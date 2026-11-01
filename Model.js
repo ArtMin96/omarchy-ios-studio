@@ -118,7 +118,9 @@ var Glyph = {
   speed: g(0xF04C5),
   thermometer: g(0xF050F),
   chip: g(0xF061A),
-  record: g(0xF044A)
+  record: g(0xF044A),
+  speedometer: g(0xF04C5),
+  chart: g(0xF012A)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

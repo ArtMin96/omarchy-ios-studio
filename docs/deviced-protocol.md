@@ -211,6 +211,9 @@ the tunnel is up.
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list` (sizes are slow to compute) |
 | `condition` | Condition + `reason` (see [Network conditions](#network-conditions)) | a condition was set or switched off |
 | `pcap` | Capture (see [Packet capture](#packet-capture)) | about once a second while capturing, and when it stops |
+| `metrics.sample` | `{sessionId, …Sample}` | about once a second per running metrics session |
+| `metrics.event` | `{sessionId, …MetricsEvent}` | hang, jetsam, crash, watchdog, thermal, hitch, exit, launch, note |
+| `metrics.state` | MetricsSession | a metrics session started, changed status or stopped (also in the welcome) |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -574,6 +577,111 @@ pulled) and parses the `.ips` header + body:
 
 Any field may be `null` (resource reports have no exception). `frames` = the first 15 frames of
 the crashed thread, unsymbolicated app frames are `"<image> + 0xOFFSET"`.
+
+### Performance metrics, used by the Performance tab and the MCP metrics tools
+
+A metrics session follows one app and keeps one compact row per interval (about an hour at 1 Hz) plus
+its events. The daemon opens one tap per metric set on its own tunnel (each long-held instrument on a
+DVT connection of its own) and shares it between every session that wants it; a tap closes with its last
+session. A session is held by the client that started it: it stops when that client disconnects, when
+nobody reads it (`metrics.read` or `metrics.snapshot`) for 2 hours, or when the active iPhone changes.
+Stopped sessions stay readable (the newest 6). At most 4 run at once.
+
+| cmd | args | reply data |
+|---|---|---|
+| `metrics.start` | `{bundleId` or `pid, name?, sets?: [str], intervalMs?: 1000, udid?}` | MetricsSession. The same client starting the same app again gets the running session back |
+| `metrics.stop` | `{sessionId}` | MetricsSession + `summary` (Stats) |
+| `metrics.list` | `{}` | `{sessions: [MetricsSession…]}` |
+| `metrics.read` | `{sessionId, kind?: "samples"` or `"events", cursor?, limit?: 600, wait?: s ≤ 20}` | `{entries, cursor, nextCursor, hasMore, missed, bufferStart, total, kind, session}` |
+| `metrics.snapshot` | `{sessionId?, recentEvents?: bool}` | `{session, stats: Stats}`; without `sessionId` and no running session: `{sessions}` |
+| `metrics.series` | `{sessionId, metric, points?: 60}` | `{metric, label, unit, buckets: [{t0, t1, min, avg, max, n}], stats}` |
+| `metrics.export` | `{sessionId}` | `{path, eventsPath, rows, events, bytes, columns}`: CSV files under `~/.cache/ios-studio/metrics/` |
+| `metrics.hitches` | `{sessionId, seconds?: 60, stop?: bool}` | MetricsSession; frame hitch tracking for at most 60 s |
+| `metrics.launchProfile` | `{bundleId, udid?}` | LaunchProfile. Quits and relaunches the app: confirm with the user first |
+| `metrics.leaks` | `{bundleId, udid?}` | LeakReport. Pauses the app while its heap is scanned: confirm first |
+
+`sets` (default: all but `hitches`):
+
+| set | source | fields in a sample |
+|---|---|---|
+| `process` | Sysmontap at 1 Hz. Rows are deltas, so the last values per pid are kept, and counters become rates | `cpu` (% of one core), `mem` (footprint MB), `rss` (MB), `threads`, `wakeups` (/s), `faults` (/s), `diskR`, `diskW` (KB/s), `sysCpu` (% of the whole phone) |
+| `energy` | EnergyMonitor for the app's pid (the first, cumulative sample is dropped) | `energy`, `eCpu`, `eGpu`, `eNet`, `eDisplay`, `eLoc`, `eOverhead`, `thermal` (thermal-state cost) |
+| `graphics` | the Graphics instrument | `fps` (Core Animation frames per second of the whole display, not the app), `gpu` (%), `gpuMem` (MB) |
+| `network` | NetworkStatistics for the app's pid | `netRx`, `netTx` (KB/s) |
+| `battery` | IOPMPowerSource every 5 s | `batt` (%), `battMw`, `charging` (0/1) |
+| `events` | the daemon's own syslog stream (one more subscriber, level `default` and up) and, after the app quits, the crash report list | events only |
+| `hitches` | ActivityTraceTap signposts (`FrameUpdate`, `Commit`, `UpdateSequence`), filtered by pid here. Very heavy (2,000 to 3,500 rows a second for the whole phone), so it's opt-in and capped at 60 s | `hitchMs`, plus `hitch` events |
+
+Every sample also has `ts` and `pid`. A field is missing when its tap has no fresh value.
+
+MetricsSession:
+
+```json
+{"sessionId": "m1", "bundleId": "XTL-A1B2C3D4E5.com.example.app", "name": "MyApp", "pid": 812,
+ "follow": true, "sets": ["process", "energy", "graphics", "network", "battery", "events"],
+ "intervalMs": 1000, "started": 1793549796.99, "stopped": null, "running": true,
+ "status": "running", "samples": 295, "events": 9,
+ "hitchTracking": {"running": false, "until": null}, "owner": "ios-studio-3"}
+```
+
+`status` is `starting`, `running`, `waiting-app` (the app isn't running; sampling starts when it opens),
+`reconnecting` (every tap is failing; `error` says why), `app-exited` (a bare `pid` session whose process
+quit) or `stopped`. A session that didn't stop on request has `error.code` `client`, `timeout`, `session` or
+`shutdown`. A `bundleId` session follows relaunches: it picks up the new pid within about 2 s and records
+`exit` and `launch` events.
+
+MetricsEvent: `{ts, kind, text, durationMs?, source?, report?}`. `kind` is one of `hang` (HangTracer; needs
+Hang Detection on, iPhone Settings › Developer), `jetsam` (a memorystatus kill that names the app, or a
+JetsamEvent report written when it quit), `crash` (a new report for the app's executable after it quit),
+`watchdog`, `thermal` (at most one per 30 s), `hitch` (`durationMs` of the slow frame), `exit`, `launch`,
+`note`.
+
+Stats (also what `metrics.stop` returns as `summary`):
+
+```json
+{"window": {"samples": 300, "start": 1793549531, "end": 1793549830, "seconds": 299},
+ "series": {"cpu": {"min": 2, "avg": 21.3, "p95": 33.3, "max": 96.4, "last": 18, "n": 300}},
+ "memory": {"slopeMbPerMin": 3.26, "r2": 0.87, "seconds": 258, "growthMb": 14, "from": 138.4, "to": 152.2,
+            "likelyLeak": true},
+ "cpuSpikes": {"count": 3, "longest": 5, "items": [{"ts": 1793549651, "seconds": 5, "peak": 96}]},
+ "fpsDrops": {"count": 3, "items": [{"ts": 1793549636, "seconds": 5, "low": 44}]},
+ "hitches": {"count": 9, "totalMs": 853, "worstMs": 128},
+ "battery": {"charging": false, "from": 78, "to": 76, "drainPctPerHour": 16.5, "mWh": 120.9, "avgMw": 1437},
+ "energy": {"avg": 5.75, "max": 11.96, "byComponent": {"Display": {"avg": 2.15, "share": 37}}},
+ "io": {"diskR": {"avg": 37.9, "max": 428, "unit": "KB/s"}},
+ "eventCounts": {"jetsam": 1, "hang": 1, "hitch": 9},
+ "anomalies": [{"kind": "leak", "level": "warn",
+                "text": "Memory grew 3.26 MB/min for 4 minutes (138.4 → 152.2 MB): a possible leak. Run Check for leaks."}]}
+```
+
+The rules live in `helper/metrics_stats.py`. The memory trend is a linear fit of the footprint since the
+app's last launch, over the whole run and the last 10 and 5 minutes; the most leak-like window is
+reported, and it counts as a likely leak at 1 MB/min or more with R² ≥ 0.6 over at least 2 minutes. A CPU
+spike is above 80% for 3 s or more. An FPS drop is 10 to 50 fps for 2 s or more (below 10 the screen is
+mostly idle rather than dropping frames). Battery drain is a linear fit of the level over at least 2
+minutes, and mWh integrates `battMw`.
+
+LaunchProfile:
+
+```json
+{"bundleId": "XTL-A1B2C3D4E5.com.example.app", "name": "MyApp", "pid": 812, "seconds": 4.2,
+ "phases": [{"name": "Loading libraries (dyld)", "ms": 182.4}, {"name": "Static initializers", "ms": 41.7},
+            {"name": "First frame (timed on this computer)", "ms": 690}],
+ "preMainMs": 224.1, "firstFrameMs": 690, "timing": {"spawn": 0.0, "init": 0.18, "main": 0.22},
+ "counts": {"images": 312, "dlopen": 4},
+ "verdict": "OK launch (690 ms). Apple suggests the first frame within 400 ms."}
+```
+
+The daemon launches the app suspended (killing the running copy), lets DyldMetrics capture the loader
+timing at `main`, resumes it, and stops the first-frame timer at the app's first `FrameUpdate`, `Commit` or
+`UpdateSequence` signpost. That timer runs on this computer, so expect about ± 0.2 s. DyldMetrics only
+works for development-signed apps; for other apps `dyldError` and `note` say so and only the first frame
+is timed.
+
+LeakReport: `{bundleId, name, pid, leakCount, leakedBytes, seconds, memgraphPath?, memgraphBytes?,
+verdict}`. `leakedBytes` is null because the phone doesn't report sizes. The app has to be running and
+debuggable (errors `not-running`, `not-debuggable`). The leaked-only memory graph is saved next to the CSV
+exports, for `leaks` or Xcode on a Mac.
 
 ### Installing apps (`app.install`)
 

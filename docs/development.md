@@ -39,7 +39,7 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (52 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (59 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp

@@ -407,6 +407,17 @@ the keyboard.
   `helper/demo.py` and the daemon is `helper/deviced_demo.py` (a made-up iPhone, account and projects; no side
   effects). AppState then uses `$XDG_RUNTIME_DIR/ios-studio-demo/` for settings, state and cache. Use it for
   screenshots so no personal data shows.
+- **PerfChart**: one metric over time (Performance tab). `title`, `unit`, `note`, `series: [{key, label, color?,
+  dashed?}]`, `stacked` (areas in categorical colours from `categorical(i)`: fixed OKLCH hues at a lightness for the
+  theme's mode), `samples` + `revision` (bump it to repaint), `t0`/`t1` (unix s), `events` (markers), `hoverTs` and
+  `hoverAt(ts)` for a crosshair shared across charts, `yFloor`, `yFixed`, `zeroBase` (false: the axis starts near the
+  lowest value), `decimals`, `gapS` (longer gaps break the line). One y-axis, and a legend for two or more series.
+  ```qml
+  PerfChart { title: "Network"; unit: "KB/s"; series: [{ key: "netRx", label: "In" }, { key: "netTx", label: "Out", dashed: true }]
+    samples: view.samples; revision: view.revision; t0: view.t0; t1: view.t1; hoverTs: view.hoverTs; onHoverAt: function(ts) { view.hoverTs = ts } }
+  ```
+- **DevicePerformanceView**: the iPhone page's Performance tab (`app`). It keeps its own state (the `metrics.*`
+  session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
 - **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView

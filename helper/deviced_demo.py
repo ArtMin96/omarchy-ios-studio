@@ -82,7 +82,7 @@ class DemoBackend:
     def error_json(self, exc: BaseException, cmd: str) -> dict:
         if isinstance(exc, LookupError):
             return {"code": "bad-args", "message": str(exc).strip("'\"")}
-        if hasattr(exc, "to_json"):   # common.HelperError: a plain-language error, as the real daemon gives
+        if callable(getattr(exc, "to_json", None)):   # common.HelperError raised by a demo feature
             return exc.to_json()
         return {"code": "failed", "message": "Demo mode can't do that.", "detail": str(exc)}
 

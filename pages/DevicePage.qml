@@ -42,6 +42,7 @@ PageFrame {
     { key: "location", label: "Location", glyph: Model.Glyph.location },
     { key: "network", label: "Network", glyph: Model.Glyph.network, level: svc.conditionActive || svc.capturing ? "warn" : "",
       count: svc.conditionActive ? "On" : (svc.capturing ? "Rec" : undefined) },
+    { key: "performance", label: "Performance", glyph: Model.Glyph.speedometer },
     { key: "profiles", label: "Profiles", glyph: Model.Glyph.signature, count: profileWarn() || undefined, level: profileWarn() ? "warn" : "" },
     { key: "info", label: "Info", glyph: Model.Glyph.info }
   ]
@@ -174,6 +175,11 @@ PageFrame {
   DeviceNetworkView {
     Layout.fillWidth: true
     visible: page.showDevice && page.tab === "network" && page.svc.connected
+    app: page.app
+  }
+  DevicePerformanceView {
+    Layout.fillWidth: true
+    visible: page.showDevice && page.tab === "performance" && page.svc.connected
     app: page.app
   }
   DeviceProfilesView {

@@ -62,6 +62,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Screen | A live view built from screenshots (up to about 2 a second over Wi-Fi). Take a screenshot, save it to Pictures, copy it or rotate it. For a smooth mirror, it can set up AirPlay through UxPlay. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
+| Performance | Measures one app over time: CPU, memory, energy, frame rate, network, disk and battery, with a report of anything unusual. See [Measure how my app performs](#measure-how-my-app-performs). |
 | Profiles | The signing profiles on the phone, active and expired. |
 | Info | Name, model, iOS version, UDID, serial number, network addresses, battery and storage. |
 
@@ -169,6 +170,26 @@ Wi-Fi-only pairing needs iOS 27 or later and both devices on the same Wi-Fi.
 4. A 6-digit code appears on one side. Type it on the other: the code iOS Studio shows goes into the iPhone, and the code the iPhone shows goes into iOS Studio.
 
 With a cable it's simpler: plug in, unlock, tap Trust. iOS Studio sets up Wi-Fi access at the same time.
+
+### Measure how my app performs
+
+1. On the iPhone page, open the Performance tab.
+2. Pick the app. Running apps come first, and your own apps are marked "yours".
+3. Press Start measuring, then use the app on the phone as you normally would. If the app isn't open yet, the tab waits for it.
+
+The charts update about once a second. Hover over one to read the values at that moment on every chart. Marks on the charts show events: red when the app was killed or crashed, yellow for a hang or a hitch. The time buttons show the last 2, 5 or 15 minutes, or everything (about the last hour is kept).
+
+The report above the charts says what stood out, for example "Memory grew 3.2 MB/min for 4 minutes: a possible leak", CPU staying above 80%, the frame rate dipping, a hang, or the app being killed for using too much memory. It also lists the average, 95th percentile and highest value of the main numbers. The export button saves every sample to Downloads as a CSV file.
+
+The frame rate is for the whole screen, not only your app, because that's what the phone reports. Measuring keeps going while you're on other pages, and stops when you press Stop or close iOS Studio.
+
+Hangs only show up when Hang Detection is on. On the iPhone, open Settings › Developer › Hang Detection and switch it on. The Developer menu is there once Developer Mode is on.
+
+Below the charts are three deeper checks, and each one asks before it starts:
+
+- Track hitches records every frame for 60 seconds and marks the ones that took too long. The phone and your computer work harder while it runs.
+- Profile launch quits the app, starts it again and shows how long loading, static initializers and the first frame took. Anything unsaved in the app is lost. Loader timing works only for your own apps.
+- Check for leaks pauses the app for a few seconds and counts objects that nothing points to any more. It works only for your own apps while they're running. It saves a memory graph file you can open in Xcode on a Mac.
 
 ### Read a crash report
 

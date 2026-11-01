@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 52 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 59 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -130,6 +130,9 @@ The server has 52 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | Apps on the iPhone | `ios_app_list`, `ios_app_install`, `ios_app_launch`, `ios_app_kill`, `ios_app_uninstall`, `ios_process_list`, `ios_screenshot`, `ios_location_set`, `ios_location_clear` |
 | Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get` |
 | Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
+| Performance | `ios_metrics_start`, `ios_metrics_summary`, `ios_metrics_series`, `ios_metrics_events`, `ios_metrics_stop`, `ios_launch_profile`, `ios_memory_leaks` |
+
+`ios_metrics_start(bundle_id)` samples an app about once a second in the device service (CPU, memory, threads, energy, display frame rate, GPU, network, disk, wakeups and battery). The service keeps about an hour and computes the stats, so `ios_metrics_summary` stays around 1 to 2 KB: min, average, 95th percentile and max of the main series, the memory trend, CPU spikes, frame-rate drops, hitches, battery drain, energy by component, and anomalies in plain words, worst first. `ios_metrics_series` downsamples one metric to at most 60 buckets and saves every sample as a CSV, returned as a path and a resource link. `ios_metrics_events` pages through hangs, jetsam kills, crashes and hitches by cursor. A session ends with `ios_metrics_stop` or when the agent's session ends. `ios_launch_profile` quits and relaunches the app, and `ios_memory_leaks` pauses it while its memory is scanned, so both are dry runs unless `confirm=true`. They run as jobs: when the reply says `running`, call again with its `job_id`.
 
 Builds and installs run as background jobs, because they can take longer than an agent waits for one tool call. `ios_build_start`, `ios_run`, `ios_project_renew` and `ios_toolchain_install` return a `build_id` straight away, and the agent checks on it with `ios_build_status`, which waits up to 25 seconds per call. Jobs stop when the agent's session ends.
 
@@ -166,7 +169,7 @@ Build logs, crash reports and the phone's log can be megabytes long, and an agen
 
 No tool takes your Apple ID password or a 2FA code. To sign in, pair the iPhone, turn on Developer Mode or download Xcode, the agent opens iOS Studio on the right page and asks you to do it there.
 
-`ios_project_remove`, `ios_build_clean`, `ios_toolchain_clean`, `ios_account_logout` and `ios_app_uninstall` take a `confirm` argument, which is false by default. With `confirm` false, the tool changes nothing and lists what it would do, and the agent is told to ask you before it repeats the call with `confirm=true`.
+`ios_project_remove`, `ios_build_clean`, `ios_toolchain_clean`, `ios_account_logout`, `ios_app_uninstall`, `ios_launch_profile` and `ios_memory_leaks` take a `confirm` argument, which is false by default. With `confirm` false, the tool changes nothing and lists what it would do, and the agent is told to ask you before it repeats the call with `confirm=true`.
 
 When a job needs a decision, such as replacing your signing certificate or confirming a 2 GB toolchain download, it pauses. The agent shows you the question and sends back your answer. Options that can't be undone also need `confirm=true`. Installing system packages shows the usual polkit password dialog on your screen.
 
