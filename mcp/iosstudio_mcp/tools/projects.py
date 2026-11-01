@@ -16,7 +16,7 @@ from .. import helper
 from ..models import (ActionResult, Convertible, ProjectBrief, ProjectChange, ProjectDetail, ProjectList, Template,
                       TemplateList)
 from ..state import existing_dir, get_state, resolve_project
-from . import READ, ann, dry_run, tool
+from . import READ, ann, dry_run, page_of, tool
 
 ProjectPath = Annotated[str, Field(description="Project folder (absolute or ~/…) or a project name from "
                                                "ios_project_list, e.g. '~/Developer/WeatherGlance' or 'WeatherGlance'")]
@@ -69,20 +69,19 @@ def register(mcp: MCPServer) -> None:
             q = query.lower()
             items = [p for p in items if q in str(p.get("name", "")).lower() or q in str(p.get("path", "")).lower()
                      or q in str(p.get("bundleId") or "").lower()]
-        page = items[offset:offset + limit]
-        more = offset + limit < len(items)
+        page, nxt_off = page_of(items, offset, limit, ProjectBrief.from_helper)
         nxt = []
         if not items:
             nxt.append("No projects found. Create one with ios_project_create (see ios_project_templates), or "
                        "register an existing folder with ios_project_add.")
-        if more:
-            nxt.append(f"More projects: call again with offset={offset + limit}.")
+        note = f"Showing {len(page)} of {len(items)}; call again with offset={nxt_off}, or narrow with query." \
+            if nxt_off is not None else None
         return ProjectList(
-            total=len(items), count=len(page), offset=offset, has_more=more,
-            next_offset=offset + limit if more else None, projects=[ProjectBrief.from_helper(p) for p in page],
+            total=len(items), count=len(page), offset=offset, has_more=nxt_off is not None, next_offset=nxt_off,
+            projects=page, note=note, truncated=nxt_off is not None, omitted=len(items) - len(page),
             convertible=[Convertible(name=c.get("name", ""), path=c.get("path", ""), reason=c.get("reason"))
                          for c in (data.get("convertible") or [])[:20]],
-            missing=data.get("missing") or [], roots=data.get("roots") or [], default_dir=data.get("defaultDir"),
+            missing=(data.get("missing") or [])[:20], roots=(data.get("roots") or [])[:20], default_dir=data.get("defaultDir"),
             next_steps=nxt)
 
     @tool(mcp, annotations=READ("Project details"))

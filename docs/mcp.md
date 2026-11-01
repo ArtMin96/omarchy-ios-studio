@@ -138,11 +138,26 @@ A few tools need more explanation:
 
 - `ios_app_run_and_capture` is for "launch it and tell me what happened". It launches an app (optionally installing its last signed build first), records its log for a few seconds, and reports whether it started, whether it was still running, the errors it logged and any new crash report with the crashing frames.
 - The phone logs about 2,000 lines a second, so `ios_logs_start` always needs a filter, such as the app's bundle id or a minimum level. The server keeps the newest 5,000 lines of each log session. The agent reads them with `ios_logs_read` from a cursor and can wait up to 25 seconds for new lines. A session nobody reads for 10 minutes stops by itself.
-- `ios_screenshot` returns an image the agent can see, scaled down to 1568 pixels on the long side, and the path of the saved file.
+- `ios_screenshot` returns an image the agent can see, at most 1568 pixels on the long side and 350 KB, and the path of the saved file. With `inline=false` it returns only the path.
 - `ios_location_set` changes the location for the whole phone. It lasts until it's cleared or the background service stops.
 - `ios_device_prepare` can't turn on Developer Mode for you. It tells you what to tap on the phone.
 
-The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), the last known iPhone state, the troubleshooting guide and this page.
+The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), large outputs a tool saved to a file (`iosstudio://cache/{kind}/{name}`), the last known iPhone state, the troubleshooting guide and this page. Each one returns at most 100 KB and says which tool reads the rest.
+
+## Output size
+
+Build logs, crash reports and the phone's log can be megabytes long, and an agent pays for every byte in its context window. Every tool follows the same rules, and new tools should too. The helpers are in `mcp/iosstudio_mcp/budget.py`.
+
+- A result is at most 12 KB (about 3,000 tokens), counting the text block and `structuredContent` together. Tools that return bulk output (`ios_build_log`, `ios_build_diagnostics`, `ios_logs_read`, `ios_crash_get`, `ios_app_run_and_capture`) take `max_bytes`, which raises that combined limit to at most 48,000. For every tool, a final check shrinks the longest lists until the result fits, marks it `truncated` and says what was cut. It never turns a large result into an error.
+- Every result is sent twice, so it reaches clients that give the model `content` and those that give it `structuredContent`. `structuredContent` has every field, log lines and crash text included. The text block shows the same result for reading: compact JSON of the other fields, then the log lines or crash text as plain lines. Because of the copy, bulk lines get a bit under half of the budget, about 5 KB of lines by default and about 22 KB with `max_bytes=48000`.
+- When something is cut, `note` says how much and how to get the rest, for example `Showing lines 19940–19999 (60 of 20000 lines). Call again with before=19940 for earlier lines`.
+- Logs default to the last 60 lines. `ios_build_log` also takes `head`, `before`, `offset`/`limit`, `grep` with `context` lines, and `level`. Lines are cut at 300 characters (`line_chars` changes that) and repeated lines fold into one line ending in `×N`.
+- Compiler diagnostics are grouped by severity and message, with a count and the first three `file:line:col` locations relative to the project. Notes are hidden unless `include_notes=true`. A list returns 25 groups by default, and a build status embeds at most 5.
+- While a job runs, `ios_build_status` returns only its state, step, progress, ETA and what changed since the last poll (`new_log_lines`, `new_errors`). It returns the full view when the job finishes or needs input, or with `verbose=true`.
+- Large artifacts go to files under `~/.cache/ios-studio/mcp/`. The result gives the path, the size and a `resource_link`, plus an excerpt that fits the budget. `ios_crash_get` returns the parsed summary and reads the rest one `section` at a time (`threads`, `images`, `raw`), paged with `start_line`.
+- Screenshots are JPEG, at most 1568 pixels on the long edge. The quality steps down from 80 to 65 and then 50 until the image is under 350 KB. PNG is sent only if it fits.
+- Errors are one line plus a next step. Details are cut at 300 characters, and raw stderr never goes into a result; the error points to the log file instead.
+- Other lists have caps too: `ios_process_list` returns 50 by default and 200 at most, and account and signing lists show 20 with totals. Free-form `data` and dry-run `would` lists stop at 20 items with "+N more".
 
 ## Safety
 

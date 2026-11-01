@@ -1,13 +1,16 @@
 """Tool modules. Each exposes `register(mcp)`; optional `on_startup(state)` / `on_shutdown(state)`.
 
 Shared pieces for tool authors (device, logs and crash tools included):
-    tool(mcp, ...)      use instead of @mcp.tool(...): same arguments, compact JSON text + structuredContent
+    tool(mcp, ...)      use instead of @mcp.tool(...): same arguments; results go through to_result(), which
+                        applies the output budget (see budget.py and docs/mcp.md "Output size")
     ann(...)            ToolAnnotations with all four hints set explicitly
     READ / READ_REMOTE  read-only presets (local / talks to Apple or the phone)
     job_status(job)     BuildStatus model for any job, with next_steps
     start_and_wait(...) start a helper stream as a job and long-poll it briefly
     wait_with_progress  job long-poll that forwards progress notifications to the client
     dry_run(...)        the ActionResult a destructive tool returns when confirm is false
+    page_of(...)        one byte-budgeted page of a list for offset-paginated tools
+    slim_schemas(mcp)   drop schema noise (titles, null defaults) from every tool's published schemas
 """
 from __future__ import annotations
 
@@ -16,15 +19,21 @@ import inspect
 import json
 from typing import Annotated, Any
 
+import logging
+
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel
 
+from .. import budget as B
 from .. import helper
 from ..jobs import Job
-from ..models import (ActionResult, BuildResult, BuildStatus, Diagnostic, ErrorInfo, PendingPrompt, PromptOption,
+from ..models import (ActionResult, BuildResult, BuildStatus, DiagGroup, ErrorInfo, PendingPrompt, PromptOption,
                       StepInfo, iso)
 from ..state import AppState
+
+log = logging.getLogger("iosstudio.tools")
 
 # Order matters only for on_startup hooks. Missing modules (device/logs/crashes until they exist) are skipped.
 MODULES = ["status", "projects", "build", "account", "toolchain", "app", "device", "logs", "crashes"]
@@ -33,13 +42,19 @@ MAX_WAIT = 25  # seconds; stays under opencode's 30 s and Codex's 60 s default t
 
 
 def to_result(value: Any) -> Any:
-    """Pydantic model -> CallToolResult with compact JSON text (no indentation, no nulls) and the same data
-    as structuredContent. The SDK's default text block is indented JSON, which costs agents tokens."""
+    """Pydantic model -> CallToolResult under the output budget.
+
+    structuredContent is the whole model without nulls and empty defaults, bulk fields included, so clients
+    that hand the model structuredContent see everything. The text block is the readable rendering: compact
+    JSON of the other fields, then the model's BULK fields (log lines, crash text) as plain lines. The
+    budget counts both copies: if text + structuredContent exceed the call's ceiling (DEFAULT_BYTES, or the
+    tool's max_bytes), bulk lines and then lists are cut and the result is marked truncated, with a note.
+    Resource links the tool attached (spilled files) are appended as resource_link blocks."""
     if not isinstance(value, BaseModel):
         return value
-    data = value.model_dump(mode="json", exclude_none=True)
-    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    return CallToolResult(content=[TextContent(type="text", text=text)], structured_content=data)
+    data, text = B.enforce(B.dump(value), getattr(type(value), "BULK", ()), B.ceiling(value))
+    content: list = [TextContent(type="text", text=text)] + B.links(value)
+    return CallToolResult(content=content, structured_content=data)
 
 
 def tool(mcp: MCPServer, **kwargs: Any):
@@ -51,12 +66,105 @@ def tool(mcp: MCPServer, **kwargs: Any):
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kw: Any) -> Any:
-            return to_result(await fn(*args, **kw))
+            try:
+                return to_result(await fn(*args, **kw))
+            except (ToolError, ResourceError) as exc:   # one line + next step, never a raw dump
+                raise ToolError(B.clip_error(str(exc))) from None
 
         wrapper.__signature__ = sig.replace(return_annotation=Annotated[CallToolResult, ret])
         mcp.tool(**kwargs)(wrapper)
         return fn
     return deco
+
+
+def page_of(items: list, offset: int, limit: int, to_model, max_bytes: int | None = None) -> tuple[list, int | None]:
+    """(models, next_offset) for offset-paginated tools: at most `limit` items whose JSON fits room(), the
+    share of the budget left for them once both copies (text and structuredContent) are counted."""
+    room = B.room(max_bytes)
+    out: list = []
+    used = 0
+    for x in items[offset:offset + limit]:
+        m = to_model(x)
+        b = B.nbytes(json.dumps(B.dump(m), separators=(",", ":"), ensure_ascii=False)) + 1
+        if out and used + b > room:
+            break
+        out.append(m)
+        used += b
+    end = offset + len(out)
+    return out, (end if end < len(items) else None)
+
+
+def _slim(schema: Any, output: bool) -> Any:
+    """Schema noise off: `title` keywords, `default: null`, and in output schemas every default. `anyOf`
+    [X, null] with a plain X becomes X with "type": [T, "null"]. Validation is unchanged."""
+    if isinstance(schema, list):
+        return [_slim(x, output) for x in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict = {}
+    for k, v in schema.items():
+        if k in ("properties", "$defs", "definitions") and isinstance(v, dict):
+            out[k] = {name: _slim(sub, output) for name, sub in v.items()}
+        elif k == "title" and isinstance(v, str):
+            continue
+        elif k == "default" and (v is None or output):
+            continue
+        else:
+            out[k] = _slim(v, output)
+    any_of = out.get("anyOf")
+    if isinstance(any_of, list) and len(any_of) == 2 and {"type": "null"} in any_of:
+        other = next(x for x in any_of if x != {"type": "null"})
+        t = other.get("type")
+        if isinstance(t, str) and "$ref" not in other and "anyOf" not in other:
+            merged = {**other, "type": [t, "null"]}
+            if "enum" in merged:
+                merged["enum"] = [*merged["enum"], None]
+            out.pop("anyOf")
+            out = {**merged, **out}
+    return out
+
+
+def _shallow(schema: dict, owner: str) -> dict:
+    """The same top-level shape with nested models typed as plain objects: it accepts exactly what the full
+    schema accepts at the top level and points to the tool that publishes the full one."""
+    def flat(s: Any) -> Any:
+        if isinstance(s, dict):
+            if "$ref" in s:
+                return {"type": "object"}
+            return {k: ({n: flat(x) for n, x in v.items()} if k == "properties" else flat(v))
+                    for k, v in s.items() if not (k == "description" and isinstance(v, str))}
+        if isinstance(s, list):
+            return [flat(x) for x in s]
+        return s
+    out = {k: flat(v) for k, v in schema.items() if k != "$defs"}
+    out["description"] = f"Same result as {owner}; its outputSchema has the nested fields."
+    return out
+
+
+# Tools whose output model is shared publish the full schema once, on the tool named here (else the first).
+CANONICAL = {"BuildStatus": "ios_build_status", "DeviceList": "ios_device_list"}
+
+
+def slim_schemas(mcp: MCPServer) -> None:
+    """Smaller tools/list: drop titles and null defaults everywhere and defaults in output schemas, and
+    publish a shared output model's nested definitions once (see CANONICAL)."""
+    tools = mcp._tool_manager.list_tools()
+    by_model: dict[Any, list] = {}
+    for t in tools:
+        t.parameters = _slim(t.parameters, output=False)
+        if t.fn_metadata.output_schema is not None:
+            t.fn_metadata.output_schema = _slim(t.fn_metadata.output_schema, output=True)
+            by_model.setdefault(t.fn_metadata.output_model, []).append(t)
+    for model, group in by_model.items():
+        if len(group) < 2 or not group[0].fn_metadata.output_schema.get("$defs"):
+            continue
+        name = getattr(model, "__name__", "")
+        owner = CANONICAL.get(name) or group[0].name
+        for t in group:
+            if t.name != owner:
+                t.fn_metadata.output_schema = _shallow(t.fn_metadata.output_schema, owner)
+    for t in tools:
+        t.__dict__.pop("output_schema", None)   # cached_property: re-read the slim one
 
 
 def ann(title: str, *, read_only: bool, destructive: bool = False, idempotent: bool = False,
@@ -87,7 +195,7 @@ def _prompt_model(p: dict | None) -> PendingPrompt | None:
     opts = [PromptOption(value=str(o.get("value")), label=o.get("label"), destructive=bool(o.get("destructive")))
             for o in (p.get("options") or []) if isinstance(o, dict)]
     return PendingPrompt(id=str(p.get("id")), kind=p.get("kind"), title=p.get("title"),
-                         message=str(p.get("message", "")), options=opts, default=p.get("default"),
+                         message=B.clip(p.get("message", ""), 1500), options=opts, default=p.get("default"),
                          destructive=any(o.destructive for o in opts))
 
 
@@ -102,11 +210,6 @@ def _result_model(job: Job) -> BuildResult | None:
                        launched=bool(r.get("launched")), pid=r.get("pid"),
                        profile_expires=iso(prof.get("expires")) if isinstance(prof, dict) else None,
                        duration_seconds=r.get("duration"))
-
-
-def _sorted_diags(diags: list[dict]) -> list[dict]:
-    rank = {"error": 0, "warning": 1}
-    return sorted(diags, key=lambda d: rank.get(str(d.get("severity")), 2))
 
 
 def job_next_steps(job: Job) -> list[str]:
@@ -149,24 +252,41 @@ def job_next_steps(job: Job) -> list[str]:
     return out
 
 
-def job_status(job: Job, diag_limit: int = 10) -> BuildStatus:
+STATUS_DIAGS = 5        # grouped diagnostics embedded in a status
+NEW_LINES = 5           # newest log lines in a delta poll
+
+
+def job_status(job: Job, verbose: bool = False) -> BuildStatus:
+    """Full view when the job finished, needs input, or verbose; else a delta: state, step, progress, ETA and
+    what changed since the previous status of this job (new log lines, new error/warning counts)."""
     errors, warnings = job.counts()
-    diags = _sorted_diags(job.diagnostics)
-    steps = [StepInfo(id=s["id"], title=s.get("title") or s["id"], state=s.get("state") or "pending",
-                      detail=s.get("detail"), owner=s.get("owner")) for s in job.steps.values()]
-    err = ErrorInfo(code=job.error.get("code"), message=str(job.error.get("message") or "Failed.")) \
-        if job.error else None
+    lines0, err0, warn0 = job.poll_mark or (0, 0, 0)
+    job.poll_mark = (job.line_count, errors, warnings)
+    new_count = max(0, job.line_count - max(lines0, job.first_line))
+    new_lines = [B.clip(ln, 200) for ln in list(job.lines)[-min(new_count, NEW_LINES):]] if new_count else []
     step_title = job.steps.get(job.current_step or "", {}).get("title") if job.current_step else None
+    common = dict(build_id=job.id, kind=job.kind, action=job.action, title=job.title, project=job.project,
+                  state=job.state, step=step_title or job.current_step,
+                  progress=round(job.progress, 3) if job.progress is not None else None,
+                  progress_detail=B.clip(job.progress_detail, 200) if job.progress_detail else None,
+                  eta_seconds=job.eta if not job.finished else None, elapsed_seconds=job.elapsed,
+                  errors=errors, warnings=warnings, new_errors=max(0, errors - err0),
+                  new_warnings=max(0, warnings - warn0), log_lines=job.line_count)
+    full = verbose or job.finished or job.state == "needs_input"
+    if not full:
+        return BuildStatus(**common, view="delta", new_log_lines=new_lines, new_log_count=new_count,
+                           next_steps=job_next_steps(job)[:1])
+    groups = B.group_diags(job.diagnostics, job.project_path)
+    steps = [StepInfo(id=s["id"], title=s.get("title") or s["id"], state=s.get("state") or "pending",
+                      detail=B.clip(s["detail"], 200) if s.get("detail") else None, owner=s.get("owner"))
+             for s in job.steps.values()]
+    err = ErrorInfo(code=job.error.get("code"), message=B.clip_error(str(job.error.get("message") or "Failed."))) \
+        if job.error else None
     return BuildStatus(
-        build_id=job.id, kind=job.kind, action=job.action, title=job.title, project=job.project,
-        project_path=job.project_path, state=job.state, step=step_title or job.current_step,
-        progress=round(job.progress, 3) if job.progress is not None else None,
-        progress_detail=job.progress_detail or None,
-        eta_seconds=job.eta if not job.finished else None, elapsed_seconds=job.elapsed,
-        errors=errors, warnings=warnings,
-        diagnostics=[Diagnostic.from_helper(d) for d in diags[:diag_limit]], diagnostics_total=len(diags),
+        **common, view="full", project_path=job.project_path,
+        diagnostics=[DiagGroup(**g) for g in groups[:STATUS_DIAGS]], diagnostics_total=len(groups),
         steps=steps, pending_prompt=_prompt_model(job.pending_prompt), result=_result_model(job), error=err,
-        log_lines=job.line_count, log_file=job.info.get("logFile"), next_steps=job_next_steps(job))
+        log_file=job.info.get("logFile"), next_steps=job_next_steps(job))
 
 
 async def wait_with_progress(state: AppState, job: Job, seconds: float, ctx: Context | None) -> Job:

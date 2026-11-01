@@ -21,6 +21,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from .. import budget as B
 from .. import helper
 from ..models import ActionResult, AppInstallResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state, resolve_project
@@ -32,7 +33,7 @@ log = logging.getLogger("iosstudio.logs")
 RING = 5000            # entries kept per session
 MAX_SESSIONS = 4
 IDLE_STOP = 600        # seconds without a read before a session stops itself
-MSG_CUT = 400
+MSG_CUT = B.LINE_CUT
 LEVELS = ["debug", "info", "default", "error", "fault"]
 RANK = {lv: i for i, lv in enumerate(LEVELS)}
 
@@ -251,18 +252,28 @@ def register(mcp: MCPServer) -> None:
         cursor: Annotated[int | None, Field(ge=0, description="next_cursor from the previous read (0 = from the "
                                                               "start); omit to continue where the last read "
                                                               "ended")] = None,
-        limit: Annotated[int, Field(ge=1, le=500, description="Max lines to return")] = 100,
+        limit: Annotated[int, Field(ge=1, le=500, description="Max lines to return")] = 60,
         wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: if nothing new is "
                                                                          "buffered, wait up to this long")] = 0,
         min_level: Annotated[Level | None, Field(description="Extra filter for this read only")] = None,
-        text: Annotated[str | None, Field(description="Extra case-insensitive substring filter for this read")] = None,
+        text: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Extra case-insensitive "
+                                                                              "substring filter for this read")] = None,
+        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Extra case-insensitive regex "
+                                                                              "filter for this read")] = None,
+        newest: Annotated[bool, Field(description="Skip to the newest `limit` matching lines instead of the "
+                                                  "oldest unread ones")] = False,
+        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut messages after this many "
+                                                                     "characters")] = B.LINE_CUT,
+        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
+                                                                                  "structuredContent together (default 12000 bytes)")] = None,
     ) -> LogRead:
-        """Read buffered log lines after `cursor`, oldest first, one compact line each:
-        '<seq> <time> <level> <process>[<pid>] <subsystem>: <message>' (messages cut at 400 chars).
+        """Read buffered log lines after `cursor`, oldest first (newest=true: the latest ones), as plain text
+        after the JSON header, one line each: '<seq> <time> <level> <process>[<pid>] <subsystem>: <message>'.
+        Messages are cut at 300 characters (line_chars) and repeated messages fold into one line with ×N.
         Returns next_cursor to pass next time, has_more when more is already buffered, `missed` if the
         5000-entry ring buffer overwrote lines you hadn't read, and `dropped` if the phone outpaced the
-        stream. Use wait_seconds (≤25) to wait for new lines. Read-only filters (min_level/text) narrow
-        this read without changing the session."""
+        stream. Use wait_seconds (≤25) to wait for new lines. min_level/text/grep narrow this read without
+        changing the session. Results stay under 12 KB unless max_bytes raises it."""
         state = get_state(ctx)
         s = _get(state, session_id)
         s.last_read = time.time()
@@ -277,40 +288,55 @@ def register(mcp: MCPServer) -> None:
         cur = max(cur, s.buffer_start)
         lo = RANK.get(min_level or "debug", 0)
         tl = text.lower() if text else None
-        lines: list[str] = []
+        rx = B.compile_pattern(grep) if grep else None
         snap = list(s.ring)
         end_seq = snap[-1][0] + 1 if snap else s.seq
-        nxt = cur
-        for seq, e in snap:
-            if seq < cur:
-                continue
-            if len(lines) >= limit:
-                break
-            nxt = seq + 1
+
+        def passes(e: dict) -> bool:
             if RANK.get(e.get("level"), 2) < lo:
-                continue
-            if tl and tl not in str(e.get("message", "")).lower() and tl not in str(e.get("process", "")).lower():
-                continue
-            lines.append(fmt(seq, e))
-        if len(lines) < limit:
-            nxt = max(nxt, end_seq)
+                return False
+            msg, proc = str(e.get("message", "")), str(e.get("process", ""))
+            if tl and tl not in msg.lower() and tl not in proc.lower():
+                return False
+            return not rx or bool(rx.search(msg) or rx.search(proc))
+
+        matches = [(seq, e) for seq, e in snap if seq >= cur and passes(e)]
+        sel = matches[-limit:] if newest else matches[:limit]
+        rows = B.fold_repeats(sel, key=lambda se: (se[1].get("process"), se[1].get("level"), se[1].get("message")))
+        rendered = [fmt(seq, e, line_chars) + (f" ×{n}" if n > 1 else "") for (seq, e), n in rows]
+        page = B.take(rendered, len(rendered), B.room(max_bytes), from_end=newest)
+        cut_rows = len(rendered) - len(page.items)
+        shown_rows = rows[page.start:page.start + len(page.items)]
+        shown = sum(n for _, n in shown_rows)
+        if newest or (not cut_rows and len(matches) <= limit):
+            nxt = end_seq                    # everything up to the end was looked at
+        else:                                # stop right after the last entry shown
+            nxt = sel[shown - 1][0] + 1 if shown else cur
+        skipped = len(matches) - shown if newest else 0
         s.read_cursor = nxt
         more = nxt < s.seq
         steps = []
+        note = None
         if more:
             steps.append(f"More is buffered: read again with cursor={nxt}.")
+            if cut_rows:
+                note = f"{cut_rows} more lines didn't fit the size cap; read on from cursor={nxt} (or pass max_bytes)."
         elif s.running:
             steps.append(f"Caught up. Call again with cursor={nxt} and wait_seconds=10 for new lines.")
+        if skipped:
+            note = f"newest=true skipped {skipped} older matching lines."
         if not s.running:
-            steps.append("The session has stopped" + (f": {s.error}" if s.error else "") +
+            steps.append("The session has stopped" + (f": {B.clip(s.error, 200)}" if s.error else "") +
                          ". Start a new one with ios_logs_start.")
         if missed:
             steps.append(f"{missed} lines were overwritten before you read them; read more often or narrow the filter.")
-        if not lines and s.seq == 0 and s.running:
+        if not page.items and s.seq == 0 and s.running:
             steps.append("Nothing captured yet. Is the app running? Filters: " + _filter_desc(s.filters))
-        return LogRead(session_id=s.id, running=s.running, lines=lines, count=len(lines), next_cursor=nxt,
+        return LogRead(session_id=s.id, running=s.running, lines=page.items, count=len(page.items), next_cursor=nxt,
                        has_more=more, buffer_start=s.buffer_start, missed=missed, dropped=s.dropped,
-                       total_received=s.seq, error=s.error, next_steps=steps)
+                       skipped=skipped, total_received=s.seq, error=B.clip(s.error, 300) if s.error else None,
+                       next_steps=steps, truncated=bool(cut_rows or skipped), omitted=cut_rows,
+                       note=note).with_budget(max_bytes)
 
     @tool(mcp, annotations=ann("Stop iPhone log", read_only=False, destructive=False, idempotent=True,
                               open_world=True))
@@ -348,13 +374,16 @@ def register(mcp: MCPServer) -> None:
         args: Annotated[list[str] | None, Field(description="Launch arguments")] = None,
         env: Annotated[dict[str, str] | None, Field(description="Launch environment variables")] = None,
         max_lines: Annotated[int, Field(ge=5, le=200, description="Max log lines in the summary")] = 40,
+        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
+                                                                                  "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
     ) -> RunCapture:
         """"Launch it and tell me what happened" in one call: (optionally installs a signed build,) starts
         a log capture filtered to the app, launches it, records for `seconds`, checks whether it is still
         running and whether a NEW crash report appeared, then stops and summarizes: launched?, pid,
         log counts per level, key lines (faults and errors first, then the latest), the new crash's
-        exception, reason and top frames, and next steps. Takes about seconds + 5 s.
+        exception, reason and top frames, and next steps. The key lines come as plain text after the JSON
+        (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
         Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read."""
         state = get_state(ctx)
         installed = None
@@ -447,11 +476,20 @@ def register(mcp: MCPServer) -> None:
         counts = Counter(str(e.get("level")) for e in entries)
         bad = [e for e in entries if RANK.get(e.get("level"), 2) >= RANK["error"]]
         bad.sort(key=lambda e: -RANK.get(e.get("level"), 2))   # faults, then errors (stable: time order)
-        key = bad[:max(5, max_lines * 2 // 3)]
-        rest = [e for e in entries if RANK.get(e.get("level"), 2) < RANK["error"]]
+        fkey = (lambda e: (e.get("process"), e.get("level"), e.get("message")))
+        bad_rows = B.fold_repeats(bad, key=fkey)
+        key = bad_rows[:max(5, max_lines * 2 // 3)]
+        rest = B.fold_repeats([e for e in entries if RANK.get(e.get("level"), 2) < RANK["error"]], key=fkey)
         key += rest[-(max_lines - len(key)):] if max_lines > len(key) else []
-        lines = [fmt(None, e) for e in key]
-        omitted = len(entries) - len(key)
+        rendered = [fmt(None, e) + (f" ×{n}" if n > 1 else "") for e, n in key]
+        page = B.take(rendered, len(rendered), B.room(max_bytes, B.RESERVE * 2), from_end=False)
+        lines = page.items
+        omitted = len(entries) - sum(n for _, n in key[:len(lines)])
+        full_path, links = None, []
+        if entries:
+            path, _, link = B.spill("\n".join(fmt(None, e, 4000) for e in entries), "captures",
+                                    f"{bid}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+            full_path, links = helper.tilde(path), [link]
 
         name = app.get("name") or bid
         if launch_error:
@@ -470,16 +508,23 @@ def register(mcp: MCPServer) -> None:
             nxt.append("Fix the launch problem above (ios_device_prepare if Developer Mode/DDI, unlock the phone if "
                        "locked), then retry.")
         if new_crash:
-            nxt.append(f"Map the app frames to source files; full report: ios_crash_get(name='{new_crash.name}', "
-                       "full_text=true).")
+            nxt.append(f"Map the app frames to source files; more of the report: ios_crash_get(name='{new_crash.name}', "
+                       "section='threads').")
         if not entries and launch_error is None:
             nxt.append("No log lines matched. Retry with min_level='info' or 'debug', or a longer seconds.")
         if launch_error is None and not new_crash:
             nxt.append("ios_screenshot shows the screen now; ios_logs_start(bundle_id) follows the log longer.")
         if proj or project_path:
             nxt.append("After fixing code, rebuild and reinstall with ios_run(project_path), then run this again.")
+        note = (f"Showing {len(lines)} key lines of {len(entries)} captured; the full capture is {full_path}."
+                if omitted > 0 and full_path else None)
+        if new_crash is not None:
+            new_crash.next_steps = []
         return RunCapture(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
-                          launch_error=launch_error, installed=installed, seconds=elapsed,
+                          launch_error=B.clip(launch_error, B.ERROR_CUT) if launch_error else None,
+                          installed=installed, seconds=elapsed,
                           log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
                           lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
-                          other_new_crashes=others, summary=summary, next_steps=nxt)
+                          other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
+                          truncated=omitted > 0, omitted=max(0, omitted), note=note,
+                          full_output_path=full_path).with_budget(max_bytes, links)

@@ -11,6 +11,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from .. import budget as B
 from .. import helper
 from ..models import ActionResult
 from . import ann, tool
@@ -87,7 +88,9 @@ def register(mcp: MCPServer) -> None:
             errf.seek(0)
             err = errf.read(2000)
         if proc.returncode not in (None, 0):
-            why = err.decode(errors="replace").strip().removeprefix("ios-studio: ") or "The launcher failed."
+            text = err.decode(errors="replace").strip()
+            first = next((ln for ln in text.splitlines() if ln.strip()), "")
+            why = B.clip(first.removeprefix("ios-studio: "), B.ERROR_CUT) or "The launcher failed."
             return ActionResult(done=False, message=why,
                                 next_steps=["Ask the user to close the open iOS Studio window, then call ios_open_app "
                                             "again.", HUMAN_STEP.get(page, "Ask the user to open iOS Studio.")])

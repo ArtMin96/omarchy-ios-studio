@@ -8,9 +8,10 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from .. import budget as B
 from .. import helper
-from ..models import (AccountStatus, ActionResult, BuildStatus, Certificate, Profile, ProjectSigning, SigningBrief,
-                      SigningStatus, iso)
+from ..models import (AccountStatus, ActionResult, BuildStatus, Certificate, Profile, ProjectSigning, RenewalDue,
+                      SigningBrief, SigningStatus, iso)
 from ..state import get_state, resolve_project
 from . import READ, READ_REMOTE, ann, dry_run, start_and_wait, tool
 from .build import Udid, WaitSeconds, make_installer
@@ -66,12 +67,21 @@ def register(mcp: MCPServer) -> None:
         h = summ.get("health") or {}
         out.health = f"{h.get('title')}: {h.get('detail')}" if h.get("title") else None
         certs = ((details.get("sections") or {}).get("certificates") or {}).get("items") or []
-        out.certificates = [Certificate(name=c.get("displayName") or c.get("name"), kind=c.get("kindLabel") or c.get("kind"),
-                                        expires=iso(c.get("expires")), days_left=c.get("daysLeft")) for c in certs]
-        out.profiles = _profiles(details)
+        out.certificates, _ = B.cap_list(
+            [Certificate(name=c.get("displayName") or c.get("name"), kind=c.get("kindLabel") or c.get("kind"),
+                         expires=iso(c.get("expires")), days_left=c.get("daysLeft")) for c in certs])
+        out.certificates_total = len(certs)
+        profiles = _profiles(details)
+        out.profiles, _ = B.cap_list(profiles)
+        out.profiles_total = len(profiles)
         out.details_fetched = iso(details.get("fetchedAt"))
         out.details_stale = bool(details.get("stale") or details.get("empty"))
-        out.errors += [f"{e.get('section')}: {e.get('message')}" for e in details.get("errors") or []]
+        out.errors += [B.clip(f"{e.get('section')}: {e.get('message')}", B.ERROR_CUT) for e in details.get("errors") or []]
+        out.errors = out.errors[:B.LIST_CAP]
+        if out.profiles_total > len(out.profiles) or out.certificates_total > len(out.certificates):
+            out.next_steps.append(f"Lists show at most {B.LIST_CAP} (soonest expiry first): {out.profiles_total} "
+                                  f"profiles, {out.certificates_total} certificates in total. The full lists are in "
+                                  "iOS Studio: ios_open_app(page='account').")
         if details.get("empty"):
             out.next_steps.append("No cached account details yet: call ios_account_status(refresh=true).")
         elif out.details_stale and not refresh:
@@ -111,13 +121,19 @@ def register(mcp: MCPServer) -> None:
         if not timer.get("enabled") and summ.get("free"):
             nxt.append("Automatic daily renewal is off: ios_project_autorenew(action='enable') turns it on "
                        "(ask the user first).")
+        profiles = _profiles(details)
+        due = [RenewalDue(path=r.get("path"), days_left=r.get("daysLeft"), due=r.get("due"))
+               for r in timer.get("projects") or []]
+        due.sort(key=lambda r: (not r.due, r.days_left if r.days_left is not None else 1e9))
+        if max(len(projects), len(profiles), len(due)) > B.LIST_CAP:
+            nxt.append(f"Lists show at most {B.LIST_CAP}, soonest expiry first; the *_total fields give the full "
+                       "counts. ios_project_list(query=...) finds one project.")
         return SigningStatus(
-            team_type=summ.get("teamType"), limits=summ.get("limits"), projects=projects, profiles=_profiles(details),
-            autorenew_timer={k: timer.get(k) for k in ("installed", "enabled", "next", "last", "lastResult")
-                             if k in timer},
-            renewal_due=[{"path": r.get("path"), "days_left": r.get("daysLeft"), "due": r.get("due")}
-                         for r in timer.get("projects") or []],
-            next_steps=nxt)
+            team_type=summ.get("teamType"), limits=summ.get("limits"), projects=projects[:B.LIST_CAP],
+            projects_total=len(projects), profiles=profiles[:B.LIST_CAP], profiles_total=len(profiles),
+            autorenew_timer={k: B.clip(timer.get(k), B.ERROR_CUT) if isinstance(timer.get(k), str) else timer.get(k)
+                             for k in ("installed", "enabled", "next", "last", "lastResult") if k in timer},
+            renewal_due=due[:B.LIST_CAP], renewal_due_total=len(due), next_steps=nxt[:B.LIST_CAP])
 
     @tool(mcp, annotations=ann("Renew app signing", read_only=False, destructive=False, idempotent=False,
                               open_world=True))

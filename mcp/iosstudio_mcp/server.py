@@ -15,7 +15,7 @@ from mcp.server.mcpserver import MCPServer
 
 from . import __version__, prompts, resources
 from .state import AppState
-from .tools import MODULES
+from .tools import MODULES, slim_schemas
 
 log = logging.getLogger("iosstudio")
 
@@ -28,6 +28,7 @@ iOS Studio builds, signs, installs and debugs iPhone apps on this Linux computer
 - If a job's state is needs_input, show its pending_prompt to the user and send THEIR answer with ios_build_respond.
 - On the iPhone: ios_app_run_and_capture(bundle_id) launches an app and reports its logs and any new crash in one call; ios_logs_start/read/stop follow the log with a cursor; ios_crash_list/get read crash reports; ios_screenshot shows the screen; ios_app_list/ios_device_info describe the phone. Developer Mode is turned on by the human (ios_device_prepare explains how).
 - udid parameters are optional and default to the active iPhone.
+- Results are kept small (about 12 KB). A cut result has truncated=true and a `note` saying how to get more (before=/offset=, grep=, a filter, or max_bytes up to 48000); big outputs are saved to a file whose path comes back as full_output_path.
 - Free Apple IDs: apps stop opening 7 days after signing (ios_project_renew re-signs), at most 3 of your apps per iPhone, 10 new app ids per week; bundle ids are registered as XTL-<TEAM>.<bundle id>.
 - Human-only steps: Apple ID sign-in (never ask for passwords or 2FA codes), the Xcode .xip download, iPhone pairing/Trust, Developer Mode, and polkit password dialogs. Explain the step and use ios_open_app(page=...).
 - Destructive tools (ios_project_remove, ios_build_clean, ios_toolchain_clean, ios_account_logout, ios_app_uninstall) take confirm=false by default and return a dry run; so does a destructive answer in ios_build_respond. Ask the user, then repeat with confirm=true.
@@ -86,6 +87,7 @@ def create_server() -> MCPServer:
         mod.register(mcp)
     prompts.register(mcp)
     resources.register(mcp)
+    slim_schemas(mcp)
     return mcp
 
 

@@ -67,6 +67,7 @@ class Job:
     _changed: asyncio.Event = field(default_factory=asyncio.Event)
     _progress_seq: int = 0
     cancel_requested: bool = False
+    poll_mark: tuple[int, int, int] | None = None   # (line_count, errors, warnings) at the last status
     _task: asyncio.Task | None = None
 
     # ---------------------------------------------------------------- derived

@@ -4,10 +4,11 @@ file:line), and convert the helper's camelCase payloads with the `from_*` constr
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from .budget import ERROR_CUT, LIST_CAP, Budgeted, clip, clip_data
 from .helper import tilde
 
 
@@ -28,25 +29,35 @@ class Out(BaseModel):
 # ------------------------------------------------------------------ shared
 
 class ActionResult(Out):
-    """Outcome of a write action, or a dry run when a destructive tool was called without confirm=true."""
-    done: bool = Field(description="True if the action was performed; False for a dry run")
+    done: bool = Field(description="False for a dry run")
     message: str
-    would: list[str] = Field(default_factory=list, description="Dry run: exactly what confirm=true would do")
+    would: list[str] = Field(default_factory=list, description="Dry run: what confirm=true would do")
     data: dict[str, Any] | None = None
     next_steps: list[str] = Field(default_factory=list)
 
+    @field_validator("message")
+    @classmethod
+    def _msg(cls, v: str) -> str:
+        return clip(v, 600)
 
-class Diagnostic(Out):
-    file: str
-    line: int
-    col: int = 0
+    @field_validator("would")
+    @classmethod
+    def _would(cls, v: list[str]) -> list[str]:
+        out = [clip(x, ERROR_CUT) for x in v[:LIST_CAP]]
+        return out + ([f"+{len(v) - LIST_CAP} more"] if len(v) > LIST_CAP else [])
+
+    @field_validator("data")
+    @classmethod
+    def _data(cls, v: dict | None) -> dict | None:
+        return clip_data(v) if v else v
+
+
+class DiagGroup(Out):
     severity: str = Field(description="error | warning | note")
     message: str
-
-    @classmethod
-    def from_helper(cls, d: dict) -> "Diagnostic":
-        return cls(file=str(d.get("file", "")), line=int(d.get("line") or 0), col=int(d.get("col") or 0),
-                   severity=str(d.get("severity") or "error"), message=str(d.get("message", "")))
+    count: int = 1
+    locations: list[str] = Field(default_factory=list, description="First 'file:line:col', relative to the project")
+    more_locations: int = 0
 
 
 class BuildBrief(Out):
@@ -70,6 +81,11 @@ class BuildBrief(Out):
                    duration_seconds=b.get("duration"), errors=int(b.get("errors") or 0),
                    warnings=int(b.get("warnings") or 0), error_code=b.get("errorCode"),
                    error_message=b.get("errorMessage"), log_file=b.get("logFile"), ipa=b.get("ipa"))
+
+    @field_validator("error_message")
+    @classmethod
+    def _err(cls, v: str | None) -> str | None:
+        return clip(" ".join(v.split()), ERROR_CUT) if v else v
 
 
 class SigningBrief(Out):
@@ -140,7 +156,7 @@ class Convertible(Out):
     reason: str | None = None
 
 
-class ProjectList(Out):
+class ProjectList(Budgeted, Out):
     total: int
     count: int
     offset: int
@@ -218,10 +234,11 @@ class BuildStatus(Out):
     build_id: str
     kind: str = Field(description="build | toolchain-install | renew")
     action: str
-    title: str
+    title: str | None = None
     project: str | None = None
     project_path: str | None = None
     state: Literal["running", "needs_input", "succeeded", "failed", "cancelled"]
+    view: Literal["full", "delta"] = Field("full", description="delta: only what changed since your last poll")
     step: str | None = None
     progress: float | None = Field(None, description="0..1")
     progress_detail: str | None = None
@@ -229,7 +246,11 @@ class BuildStatus(Out):
     elapsed_seconds: float
     errors: int = 0
     warnings: int = 0
-    diagnostics: list[Diagnostic] = Field(default_factory=list, description="First diagnostics, errors first")
+    new_errors: int = 0
+    new_warnings: int = 0
+    new_log_lines: list[str] = Field(default_factory=list, description="Newest log lines since your last poll")
+    new_log_count: int = 0
+    diagnostics: list[DiagGroup] = Field(default_factory=list, description="Top grouped diagnostics, errors first")
     diagnostics_total: int = 0
     steps: list[StepInfo] = Field(default_factory=list)
     pending_prompt: PendingPrompt | None = None
@@ -240,31 +261,35 @@ class BuildStatus(Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
-class DiagnosticsPage(Out):
-    source: str = Field(description="Where these came from: a live build_id or the build history")
+class DiagnosticsPage(Budgeted, Out):
+    source: str = Field(description="A live build_id or the build history")
     project: str | None = None
     build_result: str | None = None
-    total: int
+    total: int = Field(description="Groups after the severity filter")
     count: int
     offset: int
     has_more: bool
     next_offset: int | None = None
     errors: int
     warnings: int
-    diagnostics: list[Diagnostic]
+    notes: int = 0
+    diagnostics: list[DiagGroup]
     next_steps: list[str] = Field(default_factory=list)
 
 
-class LogPage(Out):
+class LogPage(Budgeted, Out):
+    BULK: ClassVar[tuple[str, ...]] = ("lines",)
     source: str
     log_file: str | None = None
-    total_lines: int
-    start_line: int = Field(description="0-based number of the first returned line")
+    total_lines: int = Field(description="Lines in the log")
+    matched: int | None = Field(None, description="Lines matching grep/level (when filtering)")
+    start_line: int = Field(description="First returned line number (0-based)")
+    end_line: int = Field(description="Line number after the last returned line")
     count: int
-    has_more: bool
-    next_offset: int | None = None
-    truncated_note: str | None = None
-    lines: list[str] = Field(description="'<line number>: <text>' (long lines cut at 500 characters)")
+    has_more: bool = Field(description="More lines exist in the paging direction")
+    next_offset: int | None = Field(None, description="Pass as offset for the following lines")
+    before: int | None = Field(None, description="Pass as before= for the lines above these")
+    lines: list[str] = Field(default_factory=list, description="'<n>: <line>'")
 
 
 class HistoryEntry(BuildBrief):
@@ -279,9 +304,10 @@ class HistoryEntry(BuildBrief):
                    udid=b.get("udid"), via=b.get("via"))
 
 
-class BuildHistory(Out):
+class BuildHistory(Budgeted, Out):
     total: int
     builds: list[HistoryEntry]
+    has_more: bool = False
 
 
 # ------------------------------------------------------------------ status / toolchain / account
@@ -401,7 +427,9 @@ class AccountStatus(Out):
     counts: dict[str, Any] | None = None
     health: str | None = None
     certificates: list[Certificate] = Field(default_factory=list)
-    profiles: list[Profile] = Field(default_factory=list)
+    certificates_total: int = 0
+    profiles: list[Profile] = Field(default_factory=list, description="Soonest expiry first, at most 20")
+    profiles_total: int = 0
     details_fetched: str | None = Field(None, description="When the Apple developer details were last fetched")
     details_stale: bool = False
     errors: list[str] = Field(default_factory=list)
@@ -416,13 +444,22 @@ class ProjectSigning(Out):
     auto_renew: bool = False
 
 
+class RenewalDue(Out):
+    path: str | None = None
+    days_left: float | None = None
+    due: bool | None = None
+
+
 class SigningStatus(Out):
     team_type: str | None = None
     limits: dict[str, Any] | None = None
-    projects: list[ProjectSigning]
+    projects: list[ProjectSigning] = Field(description="Soonest expiry first, at most 20")
+    projects_total: int = 0
     profiles: list[Profile] = Field(default_factory=list)
+    profiles_total: int = 0
     autorenew_timer: dict[str, Any] = Field(default_factory=dict)
-    renewal_due: list[dict[str, Any]] = Field(default_factory=list)
+    renewal_due: list[RenewalDue] = Field(default_factory=list)
+    renewal_due_total: int = 0
     next_steps: list[str] = Field(default_factory=list)
 
 
@@ -491,7 +528,7 @@ class AppBrief(Out):
     pid: int | None = None
 
 
-class AppList(Out):
+class AppList(Budgeted, Out):
     scope: str
     total: int
     count: int
@@ -525,15 +562,14 @@ class ProcessInfo(Out):
     is_app: bool = False
 
 
-class ProcessList(Out):
+class ProcessList(Budgeted, Out):
     total: int
     count: int
     processes: list[ProcessInfo]
-    truncated_note: str | None = None
 
 
 class ScreenshotInfo(Out):
-    path: str = Field(description="The image sent in this result (downscaled)")
+    path: str = Field(description="The downscaled image (the one sent inline)")
     original: str = Field(description="Full-resolution PNG from the iPhone")
     width: int
     height: int
@@ -541,6 +577,9 @@ class ScreenshotInfo(Out):
     original_height: int | None = None
     format: str
     bytes: int
+    quality: int | None = None
+    inline: bool = Field(True, description="False: no image in this result, open `path`")
+    note: str | None = None
 
 
 class LocationResult(Out):
@@ -560,17 +599,20 @@ class LogSession(Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
-class LogRead(Out):
+class LogRead(Budgeted, Out):
+    BULK: ClassVar[tuple[str, ...]] = ("lines",)
     session_id: str
     running: bool
-    lines: list[str] = Field(description="'<seq> <HH:MM:SS.mmm> <level> <process>[<pid>] <subsystem>: <message>'")
     count: int
-    next_cursor: int = Field(description="Pass as cursor on the next ios_logs_read call")
-    has_more: bool = Field(description="More entries are already buffered past next_cursor")
-    buffer_start: int = Field(description="Oldest seq still held by the server's ring buffer")
-    missed: int = Field(0, description="Entries between your cursor and buffer_start that were overwritten")
-    dropped: int = Field(0, description="Entries the daemon dropped because they came faster than it sends")
+    next_cursor: int = Field(description="Pass as cursor on the next read")
+    has_more: bool = Field(description="More is buffered past next_cursor")
+    buffer_start: int = Field(description="Oldest seq still buffered")
+    missed: int = Field(0, description="Overwritten before you read them")
+    dropped: int = Field(0, description="Dropped because the phone logged faster than the stream")
+    skipped: int = Field(0, description="Older matching lines skipped by newest=true")
     total_received: int
+    lines: list[str] = Field(default_factory=list, description="'<seq> <time> <level> "
+                             "<process>[<pid>] <subsystem>: <message>'")
     error: str | None = None
     next_steps: list[str] = Field(default_factory=list)
 
@@ -584,7 +626,7 @@ class CrashBrief(Out):
     kind: str | None = Field(None, description="crash | fault | resource | jetsam | hang | other")
 
 
-class CrashList(Out):
+class CrashList(Budgeted, Out):
     total: int
     count: int
     has_more: bool = False
@@ -592,7 +634,8 @@ class CrashList(Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
-class CrashDetail(Out):
+class CrashDetail(Budgeted, Out):
+    BULK: ClassVar[tuple[str, ...]] = ("text",)
     name: str
     path: str = Field(description="Local copy of the .ips report")
     resource_uri: str | None = None
@@ -607,12 +650,17 @@ class CrashDetail(Out):
     crashed_thread: int | None = None
     frames: list[str] = Field(default_factory=list, description="Top frames of the crashed thread; app frames "
                                                                 "without symbols read '<image> + 0xOFFSET'")
-    text: str | None = Field(None, description="Full .ips text (only with full_text=true)")
-    text_truncated: bool = False
+    size: int | None = Field(None, description="Bytes in the .ips file")
+    section: str = "summary"
+    start_line: int | None = None
+    end_line: int | None = None
+    total_lines: int | None = None
+    text: str | None = Field(None, description="The section's lines")
     next_steps: list[str] = Field(default_factory=list)
 
 
-class RunCapture(Out):
+class RunCapture(Budgeted, Out):
+    BULK: ClassVar[tuple[str, ...]] = ("key_lines",)
     bundle_id: str
     launched: bool
     pid: int | None = None
@@ -621,7 +669,8 @@ class RunCapture(Out):
     installed: AppInstallResult | None = None
     seconds: float
     log_counts: dict[str, int] = Field(default_factory=dict, description="Captured entries per level")
-    key_lines: list[str] = Field(default_factory=list, description="Faults and errors first, then the latest lines")
+    key_lines: list[str] = Field(default_factory=list, description="Faults and errors first, then "
+                                 "the latest lines")
     lines_omitted: int = 0
     dropped: int = 0
     new_crash: CrashDetail | None = None

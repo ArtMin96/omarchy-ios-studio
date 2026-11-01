@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import logging
 import os
-import shutil
 import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -26,12 +24,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import Field
 
+from .. import budget as B
 from .. import helper
 from ..jobs import Job
 from ..models import (ActionResult, AppBrief, AppInstallResult, AppLaunchResult, AppList, DeviceDetails, DeviceEntry,
                       DeviceList, DevicePrepare, LocationResult, ProcessInfo, ProcessList, ScreenshotInfo)
 from ..state import AppState, get_state, resolve_project
-from . import READ_REMOTE, ann, dry_run, tool
+from . import READ_REMOTE, ann, dry_run, page_of, tool
 
 log = logging.getLogger("iosstudio.device")
 
@@ -354,36 +353,6 @@ async def package_for(state: AppState, path: str | None, project_path: str | Non
 
 # ------------------------------------------------------------------ screenshots
 
-def _resize(src: Path, max_dim: int, fmt: str, quality: int) -> tuple[bytes, int, int, int, int]:
-    """(image bytes, width, height, original width, original height). Pillow, else ImageMagick, else as-is."""
-    try:
-        from PIL import Image as PILImage
-    except ImportError:
-        PILImage = None
-    if PILImage is not None:
-        with PILImage.open(src) as im:
-            ow, oh = im.size
-            im = im.convert("RGB") if fmt == "jpeg" else im.copy()
-            if max(ow, oh) > max_dim:
-                scale = max_dim / max(ow, oh)
-                im = im.resize((max(1, round(ow * scale)), max(1, round(oh * scale))), PILImage.LANCZOS)
-            buf = io.BytesIO()
-            if fmt == "jpeg":
-                im.save(buf, "JPEG", quality=quality, optimize=True)
-            else:
-                im.save(buf, "PNG", optimize=True)
-            return buf.getvalue(), im.size[0], im.size[1], ow, oh
-    magick = shutil.which("magick")
-    if magick:
-        import subprocess
-        out = subprocess.run([magick, str(src), "-resize", f"{max_dim}x{max_dim}>",
-                              *(["-quality", str(quality)] if fmt == "jpeg" else []), f"{fmt}:-"],
-                             capture_output=True, timeout=30, check=True).stdout
-        return out, 0, 0, 0, 0
-    data = src.read_bytes()
-    return data, 0, 0, 0, 0
-
-
 # ------------------------------------------------------------------ tools
 
 def register(mcp: MCPServer) -> None:
@@ -540,16 +509,15 @@ def register(mcp: MCPServer) -> None:
         if query:
             q = query.lower()
             items = [a for a in items if q in str(a.get("name", "")).lower() or q in str(a.get("bundleId", "")).lower()]
-        page = items[offset:offset + limit]
-        more = offset + limit < len(items)
+        page, nxt_off = page_of(items, offset, limit, _app)
         nxt = []
-        if more:
-            nxt.append(f"More: offset={offset + limit}.")
+        note = f"Showing {len(page)} of {len(items)}; call again with offset={nxt_off}, or narrow with query." \
+            if nxt_off is not None else None
         if scope == "own" and not items and not query:
             nxt.append("None of your apps are installed. ios_run(project_path) builds and installs one.")
-        return AppList(scope=scope, total=len(items), count=len(page), offset=offset, has_more=more,
-                       next_offset=offset + limit if more else None, apps=[_app(a) for a in page], own_apps=own,
-                       next_steps=nxt)
+        return AppList(scope=scope, total=len(items), count=len(page), offset=offset, has_more=nxt_off is not None,
+                       next_offset=nxt_off, apps=page, own_apps=own, next_steps=nxt, note=note,
+                       truncated=nxt_off is not None, omitted=len(items) - len(page))
 
     @tool(mcp, annotations=ann("Install app", read_only=False, destructive=False, idempotent=False, open_world=True))
     async def ios_app_install(
@@ -642,7 +610,7 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         apps_only: Annotated[bool, Field(description="Only app processes (not system daemons)")] = True,
         query: Annotated[str | None, Field(description="Case-insensitive filter on name or bundle id")] = None,
-        limit: Annotated[int, Field(ge=1, le=500, description="Max processes to return")] = 100,
+        limit: Annotated[int, Field(ge=1, le=200, description="Max processes to return")] = 50,
         udid: Udid = None,
     ) -> ProcessList:
         """Processes running on the iPhone: pid, name and bundle id. Use it to check whether an app is still
@@ -653,46 +621,59 @@ def register(mcp: MCPServer) -> None:
             q = query.lower()
             items = [p for p in items if q in str(p.get("name", "")).lower() or q in str(p.get("bundleId") or "").lower()]
         items.sort(key=lambda p: str(p.get("name", "")).lower())
-        out = [ProcessInfo(pid=int(p.get("pid") or 0), name=str(p.get("name")), bundle_id=p.get("bundleId"),
-                           is_app=bool(p.get("isApp"))) for p in items[:limit]]
-        return ProcessList(total=len(items), count=len(out), processes=out,
-                           truncated_note=f"Showing {limit} of {len(items)}; narrow with query." if len(items) > limit
-                           else None)
+        out, _ = page_of(items, 0, limit, lambda p: ProcessInfo(pid=int(p.get("pid") or 0), name=str(p.get("name")),
+                                                                bundle_id=p.get("bundleId"), is_app=bool(p.get("isApp"))))
+        cut = len(items) - len(out)
+        return ProcessList(total=len(items), count=len(out), processes=out, truncated=cut > 0, omitted=cut,
+                           note=f"Showing {len(out)} of {len(items)} (sorted by name); narrow with query"
+                                + (" or apps_only=true." if not apps_only else ".") if cut else None)
 
     @mcp.tool(annotations=ann("Screenshot", read_only=True, idempotent=False, open_world=True))
     async def ios_screenshot(
         ctx: Context,
-        max_dimension: Annotated[int, Field(ge=256, le=4096, description="Downscale so the long edge is at most "
-                                                                         "this many pixels")] = 1568,
-        format: Annotated[Literal["jpeg", "png"], Field(description="jpeg is ~10x smaller")] = "jpeg",
-        quality: Annotated[int, Field(ge=30, le=95, description="JPEG quality")] = 80,
+        max_dimension: Annotated[int, Field(ge=256, le=B.IMG_MAX_DIM, description="Downscale so the long edge is "
+                                                                                 "at most this many pixels")] = B.IMG_MAX_DIM,
+        format: Annotated[Literal["jpeg", "png"], Field(description="jpeg is ~10x smaller; png is sent only if it "
+                                                                    "fits 350 KB, else jpeg")] = "jpeg",
+        quality: Annotated[int, Field(ge=30, le=95, description="Starting JPEG quality; steps down to 65 and 50 "
+                                                                "if the image is over 350 KB")] = 80,
+        inline: Annotated[bool, Field(description="false: return only the saved file's path, no image")] = True,
         udid: Udid = None,
     ) -> Annotated[CallToolResult, ScreenshotInfo]:
-        """Capture the iPhone's screen and return it as an image (downscaled JPEG by default), plus the
-        saved file path, so you can see what the app shows. The phone must be unlocked with the screen on.
-        If your client can't show images, open the path."""
+        """Capture the iPhone's screen and return it as an image, plus the saved file path, so you can see
+        what the app shows. The image is at most 1568 px on the long edge and 350 KB (JPEG, quality stepping
+        down from 80 until it fits); width, height and bytes are reported. inline=false returns only the
+        path. The phone must be unlocked with the screen on. If your client can't show images, open the path."""
         state = get_state(ctx)
-        shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
+        try:
+            shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
+        except ToolError as exc:
+            raise ToolError(B.clip_error(str(exc))) from None
         src = Path(str(shot.get("path") or ""))
         if not src.is_file():
             raise ToolError("The iPhone returned no screenshot file. Retry with the phone unlocked.")
-        data, w, h, ow, oh = await asyncio.to_thread(_resize, src, max_dimension, format, quality)
-        if not (w and h):
-            w, h = int(shot.get("width") or 0), int(shot.get("height") or 0)
-            ow, oh = w, h
-            if data[:4] == b"\x89PNG":
-                format = "png"
-        out = src.with_suffix(".jpg" if format == "jpeg" else ".png")
+        steps = [quality] + [q for q in (65, 50) if q < quality]
+        img = await asyncio.to_thread(B.fit_image, src, max_dimension, B.IMG_MAX_BYTES, format, steps)
+        w, h = img.width or int(shot.get("width") or 0), img.height or int(shot.get("height") or 0)
+        out = src.with_suffix(".jpg" if img.format == "jpeg" else ".png")
         if out != src:
-            out.write_bytes(data)
+            out.write_bytes(img.data)
+        send = inline and img.fits
+        notes = list(img.notes)
+        if inline and not img.fits:
+            notes.append(f"The image is {len(img.data) // 1000} KB, over the {B.IMG_MAX_BYTES // 1000} KB cap, so it "
+                         "isn't inline; open the path or call again with a smaller max_dimension.")
         info = ScreenshotInfo(path=helper.tilde(str(out)), original=helper.tilde(str(src)), width=w, height=h,
-                              original_width=ow or None, original_height=oh or None, format=format, bytes=len(data))
-        text = (f"Screenshot {w}x{h} {format.upper()} ({len(data) // 1024} KB) saved to {info.path}; "
-                f"full-resolution PNG: {info.original}")
-        return CallToolResult(content=[ImageContent(type="image", data=base64.b64encode(data).decode(),
-                                                    mime_type=f"image/{format}"),
-                                       TextContent(type="text", text=text)],
-                              structured_content=info.model_dump(mode="json", exclude_none=True))
+                              original_width=img.original_width or None, original_height=img.original_height or None,
+                              format=img.format, bytes=len(img.data), quality=img.quality, inline=send,
+                              note=" ".join(notes) or None)
+        text = (f"Screenshot {w}x{h} {img.format.upper()} ({len(img.data) // 1000} KB) saved to {info.path}; "
+                f"full-resolution PNG: {info.original}." + (f" {info.note}" if info.note else ""))
+        content: list = [TextContent(type="text", text=text)]
+        if send:
+            content.insert(0, ImageContent(type="image", data=base64.b64encode(img.data).decode(),
+                                           mime_type=f"image/{img.format}"))
+        return CallToolResult(content=content, structured_content=B.dump(info))
 
     # -------------------------------------------------------------- location
 
