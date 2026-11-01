@@ -1,6 +1,9 @@
-"""iosstudio-deviced: the long-running iPhone daemon (JSON lines over stdin/stdout).
+"""iosstudio-deviced: the long-running iPhone daemon, shared by the GUI and other clients.
 
 Runs under the pymobiledevice3 venv python (common.pymd3_python()). Protocol: docs/deviced-protocol.md.
+`--serve`: the per-user broker (helper/device_broker.py) on $XDG_RUNTIME_DIR/ios-studio/deviced.sock;
+clients reach it through bin/iosstudio-deviced's stdio bridge or helper/device_client.py.
+`--once <cmd> '<json>'`: standalone one-shot (used when no daemon is running).
 One tunnel to the active device stays open; it reconnects with backoff. Requests run concurrently
 as asyncio tasks, so a slow request never blocks events or other requests.
 """
@@ -19,7 +22,6 @@ import sys
 import threading
 import time
 import traceback
-from collections import deque
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -27,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import common  # noqa: E402
 from common import HelperError, fix  # noqa: E402
+import device_broker  # noqa: E402
 import device_crash  # noqa: E402
 import device_link as link  # noqa: E402
 from device_models import marketing_name  # noqa: E402
@@ -44,9 +47,7 @@ HEALTH_EVERY_S = 60
 TUNNEL_WAIT_S = 25
 DISCOVERY_EVERY_S = 3
 
-SYSLOG_FLUSH_S = 0.1
-SYSLOG_BATCH = 200
-SYSLOG_BUFFER = 1000
+# syslog batching/buffering per client lives in device_broker.py
 SYSLOG_MSG_MAX = 8192
 LEVELS = {"debug": 0, "info": 1, "default": 2, "error": 3, "fault": 4}
 # os_trace raw level byte -> our name
@@ -66,6 +67,7 @@ _OUT = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
 os.dup2(2, 1)
 sys.stdout = sys.stderr
 ONCE = False   # --once mode: events go to stderr, only the single reply goes to stdout
+BROKER: device_broker.Broker | None = None   # --serve mode: events go to the subscribed clients
 
 
 def send(obj: dict) -> None:
@@ -82,6 +84,9 @@ def emit(name: str, data) -> None:
     if ONCE:
         if name in ("connection", "installProgress", "pair"):
             dlog(f"{name}: {json.dumps(data, default=str)[:300]}")
+        return
+    if BROKER is not None:
+        BROKER.emit(name, data)
         return
     send({"event": name, "data": data})
 
@@ -199,6 +204,7 @@ class Session:
         self.shot = None
         self.loc = None
         self.location: dict | None = None
+        self.last_connection: dict | None = None
 
     # -- lifecycle
     def start(self):
@@ -225,9 +231,10 @@ class Session:
 
     def set_state(self, state: str, message: str, detail: str = "", retry_in: float = 0):
         self.state = state
-        emit("connection", {"udid": self.udid, "state": state, "transport": self.where.get("transport"),
-                            "message": message, "detail": detail[-1500:], "retryIn": retry_in,
-                            "since": time.time()})
+        self.last_connection = {"udid": self.udid, "state": state, "transport": self.where.get("transport"),
+                                "message": message, "detail": detail[-1500:], "retryIn": retry_in,
+                                "since": time.time()}
+        emit("connection", self.last_connection)
         self.d.publish_devices()
         self.d.write_state(self)
 
@@ -496,176 +503,57 @@ class Session:
 
 # ---------------------------------------------------------------- syslog
 
-class Syslog:
+class PhoneSyslog:
+    """The one os_trace stream to the phone. Per-client filters live in device_broker.SyslogHub."""
+
     def __init__(self, daemon: "Daemon"):
         self.d = daemon
         self.task: asyncio.Task | None = None
-        self.flusher: asyncio.Task | None = None
-        self.buf: deque = deque()
-        self.filters: dict = {}
-        self.dropped = 0
-        self._last_drop_emit = 0.0
-        self.udid = None
-        self.reconnecting = False
-        self.error = None
-        self._exe = None   # resolved from filters.bundleId
-        self._bid = None
 
-    def state(self) -> dict:
-        s = {"running": self.task is not None and not self.task.done(), "udid": self.udid,
-             "filters": self.filters, "dropped": self.dropped, "reconnecting": self.reconnecting}
-        if self.error:
-            s["error"] = self.error
-        return s
+    def open(self, session: Session, pid: int):
+        self.task = asyncio.create_task(self._run(session, pid))
 
-    def emit_state(self):
-        emit("syslogState", self.state())
+    async def close(self):
+        t, self.task = self.task, None
+        if t:
+            t.cancel()
+            with contextlib.suppress(BaseException):
+                await t
 
     @staticmethod
-    def norm_filters(f: dict | None) -> dict:
-        f = dict(f or {})
-        out = {}
-        if f.get("processes"):
-            out["processes"] = [str(x) for x in f["processes"] if str(x)]
-        if f.get("pids"):
-            out["pids"] = [int(x) for x in f["pids"]]
-        if f.get("minLevel") in LEVELS:
-            out["minLevel"] = f["minLevel"]
-        if f.get("text"):
-            out["text"] = str(f["text"])
-        if f.get("subsystem"):
-            out["subsystem"] = str(f["subsystem"])
-        if f.get("bundleId"):
-            out["bundleId"] = str(f["bundleId"])
-        return out
-
-    async def start(self, session: Session, filters: dict):
-        await self.stop(emit_state=False)
-        self.filters = self.norm_filters(filters)
-        self.udid = session.udid
-        self.dropped = 0
-        self.error = None
-        self._exe = self._bid = None
-        self.buf.clear()
-        self.task = asyncio.create_task(self._run(session))
-        self.flusher = asyncio.create_task(self._flush_loop())
-        self.emit_state()
-
-    async def set_filters(self, filters: dict):
-        self.filters = self.norm_filters(filters)
-        self._exe = self._bid = None
-        if self.filters.get("bundleId") and self.d.session and self.d.session.rsd:
-            await self._resolve_bundle(self.d.session)
-        self.emit_state()
-
-    async def stop(self, emit_state: bool = True):
-        for t in (self.task, self.flusher):
-            if t:
-                t.cancel()
-        for t in (self.task, self.flusher):
-            if t:
-                with contextlib.suppress(BaseException):
-                    await t
-        self.task = self.flusher = None
-        if self.buf:
-            self._flush_once(all_=True)
-        self.reconnecting = False
-        if emit_state:
-            self.emit_state()
-
-    async def _resolve_bundle(self, session: Session):
-        bid = self.filters.get("bundleId")
-        if not bid:
-            return
-        try:
-            rsd = await session.get_rsd()
-            apps = await session.pmd3.InstallationProxyService(lockdown=rsd).get_apps(application_type="Any")
-            for k, v in apps.items():
-                if k == bid or k.endswith("." + bid):
-                    self._exe, self._bid = v.get("CFBundleExecutable") or None, k
-                    return
-        except BaseException as exc:  # noqa: BLE001
-            dlog(f"syslog: can't resolve {bid}: {exc!r}")
-        self._exe, self._bid = None, bid
-
-    def _match(self, e) -> dict | None:
-        f = self.filters
-        proc = posixpath.basename(e.filename or "")
+    def _entry(e, min_level: int) -> dict | None:
         lvl = RAW_LEVEL.get(int(e.level), "default")
-        if "minLevel" in f and LEVELS[lvl] < LEVELS[f["minLevel"]]:
-            return None
-        if "pids" in f and e.pid not in f["pids"]:
-            return None
-        if "processes" in f and proc not in f["processes"]:
-            return None
+        if LEVELS[lvl] < min_level:
+            return None   # no subscriber wants this level: skip building it
         msg = e.message or ""
-        if f.get("bundleId"):
-            exe, bid = self._exe, self._bid or f["bundleId"]
-            if not ((exe and proc == exe) or (exe and exe in msg) or bid in msg):
-                return None
-        sub = e.label.subsystem if e.label else ""
-        cat = e.label.category if e.label else ""
-        if "subsystem" in f and not sub.startswith(f["subsystem"]):
-            return None
-        if "text" in f:
-            t = f["text"].lower()
-            if t not in msg.lower() and t not in proc.lower() and t not in sub.lower():
-                return None
         if len(msg) > SYSLOG_MSG_MAX:
             msg = msg[:SYSLOG_MSG_MAX] + "…"
         try:
             ts = e.timestamp.timestamp()
         except Exception:  # noqa: BLE001
             ts = time.time()
-        return {"ts": ts, "process": proc, "pid": e.pid, "level": lvl, "subsystem": sub,
-                "category": cat, "message": msg, "image": posixpath.basename(e.image_name or "")}
+        return {"ts": ts, "process": posixpath.basename(e.filename or ""), "pid": e.pid, "level": lvl,
+                "subsystem": e.label.subsystem if e.label else "", "category": e.label.category if e.label else "",
+                "message": msg, "image": posixpath.basename(e.image_name or "")}
 
-    def _push(self, entry: dict):
-        if len(self.buf) >= SYSLOG_BUFFER:
-            self.buf.popleft()
-            self.dropped += 1
-            now = time.monotonic()
-            if now - self._last_drop_emit > 1:
-                self._last_drop_emit = now
-                self.emit_state()
-        self.buf.append(entry)
-
-    def _flush_once(self, all_: bool = False):
-        while self.buf:
-            n = min(len(self.buf), SYSLOG_BATCH)
-            batch = [self.buf.popleft() for _ in range(n)]
-            emit("syslog", batch)
-            if not all_:
-                break
-
-    async def _flush_loop(self):
-        while True:
-            await asyncio.sleep(SYSLOG_FLUSH_S)
-            if self.buf:
-                self._flush_once()
-
-    async def _run(self, session: Session):
+    async def _run(self, session: Session, pid: int):
+        hub = BROKER.syslog
         first = True
         while True:
             try:
                 rsd = await session.get_rsd(timeout=TUNNEL_WAIT_S if first else 3600)
-                if self.filters.get("bundleId") and self._exe is None:
-                    await self._resolve_bundle(session)
-                if self.reconnecting or first:
-                    self.reconnecting = False
-                    self.error = None
-                    self.emit_state()
+                await hub.resolve_missing()
+                if hub.reconnecting or first:
+                    hub.stream_state(False, None)
                 first = False
-                pids = self.filters.get("pids") or []
-                pid = pids[0] if len(pids) == 1 else -1
                 n = 0
                 dlog(f"syslog: streaming (pid filter {pid})")
                 async for entry in session.pmd3.OsTraceService(lockdown=rsd).syslog(pid=pid):
                     if n == 0:
                         dlog("syslog: first entry")
-                    item = self._match(entry)
+                    item = self._entry(entry, hub.min_level())
                     if item is not None:
-                        self._push(item)
+                        hub.feed(item)
                     n += 1
                     if n % 256 == 0:
                         await asyncio.sleep(0)  # let flushes and requests run
@@ -677,18 +565,13 @@ class Syslog:
                 dlog(f"syslog: {exc!r}")
                 if e.code == "unreachable":
                     session.drop("syslog stream broke")
-                    self.reconnecting = True
-                    self.error = None
-                    self.emit_state()
+                    hub.stream_state(True, None)
                     await asyncio.sleep(2)
                     continue
                 if first and e.code in ("not-paired", "not-trusted"):
-                    self.error = e.to_json()
-                    self.emit_state()
+                    hub.stream_failed(e.to_json())
                     return
-                self.reconnecting = True
-                self.error = e.to_json()
-                self.emit_state()
+                hub.stream_state(True, e.to_json())
                 await asyncio.sleep(5)
 
 
@@ -702,7 +585,8 @@ class Daemon:
         self.lockdown: set[str] = set()
         self.cache: dict = common.load_json(DEVICE_CACHE, {}) or {}
         self.session: Session | None = None
-        self.syslog = Syslog(self)
+        self.syslog = PhoneSyslog(self)
+        self.disc_task: asyncio.Task | None = None
         self.mirror_task: asyncio.Task | None = None
         self.mirror_fps = 1.0
         self.pair_task: asyncio.Task | None = None
@@ -829,7 +713,8 @@ class Daemon:
         self.session = None
         if old:
             await self.mirror_stop()
-            await self.syslog.stop()
+            if BROKER is not None:
+                await BROKER.syslog.stop_all()
             await old.close()
         s = Session(self, udid)
         self.session = s
@@ -1289,19 +1174,8 @@ class Daemon:
         text = await asyncio.to_thread(local.read_text, "utf-8", "replace")
         return {"path": str(local), "summary": device_crash.parse_ips(text)}
 
-    # syslog
-    async def c_syslog_start(self, a):
-        s = self.need_session(a)
-        await self.syslog.start(s, a.get("filters") or {})
-        return {"running": True, "filters": self.syslog.filters}
-
-    async def c_syslog_filter(self, a):
-        await self.syslog.set_filters(a.get("filters") or {})
-        return {"filters": self.syslog.filters}
-
-    async def c_syslog_stop(self, a):
-        await self.syslog.stop()
-        return {"running": False}
+    # syslog.start / syslog.filter / syslog.stop are per client: device_broker.SyslogHub, backed by
+    # the syslog_* methods below.
 
     # pairing
     async def c_pair_status(self, a):
@@ -1440,30 +1314,74 @@ class Daemon:
 
     # -------------------------------------------------------- dispatch
 
-    async def handle(self, msg: dict):
-        rid = msg.get("id")
-        cmd = str(msg.get("cmd") or "")
-        args = msg.get("args") or {}
+    async def dispatch(self, cmd: str, args: dict):
         fn = getattr(self, "c_" + cmd.replace(".", "_").replace("-", "_"), None)
         if fn is None:
-            send({"id": rid, "ok": False, "error": {"code": "bad-args", "message": f"Unknown command {cmd!r}."}})
-            return
+            raise err("bad-args", f"Unknown command {cmd!r}.")
+        return await fn(args if isinstance(args, dict) else {})
+
+    def error_json(self, exc: BaseException, cmd: str) -> dict:
+        e = classify(exc)
+        if e.code == "failed" and not isinstance(exc, HelperError):
+            dlog(f"{cmd} failed:\n{''.join(traceback.format_exception(exc))}")
+        if e.code == "unreachable" and not isinstance(exc, HelperError) and self.session:
+            self.session.drop(f"{cmd}: {exc!r}")
+        return e.to_json()
+
+    async def handle(self, msg: dict):
+        """--once mode: one request, reply through send()."""
+        rid = msg.get("id")
+        cmd = str(msg.get("cmd") or "")
         try:
-            data = await fn(args if isinstance(args, dict) else {})
+            data = await self.dispatch(cmd, msg.get("args") or {})
             send({"id": rid, "ok": True, "data": data if data is not None else {}})
         except asyncio.CancelledError:
             send({"id": rid, "ok": False, "error": {"code": "cancelled", "message": "Cancelled."}})
         except BaseException as exc:  # noqa: BLE001
-            e = classify(exc)
-            if e.code == "failed" and not isinstance(exc, HelperError):
-                dlog(f"{cmd} failed:\n{traceback.format_exc()}")
-            if e.code == "unreachable" and not isinstance(exc, HelperError) and self.session:
-                self.session.drop(f"{cmd}: {exc!r}")
-            send({"id": rid, "ok": False, "error": e.to_json()})
+            send({"id": rid, "ok": False, "error": self.error_json(exc, cmd)})
+
+    # -------------------------------------------------------- broker backend (device_broker.py)
+
+    async def welcome(self) -> list:
+        out = [("ready", {"version": VERSION, "pymobiledevice3": self.pmd3.version, "python": sys.executable,
+                          "pid": os.getpid()}),
+               ("devices", self.device_list())]
+        s = self.session
+        if s is not None:
+            if s.last_connection:
+                out.append(("connection", s.last_connection))
+            if s.info:
+                out.append(("deviceInfo", {"udid": s.udid, **s.info, "location": s.location}))
+        if self.mirror_task is not None and not self.mirror_task.done():
+            out.append(("mirror", {"running": True, "fps": self.mirror_fps}))
+        return out
+
+    def syslog_target(self, args: dict) -> str:
+        return self.need_session(args).udid
+
+    def syslog_open(self, pid: int):
+        self.syslog.open(self.session, pid)
+
+    async def syslog_close(self):
+        await self.syslog.close()
+
+    async def syslog_resolve(self, bid: str):
+        """bundleId filter -> (executable, installed bundle id). Never waits for the tunnel."""
+        s = self.session
+        if s is None or s.rsd is None:
+            return None, None
+        apps = await self.pmd3.InstallationProxyService(lockdown=s.rsd).get_apps(application_type="Any")
+        for k, v in apps.items():
+            if k == bid or k.endswith("." + bid):
+                return v.get("CFBundleExecutable") or None, k
+        return None, bid
 
     async def shutdown(self):
+        self.stopping.set()
+        if self.disc_task:
+            self.disc_task.cancel()
         await self.mirror_stop()
-        await self.syslog.stop(emit_state=False)
+        await self.syslog.close()
         if self.pair_task:
             self.pair_task.cancel()
         if self.session:
@@ -1471,12 +1389,38 @@ class Daemon:
                 await asyncio.wait_for(self.session.close(), 5)
 
 
-def stdin_reader(loop: asyncio.AbstractEventLoop, q: asyncio.Queue):
-    for line in sys.stdin:
-        line = line.strip()
-        if line:
-            loop.call_soon_threadsafe(q.put_nowait, line)
-    loop.call_soon_threadsafe(q.put_nowait, None)
+class BrokenBackend:
+    """--serve when pymobiledevice3 can't be loaded: every request answers with the same error."""
+
+    def __init__(self, exc: BaseException):
+        self.e = classify(exc)
+
+    async def welcome(self):
+        return [("ready", {"version": VERSION, "pymobiledevice3": None, "python": sys.executable, "pid": os.getpid(),
+                           "error": self.e.to_json()})]
+
+    async def dispatch(self, cmd, args):
+        if cmd == "daemon.ping":
+            return {"pong": True, "ts": time.time()}
+        raise self.e
+
+    def error_json(self, exc, cmd):
+        return classify(exc).to_json()
+
+    def syslog_target(self, args):
+        raise self.e
+
+    def syslog_open(self, pid):
+        pass
+
+    async def syslog_close(self):
+        pass
+
+    async def syslog_resolve(self, bid):
+        return None, bid
+
+    async def shutdown(self):
+        pass
 
 
 async def once(cmd: str, raw_args: str) -> int:
@@ -1531,59 +1475,30 @@ async def once(cmd: str, raw_args: str) -> int:
     return reply(out or {"ok": False, "error": {"code": "failed", "message": "No reply."}})
 
 
-async def amain() -> int:
+async def serve() -> int:
+    """`iosstudio-deviced --serve`: the shared daemon (normally started detached by the bridge)."""
+    global BROKER
+    broker = device_broker.Broker(demo=None)
+    if not broker.acquire():
+        return 0   # another daemon is live; its socket serves everybody
+    broker.redirect_stderr()
+    with contextlib.suppress(Exception):
+        _OUT.close()   # nothing is written to the original stdout in this mode
+    BROKER = broker
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
     logging.getLogger().addHandler(_LogBridge())
-    q: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    threading.Thread(target=stdin_reader, args=(loop, q), daemon=True).start()
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, lambda: q.put_nowait(None))
-    try:
-        pmd3 = link.load_pmd3()
-    except link.ApiError as exc:
-        emit("ready", {"version": VERSION, "pymobiledevice3": None, "python": sys.executable, "pid": os.getpid(),
-                       "error": classify(exc).to_json()})
-        # Answer every request with the same error until stdin closes.
-        while (line := await q.get()) is not None:
-            with contextlib.suppress(json.JSONDecodeError):
-                m = json.loads(line)
-                send({"id": m.get("id"), "ok": False, "error": classify(exc).to_json()})
-        return 0
-    d = Daemon(pmd3)
-    emit("ready", {"version": VERSION, "pymobiledevice3": pmd3.version, "python": sys.executable, "pid": os.getpid()})
-    disc = asyncio.create_task(d.discovery())
-    tasks: set[asyncio.Task] = set()
 
-    async def pump():
-        while True:
-            line = await q.get()
-            if line is None:
-                d.stopping.set()
-                return
-            try:
-                m = json.loads(line)
-                if not isinstance(m, dict):
-                    raise ValueError
-            except (json.JSONDecodeError, ValueError):
-                send({"event": "log", "data": {"level": "warn", "text": "ignored a malformed request line"}})
-                continue
-            t = asyncio.create_task(d.handle(m))
-            tasks.add(t)
-            t.add_done_callback(tasks.discard)
-
-    pumper = asyncio.create_task(pump())
-    await d.stopping.wait()
-    pumper.cancel()
-    disc.cancel()
-    for t in list(tasks):
-        t.cancel()
-    try:
-        await asyncio.wait_for(d.shutdown(), 6)
-    except BaseException:  # noqa: BLE001
-        pass
-    return 0
+    async def make(_broker):
+        try:
+            pmd3 = await asyncio.to_thread(link.load_pmd3)
+        except link.ApiError as exc:
+            dlog(f"pymobiledevice3 unusable: {exc!r}")
+            return BrokenBackend(exc)
+        d = Daemon(pmd3)
+        d.disc_task = asyncio.create_task(d.discovery())
+        dlog(f"pymobiledevice3 {pmd3.version} loaded")
+        return d
+    return await broker.run(make)
 
 
 def main() -> int:
@@ -1592,7 +1507,13 @@ def main() -> int:
         if len(sys.argv) >= 3 and sys.argv[1] == "--once":
             code = asyncio.run(once(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "{}"))
             return code
-        return asyncio.run(amain())
+        if len(sys.argv) >= 2 and sys.argv[1] == "--serve":
+            code = asyncio.run(serve())
+            return code
+        print("usage: deviced.py --serve | --once <cmd> '<json args>'  (normally run by bin/iosstudio-deviced)",
+              file=sys.stderr)
+        code = 2
+        return code
     except KeyboardInterrupt:
         return 0
     finally:

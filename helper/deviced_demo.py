@@ -1,8 +1,14 @@
 """Fake device daemon for demo mode (IOSSTUDIO_DEMO set): same protocol as deviced.py
 (docs/deviced-protocol.md) with a made-up iPhone. Stdlib only; never talks to a real device.
+
+`--serve` runs it as the shared broker (helper/device_broker.py) on the demo socket
+($XDG_RUNTIME_DIR/ios-studio-demo/deviced.sock), so the GUI and MCP evaluations can share one fake
+iPhone. `--once <cmd> '<json>'` answers one request and exits.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import random
@@ -13,23 +19,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import demo_art  # noqa: E402
+import device_broker  # noqa: E402
 
 SCENARIO = os.environ.get("IOSSTUDIO_DEMO", "ready").lower()
 FRESH = SCENARIO == "fresh"
 TEAM = "A1B2C3D4E5"
 UDID = "00008150-000000000000001C"
 DIR = demo_art.demo_dir()
-_out = threading.Lock()
-
-
-def send(obj: dict) -> None:
-    with _out:
-        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+BROKER: device_broker.Broker | None = None
 
 
 def event(name: str, data) -> None:
-    send({"event": name, "data": data})
+    """Device-wide event to every subscribed client (thread-safe)."""
+    if BROKER is not None:
+        BROKER.emit(name, data)
 
 
 DEVICE = {"udid": UDID, "name": "Alex's iPhone", "productType": "iPhone18,1", "model": "iPhone 17 Pro", "ios": "27.2",
@@ -57,6 +60,7 @@ APPS = [
     ("Trail Runner", "com.example.trailrunner", 0.08, "circle", False, False, 129),
 ]
 running = {b for _, b, _, _, _, r, _ in APPS if r}
+pids = {b: 400 + i for i, (_, b, *_) in enumerate(APPS)}   # one pid per app, as apps.list and processes.list report it
 installed = {b for _, b, *_ in APPS}
 
 
@@ -69,12 +73,13 @@ def apps_list() -> list:
                     "developer": dev, "removable": True, "hidden": False, "system": False, "executable": name.replace(" ", ""),
                     "path": "/private/var/containers/Bundle/Application/DEMO/" + name.replace(" ", "") + ".app",
                     "icon": str(demo_art.icon(DIR / "icons" / (bid + ".png"), hue, shape)), "running": bid in running,
-                    "pid": 400 + len(name) if bid in running else None, "size": mb * 1_000_000})
+                    "pid": pids[bid] if bid in running else None, "size": mb * 1_000_000})
     return sorted(out, key=lambda a: a["name"].lower())
 
 
-def crash_items() -> list:
-    now = time.time()
+def crash_items(now: float | None = None) -> list:
+    # Anchored to a 15-minute step so a name from crash.list still resolves in a later crash.pull.
+    now = (time.time() // 900) * 900 if now is None else now
     out = []
     for i, ago in enumerate((3.2 * 3600, 27 * 3600, 30 * 3600)):
         ts = now - ago
@@ -90,7 +95,8 @@ def crash_items() -> list:
 
 def crash_pull(name: str) -> dict:
     proc = "HabitTracker" if "Habit" in name else ("JetsamEvent" if "Jetsam" in name else "WeatherGlance")
-    item = next((c for c in crash_items() if c["name"][-11:] == name[-11:] or c["name"] == name), None)
+    base = (time.time() // 900) * 900
+    item = next((c for c in crash_items(base) + crash_items(base - 900) if c["name"] == name), None)
     when = time.strftime("%Y-%m-%d %H:%M:%S.00", time.localtime(item["ts"] if item else time.time()))
     path = DIR / "crashes" / Path(name).name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,8 +122,6 @@ def crash_pull(name: str) -> dict:
 
 # ---------------------------------------------------------------- syslog / mirror
 
-syslog_on = threading.Event()
-syslog_filters: dict = {}
 mirror_on = threading.Event()
 mirror_fps = [1.0]
 
@@ -132,25 +136,6 @@ LOG_LINES = [
     ("WeatherGlance", "fault", "com.example.weatherglance", "store", "Cache file is corrupt, rebuilding"),
     ("WeatherGlance", "info", "com.example.weatherglance", "widgets", "Reloaded 2 widget timelines"),
 ]
-
-
-def syslog_loop() -> None:
-    i = 0
-    while True:
-        time.sleep(0.7)
-        if not syslog_on.is_set():
-            continue
-        batch = []
-        for _ in range(random.randint(1, 3)):
-            proc, lvl, sub, cat, msg = LOG_LINES[i % len(LOG_LINES)]
-            i += 1
-            procs = syslog_filters.get("processes") or []
-            if procs and proc not in procs:
-                continue
-            batch.append({"ts": time.time(), "process": proc, "pid": 812 if proc != "SpringBoard" else 54, "level": lvl,
-                          "subsystem": sub, "category": cat, "message": msg, "image": proc})
-        if batch:
-            event("syslog", batch)
 
 
 def mirror_loop() -> None:
@@ -183,6 +168,7 @@ def handle(cmd: str, a: dict):
         return apps_list()
     if cmd == "app.launch":
         running.add(a.get("bundleId"))
+        pids[a.get("bundleId")] = 812
         return {"bundleId": a.get("bundleId"), "pid": 812}
     if cmd == "app.kill":
         running.discard(a.get("bundleId"))
@@ -196,15 +182,16 @@ def handle(cmd: str, a: dict):
             time.sleep(0.5)
         name = Path(str(a.get("path") or "App.ipa")).stem
         bid = next((b for n, b, *_ in APPS if n == name), f"XTL-{TEAM}.com.example." + name.lower())
+        installed.add(bid)
         return {"path": a.get("path"), "bundleId": bid, "packageBundleId": bid.split(f"XTL-{TEAM}.")[-1], "seconds": 2.0}
     if cmd == "processes.list":
-        return [{"pid": 400 + i, "name": n.replace(" ", ""), "path": "", "isApp": True, "bundleId": b}
-                for i, (n, b, *_) in enumerate(APPS) if b in running]
+        return [{"pid": pids.get(b, 812), "name": n.replace(" ", ""), "path": "", "isApp": True, "bundleId": b}
+                for n, b, *_ in APPS if b in running]
     if cmd == "screenshot":
         p = demo_art.phone_screen(DIR / "screens" / f"screenshot-{int(time.time())}.png")
         return {"path": str(p), "width": 390, "height": 844, "bytes": p.stat().st_size, "ts": time.time()}
     if cmd == "mirror.start":
-        mirror_fps[0] = float(a.get("fps") or 1.0)
+        mirror_fps[0] = max(0.2, min(4.0, float(a.get("fps") or 1.0)))
         mirror_on.set()
         event("mirror", {"running": True, "fps": mirror_fps[0]})
         return {"running": True, "fps": mirror_fps[0]}
@@ -213,8 +200,14 @@ def handle(cmd: str, a: dict):
         event("mirror", {"running": False, "fps": mirror_fps[0]})
         return {"running": False}
     if cmd == "location.set":
+        INFO["location"] = {"lat": a.get("lat"), "lon": a.get("lon")}
+        event("deviceInfo", {"udid": UDID, "location": INFO["location"]})
         return {"lat": a.get("lat"), "lon": a.get("lon")}
-    if cmd in ("location.clear", "devmode.reveal", "pair.cancel", "pair.code"):
+    if cmd == "location.clear":
+        INFO["location"] = None
+        event("deviceInfo", {"udid": UDID, "location": None})
+        return {}
+    if cmd in ("devmode.reveal", "pair.cancel", "pair.code"):
         return {}
     if cmd in ("ddi.status", "ddi.mount"):
         return {"mounted": True}
@@ -230,58 +223,117 @@ def handle(cmd: str, a: dict):
         return {"records": [{"udid": UDID, "wifi": True, "usb": True, "path": ""}], "usb": []}
     if cmd == "pair.start":
         return {"started": True}
-    if cmd == "syslog.start" or cmd == "syslog.filter":
-        syslog_filters.clear()
-        syslog_filters.update(a.get("filters") or {})
-        syslog_on.set()
-        event("syslogState", {"running": True, "udid": UDID, "filters": syslog_filters, "dropped": 0, "reconnecting": False})
-        return {"running": True, "filters": syslog_filters}
-    if cmd == "syslog.stop":
-        syslog_on.clear()
-        event("syslogState", {"running": False, "udid": UDID, "filters": syslog_filters, "dropped": 0, "reconnecting": False})
-        return {"running": False}
     if cmd == "crash.list":
         return crash_items()
     if cmd == "crash.pull":
         return crash_pull(str(a.get("name") or ""))
-    if cmd == "daemon.shutdown":
-        send({"event": "log", "data": {"level": "info", "text": "bye"}})
-        os._exit(0)
-    raise ValueError(f"Unknown command {cmd}")
+    raise LookupError(f"Unknown command {cmd!r}.")
 
 
-def serve(req: dict) -> None:
-    rid = req.get("id")
+class DemoBackend:
+    """device_broker backend for the fake iPhone."""
+
+    def __init__(self, broker: device_broker.Broker):
+        self.b = broker
+        self.syslog_task: asyncio.Task | None = None
+
+    async def welcome(self):
+        out = [("ready", {"version": "1", "pymobiledevice3": "demo", "python": sys.version.split()[0], "pid": os.getpid(),
+                          "demo": SCENARIO})]
+        if FRESH:
+            out += [("devices", []), ("connection", {"udid": None, "state": "idle", "transport": None,
+                                                     "message": "No iPhone selected", "detail": "", "retryIn": 0,
+                                                     "since": time.time()})]
+        else:
+            out += [("devices", [DEVICE]), ("connection", {"udid": UDID, "state": "connected", "transport": "wifi",
+                                                           "message": "Connected over Wi-Fi", "detail": "", "retryIn": 0,
+                                                           "since": STARTED - 900}), ("deviceInfo", INFO)]
+        if mirror_on.is_set():
+            out.append(("mirror", {"running": True, "fps": mirror_fps[0]}))
+        return out
+
+    async def dispatch(self, cmd: str, a: dict):
+        return await asyncio.to_thread(handle, cmd, a)
+
+    def error_json(self, exc: BaseException, cmd: str) -> dict:
+        if isinstance(exc, LookupError):
+            return {"code": "bad-args", "message": str(exc).strip("'\"")}
+        return {"code": "failed", "message": "Demo mode can't do that.", "detail": str(exc)}
+
+    # syslog: one fake stream, filtered per client by the broker
+    def syslog_target(self, args):
+        if FRESH:
+            raise RuntimeError("no device")
+        return UDID
+
+    def syslog_open(self, pid: int):
+        if self.syslog_task is None or self.syslog_task.done():
+            self.syslog_task = asyncio.create_task(self._syslog())
+
+    async def syslog_close(self):
+        t, self.syslog_task = self.syslog_task, None
+        if t:
+            t.cancel()
+            with contextlib.suppress(BaseException):
+                await t
+
+    async def syslog_resolve(self, bid: str):
+        for name, b, *_ in APPS:
+            if b == bid or b.endswith("." + bid):
+                return name.replace(" ", ""), b
+        return None, bid
+
+    async def _syslog(self):
+        i = 0
+        hub = self.b.syslog
+        while True:
+            await asyncio.sleep(0.7)
+            for _ in range(random.randint(1, 3)):
+                proc, lvl, sub, cat, msg = LOG_LINES[i % len(LOG_LINES)]
+                i += 1
+                hub.feed({"ts": time.time(), "process": proc, "pid": 812 if proc != "SpringBoard" else 54, "level": lvl,
+                          "subsystem": sub, "category": cat, "message": msg, "image": proc})
+
+    async def shutdown(self):
+        mirror_on.clear()
+        await self.syslog_close()
+
+
+STARTED = time.time()
+
+
+async def serve() -> int:
+    global BROKER
+    BROKER = device_broker.Broker(demo=SCENARIO)
+    if not BROKER.acquire():
+        return 0   # another demo daemon is live
+    BROKER.redirect_stderr()
+    threading.Thread(target=mirror_loop, daemon=True).start()
+
+    async def make(b):
+        return DemoBackend(b)
+    return await BROKER.run(make)
+
+
+def once(cmd: str, raw: str) -> int:
     try:
-        send({"id": rid, "ok": True, "data": handle(str(req.get("cmd")), req.get("args") or {})})
+        data = handle(cmd, json.loads(raw or "{}"))
+        print(json.dumps({"ok": True, "data": data}))
+        return 0
     except Exception as exc:  # noqa: BLE001
-        send({"id": rid, "ok": False, "error": {"code": "failed", "message": "Demo mode can't do that.", "detail": str(exc)}})
+        print(json.dumps({"ok": False, "error": DemoBackend(None).error_json(exc, cmd)}))
+        return 1
 
 
 def main() -> int:
-    event("ready", {"version": "1", "pymobiledevice3": "demo", "python": sys.version.split()[0], "pid": os.getpid()})
-    if FRESH:
-        event("devices", [])
-        event("connection", {"udid": None, "state": "idle", "transport": None, "message": "No iPhone selected", "detail": "",
-                             "retryIn": 0, "since": time.time()})
-    else:
-        event("devices", [DEVICE])
-        event("connection", {"udid": UDID, "state": "connected", "transport": "wifi", "message": "Connected over Wi-Fi",
-                             "detail": "", "retryIn": 0, "since": time.time() - 900})
-        event("deviceInfo", INFO)
-    threading.Thread(target=syslog_loop, daemon=True).start()
-    threading.Thread(target=mirror_loop, daemon=True).start()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(req, dict) and "cmd" in req:
-            threading.Thread(target=serve, args=(req,), daemon=True).start()
-    return 0
+    if len(sys.argv) >= 3 and sys.argv[1] == "--once":
+        return once(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "{}")
+    if len(sys.argv) >= 2 and sys.argv[1] == "--serve":
+        code = asyncio.run(serve())
+        os._exit(code)
+    print("usage: deviced_demo.py --serve | --once <cmd> '<json>'  (normally started by bin/iosstudio-deviced)",
+          file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

@@ -29,7 +29,19 @@ PageFrame {
                       function(e) { page.integrationError = e })
     page.app.cli.call(["app", "about"], "", function(d) { page.about = d }, function(e) {})
   }
-  function activated(params) { if (!page.integration) refresh() }
+  function activated(params) {
+    if (!page.integration) refresh()
+    var p = params || {}
+    if (p.section === "agents" || p.tab === "agents" || String(p.action || "").indexOf("agents") === 0) {
+      agents.refresh()
+      if (p.action === "agents-repair") agents.prepare(true)
+      Qt.callLater(function() {   // bring the section to the top
+        var f = page.flickable
+        var y = agents.mapToItem(f.contentItem, 0, 0).y - Style.spacing.lg
+        f.contentY = Math.max(0, Math.min(y, f.contentHeight - f.height))
+      })
+    }
+  }
   Component.onCompleted: refresh()
 
   // Saved folders, or (until the user edits the list) the detected defaults the helper scans.
@@ -217,6 +229,9 @@ PageFrame {
       }
     }
   }
+
+  // ---------------------------------------------------------------- AI agents
+  AgentsSection { id: agents; Layout.fillWidth: true; app: page.app }
 
   // ---------------------------------------------------------------- desktop
   Card {

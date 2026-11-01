@@ -1,0 +1,45 @@
+#!/bin/bash
+# iOS Studio MCP server for AI coding agents (stdio). Register this file's absolute path as the server
+# command in your agent; see docs/mcp.md.
+#
+# stdout is the MCP protocol, so everything this script prints goes to stderr. On first run (and whenever
+# mcp/pyproject.toml changes) it creates a private venv with the server's dependencies, using uv if it's
+# installed, else python -m venv + pip.
+#   IOSSTUDIO_DEMO=1        made-up account, iPhone and projects (no real side effects)
+#   IOSSTUDIO_MCP_LOG=DEBUG more detail on stderr
+#   IOSSTUDIO_MCP_VENV=dir  use another venv location
+#   --prepare               only create or update the venv, then exit (Settings › AI agents › Prepare)
+set -euo pipefail
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+repo="$(cd "$(dirname "$self")/.." && pwd)"
+pkg="$repo/mcp"
+venv="${IOSSTUDIO_MCP_VENV:-${XDG_DATA_HOME:-$HOME/.local/share}/ios-studio/mcp-venv}"
+stamp="$venv/.iosstudio-deps"
+say() { printf 'iosstudio-mcp: %s\n' "$*" >&2; }
+
+want="$(sha256sum "$pkg/pyproject.toml" | cut -c1-16)"
+if [[ ! -x $venv/bin/python || "$(cat "$stamp" 2>/dev/null || true)" != "$want" ]]; then
+  mkdir -p "$(dirname "$venv")"
+  exec 9>"$venv.lock"
+  flock 9   # two agents starting at once: one sets up, the other waits
+  if [[ ! -x $venv/bin/python || "$(cat "$stamp" 2>/dev/null || true)" != "$want" ]]; then
+    say "setting up the server's Python environment in $venv (first run only, needs internet)…"
+    mapfile -t deps < <(python3 -c 'import sys, tomllib; print("\n".join(tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"]))' "$pkg/pyproject.toml")
+    if command -v uv >/dev/null 2>&1; then
+      uv venv --quiet --allow-existing --python ">=3.10" "$venv" >&2
+      VIRTUAL_ENV="$venv" uv pip install --quiet "${deps[@]}" >&2
+    else
+      [[ -x $venv/bin/python ]] || python3 -m venv "$venv" >&2
+      "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "${deps[@]}" >&2
+    fi
+    echo "$want" >"$stamp"
+    say "ready."
+  fi
+  exec 9>&-
+fi
+
+[[ ${1:-} == --prepare ]] && exit 0
+
+# PYTHONSAFEPATH: never import from the agent's working directory (a stray mcp.py there must not win).
+export PYTHONPATH="$pkg" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 IOSSTUDIO_REPO="$repo"
+exec "$venv/bin/python" -m iosstudio_mcp "$@"

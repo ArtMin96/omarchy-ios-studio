@@ -1,7 +1,7 @@
 # iOS Studio components
 
 Shared building blocks in `components/` on top of Omarchy's `qs.Ui` kit. Build every page
-from these, so all slices look the same and follow the live theme.
+from these, so all pages look the same and follow the live theme.
 
 ```qml
 import QtQuick
@@ -63,7 +63,7 @@ PageFrame {
 | `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. |
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
-| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`. Slices may add keys. |
+| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo` and the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming`. Pages may add keys. |
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
 | `app.page`, `app.pageParams`, `app.windowFocused` | State |
 | `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir` | Paths |
@@ -385,9 +385,9 @@ the keyboard.
 
 ---
 
-## Final integration additions
+## More components and app-wide features
 
-- **QuietNote** (new): slim, left-aligned "nothing here yet" line for small dashboard sections where a full
+- **QuietNote**: slim, left-aligned "nothing here yet" line for small dashboard sections where a full
   `EmptyState` would outweigh the lists beside it. Props: `glyph`, `title`, `text`, `level` (tints the glyph).
   ```qml
   QuietNote { Layout.fillWidth: true; glyph: Model.Glyph.hammer; title: "No builds yet"; text: "Builds you run show up here." }
@@ -407,3 +407,5 @@ the keyboard.
   `helper/demo.py` and the daemon is `helper/deviced_demo.py` (a made-up iPhone, account and projects; no side
   effects). AppState then uses `$XDG_RUNTIME_DIR/ios-studio-demo/` for settings, state and cache. Use it for
   screenshots so no personal data shows.
+- **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
+  `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.

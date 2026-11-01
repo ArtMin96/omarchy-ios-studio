@@ -1,12 +1,108 @@
 # Device daemon protocol (`bin/iosstudio-deviced`)
 
-Owner: device slice. Consumers: `services/DeviceService.qml` (device slice) and
-`services/LogService.qml` (logs slice, through `app.device.request()` / `app.device.daemonEvent`).
+Clients: `services/DeviceService.qml` (iPhone page), `services/LogService.qml` (Logs page, through
+`app.device.request()` / `app.device.daemonEvent`) and the MCP server (`mcp/`, through
+`helper/device_client.py`).
 
-The daemon is a long-running Python process (pymobiledevice3 venv, see `common.pymd3_python()`)
-started by DeviceService while the app is open. It talks **JSON lines** over stdin/stdout. stderr
-is free-form debug text (never parse it). It exits when stdin closes (the app quit) or on
-`daemon.shutdown`.
+The daemon is one long-running Python process per user (pymobiledevice3 venv, see
+`common.pymd3_python()`). It owns the only tunnel to the iPhone and is shared: the GUI, the MCP
+server and `--once` jobs all talk to the same process over a Unix socket (see [Broker](#broker)).
+`bin/iosstudio-deviced` with no arguments is a stdio bridge to it, so a client can talk JSON
+lines over stdin/stdout without knowing about the socket. stderr is free-form debug text (never parse it).
+
+## Broker
+
+```
+$XDG_RUNTIME_DIR/ios-studio/deviced.sock         real phone   (mode 0600, directory 0700)
+$XDG_RUNTIME_DIR/ios-studio-demo/deviced.sock    demo mode    (IOSSTUDIO_DEMO set; fake iPhone)
+  deviced.lock   flock held by the live daemon (single instance)
+  deviced.log    the daemon's stderr (truncated at each start)
+```
+
+| invocation | what it does |
+|---|---|
+| `iosstudio-deviced` | connects to the socket; if nothing answers it starts `iosstudio-deviced --serve` detached (own session) and waits for the socket (≤30 s). Then it bridges stdin↔socket until either side closes. stdlib python, starts in ~0.1 s. |
+| `iosstudio-deviced --serve` | becomes the daemon: takes the lock (exits 0 if another daemon is live), removes a stale socket, listens, then loads pymobiledevice3. Normally only started by the bridge or `device_client.py`. |
+| `iosstudio-deviced --once <cmd> '<json>'` | one request through the live daemon if there is one (no second tunnel), otherwise the standalone one-shot mode below. |
+
+Implementation: `helper/device_broker.py` (stdlib), shared by `helper/deviced.py` and
+`helper/deviced_demo.py`.
+
+**Per connection.** Each connection is a client with the framing below. Request `id`s are scoped
+to the connection (two clients may both use `id: 1`; each reply goes back to the connection that
+asked). On connect the daemon sends a snapshot: `ready`, `devices`, and when known `connection`,
+`deviceInfo` and `mirror`, so a client attaching to a daemon that is already connected sees the
+current state at once.
+
+**Lifetime.** The daemon runs while any client is connected. With no clients it exits after an
+idle grace period (`IOSSTUDIO_DEVICED_IDLE` seconds, default 120), closing the tunnel, the syslog
+stream, the mirror and the DVT channels, and removing the socket. Quitting the GUI therefore never
+stops the daemon while the MCP server is connected, and vice versa; reopening the GUI within the
+grace period reattaches to the open tunnel instantly. SIGTERM/SIGINT/SIGHUP shut it down cleanly.
+The bridge exits when the daemon goes away (the GUI's Stream then restarts it, which starts a new
+daemon).
+
+`daemon.shutdown` means "this client is done": the daemon replies `{}` and closes that
+connection; other clients are unaffected. `{"all": true}` stops the daemon for everyone.
+
+### Broker commands
+
+| cmd | args | reply data |
+|---|---|---|
+| `hello` | `{name?, events?, version?}` | `{version, pid, clientId, name, clients, demo, socket, idle, events}`; names the client (logs, `daemon.clients`) and optionally sets the subscription |
+| `subscribe` | `{events: [name…] \| null}` | same as `hello`; `null`, `"*"` or omitting `events` = all events |
+| `daemon.clients` | – | `[{id, name, since, events, syslog: Filters \| null, mirror: bool}]` |
+| `daemon.shutdown` | `{all?: bool}` | `{}`; detaches this client (or stops the daemon with `all`) |
+
+**Events.** Device-wide events (`devices`, `connection`, `deviceInfo`, `frame`, `mirror`, `pair`,
+`appIcon`, `appSizes`, `installProgress`, …) are broadcast to every client subscribed to them.
+The default subscription is all events, which is what the GUI relies on. `syslog` and
+`syslogState` are per client: a client only gets entries for its own `syslog.start`, filtered by
+its own filters, whatever its subscription.
+
+**Shared (global) state.** These affect every client; the last writer wins:
+- the active device (`device.select`, `device.reconnect`);
+- the simulated location (`location.set` / `location.clear`; it stays until cleared or until the
+  daemon exits, not when the client that set it disconnects);
+- pairing (`pair.*`; one flow at a time, progress is broadcast);
+- the mirror frame rate (`mirror.start {fps}` from any client changes it for all).
+
+**Syslog.** There is one log stream to the phone. Each client's `syslog.start` / `syslog.filter`
+/ `syslog.stop` only changes its own subscription; filtering happens in the daemon per client, with
+the same batching and limits per client (100 ms, ≤200 entries per batch, 1000-entry buffer,
+`dropped` counted per client). The phone-side filter is a single `pid` when every subscriber
+filters on exactly that one pid; otherwise the phone sends everything and entries below every
+subscriber's `minLevel` are skipped before they're built. The phone stream starts with the first
+subscriber and stops when the last one stops or disconnects.
+
+**Mirror.** Reference counted: `mirror.start` adds the client, `mirror.stop` removes it and the
+frames stop only when no client holds it (the reply then says `{running: false, sharedWith: n}`
+while others still do). A client disconnecting releases its reference. `frame` events go to every
+subscribed client.
+
+### Python client (`helper/device_client.py`)
+
+Stdlib asyncio; import it from the repo or vendor the single file. Its module docstring is the
+full API.
+
+```python
+import sys; sys.path.insert(0, "<repo>/helper")
+from device_client import DeviceClient, DeviceError
+
+async with DeviceClient(name="mcp") as dev:          # spawns the daemon if needed
+    info = await dev.request("device.info", {}, timeout=40)
+    async with dev.events(["syslog"]) as stream:
+        await dev.request("syslog.start", {"filters": {"bundleId": "com.example.app", "minLevel": "info"}})
+        async for name, entries in stream:
+            ...
+```
+
+`request()` raises `DeviceError(code, message, fix, detail)` for error replies, plus `timeout`,
+`disconnected` and `daemon-unavailable`. Demo mode follows `IOSSTUDIO_DEMO` (or `demo=True`).
+After a daemon restart the client reconnects by itself and emits a local `reconnected` event;
+syslog subscriptions and mirror references must be re-requested then.
+
+`python3 helper/device_client.py device.info '{}'` sends one request from a shell (debugging).
 
 ## Framing
 
@@ -130,7 +226,7 @@ plugging in a cable switches transport on the next reconnect.
 | cmd | args | reply data |
 |---|---|---|
 | `daemon.ping` | – | `{pong: true, ts}` |
-| `daemon.shutdown` | – | `{}` then the process exits |
+| `daemon.shutdown` | `{all?}` | `{}`; closes this client's connection (see [Broker](#broker)) |
 | `devices.list` | – | `[Device…]` |
 | `device.select` | `{udid}` | `Device`; makes it active, (re)opens its tunnel |
 | `device.reconnect` | `{udid?}` | `{}`; drops the tunnel and reconnects now (resets backoff) |
@@ -161,7 +257,7 @@ Any field may be `null` when unknown (e.g. `battery` if the diagnostics service 
 | `app.launch` | `{bundleId, args?: [str], env?: {}, udid?}` | `{bundleId, pid}` (mounts DDI first) |
 | `app.kill` | `{bundleId, udid?}` | `{bundleId, killed: [pid…]}` |
 | `app.uninstall` | `{bundleId, udid?}` | `{bundleId}` (UI must confirm first) |
-| `app.install` | `{path, udid?}` (signed `.ipa` or `.app` folder) | `{path, bundleId, packageBundleId, seconds}` — `bundleId` is the id as installed (free teams: `XTL-<TEAM>.<id>`) |
+| `app.install` | `{path, udid?}` (signed `.ipa` or `.app` folder) | `{path, bundleId, packageBundleId, seconds}`; `bundleId` is the id as installed (free teams: `XTL-<TEAM>.<id>`) |
 | `processes.list` | `{udid?, appsOnly?: false}` | `[{pid, name, path, isApp, bundleId?}]` |
 
 App:
@@ -184,8 +280,8 @@ background (CoreDevice icon service) and sends one `appIcon` event per icon.
 | cmd | args | reply data |
 |---|---|---|
 | `screenshot` | `{udid?, save?: bool}` | `{path, width, height, bytes, ts}` |
-| `mirror.start` | `{udid?, fps?: 1.0}` (0.2–4) | `{running: true, fps}` |
-| `mirror.stop` | – | `{running: false}` |
+| `mirror.start` | `{udid?, fps?: 1.0}` (0.2–4) | `{running: true, fps}`; takes a mirror reference |
+| `mirror.stop` | – | `{running: false, sharedWith?}`; releases it (frames stop when nobody holds one) |
 
 `screenshot` writes `~/.cache/ios-studio/screens/shot-<YYYYmmdd-HHMMSS>.png`. Mirror frames go to
 two rotating files `~/.cache/ios-studio/screens/mirror-<udid>-{0,1}.png` (the UI must bust its
@@ -248,13 +344,16 @@ iPhone flow triggers.
 `show-code` (`code` = 6 digits to type on the phone), `need-code` (type the code shown on the phone
 into the app → `pair.code`), `done` (`udid`, `name`), `failed` (`message`, `detail`), `cancelled`.
 
-### Syslog (live device log) — used by the logs slice
+### Syslog (live device log), used by the Logs page
 
 | cmd | args | reply data |
 |---|---|---|
-| `syslog.start` | `{udid?, filters?: Filters}` | `{running: true, filters}`; replaces a running stream |
-| `syslog.filter` | `{filters: Filters}` | `{filters}`; changes filters without reconnecting |
-| `syslog.stop` | – | `{running: false}` |
+| `syslog.start` | `{udid?, filters?: Filters}` | `{running: true, filters}`; replaces this client's subscription |
+| `syslog.filter` | `{filters: Filters}` | `{filters}`; changes this client's filters without reconnecting |
+| `syslog.stop` | – | `{running: false}`; ends this client's subscription only |
+
+All three are per client (see [Broker](#broker)): two clients can stream with different filters at
+the same time over one phone stream.
 
 Filters (all optional, combined with AND; empty/omitted = everything):
 
@@ -293,11 +392,11 @@ SyslogEntry:
 - `subsystem`, `category` are `""` when the entry has no os_log label.
 - `image` is the basename of the sending library/binary (`""` if none).
 
-`syslogState`: `{running, udid, filters, dropped, reconnecting, error?}`. When the tunnel drops,
+`syslogState` (per client): `{running, udid, filters, dropped, reconnecting, error?}`. When the tunnel drops,
 the daemon sets `reconnecting: true` and resumes the stream automatically after reconnecting
 (entries during the gap are lost).
 
-### Crash reports — used by the logs slice
+### Crash reports, used by the Logs page
 
 | cmd | args | reply data |
 |---|---|---|
@@ -345,13 +444,14 @@ helper/device_link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes af
 | `incompatible` / `bad-signature` | iOS version/architecture mismatch, invalid signature |
 | `install-failed` | anything else (`detail` holds the installer's text) |
 
-## One-shot mode (no app running)
+## One-shot mode
 
 ```
 bin/iosstudio-deviced --once <cmd> '<json args>'
 ```
 
-Opens the tunnel to `args.udid` (or the default device: settings `defaultDevice`, last used, first
+When a daemon is live, the request goes through it (no second tunnel; `args.udid`, if given, must
+be the active device) and the reply is printed in the same format. Otherwise it runs standalone: it opens the tunnel to `args.udid` (or the default device: settings `defaultDevice`, last used, first
 USB, first Wi-Fi pair record), runs one command, prints **one** JSON object
 `{"ok": true, "data": …}` / `{"ok": false, "error": {…}}` on stdout and exits (0 ok, 1 error).
 Events and diagnostics go to stderr only. Any command works, e.g.
@@ -359,7 +459,7 @@ Events and diagnostics go to stderr only. Any command works, e.g.
 `renew-due`), `--once device.info '{}'`. The tunnel wait is 25 s, so an unreachable phone answers
 `unreachable` in ~25–35 s.
 
-## State file for other slices
+## State file for other parts of the app
 
 Whenever the device's info or connection changes, the daemon writes (atomically)
 `~/.local/state/ios-studio/device.json`:
@@ -372,5 +472,5 @@ Whenever the device's info or connection changes, the daemon writes (atomically)
 ```
 
 Unknown values are `null`; values from an earlier connection of the same device are kept.
-`connection` is the last connection state the daemon saw (stale once the daemon has exited — check
+`connection` is the last connection state the daemon saw (stale once the daemon has exited; check
 `updatedAt`).

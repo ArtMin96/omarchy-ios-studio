@@ -105,7 +105,15 @@ var Glyph = {
   layers: g(0xF0328),
   briefcase: g(0xF00D6),
   idCard: g(0xF05D2),
-  xml: g(0xF05C0)
+  xml: g(0xF05C0),
+  robot: g(0xF06A9),
+  testTube: g(0xF0668),
+  asterisk: g(0xF06C4),
+  hexagon: g(0xF02D9),
+  consoleLine: g(0xF07B7),
+  cursorArrow: g(0xF01BF),
+  starFour: g(0xF0AE2),
+  lightning: g(0xF140B)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

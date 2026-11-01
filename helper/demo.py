@@ -216,6 +216,9 @@ def _setup_check(flags: dict) -> dict:
 
 def _toolchain_info(flags: dict) -> dict:
     d = scrub(_real("setup", "toolchain", "info", flags) or {"items": [], "sdks": {}})
+    for it in d.get("items", []):
+        if it.get("id") == "apple-dev" and it.get("detail"):   # a personal checkout path: show the standard one
+            it["detail"] = "~/.local/share/omarchy-apple-dev"
     if FRESH:
         for it in d.get("items", []):
             if it["id"] not in ("apple-dev",):
@@ -241,6 +244,8 @@ def _build_stream(kind: str, flags: dict) -> int:
     steps = [("resolve", "Resolving packages"), ("compile", "Compiling"), ("link", "Linking"), ("sign", "Signing"), ("package", "Packaging")]
     lines = ["Fetching https://github.com/example/swift-collections", "Compiling " + name + " ContentView.swift",
              "Compiling " + name + " Model.swift", "Linking " + name, "Signing with Apple Development: " + NAME, "Packaging " + name + ".ipa"]
+    if name == "HabitTracker":   # the demo project with a broken branch: fails to compile, like its history
+        return _failing_build(kind, path, name, bundle, steps[:2], lines)
     for i, (sid, title) in enumerate(steps):
         common.step(sid, title, "running", detail=title + "…")
         for j in range(3):
@@ -257,13 +262,39 @@ def _build_stream(kind: str, flags: dict) -> int:
     return common.done(True, data)
 
 
+def _failing_build(kind: str, path: str, name: str, bundle: str, steps: list, lines: list) -> int:
+    diags = [{"file": path + "/Sources/HabitTracker/StreakView.swift", "line": 18, "col": 27, "severity": "error",
+              "message": "cannot find 'streakCount' in scope"},
+             {"file": path + "/Sources/HabitTracker/Habit.swift", "line": 7, "col": 5, "severity": "error",
+              "message": "type 'Habit' does not conform to protocol 'Identifiable'"}]
+    for i, (sid, title) in enumerate(steps):
+        common.step(sid, title, "running", detail=title + "…")
+        for j in range(2):
+            common.progress((i * 2 + j + 1) / 6, title + "…", 6)
+            common.log(lines[min(i + j, len(lines) - 1)])
+            time.sleep(0.4)
+        if sid == "compile":
+            for d in diags:
+                common.log(f"{d['file']}:{d['line']}:{d['col']}: error: {d['message']}")
+                common.event("diagnostic", **d)
+            common.step(sid, title, "failed")
+            break
+        common.step(sid, title, "done")
+    build = {"project": name, "name": name, "path": path, "kind": kind, "config": "debug", "result": "failed",
+             "duration": 4.1, "time": NOW, "errors": 2, "warnings": 0, "bundleId": bundle, "diagnostics": diags,
+             "errorCode": "compile-errors", "errorMessage": "The app has 2 errors in its code."}
+    common.event("done", ok=False, error={"code": "compile-errors", "message": "The app has 2 errors in its code.",
+                                          "build": build})
+    return 1
+
+
 def _fake_log(flags: dict) -> dict:
     f = str(flags.get("file") or "")
     failed = "habits" in f
     text = "\n".join([
         "$ xtool dev build --triple arm64-apple-ios",
         "Building for debugging...",
-        "[1/12] Compiling Habit.swift",
+        "[1/12] Compiling Habit.swift" if failed else "[1/12] Compiling Forecast.swift",
         HOME + "/Developer/HabitTracker/Sources/HabitTracker/Habit.swift:7:5: error: type 'Habit' does not conform to protocol 'Identifiable'" if failed else "[6/12] Compiling ContentView.swift",
         HOME + "/Developer/HabitTracker/Sources/HabitTracker/StreakView.swift:18:27: error: cannot find 'streakCount' in scope" if failed else "[12/12] Linking WeatherGlance",
         "error: build failed (2 errors)" if failed else "Signed and packaged in 48.2 s",
@@ -275,6 +306,9 @@ def _fake_log(flags: dict) -> dict:
 
 def run(group: str, action: str, flags: dict) -> int:
     key = f"{group} {action}"
+    if group == "agents":
+        import agents
+        return agents.demo(action, flags)
     if key == "setup check":
         return ok(_setup_check(flags))
     if key == "toolchain info":
@@ -292,6 +326,15 @@ def run(group: str, action: str, flags: dict) -> int:
         if FRESH:
             return ok({"projects": [], "convertible": [], "missing": [], "roots": [PROJ_ROOT], "defaultRoots": [PROJ_ROOT], "defaultDir": PROJ_ROOT, "xtool": False})
         return ok({"projects": [_project(p) for p in PROJECTS], "convertible": [], "missing": [], "roots": [PROJ_ROOT], "defaultRoots": [PROJ_ROOT], "defaultDir": PROJ_ROOT, "xtool": True})
+    if key == "projects info":
+        want = str(flags.get("path") or "").rstrip("/").split("/")[-1]
+        match = next((p for p in PROJECTS if p["name"] == want), None)
+        if not match:
+            return common.fail("not-found", "That project folder doesn't exist anymore.")
+        return ok(_project(match))
+    if key == "projects summary":
+        h = sorted(_history(), key=lambda e: e["time"])
+        return ok({"lastBuild": h[-1] if h else None, "recentBuilds": list(reversed(h))[:8], "expiring": []})
     if key == "projects templates":
         return ok(_real("projects", "projects", "templates", flags) or {"templates": []})
     if key == "projects autorenew":

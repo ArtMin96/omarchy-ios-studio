@@ -47,6 +47,21 @@ uninstall() {
     "$REPO/bin/iosstudio-helper" app window-rule --mode tile >/dev/null 2>&1 || true
     "$REPO/bin/iosstudio-helper" app opacity --opaque off >/dev/null 2>&1 || true
     say "removed iOS Studio's Hyprland keybinding / window rules (if any)"
+    # The daily re-sign timer (a systemd user unit) and AI agent registrations point into this folder.
+    "$REPO/bin/iosstudio-helper" projects autorenew --disable >/dev/null 2>&1 || true
+    say "turned off automatic re-signing (if it was on)"
+    local clients
+    clients=$("$REPO/bin/iosstudio-helper" agents list 2>/dev/null | /usr/bin/python3 -I -c '
+import json, sys
+try:
+    for c in json.load(sys.stdin)["data"]["clients"]:
+        if c.get("registered"):
+            print(c["id"])
+except Exception:
+    pass' || true)
+    for c in $clients; do
+      "$REPO/bin/iosstudio-helper" agents disconnect --client "$c" >/dev/null 2>&1 && say "disconnected iOS Studio from $c"
+    done
   fi
   for l in Commons Ui; do [[ -L $REPO/$l ]] && rm -f "$REPO/$l"; done
   refresh_icons

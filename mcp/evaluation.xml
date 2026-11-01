@@ -1,0 +1,43 @@
+<!-- iOS Studio MCP evaluation (mcp-builder format). Run against demo mode: IOSSTUDIO_DEMO=1. See EVALUATION.md. -->
+<evaluation>
+   <qa_pair>
+      <question>One of my app projects failed its most recent build. In that build, one compiler error says a type doesn't satisfy a protocol. Which source file and line is it on? Answer as FileName.swift:line.</question>
+      <answer>Habit.swift:7</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>The project that failed its most recent build is checked out on a git branch. What is the branch name?</question>
+      <answer>feature/streaks</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>Only one of my projects is included in automatic daily re-signing. How many whole days are left before its provisioning profile expires? Round down and answer with a number only.</question>
+      <answer>5</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>Ignoring memory (jetsam) reports, which Mach exception type did the most recent app crash on the iPhone have? Answer with the exception type only.</question>
+      <answer>EXC_BREAKPOINT</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>My habit-tracking app has crashed on the phone. In its crash report, which function of the app's own code is the topmost frame of the crashed thread? Answer with the function name only, as written in the frame, without the offset.</question>
+      <answer>StreakView.body.getter</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>Because I use a free Apple ID, my apps are registered under a different bundle identifier than the one in their project. What is the full registered bundle identifier of the habit-tracking app?</question>
+      <answer>XTL-A1B2C3D4E5.com.example.habits</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>The most recent signature renewal (re-sign and reinstall) in the build history: over which connection was it installed? Answer usb or wifi.</question>
+      <answer>usb</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>How many apps on the iPhone that are not my own development builds are running right now? Answer with a number only.</question>
+      <answer>2</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>What percentage of the iPhone's total storage is free? Round to the nearest whole percent and answer with a number only.</question>
+      <answer>46</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>Of the project templates available for new apps, which one generates the most Swift source files? Answer with the template id.</question>
+      <answer>tabs-app</answer>
+   </qa_pair>
+</evaluation>

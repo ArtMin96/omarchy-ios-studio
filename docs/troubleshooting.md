@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Most errors in iOS Studio come with a button that fixes them or takes you to the right place. This page explains the common ones in more detail.
+Most errors in iOS Studio come with a button that fixes them or takes you to the right place. This page explains the common ones.
 
 If a whole page shows "This page couldn't load", see [For developers](#for-developers) at the end.
 
@@ -8,7 +8,7 @@ If a whole page shows "This page couldn't load", see [For developers](#for-devel
 
 ### "Apple's sign-in helper is busy right now"
 
-Sign-in, signing and the account lists all go through a helper server that xtool uses to talk to Apple. It sometimes answers "server busy" (HTTP 503). This is temporary. Wait a minute and try again. The same cause shows up during a build as "Apple's signing service didn't answer".
+Sign-in, signing and the account lists all go through a helper server that xtool uses to talk to Apple. It sometimes answers "server busy" (HTTP 503). Wait a minute and try again. The same cause shows up during a build as "Apple's signing service didn't answer".
 
 ### The 2FA code doesn't arrive
 
@@ -76,9 +76,10 @@ The switch only appears after a developer app has been installed once. If you do
 ### "This computer isn't trusted by your iPhone yet"
 
 Unlock the phone. When it asks "Trust This Computer?", tap Trust and enter your passcode.
+
 ### "Your iPhone is locked"
 
-Unlock it and try again. Launching an app and installing need an unlocked phone.
+Unlock it and try again. Installing and launching apps need an unlocked phone.
 
 ### "Couldn't prepare your iPhone for developer tools"
 
@@ -96,7 +97,7 @@ Open Setup and run the iOS SDK step. If you updated Xcode or Swift, the SDK may 
 
 ### "That file is Xcode X, but your Swift needs Xcode Y"
 
-Each Swift version works with one Xcode version. Download the exact version Setup names, not a newer one or a beta.
+Each Swift version works with exactly one Xcode version. Download the exact version Setup names, not a newer one or a beta.
 
 ## Setup and updates
 
@@ -115,6 +116,24 @@ Building the iOS SDK needs about 15 GB free while it runs. Free space with Toolc
 ### The iPhone tools need repair
 
 pymobiledevice3 lives in its own Python environment. A Python update can break it. Open Setup and press Repair on "iPhone connection tools".
+
+## AI agents
+
+### The agent doesn't see iOS Studio's tools
+
+Start a new session in the agent after you connect it; most agents only load MCP servers at startup. Then press the test tube next to the tool in Settings › AI agents. It starts the server the way your agent will and tells you how many tools it found.
+
+### "Needs update" next to an agent
+
+The agent is registered with a server path that isn't this copy of iOS Studio, usually because the app folder moved. Press Update.
+
+### "couldn't be read" next to an agent
+
+iOS Studio found a mistake in that agent's config file and won't edit it. Fix the file by hand (the message names it), then press Check again.
+
+### Prepare fails
+
+Preparing the server downloads its Python packages, so it needs internet. [mcp.md](mcp.md#troubleshooting) shows how to run the server by hand and see the error.
 
 ## For developers
 

@@ -25,12 +25,13 @@ MODULES = {
     "projects": "projects",
     "build": "projects",
     "app": "appconfig",
+    "agents": "agents",
 }
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        return common.fail("usage", "usage: iosstudio-helper <group> <action> [--flags]") or 2
+        return common.fail("usage", "usage: iosstudio-helper <group> <action> [--flags]; groups: " + ", ".join(MODULES)) or 2
     group, action, rest = argv[0], argv[1], argv[2:]
     if os.environ.get("IOSSTUDIO_DEMO"):   # screenshots / walkthroughs: made-up data, no side effects
         import demo

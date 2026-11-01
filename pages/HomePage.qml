@@ -255,6 +255,7 @@ PageFrame {
     ActionButton { text: "New app"; glyph: Model.Glyph.plus; enabled: !page.fresh; tooltip: page.fresh ? "Finish Setup first" : "Create an app from a template"; onClicked: page.app.nav("projects", { action: "new" }) }
     ActionButton { text: "Open Setup"; glyph: Model.Glyph.rocket; onClicked: page.app.nav("setup") }
     ActionButton { text: "Mirror screen"; glyph: Model.Glyph.camera; enabled: page.dev.connected; tooltip: page.dev.connected ? "See your iPhone's screen" : "Connect your iPhone first"; onClicked: page.app.nav("device", { tab: "screen", action: "mirror" }) }
+    ActionButton { text: "Connect AI agents"; glyph: Model.Glyph.robot; kind: "ghost"; tooltip: "Let tools like Claude Code build and run your apps"; onClicked: page.app.nav("settings", { section: "agents" }) }
   }
 
   // ================================================================ iPhone + Apple ID

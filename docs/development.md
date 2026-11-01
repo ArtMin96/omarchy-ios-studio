@@ -6,10 +6,11 @@ How iOS Studio is put together, for people who want to change it.
 
 iOS Studio is a standalone [Quickshell](https://quickshell.org/) config with a Python backend.
 
-- **UI**: QML, started with `qs -n -p <repo>`. `shell.qml` declares `//@ pragma AppId ios-studio` (that's also the Hyprland window class), a `ShellRoot` and one `FloatingWindow`. Closing the window quits the app.
-- **Helper** (`bin/iosstudio-helper`): stdlib-only Python under `/usr/bin/python3 -I -B`. One call per action, or a stream of JSON lines for long jobs.
-- **Device daemon** (`bin/iosstudio-deviced`): a long-running Python process in the pymobiledevice3 venv. It keeps the connection to the iPhone open while the app runs.
-- **Tools it drives**: xtool (build, sign, install, Apple account), the Swift toolchain, omarchy-apple-dev (SDK preparation), pymobiledevice3 (device access), rcodesign and ipsw.
+- UI: QML, started with `qs -n -p <repo>`. `shell.qml` declares `//@ pragma AppId ios-studio` (that's also the Hyprland window class), a `ShellRoot` and one `FloatingWindow`. Closing the window quits the app.
+- Helper (`bin/iosstudio-helper`): stdlib-only Python under `/usr/bin/python3 -I -B`. One call per action, or a stream of JSON lines for long jobs.
+- Device broker (`bin/iosstudio-deviced`, `helper/device_broker.py`): one long-running Python process per user in the pymobiledevice3 venv. It owns the only connection to the iPhone and listens on a Unix socket, so the app, the MCP server and background jobs share it. It exits two minutes after its last client disconnects.
+- MCP server (`bin/iosstudio-mcp`, `mcp/`): a stdio server for AI coding agents. It calls the same helper as the app and reaches the iPhone through the broker with `helper/device_client.py`. See [mcp.md](mcp.md).
+- Tools it drives: xtool (build, sign, install, Apple account), the Swift toolchain, omarchy-apple-dev (SDK preparation), pymobiledevice3 (device access), rcodesign and ipsw.
 
 ## File layout
 
@@ -19,11 +20,24 @@ AppState.qml         shared state: current page, nav(), toast(), confirm(), sett
 Cli.qml, Stream.qml  wrappers for one-shot and streaming helper calls
 ThemeWatcher.qml     follows Omarchy theme changes
 Model.js             pure helpers: glyphs, PAGES, SHORTCUTS, formatting
-components/          shared UI building blocks (see components.md)
+components/          shared UI building blocks (see components.md), including AgentsSection
 services/            one QML service per area: Setup, Toolchain, Account, Device, Project, Log
 pages/               one page per sidebar entry
-helper/              Python: main.py router, one module per area, deviced.py, root/ scripts
-bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced
+helper/
+  main.py            helper router: group name -> module
+  setup.py, account.py, projects.py, appconfig.py   one module per helper group
+  agents.py          Settings › AI agents: connect the MCP server to coding agents
+  deviced.py         device daemon backend (pymobiledevice3)
+  device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
+  device_client.py   asyncio client for the broker (used by the MCP server)
+  device_link.py, device_crash.py, device_models.py   device helpers
+  demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
+  root/              scripts that run as root through pkexec
+mcp/
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (48 tools), prompts, resources
+  pyproject.toml     its dependencies (installed into a private venv on first run)
+  evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
+bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 ```
@@ -49,7 +63,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -67,7 +81,9 @@ Root work goes through one `pkexec helper/root/root-tasks.sh <flags>` per step, 
 
 ## Device daemon
 
-`services/DeviceService.qml` starts `bin/iosstudio-deviced` when the app opens and stops it on quit. Requests and replies are JSON lines with an `id`; the daemon also pushes events such as `devices`, `connection` and `syslog`. Pages call it through `app.device.request(cmd, args, callback)` and listen on `app.device.daemonEvent(name, data)`. The Logs page uses the same daemon for the live log and crash reports.
+`services/DeviceService.qml` starts `bin/iosstudio-deviced` when the app opens. That process is only a stdio bridge. The daemon itself is a shared broker on `$XDG_RUNTIME_DIR/ios-studio/deviced.sock` (`helper/device_broker.py`). The bridge starts it if it isn't running, and it exits 120 s after its last client leaves, so the app and the MCP server (`helper/device_client.py`) share one tunnel to the phone. Demo mode uses its own socket under `$XDG_RUNTIME_DIR/ios-studio-demo/`. Diagnostics go to `deviced.log` next to the socket.
+
+Requests and replies are JSON lines with an `id`. The daemon also pushes events such as `devices`, `connection` and `syslog`. Pages call it through `app.device.request(cmd, args, callback)` and listen on `app.device.daemonEvent(name, data)`. The Logs page uses the same daemon for the live log and crash reports.
 
 The daemon also has a `--once <cmd> '<json>'` mode for background jobs (the daily auto-renew timer uses it to install), and it writes the last known device state to `~/.local/state/ios-studio/device.json`.
 
@@ -83,9 +99,9 @@ qs ipc -p . call iosstudio nav projects   # drive it over IPC
 bin/iosstudio-helper setup check          # call the helper directly
 ```
 
-IPC functions: `nav(page)`, `refresh()`, `status()`, `applyTheme()`, `toast(text, level)`. `ios-studio <page>` uses `nav` to deep-link. Page names and aliases are in `Model.js`.
+IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, `status()`, `applyTheme()`, `toast(text, level)`. `ios-studio <page>` uses `nav` to deep-link. Page names and aliases are in `Model.js`.
 
-**Demo mode:** `ios-studio --demo[=ready|expiring|fresh]` runs the whole app on made-up data (a fake account, iPhone and projects). It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone.
+Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
 `setup install` accepts `--dry-run`. There are no automated tests: check that QML loads without warnings in `qs log` and that the helper commands you touched return valid JSON.
 
@@ -97,6 +113,8 @@ IPC functions: `nav(page)`, `refresh()`, `status()`, `applyTheme()`, `toast(text
 | State (build history, renewals, device, setup progress) | `~/.local/state/ios-studio/` |
 | Cache (screenshots, crash files, account lists) | `~/.cache/ios-studio/` |
 | pymobiledevice3 venv | `~/.local/share/ios-studio/venv` |
+| MCP server venv | `~/.local/share/ios-studio/mcp-venv` |
+| Config backups made by Settings › AI agents | `~/.local/state/ios-studio/backups/` |
 | App checkout | anywhere; the README clones into `~/.local/share/omarchy-ios-studio`. `install.sh` and `bin/ios-studio` find it from their own path |
 | Launcher command | `~/.local/bin/ios-studio` (symlink into the checkout) |
 | Desktop entry, icon | `~/.local/share/applications/ios-studio.desktop`, `~/.local/share/icons/hicolor/scalable/apps/ios-studio.svg` |

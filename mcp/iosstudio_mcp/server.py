@@ -1,0 +1,103 @@
+"""iOS Studio MCP server (stdio). Run with `bin/iosstudio-mcp` or `python -m iosstudio_mcp`.
+
+stdout carries the MCP protocol only; all logging goes to stderr (IOSSTUDIO_MCP_LOG=DEBUG for more).
+"""
+from __future__ import annotations
+
+import importlib
+import logging
+import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from mcp.server.mcpserver import MCPServer
+
+from . import __version__, prompts, resources
+from .state import AppState
+from .tools import MODULES
+
+log = logging.getLogger("iosstudio")
+
+INSTRUCTIONS = """\
+iOS Studio builds, signs, installs and debugs iPhone apps on this Linux computer (Swift + xtool, no Mac).
+
+- Start with ios_status: it reports toolchain, Apple ID, iPhone and projects, and names the tool that fixes each problem.
+- Projects are SwiftPM packages with an xtool.yml; sources are in Sources/<App>/. Find them with ios_project_list and pass the absolute path (or the project name) as project_path.
+- Builds are background jobs: ios_build_start (or ios_run to build+install+launch) returns a build_id; poll ios_build_status(build_id, wait_seconds=20) until succeeded/failed, then ios_build_diagnostics for file:line errors and ios_build_log for raw output. action='compile' needs neither an Apple ID nor an iPhone.
+- If a job's state is needs_input, show its pending_prompt to the user and send THEIR answer with ios_build_respond.
+- On the iPhone: ios_app_run_and_capture(bundle_id) launches an app and reports its logs and any new crash in one call; ios_logs_start/read/stop follow the log with a cursor; ios_crash_list/get read crash reports; ios_screenshot shows the screen; ios_app_list/ios_device_info describe the phone. Developer Mode is turned on by the human (ios_device_prepare explains how).
+- udid parameters are optional and default to the active iPhone.
+- Free Apple IDs: apps stop opening 7 days after signing (ios_project_renew re-signs), at most 3 of your apps per iPhone, 10 new app ids per week; bundle ids are registered as XTL-<TEAM>.<bundle id>.
+- Human-only steps: Apple ID sign-in (never ask for passwords or 2FA codes), the Xcode .xip download, iPhone pairing/Trust, Developer Mode, and polkit password dialogs. Explain the step and use ios_open_app(page=...).
+- Destructive tools (ios_project_remove, ios_build_clean, ios_toolchain_clean, ios_account_logout, ios_app_uninstall) take confirm=false by default and return a dry run; so does a destructive answer in ios_build_respond. Ask the user, then repeat with confirm=true.
+"""
+
+
+def _load_modules() -> list:
+    mods = []
+    for name in MODULES:
+        full = f"{__package__}.tools.{name}"
+        try:
+            mods.append(importlib.import_module(full))
+        except ModuleNotFoundError as exc:
+            if exc.name == full:   # optional module missing from this install
+                log.debug("tool module %s not present", name)
+                continue
+            raise
+    return mods
+
+
+TOOL_MODULES = _load_modules()
+
+
+@asynccontextmanager
+async def lifespan(server: MCPServer) -> AsyncIterator[AppState]:
+    state = AppState()
+    started = []
+    try:
+        for mod in TOOL_MODULES:
+            hook = getattr(mod, "on_startup", None)
+            if hook:
+                try:
+                    await hook(state)
+                    started.append(mod)
+                except Exception:  # noqa: BLE001  one module's startup must not take the server down
+                    log.exception("startup hook of %s failed", mod.__name__)
+            else:
+                started.append(mod)
+        yield state
+    finally:
+        await state.jobs.shutdown()
+        for mod in reversed(started):
+            hook = getattr(mod, "on_shutdown", None)
+            if hook:
+                try:
+                    await hook(state)
+                except Exception:  # noqa: BLE001
+                    log.exception("shutdown hook of %s failed", mod.__name__)
+
+
+def create_server() -> MCPServer:
+    mcp = MCPServer("iosstudio", title="iOS Studio", version=__version__, instructions=INSTRUCTIONS,
+                    website_url="https://github.com/ArtMin96/omarchy-ios-studio", lifespan=lifespan,
+                    log_level=os.environ.get("IOSSTUDIO_MCP_LOG", "INFO").upper())
+    for mod in TOOL_MODULES:
+        mod.register(mcp)
+    prompts.register(mcp)
+    resources.register(mcp)
+    return mcp
+
+
+mcp = create_server()
+
+
+def main() -> None:
+    logging.basicConfig(stream=sys.stderr, level=os.environ.get("IOSSTUDIO_MCP_LOG", "INFO").upper(),
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    log.info("iOS Studio MCP %s starting (demo=%s)", __version__, bool(os.environ.get("IOSSTUDIO_DEMO")))
+    mcp.run("stdio")
+
+
+if __name__ == "__main__":
+    main()

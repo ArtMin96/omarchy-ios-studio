@@ -2,10 +2,12 @@
 # iOS Studio launcher: focus the running window or start the app.
 #   ios-studio            open / focus
 #   ios-studio <page>     open / focus, then jump to a page (home, setup, account, device, projects, logs, toolchain, settings)
-#   ios-studio logs:crashes   …and a tab on that page (also: ios-studio crashes)
-#   ios-studio --demo[=ready|expiring|fresh] [page]   made-up account, iPhone and projects (for screenshots)
+#   ios-studio logs:crashes   open a tab on that page (also: ios-studio crashes)
+#   ios-studio --demo[=ready|expiring|fresh] [page]   run on a made-up account, iPhone and projects (for screenshots)
 #   ios-studio --log [-f|-t N]   print the log of the running app (qs log options pass through)
-#   ios-studio --uninstall       remove the launcher entry, icon, hooks and Hyprland rules (keeps the checkout and your data)
+#   ios-studio --uninstall       remove the launcher entry, icon, ios-studio command, theme hook, Hyprland rules, the re-sign timer and AI agent connections
+#                                (keeps the app folder and your data)
+#   ios-studio --help            show this help
 set -u
 self="$(readlink -f "${BASH_SOURCE[0]}")"
 repo="$(cd "$(dirname "$self")/.." && pwd)"
@@ -19,10 +21,32 @@ case "${1:-}" in
 esac
 page="${1:-}"
 
-running() { hyprctl clients -j 2>/dev/null | jq -e '.[] | select(.class == "ios-studio")' >/dev/null 2>&1; }
+# The running window's mode: "" for a real instance, else its IOSSTUDIO_DEMO scenario; fails if none runs.
+running_mode() {
+  local pid
+  pid="$(hyprctl clients -j 2>/dev/null | jq -r 'first(.[] | select(.class == "ios-studio") | .pid) // empty' 2>/dev/null)"
+  [[ -n $pid ]] || return 1
+  tr '\0' '\n' </proc/"$pid"/environ 2>/dev/null | sed -n 's/^IOSSTUDIO_DEMO=//p' | head -n1
+}
 
 was_running=0
-running && was_running=1
+if current="$(running_mode)"; then
+  was_running=1
+  # Launch-or-focus would focus the other mode's window (and qs -n refuses a second copy), so say so instead.
+  if [[ $current != "$demo" ]]; then
+    if [[ -n $demo && -z $current ]]; then
+      msg="iOS Studio is already open with your real data. Close it, then run ios-studio --demo again."
+    elif [[ -n $demo ]]; then
+      msg="iOS Studio is open in the '$current' demo. Close it, then run ios-studio --demo=$demo again."
+    else
+      msg="iOS Studio is open in demo mode. Close it, then run ios-studio again for your real data."
+    fi
+    echo "ios-studio: $msg" >&2
+    command -v notify-send >/dev/null && notify-send -a "iOS Studio" -i dialog-information "iOS Studio" "$msg" 2>/dev/null
+    hyprctl dispatch "hl.dsp.focus({ window = \"class:^ios-studio\$\" })" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
 
 env_prefix=""
 [[ -n $demo ]] && env_prefix="env IOSSTUDIO_DEMO=$(printf '%q' "$demo") "
