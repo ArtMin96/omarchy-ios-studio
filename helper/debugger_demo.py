@@ -183,6 +183,10 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
         common.event("notice", id="no-symbols", level="info",
                      message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may read "
                              "wrong and system frames show only library names. Download them once under iPhone › Debug › Debug symbols.")
+    elif (st.get("symbolsUpdate") or {}).get("needed"):
+        common.event("notice", id="symbols-update", level="warn",
+                     message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
+                             "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
     common.step("connect", "Connecting to the debugger on your iPhone", "running")
     _console("(lldb) settings set target.memory-module-load-level minimal")
     _console("(lldb) platform select remote-ios --sysroot \"~/.cache/ios-studio/DeviceSupport/27.2 (24B115)\"\n"

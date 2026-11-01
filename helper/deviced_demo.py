@@ -47,7 +47,7 @@ class DemoBackend:
         reg.command("devices.list", lambda ctx, a: [] if FRESH else [DEVICE])
         reg.command("device.select", lambda ctx, a: DEVICE)
         reg.command("device.reconnect", lambda ctx, a: {})
-        reg.command("device.info", lambda ctx, a: INFO)
+        reg.command("device.info", lambda ctx, a: {**INFO, **ctx.registry.info(ctx, None)})
 
         @reg.command("daemon.features")
         def features(ctx, a):

@@ -354,6 +354,10 @@ async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds:
                          message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
                                  "read wrong and system frames show only library names. Download them once under "
                                  "iPhone › Debug › Debug symbols.")
+        elif (st.get("symbolsUpdate") or {}).get("needed"):
+            common.event("notice", id="symbols-update", level="warn",
+                         message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
+                                 "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
         cfg = {"mode": mode, "lldbPythonPath": tc.pythonpath, "port": st.get("port"), "host": st.get("host"),
                "pid": st.get("pid"), "remotePath": st.get("remotePath"), "localExe": exe,
                "sysroot": st.get("sysroot") if st.get("symbolsReady") else None, "breakpoints": bps,

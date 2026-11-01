@@ -138,7 +138,14 @@ class DebugSymbols(Out):
     debugger_problem: str | None = None
     ios: str | None = None
     build: str | None = None
-    symbols_ready: bool = False
+    symbols_ready: bool = Field(False, description="A usable set is on this computer (also when outdated)")
+    state: str | None = Field(None, description="missing | downloading | extracting | ready | outdated | incomplete | failed")
+    update_needed: bool = False
+    update_reason: str | None = Field(None, description="Why the set needs an update, in plain words")
+    how_to_fix: str | None = Field(None, description="What the user presses in iOS Studio")
+    can_unpack: bool = Field(False, description="The download is kept, so 'Unpack again' needs no download")
+    libs: int | None = Field(None, description="Libraries in the unpacked set")
+    last_error: str | None = Field(None, description="Why the last download or unpack failed")
     downloading: bool = False
     progress: float | None = None
     phase: str | None = None
@@ -650,9 +657,11 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, annotations=READ_REMOTE("Debugger and symbols status"))
     async def ios_debug_symbols_status(ctx: Context, udid: Udid = None) -> DebugSymbols:
-        """Whether the debugger (lldb) is installed and whether this iPhone's debug symbols (the Swift
-        runtime from its iOS build, a one-time ~6 GB download done in iOS Studio › iPhone › Debug) are
-        on this computer. Without them backtraces still work, but Swift values can read wrong."""
+        """Whether the debugger (lldb) is installed and the state of this iPhone's debug symbols (the
+        Swift runtime and system libraries of its iOS build, a one-time ~7 GB download done by the
+        user in iOS Studio › iPhone › Debug). Without them backtraces still work, but Swift values can
+        read wrong; an outdated or incomplete set makes attaching slow (minutes over Wi-Fi), and
+        how_to_fix names the button that fixes it."""
         state = get_state(ctx)
         chk = await helper.call("debug", "check", timeout=30) or {}
         st = await dcall(state, "debug.symbols", {"action": "status"}, udid=udid, timeout=30) or {}
@@ -661,12 +670,27 @@ def register(mcp: MCPServer) -> None:
         if not chk.get("ready"):
             e = chk.get("error") or {}
             nxt.append(helper.next_step_for(e) or "Run ios_toolchain_check; the debugger comes with the Swift toolchain.")
-        if not st.get("ready"):
-            nxt.append("To download the symbols, ask the user to open iOS Studio › iPhone › Debug and press Download "
-                       "(ios_open_app(page='device')); it needs the space in download_bytes free.")
+        state_ = st.get("state") or ("ready" if st.get("ready") else "missing")
+        upd = st.get("update") or {}
+        unpack = bool(st.get("canUnpack"))
+        button = ("Unpack again" if unpack else {"missing": "Download", "failed": "Try again"}.get(state_, "Update"))
+        how = None
+        if state_ not in ("ready", "downloading", "extracting"):
+            how = (f"Ask the user to open iOS Studio › iPhone › Debug and press {button} on the Debug symbols card "
+                   "(ios_open_app(page='device'))" + ("; it unpacks the kept download, no download needed."
+                                                       if unpack else "; it downloads about "
+                                                       f"{(st.get('estimatedBytes') or 0) / 1e9:.1f} GB once, so "
+                                                       "that much must be free (download_bytes)."))
+        if state_ in ("outdated", "incomplete"):
+            nxt.append("Until then backtraces and breakpoints still work, but attaching can take minutes over "
+                       "Wi-Fi while the app stays paused.")
         return DebugSymbols(debugger_ready=bool(chk.get("ready")),
                             debugger_problem=B.clip((chk.get("error") or {}).get("message"), 300) if not chk.get("ready") else None,
                             ios=st.get("ios"), build=st.get("build"), symbols_ready=bool(st.get("ready")),
+                            state=state_, update_needed=bool(upd.get("needed")),
+                            update_reason=B.clip(upd.get("reason"), 300) if upd.get("needed") else None,
+                            how_to_fix=how, can_unpack=unpack, libs=st.get("libs"),
+                            last_error=B.clip((st.get("error") or {}).get("message"), 300) if st.get("error") else None,
                             downloading=bool(st.get("downloading")), progress=prog.get("fraction"), phase=prog.get("phase"),
                             download_bytes=st.get("estimatedBytes"), free_bytes=st.get("freeBytes"),
                             size_on_disk=st.get("sizeOnDisk"), ipsw=st.get("ipsw"), next_steps=nxt)
