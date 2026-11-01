@@ -164,8 +164,7 @@ class Symbols:
         ipsw = ipsw_path()
         if not ipsw:
             raise err("needs-ipsw", "ipsw is needed to unpack the symbols. Install it in Setup, then try again.", IPSW_FIX)
-        cache = next((p for p in dsc.rglob("dyld_shared_cache_arm64e") if p.is_file()), None) \
-            or next((p for p in dsc.rglob("dyld_shared_cache_arm64*") if p.is_file() and "." not in p.name), None)
+        cache = main_cache(dsc)
         if cache is None:
             raise err("failed", "The iPhone's system library cache wasn't in the download.")
         self.publish(phase="extracting", fraction=None, message="Unpacking the Swift runtime…", done=0)
@@ -190,6 +189,23 @@ class Symbols:
                          message=f"Unpacking the Swift runtime ({n} of {len(paths)})…")
         if not (sym / "usr/lib/swift/libswiftCore.dylib").is_file():
             raise err("failed", "Unpacking the Swift runtime failed.", None, "libswiftCore.dylib missing after extract")
+
+
+def main_cache(dsc: Path) -> Path | None:
+    """The iOS system library cache among the downloaded ones.
+
+    Since iOS 16 the download also holds smaller caches with the same file name (DriverKit and,
+    on newer phones, ExclaveKit). They have no Swift runtime, so pick the one under
+    System/Library/Caches/com.apple.dyld, else the one with the most subcache files next to it."""
+    found = [p for p in dsc.rglob("dyld_shared_cache_arm64*") if p.is_file() and "." not in p.name]
+    if not found:
+        return None
+    def rank(p: Path):
+        s = p.as_posix()
+        main = "/System/Library/Caches/com.apple.dyld/" in s and "DriverKit" not in s and "Exclave" not in s
+        subcaches = sum(1 for q in p.parent.glob(p.name + ".*"))
+        return (main, p.name.endswith("arm64e"), subcaches)
+    return max(found, key=rank)
 
 
 async def find_pid(s, bid: str) -> int:
