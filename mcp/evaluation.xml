@@ -40,4 +40,20 @@
       <question>Of the project templates available for new apps, which one generates the most Swift source files? Answer with the template id.</question>
       <answer>tabs-app</answer>
    </qa_pair>
+   <qa_pair>
+      <question>Over the iPhone's current connection, two of the network link conditions can't be applied at all. Of those two, which has the higher latency? Answer with the latency in milliseconds, as a number only.</question>
+      <answer>500</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>How long is the newest video in the iPhone's camera roll? Round down to whole seconds and answer with a number only.</question>
+      <answer>74</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>Measure the weather app's performance on the iPhone and read the report. How long was the longest hang it detected, in seconds? Answer with a number only.</question>
+      <answer>1.8</answer>
+   </qa_pair>
+   <qa_pair>
+      <question>The weather app keeps an exported CSV file somewhere in its container on the iPhone. What is that file's name?</question>
+      <answer>forecast-2026-10-30.csv</answer>
+   </qa_pair>
 </evaluation>

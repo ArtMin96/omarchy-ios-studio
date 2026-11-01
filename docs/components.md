@@ -65,8 +65,9 @@ PageFrame {
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo` and the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming`. Pages may add keys. |
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
-| `app.page`, `app.pageParams`, `app.windowFocused` | State |
-| `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir` | Paths |
+| `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
+| `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
+| `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths |
 | `app.refreshAll()`, `app.refreshCurrent()` | |
 
 ## Cli (one-shot helper calls), `Cli.qml`
@@ -99,8 +100,9 @@ install.start(["setup", "install", "--step", "swift"])
 install.stop()
 ```
 Props: `program` (argv prefix, default the helper; set `[app.devicedPath]` for the daemon), `args`,
-`running`, `autoRestart` (1 s→30 s backoff), `quitMessage` (written before terminating on `stop()`),
-`environment`, `lastDone`, `exitCode`. Non-JSON stdout lines and all stderr lines arrive as
+`running`, `autoRestart` (1 s→30 s backoff), `restarts`, `quitMessage` (written before terminating on
+`stop()`), `environment`, `lastDone`, `exitCode`, `maxLineLength`; `write(obj)` sends one JSON line to
+stdin, `restart()`; signals `event(obj)`, `finished(ok, data, error)`, `exited(code)`. Non-JSON stdout lines and all stderr lines arrive as
 `{event: "log", text, stream}`. Lines are capped at 512 KiB. Every other event (`notice` included)
 passes through unchanged.
 
@@ -112,13 +114,14 @@ error info help refresh sync download upload trash link linkOff wifi wifiOff usb
 lock unlock key cert shield shieldCheck clock timer location camera image video search keyboard close plus minus
 chevronRight/Left/Down/Up arrowRight arrowUp openExternal copy save export edit code swift disk memory
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
-sparkles terminal layers briefcase idCard xml network speed thermometer chip record.
+sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
+robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart.
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`, `pageIndex(key)`, `resolvePage(name)`,
-`SHORTCUTS`.
+`plural(n, word)`; `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
+`pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 ---
 
@@ -142,9 +145,9 @@ Rectangle { color: Theme.levelFill("warn"); border.color: Theme.levelColor("warn
 
 Themed text. `size`: `caption | small | body | subtitle | title | heading | display | displayLarge`.
 `tone`: `primary | dim | faint | accent | ok | warn | error | info | inherit` (inherit keeps your `color`).
-`strong` sets bold.
+`strong` sets bold, `mono` the monospace font.
 ```qml
-AppText { text: "Signed in as artem@…"; tone: "dim"; size: "small"; elide: Text.ElideRight; Layout.fillWidth: true }
+AppText { text: "Signed in as you@…"; tone: "dim"; size: "small"; elide: Text.ElideRight; Layout.fillWidth: true }
 ```
 
 ## Icon
@@ -280,7 +283,7 @@ function focusSearch() { search.focusField() }
 
 ## EmptyState
 
-`glyph`, `title`, `text`, `actionText` + `actionGlyph` → `action()`, `secondaryText` +
+`glyph`, `title`, `text`, `actionText` + `actionGlyph` (+ `actionKind`, default `primary`) → `action()`, `secondaryText` +
 `secondaryGlyph` → `secondary()`, `compact`, `level` (tints the glyph disc).
 ```qml
 EmptyState { Layout.fillWidth: true; glyph: Model.Glyph.phone; title: "No iPhone connected"
@@ -306,7 +309,7 @@ LoadingState { Layout.fillWidth: true; text: "Asking Apple for your certificates
 Skeleton { Layout.fillWidth: true; lines: 4; rowHeight: Style.space(36); gap: Style.spacing.md }   // list placeholder
 Spinner { size: Style.font.heading; running: true; color: Commons.Color.accent }
 ```
-Prefer `Skeleton` for lists and cards, so the layout doesn't jump when the data arrives.
+`Skeleton` also has `running` (the shimmer) and `Spinner` a `lineWidth`. Prefer `Skeleton` for lists and cards, so the layout doesn't jump when the data arrives.
 
 ## ProgressTrack
 
@@ -411,7 +414,7 @@ the keyboard.
   dashed?}]`, `stacked` (areas in categorical colours from `categorical(i)`: fixed OKLCH hues at a lightness for the
   theme's mode), `samples` + `revision` (bump it to repaint), `t0`/`t1` (unix s), `events` (markers), `hoverTs` and
   `hoverAt(ts)` for a crosshair shared across charts, `yFloor`, `yFixed`, `zeroBase` (false: the axis starts near the
-  lowest value), `decimals`, `gapS` (longer gaps break the line). One y-axis, and a legend for two or more series.
+  lowest value), `decimals`, `gapS` (longer gaps break the line), `plotHeight`. One y-axis, and a legend for two or more series.
   ```qml
   PerfChart { title: "Network"; unit: "KB/s"; series: [{ key: "netRx", label: "In" }, { key: "netTx", label: "Out", dashed: true }]
     samples: view.samples; revision: view.revision; t0: view.t0; t1: view.t1; hoverTs: view.hoverTs; onHoverAt: function(ts) { view.hoverTs = ts } }
@@ -420,7 +423,7 @@ the keyboard.
   session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
 - **DevicePhoneFrame**: a drawn iPhone that shows a screenshot or mirror frame. Props: `source` (file URL),
   `live` with `liveLabel` (the corner marker, e.g. `"REC 0:12"`), `dimmed`, `rotationSteps`, `glyph`,
-  `placeholder`, `clickable`. Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
+  `placeholder`, `screenAspect` (default the iPhone 17 Pro's), `clickable` + `clicked()`. Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
   once it's ready, and a frame that arrives while one is still loading replaces the queued one. The rounded
   mask is one layer effect on the container. `frameShown(url)` fires for every frame shown; pass it to
   `app.device.ackFrame(url)` so the daemon doesn't send faster than the window can draw.
@@ -435,6 +438,53 @@ the keyboard.
 - **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
   QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view
   leaves the preview out.
+- **SettingRow**: preference row with `title`, `description`, `glyph`, `note` + `noteLevel` (a coloured line
+  under the description) and `separator`. Its children are the control on the right.
+  ```qml
+  SettingRow { title: "Notifications"; description: "Tell me when a build finishes."
+    ToggleSwitch { checked: app.settings.notifications; onToggled: app.setSetting("notifications", !checked) } }
+  ```
+- **AccountSignInSheet**: the Apple ID sign-in sheet (email and password, 2FA code, team picker), driven by
+  `app.account`'s sign-in flow. Props: `app`; `begin(email?)`; signal `signedIn(status)`. The password stays in
+  the sheet's memory and goes to the helper over stdin.
+- **AccountRevokeWarning**: explains why one Apple ID on two computers revokes the other's certificate.
+  Props: `compact`, `expanded`.
+- **ProjectCard**: one project on the Projects page. Props: `project`, `svc` (`app.projects`), `hasCursor`,
+  `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
+  `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
+  `showBuild()`, `hovered(bool)`.
+- **ProjectNewSheet**: the New app sheet (name, template, location, bundle id). Props: `app`, `svc`,
+  `template` (default `swiftui-app`); `open()`, `reset()`; signal `created(project)`.
+- **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
+  slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
+  `log` (the LogView); signal `closeRequested()`.
+- **BuildDiagnosticRow**: one compiler diagnostic. Props: `diag` (`{severity, file, line, col?, message}`),
+  `projectPath`, `hasCursor`; signals `clicked()` (opens the file at the line), `hovered(bool)`.
+- **LogDeviceTab / LogSyslogView**: the Logs page's Device log tab (`app`) and its live list.
+  LogSyslogView takes SyslogEntry batches with `push(batch)` (batched every 80 ms, the last `maxLines`, default
+  5000) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,
+  `emptyTitle`, `emptyText`, `selectedSeq`; read-only `count`, `shownCount`, `pendingCount`, `selectedRow`;
+  `clear()`, `select(row)`, `selectNext(d)`, `deselect()`, `selectedText()`, `visibleText()`, `jumpToLatest()`;
+  signal `copyRequested()`.
+- **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history, then the selected build's summary,
+  problems and full log.
+- **CrashBrowser / CrashReportView**: the Logs page's Crashes tab (`app`; `scope` `mine`/`all`) and one report
+  (`app`, `item` = a CrashItem): a plain-language summary card, the crashed thread and the full report, with
+  `save()` (to `~/Downloads`) and `copy()`.
+- **DeviceConnect**: "Connect your iPhone", shown when no paired iPhone is known: cable or Wi-Fi. Props: `app`;
+  signal `pairRequested(method)`.
+- **DevicePairSheet**: the pairing sheet, driven by the daemon's `pair` events (`app.device.pair`). Props: `app`;
+  `begin(method)` with `"usb"` or `"wifi"`.
+- **DeviceSteps**: numbered instructions for pairing and Developer Mode. `steps: [{text, done?, active?}]`.
+- **DeviceHero**: the iPhone page's header: the drawn phone with the latest screen, name, battery, storage and
+  readiness pills, plus fixes when something needs the user. Props: `app`; signals `openScreen()`,
+  `devModeHelp()`.
+- **DeviceAppsView**: installed apps (search, launch, stop, remove). Props: `app`, `cursor`, `devFirst`
+  (your own builds first); read-only `search` (the FilterField); `current()`; signal `cursorMoved(index)`. The page
+  owns the cursor.
+- **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
+  copyable), Profiles tab (read-only, expired ones behind `showExpired`) and Location tab (a simulated GPS
+  location from presets or latitude/longitude). Props: `app`.
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
 - **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView

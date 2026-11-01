@@ -13,11 +13,22 @@ iOS Studio is a desktop app for [Omarchy](https://omarchy.org/). It installs the
 | Home | See your next step, what's ready, your iPhone, how many days until apps need re-signing, your apps with Run, and recent builds and crashes. |
 | Setup | Install Swift, xtool, the iOS SDK and the iPhone tools with one button. |
 | Apple ID | Sign in and see your team, certificates, profiles and the free-account limits. |
-| iPhone | Pair your phone, manage its apps, watch its screen and fake its location. |
+| iPhone | Pair your phone and work with it: see the list below. |
 | Projects | Create an app from a template, build it, run it on your iPhone and re-sign it. |
 | Logs | Read your iPhone's live log, open crash reports and look back at build logs. |
 | Toolchain | Check versions and disk usage, free space, repair or remove everything. |
 | Settings | Project folders, editor, notifications, automatic re-signing, AI agents, a launcher shortcut, tiled or floating, opaque window. |
+
+On the iPhone page you can:
+
+- manage installed apps and fake the phone's location
+- watch the screen live, take screenshots and record short videos for bug reports
+- import photos and videos from the camera roll, browse your apps' files, and feed camera code test images
+- make the phone act as if it's on a slow network, running hot or with a slow GPU, and record an app's traffic over USB
+- measure an app's CPU, memory, energy and frame rate, with a report of anything unusual
+- capture a backtrace or stop at breakpoints in your own apps with LLDB
+
+![iPhone › Performance](docs/screenshots/performance.png)
 
 Press `?` in the app to see the keyboard shortcuts.
 

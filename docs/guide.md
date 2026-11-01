@@ -60,7 +60,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 |---|---|
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
 | Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. See [Screen](#screen) below. |
-| Files | Three parts. Photos & videos shows the camera roll as thumbnails: select some (Shift+click selects a range) and import them to a folder (`~/Pictures/iPhone` unless you pick another), with HEIC photos saved as JPEG if you like. App files browses an app's files: your own apps show their whole container, App Store apps only their Documents folder and only if they share files. Save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete. Camera test runs your app's camera code on test images and videos (see [Test camera code with files](#test-camera-code-with-files)). Nothing here ever changes the camera roll. |
+| Files | Import photos and videos from the camera roll, browse and change an app's files, and test camera code with files. See [Files](#files) below. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
 | Performance | Measures one app over time: CPU, memory, energy, frame rate, network, disk and battery, with a report of anything unusual. See [Measure how my app performs](#measure-how-my-app-performs). |
@@ -70,7 +70,33 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 
 The link button at the top pairs another iPhone. The phone reconnects by itself whenever it's reachable.
 
+#### Screen
+
+![iPhone › Screen while recording](screenshots/screen.png)
+
+Press Start live view to watch the phone. The badge next to the title says how it's shown and how many frames a second actually arrive. There are three ways to show it:
+
+- Smooth streams the screen as video on iOS 27 or later, which is much smoother than screenshots. While it runs, the phone shows its screen-sharing indicator and apps can't use the camera or microphone. If an app is already using them, or the phone runs an older iOS, the view switches to screenshots by itself and says why.
+- Screenshots works on every iPhone and leaves the camera and microphone alone. The phone sets the pace: over Wi-Fi each screenshot takes about 0.6 seconds on a busy screen, so expect 1.5 to 2 frames a second, a little more when the screen is still. Speed caps it lower.
+- AirPlay opens UxPlay, a separate receiver window with sound. On the phone, open Control Center › Screen Mirroring and pick iOS Studio. If UxPlay isn't installed, the button takes you to its Setup step.
+
+Record saves a short video of the screen, up to 30 seconds, 1 minute or 5 minutes. The phone shows REC and a timer while it records, and Stop recording ends it early. The video is an MP4 in `~/.cache/ios-studio/recordings/`. Show in folder and Copy path help you attach it to a bug report, and the finished video plays inline when Qt Multimedia is installed. Recordings in Screenshots mode need ffmpeg; if it's missing, the error has a button that installs it from Setup.
+
+Take screenshot saves a full-resolution still. Save to Pictures and Copy image use the latest frame or screenshot.
+
+#### Files
+
+![iPhone › Files › Photos & videos](screenshots/files.png)
+
+Files has three parts, and nothing here ever changes the camera roll.
+
+- Photos & videos shows the camera roll as thumbnails. Select some (Shift+click selects a range) and import them to a folder (`~/Pictures/iPhone` unless you pick another). HEIC photos can be saved as JPEG.
+- App files browses an app's files. Your own apps show their whole container; App Store apps show only their Documents folder, and only if they share files. Save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete.
+- Camera test runs your app's camera code on test images and videos. See [Test camera code with files](#test-camera-code-with-files).
+
 #### Network
+
+![iPhone › Network with a condition on](screenshots/network.png)
 
 Simulated conditions come from the developer tools on the phone, so they need Developer Mode. Pick one from the list, choose how long it should last (1 to 30 minutes, 5 by default) and press Apply. It affects the whole phone and every app on it, so iOS Studio asks first. Only one condition is on at a time; applying another replaces it.
 
@@ -79,18 +105,6 @@ While one is on, a yellow banner at the top of the tab shows it with a countdown
 Over Wi-Fi, a network condition also slows down this computer's own link to the phone, and iOS Studio may lose the phone for a moment (the condition then switches off). The two profiles that cut the network off almost completely, 100% packet loss and Very poor network, are only offered over a USB cable. Heat and GPU states work the same over Wi-Fi and USB.
 
 Packet capture needs a USB cable, because the phone only shares its traffic over a cable. Pick an app (or the whole iPhone) and a duration, press Start capture, and use the app. You see the packet count while it records. When it stops, the tab shows the data sent and received, the protocols, and the servers the app talked to. The summary reads only the packet headers, never their contents, and leaves out iOS Studio's own connection to the phone. The recording is a standard pcapng file in `~/.cache/ios-studio/captures/` (the newest 20 are kept). Open in Wireshark opens it, and Setup can install Wireshark if you don't have it.
-
-#### Screen
-
-Press Start live view to watch the phone. The badge next to the title says how it's shown and how many frames a second actually arrive. There are three ways to show it:
-
-- Smooth streams the screen as video, up to 30 frames a second, on iOS 27 or later. While it runs, the phone shows its screen-sharing indicator and apps can't use the camera or microphone. If an app is already using them, or the phone runs an older iOS, the view switches to screenshots by itself and says why.
-- Screenshots works on every iPhone and leaves the camera and microphone alone. It manages about 3 to 5 frames a second; Speed slows it down.
-- AirPlay opens UxPlay, a separate receiver window with sound. On the phone, open Control Center › Screen Mirroring and pick iOS Studio. If UxPlay isn't installed, the button takes you to its Setup step.
-
-Record saves a short video of the screen, up to 30 seconds, 1 minute or 5 minutes. The phone shows REC and a timer while it records, and Stop recording ends it early. The video is an MP4 in `~/.cache/ios-studio/recordings/`. Show in folder and Copy path help you attach it to a bug report, and the finished video plays inline when Qt Multimedia is installed. Recordings in Screenshots mode need ffmpeg; if it's missing, the error has a button that installs it from Setup.
-
-Take screenshot saves a full-resolution still. Save to Pictures and Copy image use the latest frame or screenshot.
 
 ### Projects
 
@@ -187,6 +201,8 @@ With a cable it's simpler: plug in, unlock, tap Trust. iOS Studio sets up Wi-Fi 
 
 ### Measure how my app performs
 
+![iPhone › Performance with a report](screenshots/performance.png)
+
 1. On the iPhone page, open the Performance tab.
 2. Pick the app. Running apps come first, and your own apps are marked "yours".
 3. Press Start measuring, then use the app on the phone as you normally would. If the app isn't open yet, the tab waits for it.
@@ -213,6 +229,8 @@ Below the charts are three deeper checks, and each one asks before it starts:
 
 ### Test camera code with files
 
+![Files › Camera test with results](screenshots/camera-test.png)
+
 Camera code is hard to test by pointing the phone at things. Files › Camera test feeds your app chosen images and videos instead and shows what it made of them.
 
 1. Add the test hook to your app once. [camera-testing.md](camera-testing.md) has the Swift code to paste.
@@ -222,6 +240,8 @@ Camera code is hard to test by pointing the phone at things. Files › Camera te
 iOS Studio copies the files into the app's Documents/CameraTestInput, restarts the app with `-cameraTestMode 1`, waits for the app to write Documents/CameraTestOutput/done.json, and copies the results back. You get done.json, any images the app wrote, the app's log during the run and a warning if it crashed. If no done.json shows up before the timeout, the app is missing the hook or the launch argument.
 
 ### Debug my app on the iPhone
+
+![iPhone › Debug with a backtrace](screenshots/debug.png)
 
 Open iPhone › Debug and pick your app. Only your own apps are listed: iOS lets a debugger attach only to apps built and signed for development, so App Store and system apps can't be debugged. For readable results, build and run the app from Projects first, so iOS Studio has its build.
 

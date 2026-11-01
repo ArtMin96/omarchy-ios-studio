@@ -40,8 +40,8 @@ commands answer `bad-args` ("Unknown command"); `daemon.features` reports it. Ho
 **Per connection.** Each connection is a client with the framing below. Request `id`s are scoped
 to the connection (two clients may both use `id: 1`; each reply goes back to the connection that
 asked). On connect the daemon sends a snapshot: `ready`, `devices`, and when known `connection`,
-`deviceInfo` and `mirror`, so a client attaching to a daemon that is already connected sees the
-current state at once.
+`deviceInfo`, `mirror`, `record`, `condition`, `pcap` and one `metrics.state` per running metrics
+session, so a client attaching to a daemon that is already connected sees the current state at once.
 
 **Lifetime.** The daemon runs while any client is connected. With no clients it exits after an
 idle grace period (`IOSSTUDIO_DEVICED_IDLE` seconds, default 120), closing the tunnel, the syslog
@@ -84,10 +84,13 @@ filters on exactly that one pid; otherwise the phone sends everything and entrie
 subscriber's `minLevel` are skipped before they're built. The phone stream starts with the first
 subscriber and stops when the last one stops or disconnects.
 
-**Held resources.** Features that keep something running on the phone for a client (the mirror,
-a recording, network conditions, packet captures, port forwards) hold it as a reference-counted resource. It is
-released when the last client holding it stops it or disconnects, after an optional timeout, when
-the active device changes, at shutdown, and for tunnel-bound resources when the tunnel drops.
+**Held resources.** Features that keep something running on the phone for a client hold it as a
+reference-counted resource: the mirror (`mirror`), a recording (`record`), the network condition
+(`condition`), a packet capture (`pcap`), a debugger port forward (`debug:<bundleId>`), a debug
+symbols download (`debug.symbols`) and each metrics session. A resource is released when the last
+client holding it stops it or disconnects, after an optional timeout, when the active device
+changes, at shutdown, and for tunnel-bound resources (scope `tunnel`) when the tunnel drops.
+`daemon.features` lists the ones held right now.
 
 **Mirror.** Reference counted: `mirror.start` adds the client, `mirror.stop` removes it and the
 frames stop only when no client holds it (the reply then says `{running: false, sharedWith: n}`
@@ -265,7 +268,7 @@ DeviceInfo:
 {
   "udid": "…", "name": "My iPhone", "productType": "iPhone18,1", "model": "iPhone 17 Pro",
   "hardwareModel": "V53AP", "ios": "27.2", "build": "24B115", "cpu": "arm64e",
-  "deviceClass": "iPhone", "serial": "", "wifiAddress": "aa:bb:…", "timeZone": "Asia/Yerevan",
+  "deviceClass": "iPhone", "serial": "", "wifiAddress": "aa:bb:…", "timeZone": "Europe/Berlin",
   "transport": "wifi", "address": "fe80::…%wlp2s0",
   "battery": {"level": 84, "charging": false, "external": false, "cycleCount": 322, "health": 91},
   "storage": {"total": 256000000000, "free": 120000000000, "used": 136000000000},
@@ -274,6 +277,8 @@ DeviceInfo:
 }
 ```
 
+Feature modules add their own fields: `location` (`{lat, lon}` or `null`), `condition` (see
+[Network conditions](#network-conditions)) and `debugSymbols` (bool, see [Debugging](#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)).
 Any field may be `null` when unknown (e.g. `battery` if the diagnostics service failed).
 
 ### Apps and processes
@@ -307,12 +312,28 @@ slower); with `sizes` omitted the daemon computes them in the background and sen
 background (CoreDevice icon service) and sends one `appIcon` event per icon.
 `developer` = signed with a development profile (e.g. built with xtool).
 
+### Installing apps (`app.install`)
+
+Works over the active tunnel, Wi-Fi or USB (installation_proxy over RSD, the same path the transport in
+helper/device_link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes after the phone reports
+"Complete". Error codes besides the common ones:
+
+| code | message |
+|---|---|
+| `not-found` / `bad-args` / `bad-package` | the file is missing, not an .ipa/.app, or damaged |
+| `app-limit` | "Free Apple IDs can only have 3 of your own apps on an iPhone at a time…" (fix → iPhone page) |
+| `device-not-registered` | "This iPhone isn't registered with your Apple ID yet. Run once over USB." |
+| `no-space` | not enough free storage on the iPhone |
+| `locked` | the iPhone is locked |
+| `incompatible` / `bad-signature` | iOS version/architecture mismatch, invalid signature |
+| `install-failed` | anything else (`detail` holds the installer's text) |
+
 ### Screen
 
 | cmd | args | reply data |
 |---|---|---|
-| `screenshot` | `{udid?, save?: bool}` | `{path, width, height, bytes, ts}` |
-| `mirror.start` | `{udid?, mode?: "auto", fps?, scale?: 0.5, quality?: 70, source?: "dvt"}` | `{running: true, fps, mode, requestedMode, scale, quality}`; takes a mirror reference |
+| `screenshot` | `{udid?}` | `{path, width, height, bytes, ts}` |
+| `mirror.start` | `{udid?, mode?: "auto", fps?, scale?: 0.5, quality?: 70}` | `{running: true, fps, mode, requestedMode, scale, quality}` (`mode` is `"starting"` until the engine runs); takes a mirror reference |
 | `mirror.stop` | – | `{running: false, sharedWith?}`; releases it (frames stop when nobody holds one) |
 | `mirror.ack` | `{seq}` | `{}`; the client has shown frame `seq` (backpressure, below) |
 | `mirror.status` | – | the `mirror` event fields plus `{available, viewers, record}` |
@@ -326,19 +347,21 @@ background (CoreDevice icon service) and sends one `appIcon` event per icon.
 
 - `stream` (iOS 27 or later): the phone's DisplayService sends an HEVC video stream over UDP on the
   daemon's own tunnel. The daemon decodes it with PyAV and writes downscaled JPEG frames, up to
-  30 a second. While it runs, the phone shows its screen-sharing indicator and apps can't use the
+  30 a second, so it should be much smoother than screenshots (it hasn't been tried on a real
+  iPhone yet). While it runs, the phone shows its screen-sharing indicator and apps can't use the
   camera or microphone. Every way out of a stream (stop, release, disconnect, tunnel drop, device
   switch, shutdown) sends `stop_all_streams` to the phone, and if the tunnel is down at that
   moment it is sent as soon as the tunnel is back.
-- `screenshot`: screenshots in a loop, from the DVT screenshot instrument (`source: "dvt"`, the
-  default) or CoreDevice's screen capture service (`source: "coredevice"`). The next screenshot is
-  requested as soon as the previous one arrives, while a worker thread turns the newest PNG into a
-  downscaled JPEG, one at a time; a PNG that arrives while the worker is busy replaces the one
-  waiting. PNGs are decoded with libavcodec through PyAV (Pillow without it). The rate is
-  whichever is slower, the phone's screenshot call or the conversion, up to `fps` (at most 8).
-  Every 5 s `deviced.log` gets one timing line: `mirror: 5.0 s, 19 frames (3.8/s, gap 252 ms) |
-  rpc 251 ms (dvt, 20 shots) | wait 0 | decode 165 | scale+encode 23 | write 0 ms (pyav) |
-  skipped 0 (converter busy), held 0 (acks)`.
+- `screenshot`: DVT screenshot instrument calls in a loop, on the shared DVT connection. The next
+  screenshot is requested as soon as the previous one arrives, while a worker thread turns the
+  newest PNG into a downscaled JPEG, one at a time; a PNG that arrives while the worker is busy
+  replaces the one waiting. PNGs are decoded with libavcodec through PyAV (Pillow without it). The
+  rate is whichever is slower, the phone's screenshot call or the conversion, up to `fps` (at most
+  8). In practice the phone is the limit: on an iPhone 17 Pro over Wi-Fi one screenshot of a busy
+  screen takes about 630 ms, so the view gets about 1.5 to 2 frames a second (more on a still
+  screen), with JPEG frames of 65 to 200 KB. Every 5 s `deviced.log` gets one timing line:
+  `mirror: 5.0 s, 19 frames (3.8/s, gap 252 ms) | rpc 251 ms (20 shots) | wait 0 | decode 165 |
+  scale+encode 23 | write 0 ms (pyav) | skipped 0 (converter busy), held 0 (acks)`.
 - `auto` tries `stream` and falls back to `screenshot`, with a plain-language `notice` in the
   `mirror` event, when the iPhone runs an older iOS (`noticeCode: "unsupported"`), when an app holds
   the camera or microphone (`media-in-use`, the phone's CoreDevice error 9022), when the video
@@ -396,13 +419,14 @@ daemon keeps the connection open while a location is set.
 |---|---|---|
 | `condition.list` | `{udid?}` | `{groups: [Group…], transport, active: Condition, phoneActive: [{group, profile}], defaultTimeoutS: 300, maxTimeoutS: 1800}` |
 | `condition.set` | `{profile, timeoutS?: 300, acceptWifiRisk?: bool, udid?}` | Condition; replaces the active one |
-| `condition.clear` | `{udid?}` | `{active: false, cleared: bool}`; `cleared` is false when nothing was on |
+| `condition.clear` | `{force?: true, udid?}` | `{active: false, cleared: bool}`; `cleared` is false when nothing was on |
 | `condition.status` | `{verify?: bool}` | Condition; `verify` re-reads the phone and adds `phoneActive` |
 
 The phone's DVT condition inducer offers three groups on iOS 27: Network Link
-(`SlowNetworkCondition`: 100% loss, very bad network, Edge, 2G, 3G, LTE, Wi-Fi, DSL, high-latency
-DNS), Thermal State (`ThermalCondition`: Fair, Serious, Critical) and GPU Performance State
-(`GPUPerformanceState`: Min, Mid, Max). Internal groups are left out.
+(`SlowNetworkCondition`, 16 profiles: 100% loss, very bad network, Edge, 2G, 3G, LTE, Wi-Fi, DSL,
+high-latency DNS, several in more than one variant), Thermal State (`ThermalCondition`: Fair,
+Serious, Critical) and GPU Performance State (`GPUPerformanceState`: Min, Mid, Max). Internal
+groups are left out.
 
 Group:
 
@@ -446,7 +470,7 @@ Rules:
   and closes the connection. After a tunnel drop the phone can't be reached, so once the daemon has
   reconnected it lists the conditions again and clears anything still on.
 - `condition.clear` with nothing held still clears a condition the phone reports (left over from
-  another tool or a crash).
+  another tool or a crash), unless `force` is false.
 
 Event `condition`: the Condition plus `reason` ∈ `set`, `cleared`, `timeout`, `client-gone`,
 `tunnel-lost`, `shutdown`. When it ends, `active` is false and the other fields still name the
@@ -509,7 +533,7 @@ time or size limit, on `pcap.stop` from any client, when that client disconnects
 drops and at shutdown. Event `pcap`: the running Capture about once a second (`byProcess` = top
 5), then once more with the finished Capture and its `summary`.
 
-### Demo mode
+#### Demo transport (`demo.transport`)
 
 The demo daemon has the same commands with made-up data. Its iPhone starts on Wi-Fi, so capture
 answers `needs-usb`. `demo.transport {transport: "usb" | "wifi"}` (demo only) plugs the made-up
@@ -537,7 +561,7 @@ documentation address ranges.
 | cmd | args | reply data |
 |---|---|---|
 | `pair.status` | – | `{records: [{udid, wifi: bool, usb: bool, path}], usb: [udid…]}` |
-| `pair.start` | `{method: "usb" \| "wifi", udid?}` | `{started: true}`; progress comes as `pair` events |
+| `pair.start` | `{method: "usb" \| "wifi", udid?, timeout?: 300}` (`timeout` in seconds, Wi-Fi only) | `{started: true}`; progress comes as `pair` events |
 | `pair.code` | `{code}` | `{}`; only when a `pair` event asked for `need-code` |
 | `pair.cancel` | – | `{}` |
 
@@ -637,7 +661,7 @@ pulled) and parses the `.ips` header + body:
 
 ```json
 {"process": "MyApp", "bundleId": "app.myapp.mobile.dev", "appVersion": "0.1.0 (1)",
- "osVersion": "iPhone OS 27.2 (24B115)", "date": "2026-11-01 14:22:33.00 +0400",
+ "osVersion": "iPhone OS 27.2 (24B115)", "date": "2026-11-01 14:22:33.00 +0100",
  "exceptionType": "EXC_CRASH", "signal": "SIGABRT", "terminationReason": "…",
  "crashedThread": 0, "frames": ["0 libsystem_kernel.dylib __pthread_kill + 8", "…"],
  "bugType": "309", "incident": "UUID"}
@@ -656,20 +680,21 @@ gauges are polled one after the other once a second. Battery uses the diagnostic
 5 s cadence. A gauge that doesn't answer within 4 s skips that sample (the field is missing from the
 row); after 5 ticks in a row with every polled gauge failing, the connection is rebuilt. A set that stays
 down for 20 s gets a note in the session's `notes` (for example "Energy data paused: the phone is slow to
-answer. It resumes by itself."), which clears when it answers again. A session is held by the client that started it: it stops when that client disconnects, when
-nobody reads it (`metrics.read` or `metrics.snapshot`) for 2 hours, or when the active iPhone changes.
+answer. It resumes by itself."), which clears when it answers again. On an iPhone 17 Pro over Wi-Fi
+every set sampled without gaps for a 60 s run. A session is held by the client that started it: it
+stops when that client disconnects, when nobody reads it (`metrics.read` or `metrics.snapshot`) for 2 hours, or when the active iPhone changes.
 Stopped sessions stay readable (the newest 6). At most 4 run at once.
 
 | cmd | args | reply data |
 |---|---|---|
-| `metrics.start` | `{bundleId` or `pid, name?, sets?: [str], intervalMs?: 1000, udid?}` | MetricsSession. The same client starting the same app again gets the running session back |
+| `metrics.start` | `{bundleId` or `pid, name?, sets?: [str], intervalMs?: 1000 (≥1000), udid?}` | MetricsSession. The same client starting the same app again gets the running session back |
 | `metrics.stop` | `{sessionId}` | MetricsSession + `summary` (Stats) |
 | `metrics.list` | `{}` | `{sessions: [MetricsSession…]}` |
-| `metrics.read` | `{sessionId, kind?: "samples"` or `"events", cursor?, limit?: 600, wait?: s ≤ 20}` | `{entries, cursor, nextCursor, hasMore, missed, bufferStart, total, kind, session}` |
-| `metrics.snapshot` | `{sessionId?, recentEvents?: bool}` | `{session, stats: Stats}`; without `sessionId` and no running session: `{sessions}` |
-| `metrics.series` | `{sessionId, metric, points?: 60}` | `{metric, label, unit, buckets: [{t0, t1, min, avg, max, n}], stats}` |
-| `metrics.export` | `{sessionId}` | `{path, eventsPath, rows, events, bytes, columns}`: CSV files under `~/.cache/ios-studio/metrics/` |
-| `metrics.hitches` | `{sessionId, seconds?: 60, stop?: bool}` | MetricsSession; frame hitch tracking for at most 60 s |
+| `metrics.read` | `{sessionId, kind?: "samples"` or `"events", cursor?, limit?: 600 (≤4000), wait?: s ≤ 20}` | `{entries, cursor, nextCursor, hasMore, missed, bufferStart, total, kind, session}` |
+| `metrics.snapshot` | `{sessionId?, recentEvents?: bool}` | `{session, stats: Stats, recentEvents?}` (the last 20 events); without `sessionId` and no running session: `{sessions}` |
+| `metrics.series` | `{sessionId, metric, points?: 60 (≤600)}` | `{sessionId, metric, label, unit, buckets: [{t0, t1, min, avg, max, n}], stats}` |
+| `metrics.export` | `{sessionId}` | `{sessionId, path, eventsPath, rows, events, bytes, columns}`: CSV files under `~/.cache/ios-studio/metrics/` |
+| `metrics.hitches` | `{sessionId, seconds?: 60 (5 to 60), stop?: bool}` | MetricsSession; frame hitch tracking for at most 60 s |
 | `metrics.launchProfile` | `{bundleId, udid?}` | LaunchProfile. Quits and relaunches the app: confirm with the user first |
 | `metrics.leaks` | `{bundleId, udid?}` | LeakReport. Pauses the app while its heap is scanned: confirm first |
 
@@ -755,6 +780,7 @@ LeakReport: `{bundleId, name, pid, leakCount, leakedBytes, seconds, memgraphPath
 verdict}`. `leakedBytes` is null because the phone doesn't report sizes. The app has to be running and
 debuggable (errors `not-running`, `not-debuggable`). The leaked-only memory graph is saved next to the CSV
 exports, for `leaks` or Xcode on a Mac.
+
 ### Files
 
 The camera roll (read-only) and app containers, used by iPhone › Files and the MCP file tools.
@@ -767,13 +793,13 @@ Implementation: `helper/deviced_features/files.py` and `cameratest.py`, shared h
 | `media.thumb` | `{id \| path, udid?}` | `{id, path, source}`: a local JPEG; `source` ∈ `cache`, `phone`, `generated` |
 | `media.pull` | `{ids \| paths, dest?: "~/Pictures/iPhone", convertHeic?: false, transferId?, udid?}` | `{transferId, dest, files, skipped, failed: [{path, message}], bytes, converted, notConverted, seconds}` |
 | `container.list` | `{bundleId, path?, documentsOnly?: false, udid?}` | `{bundleId, name, path, root, mode, developer, fileSharing, writable, entries: [Entry…]}` |
-| `container.pull` | `{bundleId, paths, dest?: "~/Downloads", transferId?, udid?}` | `{transferId, dest, files, bytes, seconds}`; folders are copied whole |
+| `container.pull` | `{bundleId, paths \| path, dest?: "~/Downloads", transferId?, udid?}` | `{transferId, dest, files, bytes, seconds}`; folders are copied whole |
 | `container.push` | `{bundleId, srcs \| src, path?, overwrite?: false, transferId?, udid?}` | `{transferId, path, files, bytes, seconds}`; `path` (a phone folder) is created if missing |
 | `container.mkdir` | `{bundleId, path, udid?}` | `{path}` |
 | `container.delete` | `{bundleId, paths, udid?}` | `{deleted, failed}`; recursive (UI must confirm first) |
-| `transfer.cancel` | `{transferId}` | `{transferId, cancelled: bool}`; the transfer's request then fails with `cancelled` |
+| `transfer.cancel` | `{transferId \| id}` | `{transferId, cancelled: bool}`; the transfer's request then fails with `cancelled` |
 | `transfer.list` | – | `[{id, kind}]` running transfers |
-| `cameratest.run` | `{bundleId, inputs: [local path…], args?: [str] \| str, env?: {} \| "K=V, …", timeout?: 60, testId?, minLevel?: "info", udid?}` | CameraTest (below) |
+| `cameratest.run` | `{bundleId, inputs: [local path…], args?: [str] \| str, env?: {} \| "K=V, …", timeout?: 60 (5 to 900), testId?, minLevel?: "info", udid?}` | CameraTest (below) |
 
 MediaItem:
 
@@ -819,7 +845,7 @@ Transfer event (`transfer`):
 
 ```json
 {"id": "m4211-3", "kind": "media.pull", "state": "running", "bytes": 10485760, "total": 48211322,
- "files": 2, "count": 9, "file": "IMG_0003.HEIC", "seconds": 1.9, "dest": "/home/me/Pictures/iPhone"}
+ "files": 2, "count": 9, "file": "IMG_0003.HEIC", "seconds": 1.9, "dest": "<home>/Pictures/iPhone"}
 ```
 
 `kind` ∈ `media.pull`, `container.pull`, `container.push`, `cameratest.push`, `cameratest.pull`; `state`
@@ -851,22 +877,6 @@ reply comes when the run ends, so give the request `timeout + ~60 s`. The app-si
 `ok` = `done.json` parsed and no new crash. `doneRaw` holds the text (≤20 KB) when `done.json` isn't
 valid JSON. `logLines` keeps the last 400 lines; `syslog.txt` has all of them. Step ids: `check`,
 `clear`, `push`, `launch`, `wait`, `pull`, `crashes`.
-
-### Installing apps (`app.install`)
-
-Works over the active tunnel, Wi-Fi or USB (installation_proxy over RSD, the same path the transport in
-helper/device_link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes after the phone reports
-"Complete". Error codes besides the common ones:
-
-| code | message |
-|---|---|
-| `not-found` / `bad-args` / `bad-package` | the file is missing, not an .ipa/.app, or damaged |
-| `app-limit` | "Free Apple IDs can only have 3 of your own apps on an iPhone at a time…" (fix → iPhone page) |
-| `device-not-registered` | "This iPhone isn't registered with your Apple ID yet. Run once over USB." |
-| `no-space` | not enough free storage on the iPhone |
-| `locked` | the iPhone is locked |
-| `incompatible` / `bad-signature` | iOS version/architecture mismatch, invalid signature |
-| `install-failed` | anything else (`detail` holds the installer's text) |
 
 ### Debugging (`debug.*`), used by iPhone › Debug and the `debug` helper group
 

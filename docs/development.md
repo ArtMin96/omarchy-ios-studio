@@ -25,19 +25,26 @@ services/            one QML service per area: Setup, Toolchain, Account, Device
 pages/               one page per sidebar entry
 helper/
   main.py            helper router: group name -> module
+  common.py          shared helper code: ok()/fail()/event(), paths, fix links
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
+  xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
   debugger.py        iPhone › Debug: backtraces and breakpoint sessions (group `debug`)
   lldb_driver.py     runs inside lldb's Python (python3.12) and drives lldb for debugger.py
+  debugger_demo.py   the `debug` group in demo mode: a made-up backtrace and session, no lldb
   deviced.py         device daemon core: session, tunnel, device list, dispatch (pymobiledevice3)
   deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
   deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
-  deviced_features/  one module per feature group of the real daemon (screen, apps, syslog, ...)
+  deviced_features/  one module per feature group of the real daemon: apps, cameratest, conditions,
+                     crashes, ddi, debug, files, install, location, metrics, mirror, pairing, pcap,
+                     profiles, screen, syslog
   device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
   device_client.py   asyncio client for the broker (used by the MCP server)
   device_link.py, device_crash.py, device_models.py   device helpers
   device_network.py  Network tab helpers shared by both daemons: condition rules, capture summary, pcapng
   device_files.py    Files feature helpers shared by both daemons (transfers, paths, conversions, Photos.sqlite)
+  metrics_core.py    Performance sessions shared by both daemons: commands, sample rings, events, CSV
+  metrics_stats.py   the Performance report: averages, percentiles, leaks, spikes, hitches, anomalies
   demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
@@ -195,6 +202,9 @@ Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app
 | Settings | `~/.config/ios-studio/settings.json` |
 | State (build history, renewals, device, setup progress) | `~/.local/state/ios-studio/` |
 | Cache (screenshots, crash files, account lists) | `~/.cache/ios-studio/` |
+| Screen recordings, packet captures (newest 20), metrics CSVs, camera test results | `~/.cache/ios-studio/recordings/`, `captures/`, `metrics/`, `cameratest/` |
+| Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |
+| Imported photos and videos (default) | `~/Pictures/iPhone` |
 | pymobiledevice3 venv | `~/.local/share/ios-studio/venv` |
 | MCP server venv | `~/.local/share/ios-studio/mcp-venv` |
 | Config backups made by Settings › AI agents | `~/.local/state/ios-studio/backups/` |

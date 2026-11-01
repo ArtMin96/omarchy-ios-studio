@@ -85,6 +85,40 @@ Unlock it and try again. Installing and launching apps need an unlocked phone.
 
 Some features, like screenshots and location, need Apple's developer disk image loaded on the phone. Press Try again. Keep the phone unlocked and connected while it loads.
 
+## Screen, files, network and debugging
+
+### "Screen streaming isn't available while the camera or microphone is in use"
+
+While the Smooth view streams, the phone keeps the camera and microphone for itself. If an app is already using one of them, the live view falls back to screenshots and says so. Close that app on the phone, or keep using Screenshots if your app needs the camera.
+
+### The Screenshots view is slow
+
+The phone sets the pace. Over Wi-Fi each screenshot takes about 0.6 seconds on a busy screen, so 1.5 to 2 frames a second is normal (a still screen is a little faster). On iOS 27 or later, pick Smooth instead.
+
+### "This app doesn't share files"
+
+App Store apps only show their Documents folder when they turn on file sharing, and this one doesn't. Your own apps, built in iOS Studio, always show their whole container.
+
+### "Packet capture needs a USB cable"
+
+The iPhone only shares its network traffic over a cable. Plug it in; the Start capture button turns on by itself.
+
+### A network condition is marked "USB only", or asks to confirm over Wi-Fi
+
+Over Wi-Fi, a network condition also slows down this computer's own link to the phone. 100% packet loss and Very poor network would cut that link off, so they can't be switched off again over Wi-Fi and need a USB cable. The other network conditions ask you to confirm first, because iOS Studio may lose the phone for a while (the condition then switches off by itself). Heat and GPU states work the same over Wi-Fi and USB.
+
+### No hangs in the Performance report
+
+The phone only reports hangs when Hang Detection is on. On the iPhone, open Settings › Developer › Hang Detection and switch it on.
+
+### "The debugger needs Python 3.12, which isn't installed"
+
+The debugger is lldb from the Swift toolchain, and it needs Python 3.12. Install "Debugger support" in Setup; it builds Python from source, so it takes a while. If the message says lldb itself is missing or didn't start, install or repair Swift in Setup.
+
+### "The debug symbols need about N GB free while they download"
+
+The download is about 6 GB per iOS version, and only a few hundred MB stay once it's done. Free some space (Toolchain shows what can go safely), then try again. Debugging works without the symbols, but Swift strings and arrays can read wrong and system frames show only library names.
+
 ## Building
 
 ### "Your code has N errors"
