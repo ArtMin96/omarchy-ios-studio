@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 48 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 52 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -129,6 +129,7 @@ The server has 48 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | iPhone | `ios_device_list`, `ios_device_info`, `ios_device_select`, `ios_device_reconnect`, `ios_device_prepare` (Developer Mode and the developer disk image) |
 | Apps on the iPhone | `ios_app_list`, `ios_app_install`, `ios_app_launch`, `ios_app_kill`, `ios_app_uninstall`, `ios_process_list`, `ios_screenshot`, `ios_location_set`, `ios_location_clear` |
 | Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get` |
+| Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
 
 Builds and installs run as background jobs, because they can take longer than an agent waits for one tool call. `ios_build_start`, `ios_run`, `ios_project_renew` and `ios_toolchain_install` return a `build_id` straight away, and the agent checks on it with `ios_build_status`, which waits up to 25 seconds per call. Jobs stop when the agent's session ends.
 
@@ -141,6 +142,8 @@ A few tools need more explanation:
 - `ios_screenshot` returns an image the agent can see, at most 1568 pixels on the long side and 350 KB, and the path of the saved file. With `inline=false` it returns only the path.
 - `ios_location_set` changes the location for the whole phone. It lasts until it's cleared or the background service stops.
 - `ios_device_prepare` can't turn on Developer Mode for you. It tells you what to tap on the phone.
+- `ios_network_condition_set` makes the whole phone act as if it's on a slow network (Edge, 3G, LTE, DSL, packet loss, slow DNS), running hot, or with a throttled GPU. Like the destructive tools it returns a dry run first, which says what changes and, over Wi-Fi, that it also slows the agent's own link to the phone; the agent asks you before it repeats the call with `confirm=true`. The condition switches off after `minutes` (default 5, at most 30), on `ios_network_condition_clear`, or when the MCP server stops. The two profiles that cut the network off are refused over Wi-Fi. `ios_network_conditions` lists the profiles and the active one in about 6 KB.
+- `ios_pcap_capture` records the phone's traffic for up to 120 seconds, for one app (`bundle_id`) or the whole phone, and needs a USB cable. It returns packets and bytes per process, the top 10 remote hosts and ports, and protocol and service counts, read from the packet headers only. The full recording is a pcapng file whose path is in `file`. The call waits up to 25 seconds; a longer capture returns `state: "running"` and a `capture_id`, and calling the tool again with `capture_id` waits for the result (`stop=true` ends it early). The capture stops if the MCP server exits.
 
 The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), large outputs a tool saved to a file (`iosstudio://cache/{kind}/{name}`), the last known iPhone state, the troubleshooting guide and this page. Each one returns at most 100 KB and says which tool reads the rest.
 

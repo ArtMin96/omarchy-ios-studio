@@ -16,7 +16,15 @@ PageFrame {
   property int cursor: -1
 
   title: "iPhone"
-  subtitle: showDevice ? "Apps, screen, location and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
+  subtitle: showDevice ? "Apps, screen, location, network and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
+
+  // A simulated condition changes the whole phone: say so next to the title on every tab.
+  status: StatusPill {
+    visible: page.svc.conditionActive
+    level: "warn"; glyph: Model.Glyph.speed
+    text: page.svc.conditionActive ? "Simulating " + page.svc.condition.name : ""
+    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: page.tab = "network" }
+  }
 
   actions: [
     IconButton { glyph: Model.Glyph.link; tooltip: "Pair another iPhone"; visible: page.showDevice; onClicked: pairSheet.begin(page.usbPresent() ? "usb" : "wifi") },
@@ -32,6 +40,8 @@ PageFrame {
     { key: "apps", label: "Apps", glyph: Model.Glyph.apps, count: svc.apps.length || undefined },
     { key: "screen", label: "Screen", glyph: Model.Glyph.camera },
     { key: "location", label: "Location", glyph: Model.Glyph.location },
+    { key: "network", label: "Network", glyph: Model.Glyph.network, level: svc.conditionActive || svc.capturing ? "warn" : "",
+      count: svc.conditionActive ? "On" : (svc.capturing ? "Rec" : undefined) },
     { key: "profiles", label: "Profiles", glyph: Model.Glyph.signature, count: profileWarn() || undefined, level: profileWarn() ? "warn" : "" },
     { key: "info", label: "Info", glyph: Model.Glyph.info }
   ]
@@ -159,6 +169,11 @@ PageFrame {
   DeviceLocationView {
     Layout.fillWidth: true
     visible: page.showDevice && page.tab === "location" && page.svc.connected
+    app: page.app
+  }
+  DeviceNetworkView {
+    Layout.fillWidth: true
+    visible: page.showDevice && page.tab === "network" && page.svc.connected
     app: page.app
   }
   DeviceProfilesView {

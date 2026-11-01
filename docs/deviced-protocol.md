@@ -85,7 +85,7 @@ subscriber's `minLevel` are skipped before they're built. The phone stream start
 subscriber and stops when the last one stops or disconnects.
 
 **Held resources.** Features that keep something running on the phone for a client (the mirror;
-later conditions, captures, port forwards) hold it as a reference-counted resource. It is
+network conditions, packet captures, port forwards) hold it as a reference-counted resource. It is
 released when the last client holding it stops it or disconnects, after an optional timeout, when
 the active device changes, at shutdown, and for tunnel-bound resources when the tunnel drops.
 
@@ -164,6 +164,9 @@ Rules:
 | `bad-args` | Missing or invalid argument. |
 | `busy` | Another exclusive operation (pairing) is running. |
 | `pmd3-api` | The installed pymobiledevice3 lacks an API. fix → `{page:"setup", step:"pymobiledevice3"}` |
+| `needs-usb` | The feature only works over a USB cable (packet capture). |
+| `unsafe-over-wifi` | That network condition would cut the Wi-Fi link to this computer; USB only. |
+| `wifi-risk` | That network condition also slows the Wi-Fi link; repeat with `acceptWifiRisk: true` after the user agreed. |
 | `failed` | Anything else (see `detail`). |
 
 ## Device object
@@ -206,6 +209,8 @@ the tunnel is up.
 | `appIcon` | `{udid, bundleId, path}` | icon fetched in the background after `apps.list` |
 | `installProgress` | `{path, percent, status}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing`, `done` (100) |
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list` (sizes are slow to compute) |
+| `condition` | Condition + `reason` (see [Network conditions](#network-conditions)) | a condition was set or switched off |
+| `pcap` | Capture (see [Packet capture](#packet-capture)) | about once a second while capturing, and when it stops |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -313,6 +318,133 @@ screen is reachable; a failure emits `mirror {running:false, error}`.
 The simulated location stays active until `location.clear`, a phone reboot, or the daemon's DVT
 connection closing (iOS restores the real location when the instrument connection ends). The
 daemon keeps the connection open while a location is set.
+
+### Network conditions
+
+| cmd | args | reply data |
+|---|---|---|
+| `condition.list` | `{udid?}` | `{groups: [Group…], transport, active: Condition, phoneActive: [{group, profile}], defaultTimeoutS: 300, maxTimeoutS: 1800}` |
+| `condition.set` | `{profile, timeoutS?: 300, acceptWifiRisk?: bool, udid?}` | Condition; replaces the active one |
+| `condition.clear` | `{udid?}` | `{active: false, cleared: bool}`; `cleared` is false when nothing was on |
+| `condition.status` | `{verify?: bool}` | Condition; `verify` re-reads the phone and adds `phoneActive` |
+
+The phone's DVT condition inducer offers three groups on iOS 27: Network Link
+(`SlowNetworkCondition`: 100% loss, very bad network, Edge, 2G, 3G, LTE, Wi-Fi, DSL, high-latency
+DNS), Thermal State (`ThermalCondition`: Fair, Serious, Critical) and GPU Performance State
+(`GPUPerformanceState`: Min, Mid, Max). Internal groups are left out.
+
+Group:
+
+```json
+{"id": "SlowNetworkCondition", "name": "Network Link", "kind": "network", "phoneActive": false, "activeProfile": "",
+ "destructive": false,
+ "profiles": [{"id": "SlowNetwork3G", "name": "3G Network - best",
+               "summary": "0.78 Mbps down · 0.33 Mbps up · 100 ms latency",
+               "details": {"Downlink Bandwidth": "0.78 Mbps", "Downlink Latency": "100 ms", "…": "…"},
+               "description": "", "wifi": "warn", "allowed": true, "note": "Your iPhone is connected over Wi-Fi, …"}]}
+```
+
+`kind` ∈ `network`, `thermal`, `gpu`, `other`. `details` is the phone's description split into
+fields; when it has no fields, the raw text is in `description`. `wifi` is the profile's rule over
+Wi-Fi: `ok`, `warn` (a network profile: it also slows the tunnel to this computer) or `blocked`
+(`SlowNetwork100PctLoss` and `SlowNetworkVeryBadNetwork`, which would cut the tunnel so the reset
+could never be sent). `allowed` and `note` apply that rule to the current transport.
+
+Condition (also the `condition` event and `device.info`'s `condition` field, `null` when off):
+
+```json
+{"active": true, "group": "SlowNetworkCondition", "groupName": "Network Link", "kind": "network",
+ "profile": "SlowNetwork3G", "name": "3G Network - best", "summary": "0.78 Mbps down · …",
+ "setAt": 1793536000.0, "expiresAt": 1793536300.0, "timeoutS": 300, "remainingS": 284,
+ "setBy": "gui-1", "transport": "usb"}
+```
+
+When nothing is on, the reply is `{"active": false}`.
+
+Rules:
+- One condition at a time. `condition.set` switches the old one off first (no `cleared` event for
+  it) and sends `condition {reason: "set"}` for the new one.
+- Over Wi-Fi, a `blocked` profile fails with `unsafe-over-wifi`, and a `warn` profile fails with
+  `wifi-risk` unless `acceptWifiRisk` is true. Thermal and GPU profiles work on either transport.
+- The condition is a [held resource](#broker) of the client that set it, scope `tunnel`, always
+  with a timeout (`timeoutS`, 10 s to 30 min, default 5 min). It switches off on `condition.clear`
+  from any client, at the timeout, when the setting client disconnects, when the tunnel drops or the
+  active device changes, and at daemon shutdown. It runs on a DVT connection of its own; the phone
+  resets the condition when that connection closes.
+- Switching off sends `disableActiveCondition` (the phone doesn't answer it), then re-lists to check
+  and closes the connection. After a tunnel drop the phone can't be reached, so once the daemon has
+  reconnected it lists the conditions again and clears anything still on.
+- `condition.clear` with nothing held still clears a condition the phone reports (left over from
+  another tool or a crash).
+
+Event `condition`: the Condition plus `reason` ∈ `set`, `cleared`, `timeout`, `client-gone`,
+`tunnel-lost`, `shutdown`. When it ends, `active` is false and the other fields still name the
+condition that was on. A new client's snapshot includes `condition {…, reason: "set"}` while one is
+on.
+
+### Packet capture
+
+| cmd | args | reply data |
+|---|---|---|
+| `pcap.start` | `{bundleId? \| pid?, maxSeconds?: 30, maxMB?: 50, udid?}` | Capture (running) |
+| `pcap.stop` | – | Capture (finished, with `summary`) |
+| `pcap.status` | – | Capture: the running one, else the last finished one, else `{running: false}` |
+
+USB only: pcapd refuses the Wi-Fi tunnel (`ServiceProhibited`), so over Wi-Fi `pcap.start` fails
+with `needs-usb`, "Packet capture needs a USB cable. Connect your iPhone with a cable and try
+again." Over USB the daemon opens pcapd over the tunnel's RSD, or over usbmux lockdown if the
+phone refuses that. One capture at a time (`busy` otherwise).
+
+`bundleId` (plain or `XTL-<TEAM>.` form) keeps the packets of that app's executable, matched on
+the packet's process or effective process (so a request `nsurlsessiond` makes for the app counts).
+`pid` keeps one process. Neither = the whole phone. Packets of the daemon's own tunnel (`remoted`,
+`remotepairingd`, and the interface they use) are always left out. `maxSeconds` is 3 to 300,
+`maxMB` 1 to 500.
+
+The capture writes `~/.cache/ios-studio/captures/cap-<YYYYmmdd-HHMMSS>.pcapng` (standard pcapng,
+Ethernet link type; each packet has a comment `PID: …, ProcName: …, EPID: …, EProcName: …`). The
+newest 20 files are kept.
+
+Capture:
+
+```json
+{"running": false, "file": "<home>/.cache/ios-studio/captures/cap-20261101-142233.pcapng", "fileBytes": 41312,
+ "startedAt": 1793536000.0, "endedAt": 1793536030.2, "seconds": 30.2, "maxSeconds": 30, "maxMB": 50,
+ "filter": {"process": "MyApp", "bundleId": "XTL-ABCDE12345.com.example.myapp"}, "startedBy": "gui-1",
+ "packets": 312, "bytes": 180214, "excluded": 40,
+ "byProcess": [{"process": "MyApp", "packets": 300, "bytes": 170000}],
+ "stopReason": "time", "error": null, "summary": Summary}
+```
+
+`stopReason` ∈ `time`, `size`, `stopped`, `client-gone`, `tunnel-lost`, `shutdown`, `error` (then
+`error` holds the error object). `summary` is computed when the capture stops, from pcapd's
+per-packet header and the IP, TCP and UDP headers only, never the payload:
+
+```json
+{"packets": 312, "bytes": 180214, "seconds": 30.2, "sentBytes": 40000, "receivedBytes": 140214,
+ "byProcess": [{"process": "MyApp", "packets": 300, "bytes": 170000}], "processCount": 2,
+ "topHosts": [{"host": "203.0.113.24", "port": 443, "protocol": "TCP", "service": "HTTPS", "packets": 200, "bytes": 120000}],
+ "hostCount": 6, "protocols": {"TCP": 250, "UDP": 62}, "services": {"HTTPS": 250, "QUIC": 50, "DNS": 12},
+ "ipVersions": {"IPv4": 280, "IPv6": 32}, "interfaces": {"en0": 312},
+ "excludedTunnelPackets": 40, "otherProcessPackets": 1200}
+```
+
+The remote end of a flow is the side with the well-known port. `services` names common ports
+(HTTPS, QUIC, DNS, HTTP, mDNS, NTP, Apple Push, …) and shows others as `TCP <port>`. A process
+that sent on another's behalf is listed as `App (via nsurlsessiond)`.
+
+The capture is a held resource of the client that started it (scope `tunnel`): it stops at its
+time or size limit, on `pcap.stop` from any client, when that client disconnects, when the tunnel
+drops and at shutdown. Event `pcap`: the running Capture about once a second (`byProcess` = top
+5), then once more with the finished Capture and its `summary`.
+
+### Demo mode
+
+The demo daemon has the same commands with made-up data. Its iPhone starts on Wi-Fi, so capture
+answers `needs-usb`. `demo.transport {transport: "usb" | "wifi"}` (demo only) plugs the made-up
+cable in or out, sends `devices`, `connection` and `deviceInfo`, and like a real transport change
+releases what the tunnel held. Demo captures are small valid pcapng files of invented headers from
+documentation address ranges.
 
 ### Developer Mode and DDI
 

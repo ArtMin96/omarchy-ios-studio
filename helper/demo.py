@@ -189,7 +189,7 @@ def _account_details() -> dict:
 # ================================================================ setup / toolchain
 
 FRESH_MISSING = {"swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesign", "pymobiledevice3", "ipsw", "debugger",
-                 "xcode", "sdk", "apple-id", "iphone", "developer-mode", "uxplay"}
+                 "xcode", "sdk", "apple-id", "iphone", "developer-mode", "uxplay", "wireshark"}
 
 
 def _setup_check(flags: dict) -> dict:
@@ -201,7 +201,7 @@ def _setup_check(flags: dict) -> dict:
             s["detail"] = "Trusted over USB and Wi-Fi"
             s["udids"], s["plugged"] = [UDID], []
         if FRESH and s["id"] in FRESH_MISSING:
-            s["state"] = "optional" if s["id"] in ("ipsw", "uxplay", "debugger") else "missing"
+            s["state"] = "optional" if s["id"] in ("ipsw", "uxplay", "debugger", "wireshark") else "missing"
             s["detail"] = ""
     if FRESH:
         steps = d.get("steps", [])

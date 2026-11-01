@@ -112,7 +112,7 @@ error info help refresh sync download upload trash link linkOff wifi wifiOff usb
 lock unlock key cert shield shieldCheck clock timer location camera image search keyboard close plus minus
 chevronRight/Left/Down/Up arrowRight openExternal copy save export edit code swift disk memory
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
-sparkles terminal layers briefcase idCard xml.
+sparkles terminal layers briefcase idCard xml network speed thermometer chip record.
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
@@ -409,3 +409,8 @@ the keyboard.
   screenshots so no personal data shows.
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
+- **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView
+  lists the conditions (`condition.list`), applies one through `app.confirm` and shows the active-condition
+  banner with its countdown and Reset now. It embeds DeviceCaptureView (packet capture, USB only). The
+  active condition and the capture state live in `app.device` (`condition`, `conditionActive`, `capture`,
+  `capturing`), so the page header pill, the tab badge and the sidebar badge follow them on every page.

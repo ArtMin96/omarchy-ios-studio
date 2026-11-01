@@ -62,8 +62,11 @@ class DemoBackend:
                                                      "message": "No iPhone selected", "detail": "", "retryIn": 0,
                                                      "since": time.time()})]
         else:
-            out += [("devices", [DEVICE]), ("connection", {"udid": UDID, "state": "connected", "transport": "wifi",
-                                                           "message": "Connected over Wi-Fi", "detail": "", "retryIn": 0,
+            usb = DEVICE.get("transport") == "usb"   # demo.transport can plug the made-up cable in
+            out += [("devices", [DEVICE]), ("connection", {"udid": UDID, "state": "connected",
+                                                           "transport": "usb" if usb else "wifi",
+                                                           "message": "Connected over USB" if usb else "Connected over Wi-Fi",
+                                                           "detail": "", "retryIn": 0,
                                                            "since": STARTED - 900}), ("deviceInfo", INFO)]
         out.extend(await self.registry.welcome(self))
         return out
@@ -79,6 +82,8 @@ class DemoBackend:
     def error_json(self, exc: BaseException, cmd: str) -> dict:
         if isinstance(exc, LookupError):
             return {"code": "bad-args", "message": str(exc).strip("'\"")}
+        if hasattr(exc, "to_json"):   # common.HelperError: a plain-language error, as the real daemon gives
+            return exc.to_json()
         return {"code": "failed", "message": "Demo mode can't do that.", "detail": str(exc)}
 
     # syslog: one fake stream (deviced_demo_features/syslog.py), filtered per client by the broker

@@ -1064,6 +1064,14 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
                    st, det, size="about 20 MB", time_="2–5 minutes", root=True, optional=True,
                    action={"kind": "install", "label": "Repair" if st == "broken" else "Install"}))
 
+    # 18b Wireshark (optional): opens the packet captures from iPhone › Network
+    ws = shutil.which("wireshark")
+    steps.append(S("wireshark", "Wireshark (packet viewer)", "iPhone",
+                   "Optional. Opens the network recordings you make on the iPhone page's Network tab, packet by packet.",
+                   "done" if ws else "optional", "Installed" if ws else "Not installed (optional)",
+                   size="about 100 MB", time_="about a minute", root=True, optional=True,
+                   action={"kind": "install", "label": "Install"}))
+
     # 19 App integration
     have_desktop = DESKTOP_FILE.exists()
     have_launcher = LAUNCHER.exists()
@@ -1292,6 +1300,12 @@ def i_root_bundle(ctx: Ctx, ids: list[str], step_id: str, label: str) -> None:
                            info.get(f"depends_{a}", []) + info.get(f"makedepends_{a}", [])} | {"base-devel"})
             args += ["--deps", " ".join(deps), "--aur-build", str(d)]
         args += ["--avahi", "--ufw-uxplay"]
+    if "wireshark" in ids and (not shutil.which("wireshark") or ctx.flags.get("force")):
+        if "--packages" in args:   # one --packages flag: root-tasks.sh keeps only the last one
+            i = args.index("--packages")
+            args[i + 1] += " wireshark-qt"
+        else:
+            args += ["--packages", "wireshark-qt"]
     if "debugger" in ids:
         pkg = ctx.by_id.get("debugger", {}).get("pkg")
         if pkg and (ctx.state("debugger") != "done" or ctx.flags.get("force")):
@@ -1667,13 +1681,14 @@ INSTALLERS = {
     "sdk": i_sdk,
     "uxplay": lambda c, s: i_root_bundle(c, ["uxplay"], s, "Installing UxPlay"),
     "debugger": lambda c, s: i_root_bundle(c, ["debugger"], s, "Installing debugger support"),
+    "wireshark": lambda c, s: i_root_bundle(c, ["wireshark"], s, "Installing Wireshark"),
     "app-integration": i_app_integration,
 }
 
 ORDER = ["packages", "usbmuxd", "swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesign", "pymobiledevice3",
-         "ipsw", "debugger", "sdk", "uxplay", "app-integration"]
-ROOT_STEPS = {"packages", "usbmuxd", "swift", "swift-hold", "xcspec", "uxplay", "debugger"}
-OPTIONAL_IN_ALL = {"ipsw", "debugger", "uxplay"}
+         "ipsw", "debugger", "sdk", "uxplay", "wireshark", "app-integration"]
+ROOT_STEPS = {"packages", "usbmuxd", "swift", "swift-hold", "xcspec", "uxplay", "wireshark", "debugger"}
+OPTIONAL_IN_ALL = {"ipsw", "debugger", "uxplay", "wireshark"}
 
 
 def _streaming(fn):

@@ -113,7 +113,12 @@ var Glyph = {
   consoleLine: g(0xF07B7),
   cursorArrow: g(0xF01BF),
   starFour: g(0xF0AE2),
-  lightning: g(0xF140B)
+  lightning: g(0xF140B),
+  network: g(0xF06F3),
+  speed: g(0xF04C5),
+  thermometer: g(0xF050F),
+  chip: g(0xF061A),
+  record: g(0xF044A)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

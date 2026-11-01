@@ -56,6 +56,12 @@ Item {
   property var location: null              // {lat, lon} while simulated
   property bool locating: false
 
+  // network tab (DeviceNetworkView): a simulated condition is app-wide state (page header, sidebar)
+  property var condition: null             // the active condition {profile, name, groupName, expiresAt, …} or null
+  readonly property bool conditionActive: !!condition && condition.active === true
+  property var capture: ({ running: false })   // last `pcap` event (see protocol)
+  readonly property bool capturing: !!capture && capture.running === true
+
   // pairing
   property var pair: null                  // last pair event
   readonly property bool pairing: !!pair && ["starting", "waiting", "trust", "show-code", "need-code"].indexOf(pair.phase) >= 0
@@ -137,6 +143,8 @@ Item {
       root.daemonReady = false
       root._failAll({ code: "unreachable", message: "The iPhone service restarted. Try again." })
       root.mirroring = false
+      root.condition = null                     // the daemon's exit switched it off
+      if (root.capturing) root.capture = Object.assign({}, root.capture, { running: false })
       if (code === 3) {         // no pymobiledevice3 python (bin/iosstudio-deviced)
         root._needsSetup()
       }
@@ -185,6 +193,7 @@ Item {
       if (data && (!root.current || data.udid === root.current.udid)) {
         root.info = Object.assign({}, root.info, data)
         if (data.location !== undefined) root.location = data.location
+        if (data.condition !== undefined) root.condition = data.condition ? Object.assign({ active: true }, data.condition) : null
         _updateCurrent()
       }
       break
@@ -210,6 +219,12 @@ Item {
         root.apps = list
       }
       break
+    case "condition":
+      _onCondition(data || {})
+      break
+    case "pcap":
+      root.capture = data || { running: false }
+      break
     case "pair":
       root.pair = data
       if (data && data.phase === "done") {
@@ -219,6 +234,18 @@ Item {
       break
     }
     root.daemonEvent(name, data)
+  }
+
+  function _onCondition(c) {
+    var was = root.conditionActive ? root.condition : null
+    root.condition = c.active ? c : null
+    if (c.active || !was) return
+    var why = { timeout: "its time ran out", "client-gone": "the app that set it closed",
+                "tunnel-lost": "the connection to the iPhone dropped", shutdown: "the iPhone service stopped" }[c.reason]
+    if (why) {
+      root.app.toast((was.name || "The condition") + " switched off: " + why, "info")
+      root.app.notify("iPhone back to normal", (was.name || "The simulated condition") + " switched off: " + why, Model.Glyph.network)
+    }
   }
 
   function _onConnection(c) {
@@ -296,8 +323,11 @@ Item {
       var bt = batteryText(root.info.battery)
       if (bt) parts.push(bt)
       var warn = root.info.developerMode === false
-      return { title: c.name || name, detail: parts.join(" · "), level: warn ? "warn" : "ok", badge: "",
-               hint: warn ? "Developer Mode is off" : "" }
+      if (root.conditionActive) parts.push("Simulating " + (root.condition.name || "a condition"))
+      return { title: c.name || name, detail: parts.join(" · "), level: warn || root.conditionActive ? "warn" : "ok",
+               badge: root.conditionActive ? "!" : "",
+               hint: root.conditionActive ? "Simulating " + (root.condition.name || "a condition") + " on the whole iPhone"
+                     : (warn ? "Developer Mode is off" : "") }
     }
     if (root.connState === "locked") return { title: c.name || name, detail: "Locked — unlock your iPhone", level: "warn", badge: "" }
     if (root.connState === "untrusted") return { title: c.name || name, detail: "Not trusted — tap Trust on your iPhone", level: "warn", badge: "" }
@@ -325,7 +355,11 @@ Item {
 
   function refreshInfo(fresh) {
     request("device.info", { fresh: !!fresh }, function(ok, d) {
-      if (ok) { root.info = d; root.location = d.location || null; _updateCurrent() }
+      if (ok) {
+        root.info = d; root.location = d.location || null
+        if (d.condition !== undefined) root.condition = d.condition ? Object.assign({ active: true }, d.condition) : null
+        _updateCurrent()
+      }
     })
   }
 

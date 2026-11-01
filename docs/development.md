@@ -34,11 +34,12 @@ helper/
   device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
   device_client.py   asyncio client for the broker (used by the MCP server)
   device_link.py, device_crash.py, device_models.py   device helpers
+  device_network.py  Network tab helpers shared by both daemons: condition rules, capture summary, pcapng
   demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (48 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (52 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp

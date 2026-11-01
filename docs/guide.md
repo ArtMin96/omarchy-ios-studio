@@ -61,10 +61,21 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
 | Screen | A live view built from screenshots (up to about 2 a second over Wi-Fi). Take a screenshot, save it to Pictures, copy it or rotate it. For a smooth mirror, it can set up AirPlay through UxPlay. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
+| Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
 | Profiles | The signing profiles on the phone, active and expired. |
 | Info | Name, model, iOS version, UDID, serial number, network addresses, battery and storage. |
 
 The link button at the top pairs another iPhone. The phone reconnects by itself whenever it's reachable.
+
+#### Network
+
+Simulated conditions come from the developer tools on the phone, so they need Developer Mode. Pick one from the list, choose how long it should last (1 to 30 minutes, 5 by default) and press Apply. It affects the whole phone and every app on it, so iOS Studio asks first. Only one condition is on at a time; applying another replaces it.
+
+While one is on, a yellow banner at the top of the tab shows it with a countdown and a Reset now button. The iPhone page title and the sidebar also show it, so you don't forget it on another page. It switches off by itself when the time runs out, when you press Reset now, when you close iOS Studio, or when the connection to the phone drops.
+
+Over Wi-Fi, a network condition also slows down this computer's own link to the phone, and iOS Studio may lose the phone for a moment (the condition then switches off). The two profiles that cut the network off almost completely, 100% packet loss and Very poor network, are only offered over a USB cable. Heat and GPU states work the same over Wi-Fi and USB.
+
+Packet capture needs a USB cable, because the phone only shares its traffic over a cable. Pick an app (or the whole iPhone) and a duration, press Start capture, and use the app. You see the packet count while it records. When it stops, the tab shows the data sent and received, the protocols, and the servers the app talked to. The summary reads only the packet headers, never their contents, and leaves out iOS Studio's own connection to the phone. The recording is a standard pcapng file in `~/.cache/ios-studio/captures/` (the newest 20 are kept). Open in Wireshark opens it, and Setup can install Wireshark if you don't have it.
 
 ### Projects
 
