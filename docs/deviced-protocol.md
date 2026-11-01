@@ -642,9 +642,14 @@ the crashed thread, unsymbolicated app frames are `"<image> + 0xOFFSET"`.
 ### Performance metrics, used by the Performance tab and the MCP metrics tools
 
 A metrics session follows one app and keeps one compact row per interval (about an hour at 1 Hz) plus
-its events. The daemon opens one tap per metric set on its own tunnel (each long-held instrument on a
-DVT connection of its own) and shares it between every session that wants it; a tap closes with its last
-session. A session is held by the client that started it: it stops when that client disconnects, when
+its events. The daemon opens one tap per metric set on its own tunnel and shares it between every
+session that wants it; a tap closes with its last session. Sysmontap and the hitch trace each have a DVT
+connection of their own. Energy, network and graphics share one more, where the two request/response
+gauges are polled one after the other once a second. Battery uses the diagnostics service on its own
+5 s cadence. A gauge that doesn't answer within 4 s skips that sample (the field is missing from the
+row); after 5 ticks in a row with every polled gauge failing, the connection is rebuilt. A set that stays
+down for 20 s gets a note in the session's `notes` (for example "Energy data paused: the phone is slow to
+answer. It resumes by itself."), which clears when it answers again. A session is held by the client that started it: it stops when that client disconnects, when
 nobody reads it (`metrics.read` or `metrics.snapshot`) for 2 hours, or when the active iPhone changes.
 Stopped sessions stay readable (the newest 6). At most 4 run at once.
 
@@ -682,7 +687,7 @@ MetricsSession:
  "follow": true, "sets": ["process", "energy", "graphics", "network", "battery", "events"],
  "intervalMs": 1000, "started": 1793549796.99, "stopped": null, "running": true,
  "status": "running", "samples": 295, "events": 9,
- "hitchTracking": {"running": false, "until": null}, "owner": "ios-studio-3"}
+ "hitchTracking": {"running": false, "until": null}, "owner": "ios-studio-3", "notes": []}
 ```
 
 `status` is `starting`, `running`, `waiting-app` (the app isn't running; sampling starts when it opens),

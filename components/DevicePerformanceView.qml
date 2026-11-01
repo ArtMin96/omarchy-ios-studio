@@ -320,6 +320,18 @@ ColumnLayout {
     onRetry: root.start()
   }
 
+  // a set that stopped answering for a while (the daemon resumes it by itself)
+  Repeater {
+    model: root.sess && root.sess.running && root.sess.notes ? root.sess.notes : []
+    RowLayout {
+      required property string modelData
+      Layout.fillWidth: true
+      spacing: Style.spacing.lg
+      Icon { glyph: Model.Glyph.warn; color: Theme.warn; size: Style.font.icon }
+      AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "dim"; text: modelData }
+    }
+  }
+
   // ---------------------------------------------------------------- empty
   EmptyState {
     Layout.fillWidth: true

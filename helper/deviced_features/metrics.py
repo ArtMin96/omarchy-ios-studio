@@ -1,10 +1,13 @@
 """metrics.* : performance and developer metrics of an app over time (Performance tab, MCP metrics tools).
 
 Sessions, rings, stats and CSV export are shared with demo mode (helper/metrics_core.py,
-helper/metrics_stats.py). This module is the phone side: one shared tap per metric set, opened on
-the daemon's own tunnel (each long-held instrument on a DVT connection of its own,
-s.dedicated_dvt()) and fanned out to every session that wants it. A tap starts with its first user
-and stops with its last one.
+helper/metrics_stats.py). This module is the phone side: one shared tap per metric set on the
+daemon's own tunnel, fanned out to every session that wants it. A tap starts with its first user and
+stops with its last one. Connections: Sysmontap (streaming) and the opt-in hitch trace each have a DVT
+connection of their own; energy, network and graphics share ONE more (GaugeTap), where the two
+request/response gauges are polled one after the other once a second; battery is a lockdown service on
+its own slower cadence. A slow answer skips a sample instead of ending the set, and every connection
+is closed with a time limit (bounded()) so a dead one can't hang a tap.
 
     process   Sysmontap at 1 Hz (rows are deltas: last-known values per pid, cumulative counters -> rates)
     energy    EnergyMonitor for the followed pids (first, cumulative sample per pid dropped)
@@ -54,6 +57,11 @@ SYS_ATTRS = ["netBytesIn", "netBytesOut", "diskBytesRead", "diskBytesWritten", "
 BACKOFF = [2, 5, 10, 20, 30]
 FRESH_S = 5.0            # a tap value older than this isn't used in a row
 BATTERY_EVERY_S = 5.0
+GAUGE_FRESH_S = 2.5     # a polled gauge value older than this (a skipped sample) isn't used
+POLL_TIMEOUT_S = 4.0     # one request/response gauge sample; slower counts as a skipped sample
+REBUILD_AFTER = 5        # ticks in a row with every polled gauge failing before the connection is rebuilt
+PAUSE_NOTE_S = 20.0      # a gauge down this long gets a note on its sessions' metrics.state
+CLOSE_TIMEOUT_S = 5.0    # closing a connection that broke must never hang a tap
 HITCH_MS = 33.4          # a frame interval longer than two 60 Hz frames counts as a hitch
 HITCH_SIGNPOSTS = {("com.apple.coreanimation", "FrameUpdate"), ("com.apple.coreanimation", "Commit"),
                    ("com.apple.UIKit", "UpdateSequence")}
@@ -77,6 +85,23 @@ def _by_pid(res) -> dict[int, dict]:
                 if isinstance(v, dict):
                     out[int(k)] = v
     return out
+
+
+@contextlib.asynccontextmanager
+async def bounded(cm, open_timeout: float = 30.0, close_timeout: float = CLOSE_TIMEOUT_S):
+    """`async with bounded(x) as y` = `async with x as y`, but entering and leaving are time-limited. A DVT
+    connection or service that stopped answering can otherwise block its __aexit__ forever, and the tap
+    would never come back."""
+    obj = await asyncio.wait_for(cm.__aenter__(), open_timeout)
+    try:
+        yield obj
+    finally:
+        try:
+            await asyncio.wait_for(cm.__aexit__(None, None, None), close_timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            dlog(f"metrics: closing {type(cm).__name__} took over {close_timeout:g} s; left behind")
+        except Exception as exc:  # noqa: BLE001
+            dlog(f"metrics: closing {type(cm).__name__}: {exc!r}")
 
 
 # ====================================================================== taps
@@ -130,6 +155,7 @@ class Tap:
             s = self.hub.d.session
             if s is None:
                 return
+            started = time.monotonic()
             try:
                 await s.get_rsd(timeout=3600)
                 await self.run(s)
@@ -143,6 +169,8 @@ class Tap:
                 self.up = False
                 self.error = e.to_json()
                 dlog(f"metrics {self.name}: {exc!r}")
+                if time.monotonic() - started > 60:
+                    fails = 0      # it ran fine for a while: start the backoff over
                 await asyncio.sleep(BACKOFF[min(fails, len(BACKOFF) - 1)])
                 fails += 1
 
@@ -227,14 +255,14 @@ class ProcessTap(Tap):
         self.system = out
 
     async def run(self, s):
-        async with s.dedicated_dvt() as dvt:
+        async with bounded(s.dedicated_dvt()) as dvt:
             async with DeviceInfo(dvt) as di:
                 pa = set(await di.sysmon_process_attributes())
                 sa = set(await di.sysmon_system_attributes())
             self.attrs = [a for a in PROC_ATTRS if a in pa]
             self.sys_attrs = [a for a in SYS_ATTRS if a in sa]
             self.rows.clear()
-            async with Sysmontap(dvt, self.attrs, self.sys_attrs, interval_ms=1000) as tap:
+            async with bounded(Sysmontap(dvt, self.attrs, self.sys_attrs, interval_ms=1000)) as tap:
                 self.up, self.error = True, None
                 async for row in tap:
                     if not self.users:
@@ -248,160 +276,223 @@ class ProcessTap(Tap):
                         self._sys(row, now)
 
 
-class PidPoller(Tap):
-    """Base for the per-pid debug-gauge providers (energy, network): sample the followed pids once a second,
-    starting and stopping pids as sessions come and go. The first sample of a pid is dropped."""
+class Gauge:
+    """One polled metric on the shared gauge connection: its latest values, and how it's doing."""
 
-    def __init__(self, hub):
-        super().__init__(hub)
-        self.latest: dict[int, tuple[float, dict]] = {}
+    def __init__(self, name: str, label: str):
+        self.name, self.label = name, label
+        self.latest: dict[int, tuple[float, dict]] = {}   # pid (0 = whole phone) -> (monotonic t, fields)
         self.count: dict[int, int] = {}
+        self.fails = 0
+        self.down_since: float | None = None
+        self.paused = False
 
-    def parse(self, rec: dict) -> dict:
-        raise NotImplementedError
+    def ok(self):
+        self.fails, self.down_since = 0, None
+
+    def failed(self):
+        self.fails += 1
+        if self.down_since is None:
+            self.down_since = time.monotonic()
 
     def value(self, pid: int) -> dict | None:
         hit = self.latest.get(pid)
-        if hit is None or time.monotonic() - hit[0] > FRESH_S:
-            return None
+        if hit is None or time.monotonic() - hit[0] > GAUGE_FRESH_S:
+            return None   # a skipped sample is a gap in the row, not a repeated value
         return hit[1]
 
-    async def run(self, s):
-        async with s.dedicated_dvt() as dvt:
-            inst = self.factory()(dvt, [])
-            await inst.connect()
-            svc = inst.service
-            current: set[int] = set()
-            self.up, self.error = True, None
-            try:
-                while self.users:
-                    want = self.hub.pids_for(self.name)
-                    for p in sorted(want - current):
-                        await svc.start_sampling_for_pids_([p])
-                        self.count[p] = 0
-                    for p in sorted(current - want):
-                        with contextlib.suppress(Exception):
-                            await svc.stop_sampling_for_pids_([p])
-                        self.latest.pop(p, None)
-                    current = set(want)
-                    if current:
-                        res = await asyncio.wait_for(svc.sample_attributes_for_pids_({}, sorted(current)), 10)
-                        self.log_shape("sample", res)
-                        now = time.monotonic()
-                        for pid, rec in _by_pid(res).items():
-                            n = self.count.get(pid, 0)
-                            self.count[pid] = n + 1
-                            if n == 0:
-                                continue   # cumulative / left over from the previous sampler
-                            self.latest[pid] = (now, self.parse(rec))
-                    await asyncio.sleep(1.0)
-            finally:
-                if current:
-                    with contextlib.suppress(BaseException):
-                        await asyncio.wait_for(svc.stop_sampling_for_pids_(sorted(current)), 3)
 
+class GaugeTap(Tap):
+    """energy, network and graphics on ONE DVT connection of their own.
 
-class EnergyTap(PidPoller):
-    name = "energy"
+    The energy and network gauges are request/response (sampleAttributes:forPIDs:), so they're polled
+    one after the other in a single loop per tick, never concurrently. Graphics pushes its samples on
+    the same connection. A timeout skips that gauge's sample for this tick; after REBUILD_AFTER ticks
+    in a row where every polled gauge failed, the connection is closed (bounded) and opened again. A
+    gauge that stays down for PAUSE_NOTE_S gets a note on its sessions' metrics.state."""
+    name = "gauges"
+    SETS = ("energy", "network", "graphics")
 
+    def __init__(self, hub):
+        super().__init__(hub)
+        self.energy = Gauge("energy", "Energy")
+        self.network = Gauge("network", "Network")
+        self.graphics = Gauge("graphics", "Frame rate and GPU")
+        self.recoveries: int | None = None
+
+    def gauges(self):
+        return (self.energy, self.network, self.graphics)
+
+    # -- parsing
     @staticmethod
-    def factory():
-        return EnergyMonitor
-
-    def parse(self, rec: dict) -> dict:
+    def parse_energy(rec: dict) -> dict:
         low = _lower_keys(rec)
 
-        def g(k):
-            v = _num(low.get(k))
-            return round(v, 2) if v is not None else None
-        over = [_num(low.get(f"energy.{c}.overhead")) for c in
-                ("cpu", "gpu", "networking", "display", "location", "appstate", "thermalstate")]
+        def g(*keys):
+            for k in keys:
+                v = _num(low.get(k))
+                if v is not None:
+                    return round(v, 2)
+            return None
+        comps = ("cpu", "gpu", "networking", "networkning", "display", "location", "appstate", "thermalstate")
+        over = [_num(low.get(f"energy.{c}.overhead")) for c in comps]
         overhead = g("energy.overhead")
         if overhead is None and any(v is not None for v in over):
             overhead = round(sum(v for v in over if v is not None), 2)
+        # Apple spells it "networkning" on iOS 27; accept both.
         return {"energy": g("energy.cost"), "eCpu": g("energy.cpu.cost"), "eGpu": g("energy.gpu.cost"),
-                "eNet": g("energy.networking.cost"), "eDisplay": g("energy.display.cost"),
+                "eNet": g("energy.networking.cost", "energy.networkning.cost"), "eDisplay": g("energy.display.cost"),
                 "eLoc": g("energy.location.cost"), "eOverhead": overhead, "thermal": g("energy.thermalstate.cost")}
 
-
-class NetTap(PidPoller):
-    name = "network"
-
-    @staticmethod
-    def factory():
-        return NetworkStatistics
-
-    def __init__(self, hub):
-        super().__init__(hub)
-        self.prev: dict[int, tuple[float, float, float]] = {}
-
-    def parse(self, rec: dict) -> dict:
+    def parse_net(self, pid: int, rec: dict) -> dict:
         low = _lower_keys(rec)
         rx_d, tx_d = _num(low.get("net.rx.bytes.delta")), _num(low.get("net.tx.bytes.delta"))
         if rx_d is None or tx_d is None:   # no deltas: from the cumulative counters
-            pid = int(low.get("pid") or 0)
             rx, tx, now = _num(low.get("net.rx.bytes")) or 0, _num(low.get("net.tx.bytes")) or 0, time.monotonic()
-            prev = self.prev.get(pid)
-            self.prev[pid] = (now, rx, tx)
+            prev = self.network.latest.get(-pid)
+            self.network.latest[-pid] = (now, {"rx": rx, "tx": tx})
             if prev is None:
                 return {}
             dt = max(0.2, now - prev[0])
-            rx_d, tx_d = max(0, rx - prev[1]) / dt, max(0, tx - prev[2]) / dt
+            rx_d, tx_d = max(0, rx - prev[1]["rx"]) / dt, max(0, tx - prev[1]["tx"]) / dt
         return {"netRx": round(rx_d / 1024, 1), "netTx": round(tx_d / 1024, 1)}
 
+    def parse_graphics(self, sample: dict) -> dict:
+        fps = _num(sample.get("CoreAnimationFramesPerSecond"))   # absent from some samples
+        util = _num(sample.get("Device Utilization %"))
+        if util is None:
+            util = max((v for k, v in sample.items() if "Utilization" in str(k) and _num(v) is not None), default=None)
+        mem = next((_num(sample.get(k)) for k in ("In use system memory", "Alloc system memory")
+                    if _num(sample.get(k))), None)
+        rc = _num(sample.get("recoveryCount"))
+        if rc is not None:
+            if self.recoveries is not None and rc > self.recoveries:
+                self.hub.broadcast("note", "The GPU recovered from a hang (recoveryCount went up).")
+            self.recoveries = rc
+        return {"fps": round(fps, 1) if fps is not None else None, "gpu": round(util, 1) if util is not None else None,
+                "gpuMem": round(mem / MB, 1) if mem is not None else None}
 
-class GraphicsTap(Tap):
-    name = "graphics"
+    # -- notes on the sessions when a gauge stays down
+    def _notes(self):
+        now = time.monotonic()
+        for g in self.gauges():
+            paused = g.down_since is not None and now - g.down_since >= PAUSE_NOTE_S
+            if paused != g.paused:
+                g.paused = paused
+                text = f"{g.label} data paused: the phone is slow to answer. It resumes by itself." if paused else None
+                self.hub.note(g.name, text)
 
-    def __init__(self, hub):
-        super().__init__(hub)
-        self.latest: tuple[float, dict] | None = None
-        self.recoveries: int | None = None
+    # -- the loop
+    async def _poll(self, svc, gauge: Gauge, current: set[int], want: set[int], parse):
+        for p in sorted(want - current):
+            await asyncio.wait_for(svc.start_sampling_for_pids_([p]), POLL_TIMEOUT_S)
+            gauge.count[p] = 0
+            current.add(p)
+        for p in sorted(current - want):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(svc.stop_sampling_for_pids_([p]), POLL_TIMEOUT_S)
+            current.discard(p)
+            gauge.latest.pop(p, None)
+        if not current:
+            gauge.ok()
+            return
+        res = await asyncio.wait_for(svc.sample_attributes_for_pids_({}, sorted(current)), POLL_TIMEOUT_S)
+        self.log_shape(gauge.name, res)
+        now = time.monotonic()
+        for pid, rec in _by_pid(res).items():
+            n = gauge.count.get(pid, 0)
+            gauge.count[pid] = n + 1
+            if n == 0:
+                continue   # cumulative, or left over from the previous sampler
+            gauge.latest[pid] = (now, parse(pid, rec))
+        gauge.ok()
 
-    def value(self) -> dict | None:
-        if self.latest is None or time.monotonic() - self.latest[0] > FRESH_S:
-            return None
-        return self.latest[1]
+    async def _graphics(self, dvt):
+        g = Graphics(dvt)
+        async with bounded(g):
+            first = True
+            async for sample in g:
+                if not isinstance(sample, dict):
+                    continue
+                if first:          # covers less than a second
+                    first = False
+                    self.log_shape("graphics", sample)
+                    continue
+                self.graphics.latest[0] = (time.monotonic(), self.parse_graphics(sample))
+                self.graphics.ok()
 
     async def run(self, s):
-        async with s.dedicated_dvt() as dvt:
-            async with Graphics(dvt) as g:
-                self.up, self.error = True, None
-                first = True
-                async for sample in g:
-                    if not self.users:
-                        return
-                    if not isinstance(sample, dict):
-                        continue
-                    if first:     # covers less than a second
-                        first = False
-                        self.log_shape("sample", sample)
-                        continue
-                    fps = _num(sample.get("CoreAnimationFramesPerSecond"))
-                    util = _num(sample.get("Device Utilization %"))
-                    if util is None:
-                        util = max((v for k, v in sample.items() if "Utilization" in str(k) and _num(v) is not None),
-                                   default=None)
-                    mem = next((_num(sample.get(k)) for k in ("In use system memory", "Alloc system memory",
-                                                              "In use system memory (driver)")
-                                if _num(sample.get(k)) is not None), None)
-                    self.latest = (time.monotonic(), {
-                        "fps": round(fps, 1) if fps is not None else None,
-                        "gpu": round(util, 1) if util is not None else None,
-                        "gpuMem": round(mem / MB, 1) if mem is not None else None})
-                    rc = _num(sample.get("recoveryCount"))
-                    if rc is not None:
-                        if self.recoveries is not None and rc > self.recoveries:
-                            self.hub.broadcast("note", "The GPU recovered from a hang (recoveryCount went up).")
-                        self.recoveries = rc
+        services: dict[str, object] = {}
+        current = {"energy": set(), "network": set()}
+        gtask: asyncio.Task | None = None
+        bad_ticks = 0
+        async with bounded(s.dedicated_dvt()) as dvt:
+            self.up, self.error = True, None
+            try:
+                while self.users:
+                    t0 = time.monotonic()
+                    wants_g = bool(self.hub.sessions_with("graphics"))
+                    if wants_g and (gtask is None or gtask.done()):
+                        if gtask is not None and gtask.done() and not gtask.cancelled() and gtask.exception():
+                            dlog(f"metrics graphics: {gtask.exception()!r}")
+                            self.graphics.failed()
+                        gtask = asyncio.create_task(self._graphics(dvt))
+                    elif not wants_g and gtask is not None:
+                        gtask.cancel()
+                        gtask = None
+                    if wants_g and time.monotonic() - (self.graphics.latest.get(0, (0,))[0] or 0) > FRESH_S * 2:
+                        self.graphics.failed()
+                    polled = 0
+                    failed = 0
+                    for name, cls, parse in (("energy", EnergyMonitor, lambda p, r: self.parse_energy(r)),
+                                             ("network", NetworkStatistics, self.parse_net)):
+                        gauge = getattr(self, name)
+                        want = self.hub.pids_for(name)
+                        if not want and not current[name]:
+                            gauge.ok()
+                            continue
+                        polled += 1
+                        try:
+                            if name not in services:
+                                inst = cls(dvt, [])
+                                await asyncio.wait_for(inst.connect(), POLL_TIMEOUT_S * 2)
+                                services[name] = inst.service
+                            await self._poll(services[name], gauge, current[name], want, parse)
+                        except asyncio.CancelledError:
+                            raise
+                        except (asyncio.TimeoutError, TimeoutError) as exc:
+                            failed += 1
+                            gauge.failed()
+                            if gauge.fails in (1, 10) or gauge.fails % 60 == 0:
+                                dlog(f"metrics {name}: no answer in {POLL_TIMEOUT_S:g} s ({gauge.fails} in a row): {exc!r}")
+                        except Exception as exc:  # noqa: BLE001 - a bad reply skips this sample only
+                            failed += 1
+                            gauge.failed()
+                            dlog(f"metrics {name}: {exc!r}")
+                    self._notes()
+                    bad_ticks = bad_ticks + 1 if polled and failed == polled else 0
+                    if bad_ticks >= REBUILD_AFTER:
+                        raise ConnectionError(f"the gauges didn't answer for {bad_ticks} ticks; reconnecting")
+                    await asyncio.sleep(max(0.05, 1.0 - (time.monotonic() - t0)))
+            finally:
+                if gtask is not None:
+                    gtask.cancel()
+                for name, svc in services.items():
+                    if current[name]:
+                        with contextlib.suppress(BaseException):
+                            await asyncio.wait_for(svc.stop_sampling_for_pids_(sorted(current[name])), 2)
+                self.up = False
 
 
 class BatteryTap(Tap):
+    """IOPMPowerSource over diagnostics, on its own (lockdown) connection and its own slow cadence, so it
+    never holds up the DVT gauges. A timeout skips one reading; three in a row reopen the service."""
     name = "battery"
 
     def __init__(self, hub):
         super().__init__(hub)
         self.latest: tuple[float, dict] | None = None
+        self.gauge = Gauge("battery", "Battery")
 
     def value(self) -> dict | None:
         if self.latest is None or time.monotonic() - self.latest[0] > BATTERY_EVERY_S * 4:
@@ -415,7 +506,7 @@ class BatteryTap(Tap):
             if v is None:
                 return None
             return v - (1 << 64) if v > (1 << 63) else v
-        amp, volt = signed(b.get("InstantAmperage")), _num(b.get("Voltage"))
+        amp, volt = signed(b.get("InstantAmperage")), _num(b.get("Voltage"))   # mA (negative: discharging), mV
         tel = b.get("PowerTelemetryData") if isinstance(b.get("PowerTelemetryData"), dict) else {}
         mw = signed(tel.get("BatteryPower"))
         if mw is None and amp is not None and volt:
@@ -425,17 +516,24 @@ class BatteryTap(Tap):
                 "sysPowerInMw": _num(tel.get("SystemPowerIn"))}
 
     async def run(self, s):
-        self.up, self.error = True, None
-        while self.users:
-            async with s.open_service(DiagnosticsService) as diag:
-                while self.users:
-                    b = await asyncio.wait_for(diag.get_battery(), 10)
-                    self.log_shape("battery", {k: b.get(k) for k in ("CurrentCapacity", "InstantAmperage",
-                                                                    "Voltage", "IsCharging", "PowerTelemetryData")}
-                                   if isinstance(b, dict) else b)
-                    if isinstance(b, dict):
-                        self.latest = (time.monotonic(), self.parse(b))
+        async with bounded(s.open_service(DiagnosticsService)) as diag:
+            self.up, self.error = True, None
+            while self.users:
+                try:
+                    b = await asyncio.wait_for(diag.get_battery(), POLL_TIMEOUT_S * 2)
+                except (asyncio.TimeoutError, TimeoutError):
+                    self.gauge.failed()
+                    if self.gauge.fails >= 3:
+                        raise ConnectionError("the battery readings stopped answering; reopening")
                     await asyncio.sleep(BATTERY_EVERY_S)
+                    continue
+                self.gauge.ok()
+                self.log_shape("battery", {k: b.get(k) for k in ("CurrentCapacity", "InstantAmperage", "Voltage",
+                                                                "IsCharging", "PowerTelemetryData")}
+                               if isinstance(b, dict) else b)
+                if isinstance(b, dict):
+                    self.latest = (time.monotonic(), self.parse(b))
+                await asyncio.sleep(BATTERY_EVERY_S)
 
 
 class _SyslogSink:
@@ -501,12 +599,12 @@ class HitchTap(Tap):
         return bool(self.users) and bool(self.hub.hitch_pids())
 
     async def run(self, s):
-        async with s.dedicated_dvt() as dvt:
+        async with bounded(s.dedicated_dvt()) as dvt:
             tap = ActivityTraceTap(dvt)
             tap._config["ur"] = 200
             open_: dict[tuple, float] = {}
             last_emit: dict[int, float] = {}
-            async with tap:
+            async with bounded(tap):
                 self.up, self.error = True, None
                 it = tap.__aiter__()
                 while self.users and self.hub.hitch_pids():
@@ -543,12 +641,28 @@ class Hub:
         self.sessions: dict[str, metrics_core.MetricsSession] = {}
         self.taps: dict[str, Tap] = {}
 
-    def tap(self, name: str) -> Tap:
+    @staticmethod
+    def tap_name(set_name: str) -> str:
+        return GaugeTap.name if set_name in GaugeTap.SETS else set_name
+
+    def tap(self, set_name: str) -> Tap:
+        name = self.tap_name(set_name)
         if name not in self.taps:
-            self.taps[name] = {"process": ProcessTap, "energy": EnergyTap, "network": NetTap,
-                               "graphics": GraphicsTap, "battery": BatteryTap, "events": EventsTap,
+            self.taps[name] = {"process": ProcessTap, "gauges": GaugeTap, "battery": BatteryTap, "events": EventsTap,
                                "hitches": HitchTap}[name](self)
         return self.taps[name]
+
+    def sessions_with(self, set_name: str) -> list:
+        return [s for s in self.sessions.values() if s.running and set_name in s.sets]
+
+    def note(self, set_name: str, text: str | None):
+        """Show (or clear, text=None) a note on every session that uses this set."""
+        for s in self.sessions_with(set_name):
+            if text:
+                s.notes[set_name] = text
+            else:
+                s.notes.pop(set_name, None)
+            s.set_status(s.status, s.error, force=True)
 
     def pids_for(self, set_name: str) -> set[int]:
         return {s.pid for s in self.sessions.values() if s.running and s.pid and set_name in s.sets}
@@ -636,11 +750,13 @@ class Hub:
                 row.update(pt.view(sess.pid) or {})
             if pt.system and time.monotonic() - pt.system.get("t", 0) < FRESH_S:
                 row["sysCpu"] = pt.system.get("sysCpu")
-        for name in ("energy", "network"):
-            if name in sess.sets and name in self.taps and sess.pid:
-                row.update(self.taps[name].value(sess.pid) or {})
-        if "graphics" in sess.sets and "graphics" in self.taps:
-            row.update(self.taps["graphics"].value() or {})
+        gt = self.taps.get(GaugeTap.name)
+        if gt is not None:
+            for name in ("energy", "network"):
+                if name in sess.sets and sess.pid:
+                    row.update(getattr(gt, name).value(sess.pid) or {})
+            if "graphics" in sess.sets:
+                row.update(gt.graphics.value(0) or {})
         if "battery" in sess.sets and "battery" in self.taps:
             b = dict(self.taps["battery"].value() or {})
             b.pop("sysPowerInMw", None)
@@ -649,7 +765,8 @@ class Hub:
 
     def tap_state(self, sess) -> dict | None:
         """The error to show when every wanted tap is failing (else None)."""
-        wanted = [self.taps[n] for n in sess.sets if n in self.taps and n != "events"]
+        wanted = list({id(t): t for t in (self.taps.get(self.tap_name(n)) for n in sess.sets if n != "events")
+                       if t is not None}.values())
         if wanted and all(not t.up and t.error for t in wanted):
             return wanted[0].error
         return None
@@ -716,7 +833,7 @@ class Backend:
         if hub is None:
             return
         hub.sessions.pop(sess.id, None)
-        for name in list(sess.sets) + ["hitches"]:
+        for name in {hub.tap_name(n) for n in list(sess.sets) + ["hitches"]}:
             if name in hub.taps:
                 await hub.taps[name].release(sess.id)
 
@@ -805,7 +922,7 @@ class Backend:
         await s.ensure_ddi()
         t_start = time.time()
         first_frame: dict = {}
-        async with s.dedicated_dvt() as dvt:
+        async with bounded(s.dedicated_dvt(), close_timeout=10) as dvt:
             async with ProcessControl(dvt) as pc:
                 tap = ActivityTraceTap(dvt)
                 tap._config["ur"] = 100
@@ -878,7 +995,7 @@ class Backend:
             raise err("not-running", f"{name or exe} isn't running. Open it on the iPhone, use it for a bit, "
                                      "then check for leaks.")
         t0 = time.time()
-        async with s.dedicated_dvt() as dvt:
+        async with bounded(s.dedicated_dvt(), close_timeout=10) as dvt:
             async with ProcessControl(dvt) as pc:
                 if not await pc.is_debuggable(pid):
                     raise err("not-debuggable", "Leak checks only work for your own apps built and installed by "

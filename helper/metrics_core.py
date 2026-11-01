@@ -66,6 +66,7 @@ class MetricsSession:
         self.hitch_pending_ms = 0.0
         self.owner = ""
         self.data: dict = {}                      # backend state for this session
+        self.notes: dict[str, str] = {}          # set -> plain-language note (e.g. a gauge that stopped answering)
         self._emit = None
         self._state_sig = None
 
@@ -117,11 +118,13 @@ class MetricsSession:
                "owner": self.owner}
         if self.error:
             out["error"] = self.error
+        if self.notes:
+            out["notes"] = list(self.notes.values())
         return out
 
     def set_status(self, status: str, error: dict | None = None, force: bool = False) -> None:
         self.status, self.error = status, error
-        sig = (status, (error or {}).get("code"), self.pid, self.hitches_on())
+        sig = (status, (error or {}).get("code"), self.pid, self.hitches_on(), tuple(sorted(self.notes)))
         if self._emit and (force or sig != self._state_sig):
             self._state_sig = sig
             self._emit("metrics.state", self.describe())

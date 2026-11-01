@@ -80,6 +80,8 @@ class MetricsSummary(Budgeted, Out):
     energy_by_component: dict[str, int] | None = Field(None, description="Share (%) of the app's energy impact")
     events: dict[str, int] = Field(default_factory=dict, description="Event counts by kind (ios_metrics_events)")
     error: str | None = None
+    notes: list[str] = Field(default_factory=list, description="Metric sets that stopped answering for a while "
+                                                                "(they resume by themselves)")
     next_steps: list[str] = Field(default_factory=list)
 
 
@@ -171,6 +173,7 @@ def _summary(snap: dict, extra_steps: list[str] | None = None) -> MetricsSummary
         energy_by_component={k: int(v.get("share") or 0) for k, v in en.items() if v.get("share")} or None,
         events=st.get("eventCounts") or {},
         error=B.clip_error(str(err.get("message"))) if isinstance(err, dict) and err.get("message") else None,
+        notes=[B.clip(n, 200) for n in (sess.get("notes") or [])[:5]],
         next_steps=steps)
 
 
