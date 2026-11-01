@@ -47,6 +47,7 @@ GridLayout {
 
   // ---------------------------------------------------------------- recording
   readonly property var rec: svc.recording
+  readonly property var recNow: rec || ({ path: "" })   // rec, or a blank one while bindings catch up after it goes null
   readonly property bool recActive: svc.recordingActive
   readonly property bool recDone: !!rec && rec.state === "done" && !!rec.path
   property int recLimit: 60
@@ -242,10 +243,10 @@ GridLayout {
       spacing: Style.spacing.lg
       visible: !root.airplayView
       ActionButton {
-        text: !root.recActive ? "Record" : (root.rec.state === "finishing" ? "Saving…" : "Stop recording")
+        text: !root.recActive ? "Record" : (root.recNow.state === "finishing" ? "Saving…" : "Stop recording")
         glyph: root.recActive ? Model.Glyph.stop : Model.Glyph.dot
         kind: root.recActive ? "danger" : "secondary"
-        busy: root.recActive && root.rec.state === "finishing"
+        busy: root.recActive && root.recNow.state === "finishing"
         enabled: root.svc.connected || root.recActive
         onClicked: root.recActive ? root.svc.stopRecording() : root.svc.startRecording(root.recLimit)
       }
@@ -289,21 +290,21 @@ GridLayout {
       AppText {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
-        text: !root.recDone ? "" : (root.rec.placeholder ? (root.rec.notice || "")
-              : "Saved a " + root.clock(root.rec.seconds) + " video (" + Model.formatBytes(root.rec.bytes) + ", "
-                + (root.rec.mode === "stream" ? "smooth" : "from screenshots") + ")")
+        text: !root.recDone ? "" : (root.recNow.placeholder ? (root.recNow.notice || "")
+              : "Saved a " + root.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
+                + (root.recNow.mode === "stream" ? "smooth" : "from screenshots") + ")")
       }
       AppText {
         Layout.fillWidth: true
-        visible: root.recDone && !root.rec.placeholder
-        text: !root.recDone ? "" : (root.rec.path.indexOf(root.app.home + "/") === 0 ? "~" + root.rec.path.slice(root.app.home.length) : root.rec.path)
+        visible: root.recDone && !root.recNow.placeholder
+        text: !root.recDone ? "" : (root.recNow.path.indexOf(root.app.home + "/") === 0 ? "~" + root.recNow.path.slice(root.app.home.length) : root.recNow.path)
         size: "small"; tone: "faint"; elide: Text.ElideMiddle
       }
       Flow {
         Layout.fillWidth: true
         spacing: Style.spacing.lg
-        ActionButton { visible: root.recDone && !root.rec.placeholder; text: "Show in folder"; glyph: Model.Glyph.folderOpen; onClicked: root.showRecording() }
-        ActionButton { visible: root.recDone && !root.rec.placeholder; text: "Copy path"; glyph: Model.Glyph.copy; onClicked: root.copyRecordingPath() }
+        ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Show in folder"; glyph: Model.Glyph.folderOpen; onClicked: root.showRecording() }
+        ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Copy path"; glyph: Model.Glyph.copy; onClicked: root.copyRecordingPath() }
         ActionButton { text: "Done"; kind: "ghost"; onClicked: root.svc.dismissRecording() }
       }
       // inline player; left out when Qt Multimedia isn't installed (the Loader fails quietly)
@@ -311,10 +312,10 @@ GridLayout {
         id: preview
         Layout.preferredWidth: Style.space(160)
         Layout.preferredHeight: active && status === Loader.Ready ? Style.space(348) : 0
-        active: root.recDone && !root.rec.placeholder
+        active: root.recDone && !root.recNow.placeholder
         visible: status === Loader.Ready
         source: "DeviceRecordingPreview.qml"
-        onLoaded: item.source = Qt.binding(function() { return root.recDone ? "file://" + root.rec.path : "" })
+        onLoaded: item.source = Qt.binding(function() { return root.recDone ? "file://" + root.recNow.path : "" })
       }
     }
 

@@ -6,7 +6,7 @@ import qs.Commons as Commons
 // Top of every page: title, one-line subtitle, optional status pill and
 // trailing actions.
 //   PageHeader {
-//     title: "iPhone"; subtitle: "Artem's iPhone · iOS 18.1"
+//     title: "iPhone"; subtitle: "Alex's iPhone · iOS 18.1"
 //     status: StatusPill { level: "ok"; text: "Connected" }     // optional
 //     actions: [ ActionButton { text: "Refresh"; glyph: Model.Glyph.refresh; kind: "ghost" } ]
 //   }
