@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import demo_art
-from deviced_demo_core import APPS, DIR, TEAM, event, installed, pids, running
+from deviced_demo_core import APPS, DIR, FILE_SHARING, TEAM, event, installed, pids, running
 
 
 def apps_list() -> list:
@@ -17,7 +17,8 @@ def apps_list() -> list:
                     "developer": dev, "removable": True, "hidden": False, "system": False, "executable": name.replace(" ", ""),
                     "path": "/private/var/containers/Bundle/Application/DEMO/" + name.replace(" ", "") + ".app",
                     "icon": str(demo_art.icon(DIR / "icons" / (bid + ".png"), hue, shape)), "running": bid in running,
-                    "pid": pids[bid] if bid in running else None, "size": mb * 1_000_000})
+                    "pid": pids[bid] if bid in running else None, "size": mb * 1_000_000,
+                    "fileSharing": bid in FILE_SHARING, "debuggable": dev})
     return sorted(out, key=lambda a: a["name"].lower())
 
 

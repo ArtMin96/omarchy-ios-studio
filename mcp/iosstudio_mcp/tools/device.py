@@ -39,7 +39,7 @@ BundleId = Annotated[str, Field(description="Bundle id, e.g. 'com.example.myapp'
                                             "'XTL-<TEAM>.com.example.myapp' form also works")]
 
 # Device-wide events the MCP client wants. Not 'frame' (mirror images) or icons: nobody here reads them.
-EVENTS = ["ready", "devices", "connection", "deviceInfo", "installProgress"]
+EVENTS = ["ready", "devices", "connection", "deviceInfo", "installProgress", "transfer", "cameratest"]
 
 
 # ------------------------------------------------------------------ errors

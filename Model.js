@@ -66,6 +66,8 @@ var Glyph = {
   location: g(0xF034E),
   camera: g(0xF0100),
   image: g(0xF02E9),
+  video: g(0xF0567),
+  arrowUp: g(0xF005D),
   search: g(0xF0349),
   keyboard: g(0xF030C),
   close: g(0xF0156),

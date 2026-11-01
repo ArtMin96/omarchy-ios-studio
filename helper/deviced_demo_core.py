@@ -66,3 +66,4 @@ APPS = [
 running = {b for _, b, _, _, _, r, _ in APPS if r}
 pids = {b: 400 + i for i, (_, b, *_) in enumerate(APPS)}   # one pid per app, as apps.list and processes.list report it
 installed = {b for _, b, *_ in APPS}
+FILE_SHARING = {"com.example.podcasts", "com.example.dailysketch"}   # App Store apps that share Documents

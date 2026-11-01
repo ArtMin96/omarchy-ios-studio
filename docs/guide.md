@@ -60,6 +60,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 |---|---|
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
 | Screen | A live view built from screenshots (up to about 2 a second over Wi-Fi). Take a screenshot, save it to Pictures, copy it or rotate it. For a smooth mirror, it can set up AirPlay through UxPlay. |
+| Files | Three parts. Photos & videos shows the camera roll as thumbnails: select some (Shift+click selects a range) and import them to a folder (`~/Pictures/iPhone` unless you pick another), with HEIC photos saved as JPEG if you like. App files browses an app's files: your own apps show their whole container, App Store apps only their Documents folder and only if they share files. Save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete. Camera test runs your app's camera code on test images and videos (see [Test camera code with files](#test-camera-code-with-files)). Nothing here ever changes the camera roll. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
 | Performance | Measures one app over time: CPU, memory, energy, frame rate, network, disk and battery, with a report of anything unusual. See [Measure how my app performs](#measure-how-my-app-performs). |
@@ -196,6 +197,16 @@ Below the charts are three deeper checks, and each one asks before it starts:
 1. Open Logs › Crashes with the iPhone connected.
 2. "My apps" shows only your apps' crashes. Pick one.
 3. Read the summary at the top. The reason and "Where it crashed" usually point at the problem. Save or copy the full report if you need to share it.
+
+### Test camera code with files
+
+Camera code is hard to test by pointing the phone at things. Files › Camera test feeds your app chosen images and videos instead and shows what it made of them.
+
+1. Add the test hook to your app once. [camera-testing.md](camera-testing.md) has the Swift code to paste.
+2. Build and run the app on the iPhone from Projects.
+3. On the iPhone page, open Files › Camera test. Pick the app, add images or videos (or drop them on the list) and press Run test.
+
+iOS Studio copies the files into the app's Documents/CameraTestInput, restarts the app with `-cameraTestMode 1`, waits for the app to write Documents/CameraTestOutput/done.json, and copies the results back. You get done.json, any images the app wrote, the app's log during the run and a warning if it crashed. If no done.json shows up before the timeout, the app is missing the hook or the launch argument.
 
 ### Free space
 

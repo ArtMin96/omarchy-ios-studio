@@ -214,6 +214,8 @@ the tunnel is up.
 | `metrics.sample` | `{sessionId, …Sample}` | about once a second per running metrics session |
 | `metrics.event` | `{sessionId, …MetricsEvent}` | hang, jetsam, crash, watchdog, thermal, hitch, exit, launch, note |
 | `metrics.state` | MetricsSession | a metrics session started, changed status or stopped (also in the welcome) |
+| `transfer` | Transfer (see [Files](#files)) | during `media.pull`, `container.pull/push` and inside `cameratest.run`, at most 4 a second, plus one final `done` / `failed` / `cancelled` |
+| `cameratest` | `{testId, step, state, title, detail}` | each step of `cameratest.run` (`running`, `done`, `failed`) |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -289,8 +291,13 @@ App:
 {"bundleId": "XTL-ABCDE12345.com.example.myapp", "name": "MyApp", "version": "0.1.0",
  "build": "1", "developer": true, "removable": true, "hidden": false, "system": false,
  "executable": "MyApp", "path": "/private/var/containers/Bundle/Application/…/MyApp.app",
- "icon": "<home>/.cache/ios-studio/icons/<udid>/<bundleId>.png", "running": false, "pid": null}
+ "icon": "<home>/.cache/ios-studio/icons/<udid>/<bundleId>.png", "running": false, "pid": null,
+ "fileSharing": false, "debuggable": true}
 ```
+
+`fileSharing` = the app sets `UIFileSharingEnabled` (its Documents folder can be opened, see
+[Files](#files)); `debuggable` = signed with `get-task-allow` (a development build: its whole container
+can be opened).
 
 `size` (bytes, app + data) is `null` unless `sizes: true` was passed (which makes the reply ~9 s
 slower); with `sizes` omitted the daemon computes them in the background and sends `appSizes`.
@@ -682,6 +689,102 @@ LeakReport: `{bundleId, name, pid, leakCount, leakedBytes, seconds, memgraphPath
 verdict}`. `leakedBytes` is null because the phone doesn't report sizes. The app has to be running and
 debuggable (errors `not-running`, `not-debuggable`). The leaked-only memory graph is saved next to the CSV
 exports, for `leaks` or Xcode on a Mac.
+### Files
+
+The camera roll (read-only) and app containers, used by iPhone › Files and the MCP file tools.
+Implementation: `helper/deviced_features/files.py` and `cameratest.py`, shared helpers in
+`helper/device_files.py`.
+
+| cmd | args | reply data |
+|---|---|---|
+| `media.list` | `{offset?: 0, limit?: 200 (≤1000), kind?: "photo"\|"video", refresh?: bool, udid?}` | `{total, offset, items: [MediaItem…], source, photos, videos}` newest first |
+| `media.thumb` | `{id \| path, udid?}` | `{id, path, source}`: a local JPEG; `source` ∈ `cache`, `phone`, `generated` |
+| `media.pull` | `{ids \| paths, dest?: "~/Pictures/iPhone", convertHeic?: false, transferId?, udid?}` | `{transferId, dest, files, skipped, failed: [{path, message}], bytes, converted, notConverted, seconds}` |
+| `container.list` | `{bundleId, path?, documentsOnly?: false, udid?}` | `{bundleId, name, path, root, mode, developer, fileSharing, writable, entries: [Entry…]}` |
+| `container.pull` | `{bundleId, paths, dest?: "~/Downloads", transferId?, udid?}` | `{transferId, dest, files, bytes, seconds}`; folders are copied whole |
+| `container.push` | `{bundleId, srcs \| src, path?, overwrite?: false, transferId?, udid?}` | `{transferId, path, files, bytes, seconds}`; `path` (a phone folder) is created if missing |
+| `container.mkdir` | `{bundleId, path, udid?}` | `{path}` |
+| `container.delete` | `{bundleId, paths, udid?}` | `{deleted, failed}`; recursive (UI must confirm first) |
+| `transfer.cancel` | `{transferId}` | `{transferId, cancelled: bool}`; the transfer's request then fails with `cancelled` |
+| `transfer.list` | – | `[{id, kind}]` running transfers |
+| `cameratest.run` | `{bundleId, inputs: [local path…], args?: [str] \| str, env?: {} \| "K=V, …", timeout?: 60, testId?, minLevel?: "info", udid?}` | CameraTest (below) |
+
+MediaItem:
+
+```json
+{"id": "DCIM/100APPLE/IMG_0001.HEIC", "path": "DCIM/100APPLE/IMG_0001.HEIC", "name": "IMG_0001.HEIC",
+ "kind": "photo", "date": "2026-10-30T18:12:05", "ts": 1793383925.0, "width": 4032, "height": 3024,
+ "duration": null, "size": 2310044, "thumb": "<home>/.cache/ios-studio/thumbs/<udid>/DCIM_100APPLE_IMG_0001.HEIC.jpg"}
+```
+
+Camera roll:
+- `media.list` lists `DCIM` over AFC (about 0.1 s for 1,400 files) and joins it with a copy of
+  `PhotoData/Photos.sqlite` (plus `-wal`/`-shm`) for dates, sizes, dimensions and video length
+  (`source: "photos-db"`). The copy lives in `~/.cache/ios-studio/media/<udid>/` and is pulled
+  again only when the database's size or mtime changes. Assets in Recently Deleted or Hidden, iCloud-only
+  assets (not in DCIM) and Live Photo companion videos are left out. When the database's columns
+  aren't the expected ones (they change between iOS releases), the plain DCIM listing is used
+  (`source: "dcim"`; `date`, `size` and dimensions are `null`). Listings are reused for 15 s;
+  `refresh` forces a new one.
+- `media.thumb` writes `~/.cache/ios-studio/thumbs/<udid>/<path>.jpg`: the phone's own thumbnail
+  (`PhotoData/Thumbnails/V2/<path>/5005.JPG`, or a video key frame) when there is one, else it pulls the
+  original (up to 80 MB) and converts it with vips, ImageMagick or ffmpeg (Qt has no HEIF plugin, so
+  HEIC never reaches the UI as is). At most 4 thumbnails are made at a time. `no-converter` (fix →
+  Setup › System packages) when no tool could read the file, `no-thumbnail` for a huge original.
+- `media.pull` copies originals unchanged; files already imported (same name and size) are skipped,
+  other name clashes become `name (2).ext`. With `convertHeic`, HEIC/HEIF photos are saved as JPEG
+  (heif-convert, vips, ImageMagick or ffmpeg); one that can't be converted stays HEIC and counts in
+  `notConverted`.
+- Nothing ever writes to `DCIM` or `PhotoData`.
+
+Containers (house_arrest):
+- Your development builds (`get-task-allow`) vend the whole container (`mode: "container"`, `root: "/"`:
+  `Documents`, `Library`, `tmp`). Entries the phone refuses (such as `SystemData`) are skipped.
+- App Store apps with `UIFileSharingEnabled` vend `Documents` only (`mode: "documents"`, `root:
+  "/Documents"`); `documentsOnly` gives the same view of your own app.
+- Any other app fails with `no-file-sharing` ("This app doesn't share files…").
+- Paths are POSIX paths inside `root`; `..` is refused (`bad-args`). `container.push` first checks
+  every target and fails with `exists` (the clashing paths in `detail`, one per line) unless
+  `overwrite`; nothing is copied then. Pulls never overwrite local files (`name (2).ext`).
+- Error codes besides the common ones: `no-file-sharing`, `denied` (the phone refused this path),
+  `exists`, `no-space`, `not-found`.
+
+Transfer event (`transfer`):
+
+```json
+{"id": "m4211-3", "kind": "media.pull", "state": "running", "bytes": 10485760, "total": 48211322,
+ "files": 2, "count": 9, "file": "IMG_0003.HEIC", "seconds": 1.9, "dest": "/home/me/Pictures/iPhone"}
+```
+
+`kind` ∈ `media.pull`, `container.pull`, `container.push`, `cameratest.push`, `cameratest.pull`; `state`
+∈ `running`, `done`, `failed` (with `error`), `cancelled`. Pass your own `transferId` to match events
+to a request before its reply arrives. A client that disconnects cancels its transfers.
+
+#### Camera test (`cameratest.run`)
+
+One job for your own app (others fail with `not-dev-app`): clear `Documents/CameraTestOutput` and
+`Documents/CameraTestInput`, copy `inputs` to `CameraTestInput`, stop and launch the app with `args`
+(default `["-cameraTestMode", "1"]`) and `env` while recording its log (bundleId filter, `minLevel`),
+wait for `CameraTestOutput/done.json`, the app exiting (checked every 3 s) or `timeout` seconds,
+copy `CameraTestOutput` to `~/.cache/ios-studio/cameratest/<testId>/pulled/`, and look for new crash
+reports. `cameratest` events report each step; `transfer.cancel {transferId: testId}` stops it. The
+reply comes when the run ends, so give the request `timeout + ~60 s`. The app-side hook is in
+[camera-testing.md](camera-testing.md).
+
+```json
+{"testId": "ct4211-7", "bundleId": "XTL-ABCDE12345.com.example.myapp", "ok": true, "timedOut": false,
+ "exited": false, "done": {"results": [{"file": "cat.jpg", "frame": 0, "label": "cat"}]}, "doneRaw": null,
+ "outputDir": "<home>/.cache/ios-studio/cameratest/ct4211-7/pulled/CameraTestOutput",
+ "outputs": ["<…>/CameraTestOutput/done.json", "<…>/CameraTestOutput/cat-annotated.png"],
+ "logLines": ["14:22:31 info    MyApp: CameraTest: 1 input file(s)", "…"], "logCount": 37,
+ "logFile": "<…>/ct4211-7/syslog.txt", "newCrashes": [CrashItem…], "pid": 812, "seconds": 6.4,
+ "args": ["-cameraTestMode", "1"], "env": {}, "timeout": 60,
+ "steps": [{"id": "check", "title": "Check the app", "state": "done", "detail": "MyApp"}, "…"]}
+```
+
+`ok` = `done.json` parsed and no new crash. `doneRaw` holds the text (≤20 KB) when `done.json` isn't
+valid JSON. `logLines` keeps the last 400 lines; `syslog.txt` has all of them. Step ids: `check`,
+`clear`, `push`, `launch`, `wait`, `pull`, `crashes`.
 
 ### Installing apps (`app.install`)
 

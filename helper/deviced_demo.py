@@ -80,6 +80,8 @@ class DemoBackend:
         return await asyncio.to_thread(fn, self, a)   # sync handlers may sleep (app.install)
 
     def error_json(self, exc: BaseException, cmd: str) -> dict:
+        if hasattr(exc, "to_json") and getattr(exc, "code", None):   # common.HelperError from a feature
+            return exc.to_json()
         if isinstance(exc, LookupError):
             return {"code": "bad-args", "message": str(exc).strip("'\"")}
         if callable(getattr(exc, "to_json", None)):   # common.HelperError raised by a demo feature

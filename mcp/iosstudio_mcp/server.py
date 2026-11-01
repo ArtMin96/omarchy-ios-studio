@@ -29,11 +29,12 @@ iOS Studio builds, signs, installs and debugs iPhone apps on this Linux computer
 - On the iPhone: ios_app_run_and_capture(bundle_id) launches an app and reports its logs and any new crash in one call; ios_logs_start/read/stop follow the log with a cursor; ios_crash_list/get read crash reports; ios_screenshot shows the screen; ios_app_list/ios_device_info describe the phone. Developer Mode is turned on by the human (ios_device_prepare explains how).
 - Network testing: ios_network_conditions lists slow-network, thermal and GPU profiles; ios_network_condition_set (dry run first, then confirm=true) applies one to the whole phone for a few minutes, ios_network_condition_clear ends it. ios_pcap_capture records traffic over USB and returns a header-only summary and a pcapng path.
 - Performance: ios_metrics_start(bundle_id) samples CPU, memory, energy, FPS, network and battery about once a second; ios_metrics_summary gives stats and anomalies (possible leak, spikes, hangs, jetsam); ios_metrics_stop ends it. ios_launch_profile and ios_memory_leaks change the app's state: confirm with the user first.
+- Files: ios_media_list/ios_media_pull read the camera roll; ios_files_list/pull/push/delete work in an app's container; ios_camera_test runs the app's camera code on test files (needs the hook in docs/camera-testing.md). Long copies and tests return state='running' with an id: call the same tool again with it.
 - udid parameters are optional and default to the active iPhone.
 - Results are kept small (about 12 KB). A cut result has truncated=true and a `note` saying how to get more (before=/offset=, grep=, a filter, or max_bytes up to 48000); big outputs are saved to a file whose path comes back as full_output_path.
 - Free Apple IDs: apps stop opening 7 days after signing (ios_project_renew re-signs), at most 3 of your apps per iPhone, 10 new app ids per week; bundle ids are registered as XTL-<TEAM>.<bundle id>.
 - Human-only steps: Apple ID sign-in (never ask for passwords or 2FA codes), the Xcode .xip download, iPhone pairing/Trust, Developer Mode, and polkit password dialogs. Explain the step and use ios_open_app(page=...).
-- Destructive tools (ios_project_remove, ios_build_clean, ios_toolchain_clean, ios_account_logout, ios_app_uninstall) take confirm=false by default and return a dry run; so does a destructive answer in ios_build_respond. Ask the user, then repeat with confirm=true.
+- Destructive tools (ios_project_remove, ios_build_clean, ios_toolchain_clean, ios_account_logout, ios_app_uninstall, ios_files_delete) take confirm=false by default and return a dry run; so does a destructive answer in ios_build_respond. Ask the user, then repeat with confirm=true.
 """
 
 

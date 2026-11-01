@@ -120,3 +120,45 @@ def phone_screen(path: Path, seq: int = 0, w: int = 390, h: int = 844) -> Path:
         rows.append(bytes(row))
     _write_png(path, w, h, rows)
     return path
+
+
+def photo(path: Path, seed: int = 0, w: int = 200, h: int = 200) -> Path:
+    """A made-up camera roll picture for demo mode: sky, sun, two hill ridges and water, varied by seed."""
+    if path.exists():
+        return path
+    import math
+    import random
+    rnd = random.Random(seed)
+    hue = rnd.random()
+    sky0, sky1 = _rgb(hue, 0.35 + rnd.random() * 0.3, 0.95), _rgb(hue + 0.07, 0.55, 0.65)
+    hill = [_rgb(hue + 0.33 + rnd.random() * 0.1, 0.45, 0.45 + rnd.random() * 0.2),
+            _rgb(hue + 0.30, 0.55, 0.28 + rnd.random() * 0.12)]
+    water = _rgb(hue + 0.02, 0.4, 0.55)
+    sx, sy, sr = rnd.uniform(0.2, 0.8) * w, rnd.uniform(0.15, 0.4) * h, rnd.uniform(0.06, 0.12) * w
+    waves = [(rnd.uniform(0.45, 0.6), rnd.uniform(2, 5), rnd.uniform(0, 6), rnd.uniform(0.03, 0.07)),
+             (rnd.uniform(0.6, 0.72), rnd.uniform(3, 7), rnd.uniform(0, 6), rnd.uniform(0.02, 0.05))]
+    has_water = rnd.random() < 0.5
+    rows = []
+    for y in range(h):
+        t = y / h
+        base = [int(sky0[i] + (sky1[i] - sky0[i]) * t) for i in range(3)]
+        row = bytearray()
+        for x in range(w):
+            px = base
+            dx, dy = x - sx, y - sy
+            d2 = dx * dx + dy * dy
+            if d2 <= sr * sr:
+                px = [255, 236, 190]
+            elif d2 <= (sr * 2.2) ** 2:
+                k = 1 - math.sqrt(d2) / (sr * 2.2)
+                px = [int(c + (255 - c) * 0.35 * k) for c in base]
+            for (lvl, freq, ph, amp), col in zip(waves, hill):
+                if t > lvl + amp * math.sin(freq * x / w * math.pi + ph):
+                    px = [int(c * (0.85 + 0.15 * (1 - t))) for c in col]
+            if has_water and t > 0.82:
+                k = 0.5 + 0.5 * math.sin(y * 0.9 + x * 0.05)
+                px = [int(c * (0.8 + 0.2 * k)) for c in water]
+            row += bytes(px) + b"\xff"
+        rows.append(bytes(row))
+    _write_png(path, w, h, rows)
+    return path

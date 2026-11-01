@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 59 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 66 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -131,6 +131,7 @@ The server has 59 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get` |
 | Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
 | Performance | `ios_metrics_start`, `ios_metrics_summary`, `ios_metrics_series`, `ios_metrics_events`, `ios_metrics_stop`, `ios_launch_profile`, `ios_memory_leaks` |
+| Files and camera tests | `ios_media_list`, `ios_media_pull`, `ios_files_list`, `ios_files_pull`, `ios_files_push`, `ios_files_delete`, `ios_camera_test` |
 
 `ios_metrics_start(bundle_id)` samples an app about once a second in the device service (CPU, memory, threads, energy, display frame rate, GPU, network, disk, wakeups and battery). The service keeps about an hour and computes the stats, so `ios_metrics_summary` stays around 1 to 2 KB: min, average, 95th percentile and max of the main series, the memory trend, CPU spikes, frame-rate drops, hitches, battery drain, energy by component, and anomalies in plain words, worst first. `ios_metrics_series` downsamples one metric to at most 60 buckets and saves every sample as a CSV, returned as a path and a resource link. `ios_metrics_events` pages through hangs, jetsam kills, crashes and hitches by cursor. A session ends with `ios_metrics_stop` or when the agent's session ends. `ios_launch_profile` quits and relaunches the app, and `ios_memory_leaks` pauses it while its memory is scanned, so both are dry runs unless `confirm=true`. They run as jobs: when the reply says `running`, call again with its `job_id`.
 
@@ -147,6 +148,10 @@ A few tools need more explanation:
 - `ios_device_prepare` can't turn on Developer Mode for you. It tells you what to tap on the phone.
 - `ios_network_condition_set` makes the whole phone act as if it's on a slow network (Edge, 3G, LTE, DSL, packet loss, slow DNS), running hot, or with a throttled GPU. Like the destructive tools it returns a dry run first, which says what changes and, over Wi-Fi, that it also slows the agent's own link to the phone; the agent asks you before it repeats the call with `confirm=true`. The condition switches off after `minutes` (default 5, at most 30), on `ios_network_condition_clear`, or when the MCP server stops. The two profiles that cut the network off are refused over Wi-Fi. `ios_network_conditions` lists the profiles and the active one in about 6 KB.
 - `ios_pcap_capture` records the phone's traffic for up to 120 seconds, for one app (`bundle_id`) or the whole phone, and needs a USB cable. It returns packets and bytes per process, the top 10 remote hosts and ports, and protocol and service counts, read from the packet headers only. The full recording is a pcapng file whose path is in `file`. The call waits up to 25 seconds; a longer capture returns `state: "running"` and a `capture_id`, and calling the tool again with `capture_id` waits for the result (`stop=true` ends it early). The capture stops if the MCP server exits.
+- `ios_media_list` lists the camera roll (dates, sizes, no images) in pages, and `ios_media_pull` copies photos and videos to a folder in your home folder, optionally as JPEG. The camera roll is never changed.
+- `ios_files_list`, `ios_files_pull`, `ios_files_push` and `ios_files_delete` work in an app's files: the whole container for your own builds, Documents for App Store apps that share files. A push that would replace files returns `needs_confirm` and changes nothing until it's repeated with `confirm=true`; `ios_files_delete` is a dry run until `confirm=true`.
+- `ios_camera_test` runs your app's camera code on test images and videos and reports a summary of its `done.json`, the output files, key log lines and any crash. The app needs a small hook: see [camera-testing.md](camera-testing.md).
+- Copies and camera tests can take longer than one call. They keep running in the server and return `state: "running"` with a `transfer_id` or `test_id`; calling the same tool again with that id waits for the result, and `cancel=true` stops it.
 
 The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), large outputs a tool saved to a file (`iosstudio://cache/{kind}/{name}`), the last known iPhone state, the troubleshooting guide and this page. Each one returns at most 100 KB and says which tool reads the rest.
 
@@ -169,7 +174,7 @@ Build logs, crash reports and the phone's log can be megabytes long, and an agen
 
 No tool takes your Apple ID password or a 2FA code. To sign in, pair the iPhone, turn on Developer Mode or download Xcode, the agent opens iOS Studio on the right page and asks you to do it there.
 
-`ios_project_remove`, `ios_build_clean`, `ios_toolchain_clean`, `ios_account_logout`, `ios_app_uninstall`, `ios_launch_profile` and `ios_memory_leaks` take a `confirm` argument, which is false by default. With `confirm` false, the tool changes nothing and lists what it would do, and the agent is told to ask you before it repeats the call with `confirm=true`.
+`ios_project_remove`, `ios_build_clean`, `ios_toolchain_clean`, `ios_account_logout`, `ios_app_uninstall`, `ios_files_delete`, `ios_launch_profile` and `ios_memory_leaks` take a `confirm` argument, which is false by default. With `confirm` false, the tool changes nothing and lists what it would do, and the agent is told to ask you before it repeats the call with `confirm=true`.
 
 When a job needs a decision, such as replacing your signing certificate or confirming a 2 GB toolchain download, it pauses. The agent shows you the question and sends back your answer. Options that can't be undone also need `confirm=true`. Installing system packages shows the usual polkit password dialog on your screen.
 

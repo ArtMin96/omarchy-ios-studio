@@ -16,7 +16,7 @@ PageFrame {
   property int cursor: -1
 
   title: "iPhone"
-  subtitle: showDevice ? "Apps, screen, location, network and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
+  subtitle: showDevice ? "Apps, screen, files, network, performance and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
 
   // A simulated condition changes the whole phone: say so next to the title on every tab.
   status: StatusPill {
@@ -39,6 +39,7 @@ PageFrame {
   readonly property var tabs: [
     { key: "apps", label: "Apps", glyph: Model.Glyph.apps, count: svc.apps.length || undefined },
     { key: "screen", label: "Screen", glyph: Model.Glyph.camera },
+    { key: "files", label: "Files", glyph: Model.Glyph.folder },
     { key: "location", label: "Location", glyph: Model.Glyph.location },
     { key: "network", label: "Network", glyph: Model.Glyph.network, level: svc.conditionActive || svc.capturing ? "warn" : "",
       count: svc.conditionActive ? "On" : (svc.capturing ? "Rec" : undefined) },
@@ -66,6 +67,7 @@ PageFrame {
     else if (p.action === "ddi") svc.mountDdi()
     else if (p.action === "screenshot") { page.tab = "screen"; svc.screenshot() }
     else if (p.action === "mirror") { page.tab = "screen"; if (svc.connected && !svc.mirroring) svc.startMirror() }
+    else if (p.tab === "files" && ["media", "apps", "camera"].indexOf(p.action) >= 0) filesView.show(p.action)
     if (svc.connected && svc.appsStatus === "unknown") svc.refreshApps()
   }
 
@@ -165,6 +167,13 @@ PageFrame {
   DeviceScreenView {
     Layout.fillWidth: true
     visible: page.showDevice && page.tab === "screen" && page.svc.connected
+    app: page.app
+  }
+  DeviceFilesView {
+    id: filesView
+    Layout.fillWidth: true
+    visible: page.showDevice && page.tab === "files" && page.svc.connected
+    active: visible && page.app.page === "device"
     app: page.app
   }
   DeviceLocationView {

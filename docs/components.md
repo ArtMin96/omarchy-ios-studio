@@ -109,8 +109,8 @@ passes through unchanged.
 `Model.Glyph.*` (Nerd Font glyphs): home rocket apple account phone hammer build play pause stop logs
 console crash gear sdk box toolbox wrench folder folderOpen folderPlus file check checkCircle circle dot warn
 error info help refresh sync download upload trash link linkOff wifi wifiOff usb battery batteryCharging
-lock unlock key cert shield shieldCheck clock timer location camera image search keyboard close plus minus
-chevronRight/Left/Down/Up arrowRight openExternal copy save export edit code swift disk memory
+lock unlock key cert shield shieldCheck clock timer location camera image video search keyboard close plus minus
+chevronRight/Left/Down/Up arrowRight arrowUp openExternal copy save export edit code swift disk memory
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record.
 
@@ -425,3 +425,23 @@ the keyboard.
   banner with its countdown and Reset now. It embeds DeviceCaptureView (packet capture, USB only). The
   active condition and the capture state live in `app.device` (`condition`, `conditionActive`, `capture`,
   `capturing`), so the page header pill, the tab badge and the sidebar badge follow them on every page.
+- **DeviceFilesView**: the iPhone › Files tab. Props: `app`, `active` (the tab is showing; the parts load on
+  first show), `section` (`media`, `apps`, `camera`; remembered in the `filesSection` setting); `show(section)`.
+  Deep link: `nav("device:files:camera")`. It holds the three parts below, each with the same `app` and
+  `active` props:
+  - **DeviceMediaView**: the camera roll as a thumbnail grid (`media.list` in pages of 120, `media.thumb`
+    four at a time), click and Shift+click selection, and import (`media.pull`) to the `mediaImportDir`
+    setting (default `~/Pictures/iPhone`) with the `mediaConvertHeic` switch.
+  - **DeviceContainerView**: an app's container (`container.*`): an app picker limited to apps that share
+    files and your own builds (`filesApp` setting), breadcrumbs, Add files (file dialog), New folder,
+    Save to… (folder dialog), Delete (through `app.confirm`), and a `DropArea` that copies files dropped from
+    the desktop into the open folder. A push that would overwrite asks first.
+  - **DeviceCameraTestView**: the camera test form and run (`cameratest.run`): app, test files (file dialog
+    or drop), launch arguments, environment and timeout (settings `cameraTestApp`, `cameraTestInputs`,
+    `cameraTestArgs`, `cameraTestEnv`, `cameraTestTimeout`), live steps, then `done.json`, output images,
+    the app's log and a crash banner.
+- **DeviceTransferBar**: progress of one daemon `transfer` (file, n of m, bytes) with a Cancel button.
+  Props: `transfer` (the event data or null; hidden when null), `verb`; signal `cancel()`.
+  ```qml
+  DeviceTransferBar { Layout.fillWidth: true; transfer: root.transfer; verb: "Importing"; onCancel: svc.request("transfer.cancel", { transferId: id }, null) }
+  ```

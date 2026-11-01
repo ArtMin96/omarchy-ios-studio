@@ -117,6 +117,9 @@ def register(reg):
                 "icon": str(icon) if icon.exists() else None,
                 "running": pid is not None,
                 "pid": pid,
+                # Files tab: App Store apps that share Documents, and your builds (whole container)
+                "fileSharing": bool(info.get("UIFileSharingEnabled")),
+                "debuggable": bool((info.get("Entitlements") or {}).get("get-task-allow")),
             })
         out.sort(key=lambda x: (x["name"] or "").lower())
         if a.get("sizes") is None and idle("sizes"):
