@@ -82,7 +82,9 @@ IPSW_SHA = {
 }
 
 PACKAGES = ["usbmuxd", "zip", "base-devel", "git", "libimobiledevice", "openssl", "poppler", "libheif",
-            "python", "curl"]
+            "python", "curl", "ffmpeg"]
+# GStreamer pieces UxPlay's mirror needs at run time: the H.264/H.265 parsers (bad) and hardware decode (va)
+UXPLAY_RUNTIME = ["gst-plugins-bad", "gst-plugin-va"]
 
 # Swift major.minor -> (Xcode we recommend, Xcode major that works, approx .xip bytes)
 XCODE_FOR_SWIFT = {"6.4": ("27.1", "27", 2_027_369_056), "6.3": ("26", "26", 3_000_000_000)}
@@ -781,7 +783,7 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     missing_pkgs = [l.strip() for l in F["pacman_T"][1].splitlines() if l.strip()] if F["pacman_T"][0] != 0 else []
     ctx["missing_pkgs"] = missing_pkgs
     steps.append(S("packages", "System packages", "System",
-                   "Tools for talking to an iPhone over USB (usbmuxd, libimobiledevice), building software (base-devel, git) and packaging apps.",
+                   "Tools for talking to an iPhone over USB (usbmuxd, libimobiledevice), building software (base-devel, git), packaging apps and saving screen recordings (ffmpeg).",
                    "missing" if missing_pkgs else "done",
                    ("Missing: " + ", ".join(missing_pkgs)) if missing_pkgs else "All installed",
                    size="about 50–150 MB", time_="under a minute", root=True, essential=True))
@@ -1299,6 +1301,13 @@ def i_root_bundle(ctx: Ctx, ids: list[str], step_id: str, label: str) -> None:
             deps = sorted({strip_ver(x) for x in info.get("depends", []) + info.get("makedepends", []) +
                            info.get(f"depends_{a}", []) + info.get(f"makedepends_{a}", [])} | {"base-devel"})
             args += ["--deps", " ".join(deps), "--aur-build", str(d)]
+        ux_miss = UXPLAY_RUNTIME if DRY else [x for x in UXPLAY_RUNTIME if q(["pacman", "-T", x])[0] != 0]
+        if ux_miss:
+            if "--packages" in args:
+                i = args.index("--packages") + 1
+                args[i] = " ".join(dict.fromkeys(args[i].split() + ux_miss))
+            else:
+                args += ["--packages", " ".join(ux_miss)]
         args += ["--avahi", "--ufw-uxplay"]
     if "wireshark" in ids and (not shutil.which("wireshark") or ctx.flags.get("force")):
         if "--packages" in args:   # one --packages flag: root-tasks.sh keeps only the last one

@@ -74,7 +74,7 @@ its own filters, whatever its subscription.
 - the simulated location (`location.set` / `location.clear`; it stays until cleared or until the
   daemon exits, not when the client that set it disconnects);
 - pairing (`pair.*`; one flow at a time, progress is broadcast);
-- the mirror frame rate (`mirror.start {fps}` from any client changes it for all).
+- the mirror settings (`mirror.start {fps, mode, scale, quality}` from any client changes them for all).
 
 **Syslog.** There is one log stream to the phone. Each client's `syslog.start` / `syslog.filter`
 / `syslog.stop` only changes its own subscription; filtering happens in the daemon per client, with
@@ -84,15 +84,15 @@ filters on exactly that one pid; otherwise the phone sends everything and entrie
 subscriber's `minLevel` are skipped before they're built. The phone stream starts with the first
 subscriber and stops when the last one stops or disconnects.
 
-**Held resources.** Features that keep something running on the phone for a client (the mirror;
-network conditions, packet captures, port forwards) hold it as a reference-counted resource. It is
+**Held resources.** Features that keep something running on the phone for a client (the mirror,
+a recording, network conditions, packet captures, port forwards) hold it as a reference-counted resource. It is
 released when the last client holding it stops it or disconnects, after an optional timeout, when
 the active device changes, at shutdown, and for tunnel-bound resources when the tunnel drops.
 
 **Mirror.** Reference counted: `mirror.start` adds the client, `mirror.stop` removes it and the
 frames stop only when no client holds it (the reply then says `{running: false, sharedWith: n}`
 while others still do). A client disconnecting releases its reference. `frame` events go to every
-subscribed client.
+subscribed client. A recording holds the mirror too, so it keeps running until the recording ends.
 
 ### Python client (`helper/device_client.py`)
 
@@ -201,8 +201,9 @@ the tunnel is up.
 | `devices` | `[Device…]` | at start and whenever the list or any field changes |
 | `connection` | Connection (below) | on every connection state change of the active device |
 | `deviceInfo` | `{udid, …partial DeviceInfo}` | after connect and every 60 s (battery etc.) |
-| `frame` | `{path, seq, ts, width, height}` | mirror running; one per screenshot |
-| `mirror` | `{running, fps, error?}` | mirror started/stopped/failed |
+| `frame` | `{path, seq, ts, width, height, bytes, mode}` | mirror running; one per frame shown (see Screen) |
+| `mirror` | `{running, fps, mode, requestedMode, measuredFps, dropped, scale, quality, recording, notice?, noticeCode?, error?}` | mirror started/stopped/failed, mode changed, and every 2 s while it runs |
+| `record` | Recording (see Screen) | recording started, every 2 s while it runs, finishing, done or failed |
 | `syslog` | `[SyslogEntry…]` (array!) | batched, see Syslog |
 | `syslogState` | `{running, udid, filters, dropped, reconnecting, error?}` | stream state change |
 | `pair` | Pair (below) | pairing flow progress |
@@ -310,13 +311,66 @@ background (CoreDevice icon service) and sends one `appIcon` event per icon.
 | cmd | args | reply data |
 |---|---|---|
 | `screenshot` | `{udid?, save?: bool}` | `{path, width, height, bytes, ts}` |
-| `mirror.start` | `{udid?, fps?: 1.0}` (0.2–4) | `{running: true, fps}`; takes a mirror reference |
+| `mirror.start` | `{udid?, mode?: "auto", fps?, scale?: 0.5, quality?: 70}` | `{running: true, fps, mode, requestedMode, scale, quality}`; takes a mirror reference |
 | `mirror.stop` | – | `{running: false, sharedWith?}`; releases it (frames stop when nobody holds one) |
+| `mirror.ack` | `{seq}` | `{}`; the client has shown frame `seq` (backpressure, below) |
+| `mirror.status` | – | the `mirror` event fields plus `{available, viewers, record}` |
+| `record.start` | `{udid?, maxSeconds?: 60, mode?}` | Recording `{state: "recording", …}`; takes a mirror reference for the recording |
+| `record.stop` | – | the finished Recording (waits while the MP4 is written) |
+| `record.status` | – | the running Recording, else the last one, else `{state: "idle"}` |
 
-`screenshot` writes `~/.cache/ios-studio/screens/shot-<YYYYmmdd-HHMMSS>.png`. Mirror frames go to
-two rotating files `~/.cache/ios-studio/screens/mirror-<udid>-{0,1}.png` (the UI must bust its
-image cache, e.g. `source = "file://" + path + "?" + seq`). Frames are only produced while the
-screen is reachable; a failure emits `mirror {running:false, error}`.
+`screenshot` writes `~/.cache/ios-studio/screens/shot-<YYYYmmdd-HHMMSS>.png`.
+
+**Mirror modes.** `mode` is `auto` (default), `stream` or `screenshot`:
+
+- `stream` (iOS 27 or later): the phone's DisplayService sends an HEVC video stream over UDP on the
+  daemon's own tunnel. The daemon decodes it with PyAV and writes downscaled JPEG frames, up to
+  30 a second. While it runs, the phone shows its screen-sharing indicator and apps can't use the
+  camera or microphone. Every way out of a stream (stop, release, disconnect, tunnel drop, device
+  switch, shutdown) sends `stop_all_streams` to the phone, and if the tunnel is down at that
+  moment it is sent as soon as the tunnel is back.
+- `screenshot`: DVT screenshots in a loop. Each PNG is converted to a downscaled JPEG while the
+  next one is captured. It runs as fast as the phone answers, about 3 to 5 a second, up to `fps`
+  (at most 8).
+- `auto` tries `stream` and falls back to `screenshot`, with a plain-language `notice` in the
+  `mirror` event, when the iPhone runs an older iOS (`noticeCode: "unsupported"`), when an app holds
+  the camera or microphone (`media-in-use`, the phone's CoreDevice error 9022), when the video
+  decoder is missing (`no-decoder`), when the connection can't carry UDP (`no-udp`) or when the
+  stream won't start (`failed`). A forced `stream` fails instead, with error code `media-in-use`
+  or `stream-<reason>`.
+
+`fps` caps the frames sent to clients (0.2 to 30; without it, 30 in stream mode and 8 in
+screenshot mode). `scale` (0.25 to 1) and `quality` (30 to 95) shape the JPEGs. Without Pillow the
+screenshot mode sends the phone's PNGs unchanged. `measuredFps` is what was actually delivered over
+the last 2 s and `dropped` counts frames held back by backpressure. `mirror.status.available` is
+`{stream: {available, reason, message}, screenshot: {available, reason}, jpeg, ffmpeg}`.
+
+**Frames and backpressure.** Frames rotate through four files,
+`~/.cache/ios-studio/screens/mirror-<udid>-{0..3}.jpg` (`.png` without Pillow), so the client must
+bust its image cache, e.g. `source = "file://" + path + "?" + seq`. A client that sends
+`mirror.ack {seq}` after showing each frame is never more than three frames behind: the daemon
+holds new frames back while three are unacknowledged, and sends one anyway after a second without
+an ack. Clients that never ack get every frame. Frames are only produced while a client that
+called `mirror.start` holds the mirror; a recording alone records without writing frames. A
+failure emits `mirror {running: false, error}`.
+
+**Recordings.** One at a time (`busy` otherwise). A recording uses the mirror's current mode, or
+`mode` when the mirror isn't running. Stream mode copies the phone's HEVC into an MP4 without
+re-encoding. Screenshot mode captures at least 8 frames a second and joins them with ffmpeg
+(H.264), keeping each frame's real duration. It stops at `maxSeconds` (1 to 300), on
+`record.stop`, when the client that started it disconnects, when the tunnel drops, when the mirror
+mode changes and at shutdown, and the MP4 is saved in each case. Files:
+`~/.cache/ios-studio/recordings/rec-<YYYYmmdd-HHMMSS>.mp4` plus a 320 px thumbnail `rec-….jpg`.
+
+Recording: `{state, mode, seconds, bytes, frames, maxSeconds, path, started}`, where `state` is
+`recording`, `finishing`, `done` or `failed`. A finished one adds `{fps, thumbnail, reason}`
+(`reason` is `timeout` for `maxSeconds`, `stopped`, `client`, `tunnel`, `mode`, `shutdown`, …).
+A failed one adds `error`. Errors: `no-ffmpeg` (screenshot recordings need ffmpeg, fix: Setup ›
+System packages), `record-empty` (no picture arrived), `record-failed`, `not-recording`.
+
+Demo mode paints the frames. `IOSSTUDIO_DEMO_MEDIA_BUSY=1` makes the demo iPhone behave as if an app
+held the camera, so `auto` falls back with the notice. A demo recording is a real MP4 made with
+ffmpeg, or a placeholder path with a `notice` when ffmpeg is missing.
 
 ### Location
 

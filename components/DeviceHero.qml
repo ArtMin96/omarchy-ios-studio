@@ -28,6 +28,7 @@ RowLayout {
     Layout.alignment: Qt.AlignTop
     source: root.svc.screenSource
     live: root.svc.mirroring
+    onFrameShown: function(url) { root.svc.ackFrame(url) }
     dimmed: !root.online
     clickable: root.online
     glyph: root.online ? Model.Glyph.camera : (root.st === "locked" ? Model.Glyph.lock : Model.Glyph.phoneLink)

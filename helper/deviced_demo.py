@@ -84,7 +84,7 @@ class DemoBackend:
             return exc.to_json()
         if isinstance(exc, LookupError):
             return {"code": "bad-args", "message": str(exc).strip("'\"")}
-        if callable(getattr(exc, "to_json", None)):   # common.HelperError raised by a demo feature
+        if callable(getattr(exc, "to_json", None)):   # common.HelperError: a plain-language error with a fix
             return exc.to_json()
         return {"code": "failed", "message": "Demo mode can't do that.", "detail": str(exc)}
 

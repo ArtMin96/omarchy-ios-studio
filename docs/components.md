@@ -418,6 +418,23 @@ the keyboard.
   ```
 - **DevicePerformanceView**: the iPhone page's Performance tab (`app`). It keeps its own state (the `metrics.*`
   session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
+- **DevicePhoneFrame**: a drawn iPhone that shows a screenshot or mirror frame. Props: `source` (file URL),
+  `live` with `liveLabel` (the corner marker, e.g. `"REC 0:12"`), `dimmed`, `rotationSteps`, `glyph`,
+  `placeholder`, `clickable`. Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
+  once it's ready, and a frame that arrives while one is still loading replaces the queued one. The rounded
+  mask is one layer effect on the container. `frameShown(url)` fires for every frame shown; pass it to
+  `app.device.ackFrame(url)` so the daemon doesn't send faster than the window can draw.
+  ```qml
+  DevicePhoneFrame { source: app.device.screenSource; live: app.device.mirroring
+                     onFrameShown: function(url) { app.device.ackFrame(url) } }
+  ```
+- **DeviceScreenView**: the iPhone › Screen tab: the live view (Smooth, Screenshots or AirPlay through UxPlay),
+  the frame rate it reaches, recordings and stills. State and actions are on `app.device`: `mirrorMode`,
+  `mirrorActive`, `measuredFps`, `mirrorNotice`, `recording`, `setMirrorMode()`, `startRecording(maxSeconds)`,
+  `stopRecording()`, `dismissRecording()`. The settings keys `mirrorMode` and `mirrorView` remember the choice.
+- **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
+  QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view
+  leaves the preview out.
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
 - **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView

@@ -59,7 +59,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Tab | What it does |
 |---|---|
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
-| Screen | A live view built from screenshots (up to about 2 a second over Wi-Fi). Take a screenshot, save it to Pictures, copy it or rotate it. For a smooth mirror, it can set up AirPlay through UxPlay. |
+| Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. See [Screen](#screen) below. |
 | Files | Three parts. Photos & videos shows the camera roll as thumbnails: select some (Shift+click selects a range) and import them to a folder (`~/Pictures/iPhone` unless you pick another), with HEIC photos saved as JPEG if you like. App files browses an app's files: your own apps show their whole container, App Store apps only their Documents folder and only if they share files. Save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete. Camera test runs your app's camera code on test images and videos (see [Test camera code with files](#test-camera-code-with-files)). Nothing here ever changes the camera roll. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
@@ -78,6 +78,18 @@ While one is on, a yellow banner at the top of the tab shows it with a countdown
 Over Wi-Fi, a network condition also slows down this computer's own link to the phone, and iOS Studio may lose the phone for a moment (the condition then switches off). The two profiles that cut the network off almost completely, 100% packet loss and Very poor network, are only offered over a USB cable. Heat and GPU states work the same over Wi-Fi and USB.
 
 Packet capture needs a USB cable, because the phone only shares its traffic over a cable. Pick an app (or the whole iPhone) and a duration, press Start capture, and use the app. You see the packet count while it records. When it stops, the tab shows the data sent and received, the protocols, and the servers the app talked to. The summary reads only the packet headers, never their contents, and leaves out iOS Studio's own connection to the phone. The recording is a standard pcapng file in `~/.cache/ios-studio/captures/` (the newest 20 are kept). Open in Wireshark opens it, and Setup can install Wireshark if you don't have it.
+
+#### Screen
+
+Press Start live view to watch the phone. The badge next to the title says how it's shown and how many frames a second actually arrive. There are three ways to show it:
+
+- Smooth streams the screen as video, up to 30 frames a second, on iOS 27 or later. While it runs, the phone shows its screen-sharing indicator and apps can't use the camera or microphone. If an app is already using them, or the phone runs an older iOS, the view switches to screenshots by itself and says why.
+- Screenshots works on every iPhone and leaves the camera and microphone alone. It manages about 3 to 5 frames a second; Speed slows it down.
+- AirPlay opens UxPlay, a separate receiver window with sound. On the phone, open Control Center › Screen Mirroring and pick iOS Studio. If UxPlay isn't installed, the button takes you to its Setup step.
+
+Record saves a short video of the screen, up to 30 seconds, 1 minute or 5 minutes. The phone shows REC and a timer while it records, and Stop recording ends it early. The video is an MP4 in `~/.cache/ios-studio/recordings/`. Show in folder and Copy path help you attach it to a bug report, and the finished video plays inline when Qt Multimedia is installed. Recordings in Screenshots mode need ffmpeg; if it's missing, the error has a button that installs it from Setup.
+
+Take screenshot saves a full-resolution still. Save to Pictures and Copy image use the latest frame or screenshot.
 
 ### Projects
 

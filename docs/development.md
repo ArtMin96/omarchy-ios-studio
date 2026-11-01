@@ -40,7 +40,7 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (66 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (68 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
@@ -153,7 +153,7 @@ The phone must only be reached through the session's existing tunnel. A second t
 
 Import pymobiledevice3 classes the core doesn't load (`HouseArrestService`, `PcapdService`, `DisplayService`, `ConditionInducer`, ...) at the top of your feature module. If pymobiledevice3 changes, only that module fails to load.
 
-`d.resources` (`deviced_kit.Resources`) holds things that stay open for clients: a mirror stream, a condition, a perf tap, a packet capture, a port forward. `acquire(key, client, open_fn, close_fn, scope=..., timeout=...)` counts one hold per client and runs `open_fn` once. `release(key, client)` returns how many holders are left and closes the resource at zero. The resource also closes when its last holder disconnects, after `timeout` seconds (`touch(key)` restarts the timer), on a tunnel drop (`scope="tunnel"`), on a device switch (`"tunnel"` or `"session"`) and at shutdown (all scopes). `forget(key)` drops a resource that ended by itself. Use it for anything that changes the phone, so a crashed client never leaves a network condition switched on. `screen.py`'s mirror is a working example.
+`d.resources` (`deviced_kit.Resources`) holds things that stay open for clients: a mirror stream, a recording, a condition, a perf tap, a packet capture, a port forward. `acquire(key, client, open_fn, close_fn, scope=..., timeout=...)` counts one hold per client and runs `open_fn` once. `release(key, client)` returns how many holders are left and closes the resource at zero. The resource also closes when its last holder disconnects, after `timeout` seconds (`touch(key)` restarts the timer), on a tunnel drop (`scope="tunnel"`), on a device switch (`"tunnel"` or `"session"`) and at shutdown (all scopes). `forget(key)` drops a resource that ended by itself. Use it for anything that changes the phone, so a crashed client never leaves a network condition switched on. `mirror.py` (the live view and recordings) is a working example; it also shows the DisplayService video stream over `s.userspace_udp()`.
 
 `deviced_kit.CursorRing` buffers streamed entries with bounds on count and bytes. `read(cursor)` returns `entries`, `nextCursor`, `hasMore`, `missed` and `bufferStart`, with the same semantics as the MCP server's `ios_logs_read`.
 

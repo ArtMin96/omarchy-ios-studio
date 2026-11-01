@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 66 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 68 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -127,7 +127,8 @@ The server has 66 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | Apple ID and signing | `ios_account_status`, `ios_signing_status`, `ios_project_renew`, `ios_project_autorenew`, `ios_account_logout` |
 | Toolchain | `ios_toolchain_check`, `ios_toolchain_info`, `ios_toolchain_install`, `ios_toolchain_clean` |
 | iPhone | `ios_device_list`, `ios_device_info`, `ios_device_select`, `ios_device_reconnect`, `ios_device_prepare` (Developer Mode and the developer disk image) |
-| Apps on the iPhone | `ios_app_list`, `ios_app_install`, `ios_app_launch`, `ios_app_kill`, `ios_app_uninstall`, `ios_process_list`, `ios_screenshot`, `ios_location_set`, `ios_location_clear` |
+| Apps on the iPhone | `ios_app_list`, `ios_app_install`, `ios_app_launch`, `ios_app_kill`, `ios_app_uninstall`, `ios_process_list`, `ios_location_set`, `ios_location_clear` |
+| Screen | `ios_screenshot`, `ios_screen_record`, `ios_mirror_status` |
 | Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get` |
 | Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
 | Performance | `ios_metrics_start`, `ios_metrics_summary`, `ios_metrics_series`, `ios_metrics_events`, `ios_metrics_stop`, `ios_launch_profile`, `ios_memory_leaks` |
@@ -144,6 +145,7 @@ A few tools need more explanation:
 - `ios_app_run_and_capture` is for "launch it and tell me what happened". It launches an app (optionally installing its last signed build first), records its log for a few seconds, and reports whether it started, whether it was still running, the errors it logged and any new crash report with the crashing frames.
 - The phone logs about 2,000 lines a second, so `ios_logs_start` always needs a filter, such as the app's bundle id or a minimum level. The server keeps the newest 5,000 lines of each log session. The agent reads them with `ios_logs_read` from a cursor and can wait up to 25 seconds for new lines. A session nobody reads for 10 minutes stops by itself.
 - `ios_screenshot` returns an image the agent can see, at most 1568 pixels on the long side and 350 KB, and the path of the saved file. With `inline=false` it returns only the path.
+- `ios_screen_record` records the screen for up to 60 seconds into an MP4, for a bug report. It returns the path, length, size, frame rate and mode, and one small preview image (320 pixels, at most 60 KB). The recording runs in the background: if it isn't saved within `wait_seconds` (25 at most), the result has a `recording_id` to call again with. It uses the smooth stream on iOS 27 or later and screenshots otherwise. `ios_mirror_status` is read-only and says which mode the live view uses, the frame rate it reaches, which modes are available and why not, and whether UxPlay and ffmpeg are installed.
 - `ios_location_set` changes the location for the whole phone. It lasts until it's cleared or the background service stops.
 - `ios_device_prepare` can't turn on Developer Mode for you. It tells you what to tap on the phone.
 - `ios_network_condition_set` makes the whole phone act as if it's on a slow network (Edge, 3G, LTE, DSL, packet loss, slow DNS), running hot, or with a throttled GPU. Like the destructive tools it returns a dry run first, which says what changes and, over Wi-Fi, that it also slows the agent's own link to the phone; the agent asks you before it repeats the call with `confirm=true`. The condition switches off after `minutes` (default 5, at most 30), on `ios_network_condition_clear`, or when the MCP server stops. The two profiles that cut the network off are refused over Wi-Fi. `ios_network_conditions` lists the profiles and the active one in about 6 KB.

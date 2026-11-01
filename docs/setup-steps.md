@@ -10,7 +10,7 @@ States: `done`, `missing`, `broken` (installed but not working: shows **Repair**
 | id | Group | Title | What the user reads | Root | Size / time | How it's done |
 |---|---|---|---|---|---|---|
 | `platform` | System | This computer | Needs an Arch-based Linux (like Omarchy) on a 64-bit Intel/AMD or ARM computer. | – | – | check only |
-| `packages` | System | System packages | Tools for talking to an iPhone over USB, building software and packaging apps. | yes | 50–150 MB, < 1 min | `pacman -S --needed` |
+| `packages` | System | System packages | Tools for talking to an iPhone over USB, building software, packaging apps and saving screen recordings (ffmpeg). | yes | 50–150 MB, < 1 min | `pacman -S --needed` |
 | `usbmuxd` | System | USB connection service | Carries the cable connection to the iPhone; starts by itself when you plug it in. | yes | seconds | optional restart drop-in + udev trigger |
 | `swift` | Toolchain | Swift compiler | The Swift toolchain that compiles your apps. | yes | 1 GB download, 3.5 GB, 5–10 min | AUR `swift-bin` pinned to `f78c5ec` (6.4.2-2): tarball downloaded by us with progress, `makepkg` as the user (runuser), `pacman -U`; also holds Swift and fixes xcspec in the same prompt |
 | `swift-hold` | Toolchain | Keep Swift on this version | Stops system updates from changing Swift behind your back. | yes | seconds | `IgnorePkg = swift-bin` + Omarchy `pre-refresh-pacman` hook |
@@ -26,7 +26,7 @@ States: `done`, `missing`, `broken` (installed but not working: shows **Repair**
 | `apple-id` | Apple | Apple Account | Sign in so apps can be signed for your iPhone. | – | a minute | `{kind:"page", page:"account", action:"signin"}` |
 | `iphone` | iPhone | Pair your iPhone | Connect, unlock, tap Trust. | – | a minute | `{kind:"page", page:"device", action:"pair"}` |
 | `developer-mode` | iPhone | Developer Mode | Settings › Privacy & Security › Developer Mode, then restart. | – | phone restarts | `{kind:"page", page:"device", action:"developer-mode"}`; state from `~/.local/state/ios-studio/device.json` `developerMode` |
-| `uxplay` | iPhone | Screen mirroring (optional) | Your iPhone's screen live on this computer over Wi-Fi (AirPlay). | yes | 20 MB, 2–5 min | AUR `uxplay` build, enable avahi, open ufw ports for `uxplay -p` (TCP 7000,7001,7100; UDP 6000,6001,7011, 5353) |
+| `uxplay` | iPhone | Screen mirroring (optional) | Your iPhone's screen live on this computer over Wi-Fi (AirPlay). | yes | 20 MB, 2–5 min | AUR `uxplay` build, `gst-plugins-bad` and `gst-plugin-va` (hardware video decode), enable avahi, open ufw ports for `uxplay -p` (TCP 7000,7001,7100; UDP 6000,6001,7011, 5353) |
 | `wireshark` | iPhone | Wireshark (optional) | Opens the network recordings from the iPhone page's Network tab. | yes | about 100 MB, about a minute | `pacman -S --needed wireshark-qt` |
 | `app-integration` | System | App launcher entry | Adds iOS Studio to the app launcher. | – | seconds | runs `install.sh` |
 

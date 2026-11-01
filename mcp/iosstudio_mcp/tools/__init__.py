@@ -36,7 +36,7 @@ from ..state import AppState
 log = logging.getLogger("iosstudio.tools")
 
 # Order matters only for on_startup hooks. Missing modules (device/logs/crashes until they exist) are skipped.
-MODULES = ["status", "projects", "build", "account", "toolchain", "app", "device", "logs", "crashes", "network", "metrics", "files"]
+MODULES = ["status", "projects", "build", "account", "toolchain", "app", "device", "logs", "crashes", "screen", "network", "metrics", "files"]
 
 MAX_WAIT = 25  # seconds; stays under opencode's 30 s and Codex's 60 s default tool timeouts
 

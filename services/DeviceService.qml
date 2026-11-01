@@ -46,11 +46,21 @@ Item {
   property real mirrorFps: 1
   property string framePath: ""            // latest mirror frame (rotating files)
   property int frameSeq: 0
+  property string frameUrl: ""             // file://<framePath>?<seq>, set in one step so a frame is one change
   property string lastShot: ""             // latest one-off screenshot
   property bool shooting: false
   property var mirrorError: null
-  readonly property string screenSource: framePath !== "" ? "file://" + framePath + "?" + frameSeq
+  readonly property string screenSource: framePath !== "" ? frameUrl
                                        : (lastShot !== "" ? "file://" + lastShot : "")
+  // mirror modes (deviced mirror.start {mode}): "auto" tries the smooth stream (iOS 27+), else screenshots
+  property string mirrorMode: app.setting("mirrorMode", "auto")   // what the user picked: auto | screenshot
+  property string mirrorActive: ""         // what runs now: stream | screenshot ("" = not running)
+  property real measuredFps: 0
+  property string mirrorNotice: ""         // why it fell back to a lower frame rate
+  property var mirrorInfo: null            // last mirror.status (available modes)
+  // recording (deviced record.*): null | {state: recording|finishing|done|failed, seconds, bytes, path, …}
+  property var recording: null
+  readonly property bool recordingActive: !!recording && (recording.state === "recording" || recording.state === "finishing")
 
   // location
   property var location: null              // {lat, lon} while simulated
@@ -142,7 +152,7 @@ Item {
     onExited: function(code) {
       root.daemonReady = false
       root._failAll({ code: "unreachable", message: "The iPhone service restarted. Try again." })
-      root.mirroring = false
+      root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
       root.condition = null                     // the daemon's exit switched it off
       if (root.capturing) root.capture = Object.assign({}, root.capture, { running: false })
       if (code === 3) {         // no pymobiledevice3 python (bin/iosstudio-deviced)
@@ -198,13 +208,26 @@ Item {
       }
       break
     case "frame":
-      if (root.mirroring && data) { root.framePath = data.path; root.frameSeq = data.seq }
+      if (root.mirroring && data) { root.frameSeq = data.seq; root.frameUrl = "file://" + data.path + "?" + data.seq; root.framePath = data.path }
       break
     case "mirror":
       root.mirroring = !!(data && data.running)
-      if (data && data.fps) root.mirrorFps = data.fps
+      if (data && data.fps && (data.mode === "screenshot" || !data.mode)) root.mirrorFps = Math.min(8, data.fps)
+      root.mirrorActive = root.mirroring && data.mode ? data.mode : ""
+      root.measuredFps = root.mirroring && data.measuredFps ? data.measuredFps : 0
+      var notice = root.mirroring && data.notice ? data.notice : ""
+      if (notice !== "" && notice !== root.mirrorNotice) root.app.toast(notice, "info")
+      root.mirrorNotice = notice
       if (data && data.error) { root.mirrorError = data.error; root.app.toast(Model.errorMessage(data.error), "warn") }
       if (!root.mirroring) root.framePath = ""
+      break
+    case "record":
+      if (data) {
+        var was = root.recording ? root.recording.state : ""
+        root.recording = data
+        if (data.state === "done" && was !== "done" && !data.placeholder) root.app.notify("Screen recording saved", (data.seconds || 0).toFixed(0) + " s video", Model.Glyph.camera)
+        if (data.state === "failed" && was !== "failed" && data.error) root.app.toast(Model.errorMessage(data.error), "error")
+      }
       break
     case "appIcon":
       _patchApp(data.bundleId, { icon: data.path })
@@ -264,7 +287,7 @@ Item {
       if (root.profilesStatus !== "ready") refreshProfiles()
     } else if (c.state !== "connected" && c.state !== "locked" && (prev === "connected" || prev === "locked")) {
       root._disconnectedAt = Date.now()
-      root.mirroring = false
+      root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
       root.framePath = ""
     } else if (prev === "" && c.state !== "connected") {
       root._disconnectedAt = Date.now()
@@ -430,13 +453,61 @@ Item {
     })
   }
 
+  // fps only caps the screenshot mode; the stream sends what the phone gives (up to 30/s)
+  function _mirrorArgs(fps) {
+    var a = { mode: root.mirrorMode }
+    if (root.mirrorMode === "screenshot") a.fps = fps || root.mirrorFps
+    else a.fps = 30
+    return a
+  }
+
   function startMirror(fps) {
     root.mirrorError = null
-    request("mirror.start", { fps: fps || root.mirrorFps }, function(ok, d) {
-      if (ok) { root.mirroring = true; root.mirrorFps = d.fps }
+    request("mirror.start", _mirrorArgs(fps), function(ok, d) {
+      if (ok) { root.mirroring = true; if (d.mode && d.mode !== "starting") root.mirrorActive = d.mode }
       else { root.mirrorError = d; root.app.toast(Model.errorMessage(d), "error") }
     })
   }
+
+  function setMirrorMode(mode) {
+    if (mode === root.mirrorMode) return
+    root.mirrorMode = mode
+    root.app.setSetting("mirrorMode", mode)
+    root.mirrorNotice = ""
+    if (root.mirroring) request("mirror.start", _mirrorArgs(), null)
+  }
+
+  // DevicePhoneFrame.frameShown: tells the daemon this frame is on screen (backpressure)
+  function ackFrame(url) {
+    if (!root.mirroring) return
+    var q = String(url).lastIndexOf("?")
+    var seq = q >= 0 ? parseInt(String(url).slice(q + 1)) : 0
+    if (seq > 0) daemon.write({ id: 0, cmd: "mirror.ack", args: { seq: seq } })
+  }
+
+  function refreshMirrorInfo() {
+    request("mirror.status", {}, function(ok, d) { if (ok) root.mirrorInfo = d })
+  }
+
+  function startRecording(maxSeconds) {
+    root.recording = { state: "recording", seconds: 0, bytes: 0, maxSeconds: maxSeconds || 60, starting: true }
+    var args = { maxSeconds: maxSeconds || 60 }
+    if (!root.mirroring) args.mode = root.mirrorMode
+    request("record.start", args, function(ok, d) {
+      if (ok) root.recording = d
+      else { root.recording = { state: "failed", error: d }; root.app.toast(Model.errorMessage(d), "error") }
+    }, 60000)
+  }
+
+  function stopRecording() {
+    if (root.recording) root.recording = Object.assign({}, root.recording, { state: "finishing" })
+    request("record.stop", {}, function(ok, d) {
+      if (ok) root.recording = d
+      else root.recording = { state: "failed", error: d }
+    }, 180000)
+  }
+
+  function dismissRecording() { if (!root.recordingActive) root.recording = null }
 
   function stopMirror() {
     // keep the last frame visible as a still
@@ -447,7 +518,7 @@ Item {
 
   function setFps(fps) {
     root.mirrorFps = fps
-    if (root.mirroring) request("mirror.start", { fps: fps }, null)
+    if (root.mirroring && root.mirrorActive === "screenshot") request("mirror.start", { fps: fps }, null)
   }
 
   function setLocation(lat, lon, label) {

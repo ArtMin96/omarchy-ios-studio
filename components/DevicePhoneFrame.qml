@@ -7,12 +7,17 @@ import "../Model.js" as Model
 // A drawn iPhone (bezel, Dynamic Island) that shows a screen image when it has one.
 // It's a depiction of the device, so it keeps its physical rounded corners even on
 // square-cornered themes.
-//   DevicePhoneFrame { width: …; source: app.device.screenSource; live: app.device.mirroring }
+//   DevicePhoneFrame { width: …; source: app.device.screenSource; live: app.device.mirroring
+//                      onFrameShown: function(url) { app.device.ackFrame(url) } }
+// Mirror frames are double-buffered: the next one decodes in a hidden Image and the two swap
+// once it's Ready, so a frame is never shown half-loaded. A frame that arrives while one is
+// still decoding replaces the queued one (latest wins). frameShown(url) fires for each frame shown.
 Item {
   id: root
 
   property string source: ""                // file:// URL of a screenshot / mirror frame
   property bool live: false                 // shows the LIVE marker
+  property string liveLabel: "LIVE"         // its text (e.g. "REC 0:12" while recording)
   property bool dimmed: false               // device not connected
   property string glyph: Model.Glyph.phone  // placeholder glyph when there's no image
   property string placeholder: ""           // placeholder caption
@@ -20,17 +25,36 @@ Item {
   property real screenAspect: 1206 / 2622   // iPhone 17 Pro
   property bool clickable: false
   signal clicked()
+  signal frameShown(string url)
 
   readonly property bool landscape: rotationSteps % 2 === 1
   readonly property real _bodyW: landscape ? Math.min(height, width * screenAspect) : Math.min(width, height * screenAspect)
   readonly property real _bodyH: _bodyW / screenAspect
   readonly property real _bezel: Math.max(3, _bodyW * 0.035)
   readonly property real _radius: _bodyW * 0.16
-  // Mirror frames replace each other every ~0.5 s; keep showing the previous one while
-  // the next decodes (retainWhileLoading), so "has an image" survives the Loading state.
-  property bool _loadedOnce: false
-  readonly property bool hasImage: root.source !== "" && (shot.status === Image.Ready || (shot.status === Image.Loading && _loadedOnce))
-  onSourceChanged: if (source === "") _loadedOnce = false
+  // double buffer: the front Image is on screen, the back one loads the next frame
+  property bool _aFront: true
+  property string _pending: ""
+  readonly property var _front: _aFront ? imgA : imgB
+  readonly property var _back: _aFront ? imgB : imgA
+  readonly property bool hasImage: root.source !== "" && _front.status === Image.Ready && String(_front.source) !== ""
+
+  function _load(url) {
+    if (url === "") { imgA.source = ""; imgB.source = ""; root._pending = ""; return }
+    if (String(root._front.source) === url && root._front.status === Image.Ready) return
+    if (root._back.status === Image.Loading) { root._pending = url; return }
+    root._back.source = url
+  }
+  function _settled(img) {
+    if (img !== root._back) return
+    if (img.status === Image.Ready) {
+      root._aFront = (img === imgA)
+      root.frameShown(String(img.source))
+    }
+    if (root._pending !== "") { var next = root._pending; root._pending = ""; root._load(next) }
+  }
+  onSourceChanged: _load(root.source)
+  Component.onCompleted: _load(root.source)
 
   implicitWidth: Style.space(180)
   implicitHeight: implicitWidth / screenAspect
@@ -87,21 +111,6 @@ Item {
         color: Theme.isDark ? Qt.darker(Commons.Color.background, 1.6) : Qt.darker(Commons.Color.background, 1.18)
       }
 
-      Image {
-        id: shot
-        anchors.fill: parent
-        source: root.source
-        asynchronous: true
-        cache: false
-        smooth: true
-        mipmap: true
-        fillMode: Image.PreserveAspectCrop
-        sourceSize.height: Math.round(height * 2)
-        visible: false
-        retainWhileLoading: true
-        onStatusChanged: if (status === Image.Ready) root._loadedOnce = true
-      }
-
       Rectangle {
         id: mask
         anchors.fill: parent
@@ -110,13 +119,37 @@ Item {
         layer.enabled: true
       }
 
-      MultiEffect {
+      // Both buffers sit in one container; the rounded-corner mask is applied once, as its layer
+      // effect (a hidden container used as a MultiEffect source doesn't refresh its children).
+      Item {
+        id: shots
         anchors.fill: parent
-        source: shot
-        maskEnabled: true
-        maskSource: mask
         visible: root.hasImage
         opacity: root.dimmed ? 0.6 : 1
+        layer.enabled: true
+        layer.effect: MultiEffect { maskEnabled: true; maskSource: mask }
+        Image {
+          id: imgA
+          anchors.fill: parent
+          asynchronous: true
+          cache: false
+          smooth: true
+          fillMode: Image.PreserveAspectCrop
+          sourceSize.height: Math.round(parent.height * 2)
+          visible: root._aFront
+          onStatusChanged: if (status === Image.Ready || status === Image.Error) root._settled(imgA)
+        }
+        Image {
+          id: imgB
+          anchors.fill: parent
+          asynchronous: true
+          cache: false
+          smooth: true
+          fillMode: Image.PreserveAspectCrop
+          sourceSize.height: Math.round(parent.height * 2)
+          visible: !root._aFront
+          onStatusChanged: if (status === Image.Ready || status === Image.Error) root._settled(imgB)
+        }
       }
 
       // placeholder
@@ -176,7 +209,7 @@ Item {
               NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutSine }
               NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutSine } }
           }
-          Text { text: "LIVE"; color: "#ffffff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+          Text { text: root.liveLabel; color: "#ffffff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
         }
       }
     }
