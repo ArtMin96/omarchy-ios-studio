@@ -1,0 +1,6 @@
+{
+  "id": "list-detail",
+  "title": "List + detail",
+  "description": "A list of notes you can add, edit and delete, with a detail screen for each one.",
+  "glyph": "list"
+}

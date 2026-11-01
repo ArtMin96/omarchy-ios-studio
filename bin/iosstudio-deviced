@@ -1,0 +1,16 @@
+#!/bin/bash
+# iOS Studio device daemon: JSON lines on stdin/stdout (docs/deviced-protocol.md).
+# Runs under the pymobiledevice3 venv python (common.pymd3_python() order).
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# Demo mode (screenshots): a fake iPhone, stdlib only, never touches a real device.
+if [[ -n ${IOSSTUDIO_DEMO:-} ]]; then exec /usr/bin/python3 -I -B "$here/../helper/deviced_demo.py" "$@"; fi
+py=""
+# Ours first, then ~/pymobile3-venv (omarchy-apple-dev's own venv path).
+for cand in "${XDG_DATA_HOME:-$HOME/.local/share}/ios-studio/venv/bin/python" "$HOME/pymobile3-venv/bin/python"; do
+  if [[ -x "$cand" ]]; then py="$cand"; break; fi
+done
+if [[ -z "$py" ]]; then
+  printf '%s\n' '{"event":"ready","data":{"version":"1","pymobiledevice3":null,"error":{"code":"needs-setup","message":"The iPhone tools (pymobiledevice3) aren'"'"'t installed yet.","fix":{"label":"Install","page":"setup","step":"pymobiledevice3"}}}}'
+  exit 3
+fi
+exec "$py" -I -B "$here/../helper/deviced.py" "$@"

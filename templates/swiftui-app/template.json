@@ -1,0 +1,7 @@
+{
+  "id": "swiftui-app",
+  "title": "SwiftUI app",
+  "description": "One screen with a greeting and a tap counter. The simplest place to start.",
+  "glyph": "phone",
+  "default": true
+}

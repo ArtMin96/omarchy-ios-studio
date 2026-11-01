@@ -1,0 +1,6 @@
+{
+  "id": "tabs-app",
+  "title": "SwiftUI tabs app",
+  "description": "A tab bar with Home, Favorites and Settings screens, each in its own file.",
+  "glyph": "tabs"
+}

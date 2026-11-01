@@ -1,0 +1,409 @@
+# iOS Studio components
+
+Shared building blocks in `components/` on top of Omarchy's `qs.Ui` kit. Build every page
+from these, so all slices look the same and follow the live theme.
+
+```qml
+import QtQuick
+import QtQuick.Layouts
+import qs.Commons                  // Style, Util, Border
+import qs.Commons as Commons       // Commons.Color.*
+import qs.Ui                       // Button, TextField, ToggleSwitch, Dropdown, …
+import qs.components               // everything below
+import "../Model.js" as Model      // Glyph, formatters (from pages/ or services/)
+```
+
+Rules: sizes come only from `Style.font.*`, spacing from `Style.spacing.*` / `Style.space(px)`, radius from
+`Style.cornerRadius`, and colours from `Commons.Color.*` or `Theme.*`. No hard-coded px or hex values.
+Quickshell picks up new files in `components/` automatically (no qmldir). Add new shared pieces as **new
+files** there.
+
+> Note on names: several names are taken by QtQuick / QtQuick.Controls, and a page that imports
+> QtQuick.Controls would silently get the Qt type instead. So the palette singleton is **`Theme`** (not
+> Palette), the filter box is **`FilterField`** (not SearchField), the progress bar is **`ProgressTrack`**
+> (not ProgressBar), and the in-page tabs are **`PageTabs`** (not TabBar). Check the name against
+> `/usr/lib/qt6/qml/QtQuick/Controls/Basic/` before you add a new component.
+
+---
+
+## Page contract (how shell.qml talks to your page)
+
+```qml
+PageFrame {
+  id: page
+  required property var app              // AppState: services, nav, toast, confirm, settings
+  title: "iPhone"; subtitle: "…"
+
+  // all optional hooks, called by shell.qml when they exist:
+  function activated(params) {}          // on every nav() to this page (params = app.pageParams), incl. deep links
+  function handleKey(event) { return false }   // page cursor model; return true if consumed
+  function focusSearch() {}              // global "/"
+  function refresh() {}                  // global "r" (default: the page's service.refresh())
+  function goBack() {}                   // Esc when no overlay or text field has focus (`escape` is an illegal QML method name)
+}
+```
+
+- Pages are loaded lazily on first visit and **kept alive**, so page-local state survives switching.
+  Shared state belongs in the service (`app.device`, …).
+- Global keys that the shell handles first: `1`–`8` pages, `?` shortcut sheet, `r` refresh, `/` search,
+  `Ctrl+Tab` next page, and `Esc` (closes the top overlay, else leaves a text field, else calls `page.goBack()`).
+  The shell calls `handleKey(event)` **before** the global keys, so return `true` only for keys you use
+  (typically `j`/`k`/arrows, `Enter`, `x`, `c`). Use `Model.keyAction(event)` to map an event to
+  `"up"|"down"|"left"|"right"|"activate"|"delete"|"copy"|"home"|"end"|"pageUp"|"pageDown"|""`.
+- One cursor per page: keep `property int cursor` on the page, bind `hasCursor: page.cursor === index`
+  on rows, and set `page.cursor = index` from the rows' `hovered(true)`.
+
+## AppState (`app`)
+
+| Member | |
+|---|---|
+| `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and `activated(params)`. |
+| `app.openSetupStep(id)` | `nav("setup", {step: id})` |
+| `app.toast(text, level?)` | level: `info` (default), `ok`, `warn`, `error` |
+| `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. |
+| `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
+| `app.cli` | Shared `Cli` instance (see below). |
+| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`. Slices may add keys. |
+| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
+| `app.page`, `app.pageParams`, `app.windowFocused` | State |
+| `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir` | Paths |
+| `app.refreshAll()`, `app.refreshCurrent()` | |
+
+## Cli (one-shot helper calls), `Cli.qml`
+
+```qml
+app.cli.call(["toolchain", "status"], "",
+  function(data) { root.info = data; root.status = "ready" },
+  function(err)  { root.error = err;  root.status = "error" })   // err = {code, message, fix?, detail?}
+
+app.cli.call(["account", "login-check"], JSON.stringify({ password: pw }), ok, fail)   // secrets via stdin only
+app.cli.call(["account", "ds-list", "--cached"], "", ok, fail, { timeout: 30000 })
+```
+Every call spawns its own process, so calls run concurrently. `onFail` always gets an error object, even
+on a crash, garbage output or timeout (default 120 s). Services can also create their own `Cli {}` (import
+`".."` from `services/`). `cli.busy` is the number of calls in flight.
+
+## Stream (JSON-lines processes), `Stream.qml`
+
+```qml
+Stream {
+  id: install
+  onEvent: function(ev) {
+    if (ev.event === "step") …; else if (ev.event === "progress") …; else if (ev.event === "log") log.append(ev.text)
+    else if (ev.event === "prompt") promptSheet.ask(ev)        // answer: install.write({prompt: ev.id, value: v})
+    else if (ev.event === "notice") app.toast(ev.message, ev.level)
+  }
+  onFinished: function(ok, data, error) { … }                   // from {"event":"done"}, or an unexpected exit
+}
+install.start(["setup", "install", "--step", "swift"])
+install.stop()
+```
+Props: `program` (argv prefix, default the helper; set `[app.devicedPath]` for the daemon), `args`,
+`running`, `autoRestart` (1 s→30 s backoff), `quitMessage` (written before terminating on `stop()`),
+`environment`, `lastDone`, `exitCode`. Non-JSON stdout lines and all stderr lines arrive as
+`{event: "log", text, stream}`. Lines are capped at 512 KiB. Every other event (`notice` included)
+passes through unchanged.
+
+## Model.js
+
+`Model.Glyph.*` (Nerd Font glyphs): home rocket apple account phone hammer build play pause stop logs
+console crash gear sdk box toolbox wrench folder folderOpen folderPlus file check checkCircle circle dot warn
+error info help refresh sync download upload trash link linkOff wifi wifiOff usb battery batteryCharging
+lock unlock key cert shield shieldCheck clock timer location camera image search keyboard close plus minus
+chevronRight/Left/Down/Up arrowRight openExternal copy save export edit code swift disk memory
+cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
+sparkles terminal layers briefcase idCard xml.
+
+Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
+`formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
+`level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
+`matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`, `pageIndex(key)`, `resolvePage(name)`,
+`SHORTCUTS`.
+
+---
+
+## Theme (singleton), semantic colours
+
+| | |
+|---|---|
+| `Theme.success`, `Theme.warn` | Picked by hue from the theme's colors.toml, synthesised when the theme has no fitting colour. |
+| `Theme.error` (= urgent), `Theme.info` (= accent) | |
+| `Theme.dim`, `Theme.faint` | Secondary and tertiary text |
+| `Theme.hairline` | Separators and quiet borders |
+| `Theme.surface`, `Theme.surfaceRaised` | Card fills (resting / hover) |
+| `Theme.scrim`, `Theme.isDark` | |
+| `Theme.levelColor(level)`, `Theme.levelFill(level)` | `ok/warn/error/info/busy` → colour / tinted fill |
+
+```qml
+Rectangle { color: Theme.levelFill("warn"); border.color: Theme.levelColor("warn") }
+```
+
+## AppText
+
+Themed text. `size`: `caption | small | body | subtitle | title | heading | display | displayLarge`.
+`tone`: `primary | dim | faint | accent | ok | warn | error | info | inherit` (inherit keeps your `color`).
+`strong` sets bold.
+```qml
+AppText { text: "Signed in as artem@…"; tone: "dim"; size: "small"; elide: Text.ElideRight; Layout.fillWidth: true }
+```
+
+## Icon
+
+```qml
+Icon { glyph: Model.Glyph.phone; size: Style.font.iconLarge; color: Theme.dim; spinning: false }
+```
+
+## ActionButton
+
+`text`, `glyph`, `kind: "primary" | "secondary" (default) | "ghost" | "danger"`, `busy` (spinner, ignores
+clicks), `enabled`, `compact`, `tooltip`, `hasCursor`; signals `clicked()`, `hovered(bool)`.
+Use one `primary` per view, for the main call to action.
+```qml
+ActionButton { text: "Run on iPhone"; glyph: Model.Glyph.play; kind: "primary"; busy: svc.building; onClicked: svc.run(p) }
+```
+
+## IconButton
+
+Glyph-only toolbar or row button: `glyph`, `tooltip`, `danger` (turns urgent on hover), `busy`, `enabled`.
+```qml
+IconButton { glyph: Model.Glyph.trash; tooltip: "Uninstall"; danger: true; onClicked: page.uninstall(app) }
+```
+
+## Card
+
+Quiet raised surface with an optional header. Props: `title`, `subtitle`, `glyph`, `glyphColor`,
+`actions` (list, top right), `clickable` + `clicked()`, `hasCursor`, `accentEdge`, `edgeColor`,
+`contentSpacing`. Children go into a ColumnLayout, so use `Layout.fillWidth: true` on them.
+```qml
+Card {
+  Layout.fillWidth: true
+  title: "Certificates"; glyph: Model.Glyph.cert; subtitle: "2 active"
+  actions: [ IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh"; onClicked: svc.refresh() } ]
+  KeyValueList { Layout.fillWidth: true; rows: [...] }
+}
+```
+
+## PageFrame
+
+Standard page: margins, `PageHeader`, and a scrolling, width-capped ColumnLayout. Props: `title`,
+`subtitle`, `glyph`, `actions`, `status`, `scrollable` (false = content fills the remaining height, for
+LogView or big ListViews), `maxContentWidth`, `spacing`; `scrollToItem(item)`; `flickable`.
+```qml
+PageFrame {
+  required property var app
+  title: "Logs"; scrollable: false
+  LogView { Layout.fillWidth: true; Layout.fillHeight: true }
+}
+```
+
+## PageHeader
+
+`title`, `subtitle`, `glyph`, `status` (an item next to the title, e.g. a StatusPill), `actions` (top right).
+PageFrame already includes one.
+
+## SectionHeader
+
+Small uppercase group label with a hairline, an optional `detail` (e.g. a count) and `trailing` items.
+```qml
+SectionHeader { Layout.fillWidth: true; text: "Installed apps"; detail: "12"; trailing: [ IconButton { glyph: Model.Glyph.refresh } ] }
+```
+
+## StatusPill
+
+`level` (`ok|warn|error|info|busy`, aliases normalised), `text`, `glyph` (override), `showGlyph`,
+`quiet` (no fill, for dense rows). `busy` spins.
+```qml
+StatusPill { level: exp.level; text: exp.text }   // exp = Model.expiryStatus(profile.expires)
+```
+
+## Badge
+
+A dot (no `text`) or a small count chip. `level`, `text`.
+```qml
+Badge { level: "warn"; text: "3" }
+```
+
+## InfoRow / KeyValueList
+
+`InfoRow`: `label`, `value`, `glyph`, `level` (tints the value and adds a glyph), `copyable` (copies with
+wl-copy, emits `copied(value)`), `labelWidth`, `trailing`.
+`KeyValueList`: `rows: [{label, value, level?, glyph?, copy?}]`, `labelWidth`, `separators`; `copied(value)`.
+```qml
+KeyValueList {
+  Layout.fillWidth: true
+  rows: [ { label: "Model", value: d.model }, { label: "UDID", value: d.udid, copy: true },
+          { label: "Developer Mode", value: d.devMode ? "On" : "Off", level: d.devMode ? "ok" : "warn" } ]
+  onCopied: function(v) { app.toast("Copied") }
+}
+```
+
+## ListRow
+
+Selectable row on the shared cursor model (CursorSurface). Props: `glyph`, `glyphColor`, `title`,
+`subtitle`, `meta`, `badgeLevel`, `hasCursor`, `current`, `trailing`, `leading`; signals `clicked()`,
+`doubleClicked()`, `hovered(bool)`.
+```qml
+Repeater {
+  model: svc.apps
+  delegate: ListRow {
+    required property var modelData; required property int index
+    Layout.fillWidth: true
+    glyph: Model.Glyph.apps; title: modelData.name; subtitle: modelData.bundleId; meta: modelData.version
+    hasCursor: page.cursor === index
+    onHovered: function(h) { if (h) page.cursor = index }
+    trailing: [ IconButton { glyph: Model.Glyph.play; tooltip: "Launch"; onClicked: svc.launch(modelData) } ]
+  }
+}
+```
+
+## PageTabs
+
+In-page tabs with an accent underline: `tabs: [{key, label, glyph?, count?, level?}]`, `current`,
+`cursorIndex`; `selected(key)`.
+```qml
+PageTabs { Layout.fillWidth: true; tabs: [{key: "live", label: "Live"}, {key: "crashes", label: "Crashes", count: 2, level: "warn"}]; current: page.tab; onSelected: function(k) { page.tab = k } }
+```
+
+## ButtonGroupLite
+
+Compact segmented filter: `options: [{value, label}]`, `value`; `picked(value)`. (For forms, `qs.Ui`
+`ButtonGroup` also works.)
+
+## FilterField
+
+`text`, `placeholder`, `field` (the TextField), `editing`; `focusField()`, `clear()`; signals
+`accepted(text)`, `cleared()`. Esc clears, and a second Esc hands focus back to the page.
+```qml
+FilterField { id: search; placeholder: "Filter apps" }
+function focusSearch() { search.focusField() }
+```
+
+## EmptyState
+
+`glyph`, `title`, `text`, `actionText` + `actionGlyph` → `action()`, `secondaryText` +
+`secondaryGlyph` → `secondary()`, `compact`, `level` (tints the glyph disc).
+```qml
+EmptyState { Layout.fillWidth: true; glyph: Model.Glyph.phone; title: "No iPhone connected"
+  text: "Plug it in with a USB cable and tap Trust on the phone."; actionText: "Pairing help"; onAction: app.openSetupStep("pair") }
+```
+
+## ErrorState
+
+Plain-language error with a one-click fix. `app` (needed for the fix button), `error` (the helper error
+object `{code, message, fix?: {label, page, step?, action?, url?}, detail?}`), or `message`; `title`,
+`compact`, `banner` (slim inline strip), `showRetry`, `retryText`; signals `retry()`, `fixed(fix)`.
+The fix button opens `fix.url` externally when present, else calls `app.nav(fix.page, fix)`.
+"Show details" reveals `detail`, selectable.
+```qml
+ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; visible: svc.status === "error"; onRetry: svc.refresh() }
+ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; banner: true }
+```
+
+## LoadingState / Skeleton / Spinner
+
+```qml
+LoadingState { Layout.fillWidth: true; text: "Asking Apple for your certificates…"; detail: "This can take about 10 seconds." }
+Skeleton { Layout.fillWidth: true; lines: 4; rowHeight: Style.space(36); gap: Style.spacing.md }   // list placeholder
+Spinner { size: Style.font.heading; running: true; color: Commons.Color.accent }
+```
+Prefer `Skeleton` for lists and cards, so the layout doesn't jump when the data arrives.
+
+## ProgressTrack
+
+`value` (0…1), `indeterminate`, `level` ("" = accent, ok, warn, error), `label` (left caption),
+`trailing` (right caption), `thickness`.
+```qml
+ProgressTrack { Layout.fillWidth: true; value: ev.fraction; label: ev.detail; trailing: Model.formatDuration(ev.eta) + " left" }
+```
+
+## StepRow
+
+A wizard step. Props: `number`, `title`, `description`, `state`
+(`done|missing|running|failed|pending|optional|skipped`), `meta` ("≈ 900 MB · 3 min"), `actionText`,
+`actionGlyph`, `actionKind` (auto: primary when missing or failed), `actionEnabled`, `actionBusy`
+(default `state === "running"`), `progress` (-1 hides it), `progressIndeterminate`, `progressText`,
+`progressTrailing`, `logLines` (array of strings or `{text, level}`), `errorText`, `expanded`,
+`hasCursor`, `extra` (more controls under the description); signals `action()`, `hovered(bool)`,
+`toggled(expanded)`.
+```qml
+StepRow {
+  Layout.fillWidth: true
+  number: index + 1; title: s.title; description: s.description; state: s.state; meta: s.meta
+  actionText: s.state === "done" ? "Repair" : "Install"; actionGlyph: Model.Glyph.download
+  progress: s.progress === undefined ? -1 : s.progress; progressText: s.detail
+  logLines: svc.logs[s.id] || []; errorText: s.error ? s.error.message : ""
+  onAction: svc.install(s.id)
+}
+```
+
+## LogView
+
+Fast, bounded, monospace log list. Feed it with `lines: [...]` (declarative) or `append(text, level?, meta?)`
+/ `appendMany(arr)` / `clear()` (streams; batched every 80 ms, keeps the last `maxLines`, default 5000).
+Props: `follow`, `paused`, `wrap`, `showToolbar` (filter field, All/Warnings/Errors, pause, follow, copy,
+clear), `toolbarExtra` (your own toolbar items), `showMeta` (left column from `meta`, e.g. the process
+name), `filter`, `levelFilter` (`""|"info"|"warn"|"error"` = minimum level), `emptyText`; read-only
+`count`, `shownCount`; `text()`, `copyAll()`, `scrollToEnd()`; signals `lineCopied(text)` (on a
+double-click), `copiedAll(n)`. The level is guessed from the text when omitted.
+```qml
+LogView { id: log; Layout.fillWidth: true; Layout.fillHeight: true; onCopiedAll: function(n) { app.toast("Copied " + n + " lines") } }
+Connections { target: app.device; function onDaemonEvent(name, data) { if (name === "syslog") log.append(data.message, data.level, data.process) } }
+```
+
+## Sheet
+
+In-window modal for forms (sign-in, 2FA, pickers). Declare it anywhere in your page; it lifts itself
+into the window overlay, so the scrim covers the whole app. Props: `title`, `subtitle`, `glyph`, `opened`,
+`dismissible`, `busy` (progress strip, blocks dismissal), `preferredWidth`, `footer` (buttons, right
+aligned). Body children go into a ColumnLayout. `open()`, `close()`; signals `shown()`, `closed()`.
+Esc, the close button or a scrim click dismiss it.
+```qml
+Sheet {
+  id: signIn
+  title: "Sign in to Apple ID"; subtitle: "Your password is sent only to Apple."; glyph: Model.Glyph.apple
+  busy: svc.signingIn
+  TextField { id: email; Layout.fillWidth: true; placeholderText: "Apple ID (email)" }
+  TextField { id: pw; Layout.fillWidth: true; placeholderText: "Password"; password: true; onAccepted: go() }
+  footer: [ ActionButton { text: "Cancel"; kind: "ghost"; onClicked: signIn.close() },
+            ActionButton { text: "Sign in"; kind: "primary"; onClicked: go() } ]
+  onShown: email.forceActiveFocus()
+}
+```
+
+## ConfirmHost / ToastHost / ShortcutSheet / Sidebar / Host
+
+Hosted by `shell.qml`. Pages use them only through `app.confirm(...)`, `app.toast(...)` and
+`app.shortcutsOpen`. `Host` (singleton) is the overlay registry: `Host.depth > 0` means an overlay owns
+the keyboard.
+
+## Also available from qs.Ui
+
+`Button`, `ButtonGroup`, `TextField` (`password: true`), `NumberField`, `Toggle` (labelled row),
+`ToggleSwitch`, `Dropdown`, `SearchableDropdown`, `MultiSelect`, `PanelSeparator`, `PanelToolTip`,
+`CursorSurface`, `BorderSurface`. See `/usr/share/omarchy/shell/Ui/*.qml`. Don't use `KeyboardPanel`,
+`PopupCard`, `Panel` or the bar widgets (they are layer-shell only).
+
+---
+
+## Final integration additions
+
+- **QuietNote** (new): slim, left-aligned "nothing here yet" line for small dashboard sections where a full
+  `EmptyState` would outweigh the lists beside it. Props: `glyph`, `title`, `text`, `level` (tints the glyph).
+  ```qml
+  QuietNote { Layout.fillWidth: true; glyph: Model.Glyph.hammer; title: "No builds yet"; text: "Builds you run show up here." }
+  ```
+- **ListRow**: read-only `narrow` (width < 560 px). Narrow rows move `meta` under the subtitle so the title
+  keeps its room; wide rows elide `meta` at 35 % of the row. Hide optional trailing items with `!row.narrow`.
+- **StepRow**: read-only `narrow` (width < 560 px). The action button and `meta` drop under the description
+  instead of squeezing it.
+- **LogView**: the toolbar wraps onto two rows below ~640 px (the line count hides). `copyAll()` and the
+  double-click copy pipe text to `wl-copy` over stdin (no 128 KB argv limit).
+- **Sidebar**: `compact` (icons only, tooltips, status dots). shell.qml turns it on below 920 px of window width.
+- **Deep links**: `app.navLink(link, tab?)` accepts `"logs"`, `"logs:crashes"`, `"logs/crashes"` or an alias
+  that implies a tab (`"crashes"`). IPC: `nav <page[:tab]>` and `navTab <page> <tab>`; the launcher passes its
+  argument through, so `ios-studio crashes` opens Logs → Crashes. Pages read the tab from `params.tab`.
+  A third segment is the action: `device:screen:mirror` opens the Screen tab and starts the live view.
+- **Demo mode** (`ios-studio --demo[=ready|expiring|fresh]`, env `IOSSTUDIO_DEMO`): the helper answers from
+  `helper/demo.py` and the daemon is `helper/deviced_demo.py` (a made-up iPhone, account and projects; no side
+  effects). AppState then uses `$XDG_RUNTIME_DIR/ios-studio-demo/` for settings, state and cache. Use it for
+  screenshots so no personal data shows.

@@ -1,0 +1,42 @@
+#!/bin/bash
+# iOS Studio launcher: focus the running window or start the app.
+#   ios-studio            open / focus
+#   ios-studio <page>     open / focus, then jump to a page (home, setup, account, device, projects, logs, toolchain, settings)
+#   ios-studio logs:crashes   …and a tab on that page (also: ios-studio crashes)
+#   ios-studio --demo[=ready|expiring|fresh] [page]   made-up account, iPhone and projects (for screenshots)
+#   ios-studio --log [-f|-t N]   print the log of the running app (qs log options pass through)
+#   ios-studio --uninstall       remove the launcher entry, icon, hooks and Hyprland rules (keeps the checkout and your data)
+set -u
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+repo="$(cd "$(dirname "$self")/.." && pwd)"
+demo=""
+case "${1:-}" in
+  --demo) demo=ready; shift ;;
+  --demo=*) demo="${1#--demo=}"; shift ;;
+  --log) shift; exec qs log -p "$repo" "$@" ;;
+  --uninstall) exec "$repo/install.sh" --uninstall ;;
+  -h|--help) sed -n '2,/^set -u/{/^set -u/d;s/^# \{0,1\}//;p}' "$self"; exit 0 ;;
+esac
+page="${1:-}"
+
+running() { hyprctl clients -j 2>/dev/null | jq -e '.[] | select(.class == "ios-studio")' >/dev/null 2>&1; }
+
+was_running=0
+running && was_running=1
+
+env_prefix=""
+[[ -n $demo ]] && env_prefix="env IOSSTUDIO_DEMO=$(printf '%q' "$demo") "
+launch=(omarchy-launch-or-focus '^ios-studio$' "uwsm-app -- ${env_prefix}qs -n -p $(printf '%q' "$repo")")
+
+if [[ -z $page ]]; then exec "${launch[@]}"; fi
+
+"${launch[@]}" >/dev/null 2>&1 < /dev/null &
+disown
+
+# IPC answers once the config has loaded; retry briefly while it starts.
+tries=$(( was_running ? 10 : 40 ))
+for ((i = 0; i < tries; i++)); do
+  if qs ipc -p "$repo" call iosstudio nav "$page" >/dev/null 2>&1; then exit 0; fi
+  sleep 0.25
+done
+exit 1
