@@ -220,7 +220,7 @@ the tunnel is up.
 | `metrics.state` | MetricsSession | a metrics session started, changed status or stopped (also in the welcome) |
 | `transfer` | Transfer (see [Files](#files)) | during `media.pull`, `container.pull/push` and inside `cameratest.run`, at most 4 a second, plus one final `done` / `failed` / `cancelled` |
 | `cameratest` | `{testId, step, state, title, detail}` | each step of `cameratest.run` (`running`, `done`, `failed`) |
-| `debugSymbols` | `{phase, fraction?, received?, total?, rate?, eta?, done?, count?, message?, ready?, error?, ts}` | during a `debug.symbols` download (at most twice a second) |
+| `debugSymbols` | `{phase, fraction?, received?, total?, rate?, eta?, done?, count?, message?, ready?, error?, sizeOnDisk?, libs?, ts}` | during a `debug.symbols` download or unpack (at most twice a second) |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -278,7 +278,7 @@ DeviceInfo:
 ```
 
 Feature modules add their own fields: `location` (`{lat, lon}` or `null`), `condition` (see
-[Network conditions](#network-conditions)) and `debugSymbols` (bool, see [Debugging](#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)).
+[Network conditions](#network-conditions)) `debugSymbols` (bool: a usable set is there) and `debugSymbolsState` (the `state` below, see [Debugging](#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)).
 Any field may be `null` when unknown (e.g. `battery` if the diagnostics service failed).
 
 ### Apps and processes
@@ -888,9 +888,9 @@ process over the shared DVT connection (`ProcessControl`). `bin/iosstudio-helper
 
 | cmd | args | reply data |
 |---|---|---|
-| `debug.start` | `{bundleId, launch?: "auto" \| "attach" \| "suspended" \| "none", args?: [str], env?: {}, udid?}` | `{bundleId, port, host, pid, launched, remotePath, executable, ios, build, sysroot, symbolsReady}` |
+| `debug.start` | `{bundleId, launch?: "auto" \| "attach" \| "suspended" \| "none", args?: [str], env?: {}, udid?}` | `{bundleId, port, host, pid, launched, remotePath, executable, ios, build, sysroot, symbolsReady, symbolsState, symbolsUpdate}` |
 | `debug.stop` | `{bundleId, kill?: bool, pid?}` | `{bundleId, stopped, sharedWith, killed}` |
-| `debug.symbols` | `{action?: "status" \| "download" \| "cancel", force?: bool, udid?}` | Symbols status (below); `download` adds `{started: true, total}` |
+| `debug.symbols` | `{action?: "status" \| "download" \| "unpack" \| "cancel" \| "remove", force?: bool, keepDownload?: bool, udid?}` | Symbols status (below); `download` and `unpack` add `{started: true}`, `download` also `total` |
 
 `launch`: `attach` needs the app running (else `not-running`). `suspended` launches it paused,
 killing a running copy, so startup code can be debugged. `auto` (default) attaches when it runs
@@ -905,30 +905,82 @@ for a suspended launch that never got attached.
 
 `remotePath` is the executable's path on the phone (lldb needs it to match the local binary to the
 installed one). `sysroot` is `~/.cache/ios-studio/DeviceSupport/<ios> (<build>)`, the directory lldb
-gets as `platform select remote-ios --sysroot`; `symbolsReady` says whether its `Symbols/` is complete.
+gets as `platform select remote-ios --sysroot`; `symbolsReady` says whether its `Symbols/` is usable, and
+`symbolsState`/`symbolsUpdate` are the status fields below (the helper warns that attaching is slow
+when `symbolsUpdate.needed`).
 
 Errors besides the common ones: `not-found` (not installed), `not-debuggable` (App Store or system
-app), `not-running`, `busy`, `no-space`, `needs-ipsw` (fix → Setup step `ipsw`).
+app), `not-running`, `busy`, `no-space`, `needs-ipsw` (fix → Setup step `ipsw`), `no-download`
+(`unpack` with no whole download kept).
 
 Symbols status:
 
 ```json
 {"ios": "27.2", "build": "24B115", "dir": "<home>/.cache/ios-studio/DeviceSupport/27.2 (24B115)",
- "sysroot": "…same…", "ready": false, "downloading": false, "estimatedBytes": 6000000000,
- "estimated": true, "freeBytes": 120000000000, "ipsw": true, "sizeOnDisk": null,
- "progress": {"phase": "downloading", "fraction": 0.42, "received": 2520000000, "total": 6000000000}}
+ "sysroot": "…same…", "state": "outdated", "ready": true,
+ "update": {"needed": true, "action": "download",
+            "reason": "These symbols were unpacked by an older version of iOS Studio and miss system libraries, …"},
+ "libs": 80, "format": 1, "currentFormat": 2, "sizeOnDisk": 168505004,
+ "downloadKept": 0, "canUnpack": false, "keepDownload": false, "downloading": false,
+ "estimatedBytes": 7300000000, "estimated": false, "freeBytes": 120000000000, "ipsw": true,
+ "progress": {"phase": "downloading", "fraction": 0.42, "received": 3066000000, "total": 7300000000}}
 ```
 
-`download` lists the phone's dyld shared cache (`com.apple.dt.remoteFetchSymbols`), checks that the
-download plus 1 GB fits on the disk (`no-space` otherwise), and returns at once. The download runs
-in the background with `debugSymbols` events: `downloading` (bytes, rate, ETA), `extracting`
-(`ipsw dyld extract` of `/usr/lib/swift/*` and `libobjc`, `done` of `count`), then `done`,
-`failed` or `cancelled`. Afterwards the cache itself is deleted and only `Symbols/` stays (a few
-hundred MB), marked complete with `Symbols/.ios-studio-complete`. Files that were already fully
-downloaded are kept when an interrupted download starts again. The download is a resource
-(`debug.symbols`, scope `tunnel`) held by the client that started it, so it stops when that
-client disconnects or the tunnel drops. `estimatedBytes` is a 6 GB guess until the phone has been
-asked once (`estimated: false` afterwards). `device.info` also reports `debugSymbols: bool`.
+`state` is one of:
+
+| state | meaning | `ready` |
+|---|---|---|
+| `missing` | no set for this iOS build | false |
+| `downloading`, `extracting` | a download or unpack is running (`progress`) | as before it started |
+| `ready` | a set of the current format with every library it lists | true |
+| `outdated` | a set from an older format (the plain-text marker of the first version is format 1) | true |
+| `incomplete` | a set of the current format with libraries missing (`missing`: their paths) | true while libswiftCore is there |
+| `failed` | the last run failed and there's no set (`error`) | false |
+
+An `outdated` or `incomplete` set still works, so `ready` stays true, but `update.needed` is true
+and `update.reason` says why in plain words. When the last run failed but an older set is still
+there, `state` stays `outdated` or `incomplete` and `error` holds the failure. `update.action` is
+`unpack` when a whole download is kept (`canUnpack`), else `download`. `libs` counts the unpacked
+libraries, `sizeOnDisk` is the size of `Symbols/`, `downloadKept` the size of `dsc/`.
+
+What gets unpacked (`SYSTEM_LIBS` in `helper/deviced_features/debug.py`, format 2): every dylib under
+`/usr/lib/swift/`, plus `/usr/lib/libobjc.A.dylib`, `/usr/lib/system/libdispatch.dylib`,
+`libsystem_pthread`, `libsystem_kernel`, `libsystem_platform`, `libsystem_c` and `libdyld` (all
+`/usr/lib/system/*.dylib`), `/usr/lib/libc++.1.dylib` and `/usr/lib/libc++abi.dylib`. libdispatch
+matters most: while attaching, debugserver asks lldb for `dispatch_queue_offsets` once per loaded
+image (about a thousand `qSymbol` round trips), and without libdispatch in the sysroot lldb can't
+answer, so attaching takes minutes over Wi-Fi. Changing the list means bumping `FORMAT`, which
+turns existing sets `outdated`.
+
+Actions:
+
+- `download` lists the phone's dyld shared cache (`com.apple.dt.remoteFetchSymbols`), checks that
+  the download plus 1 GB fits on the disk (`no-space` otherwise), and returns at once. It runs in
+  the background with `debugSymbols` events: `downloading` (bytes, rate, ETA), `extracting`
+  (`ipsw dyld extract`, four at a time, `done` of `count`), then `done`, `failed` or `cancelled`.
+  The download goes to `dsc/` (files already there at full size are kept, so an interrupted
+  download resumes) and is marked whole with `dsc/.ios-studio-downloaded`. The libraries are
+  unpacked into `Symbols.new/`, marked with `Symbols.new/.ios-studio-complete` (JSON `{format,
+  libs, failed, ios, build, created}`), and only then swapped in place of `Symbols/`, so an older
+  set keeps working until the new one is ready. On a set that is already `ready`, `download` does
+  nothing unless `force` is set.
+- `unpack` runs the extraction again from a kept, whole `dsc/` without downloading (`no-download`
+  when there isn't one). It needs 1 GB free.
+- `cancel` stops either. A cancelled download deletes its partial `dsc/`; a cancelled unpack keeps
+  the whole download. A failed run keeps `dsc/` (a partial one resumes, a whole one can be
+  unpacked again) and never touches the existing set.
+- `remove` deletes `Symbols/` and `dsc/` for this iOS build (`busy` while a run is going).
+- `keepDownload` (with any action) is stored in `~/.local/state/ios-studio/debug-symbols.json`.
+  When it's off, a finished run deletes `dsc/`; turning it off while the set is `ready` deletes a
+  kept `dsc/` at once.
+
+A run is a resource (`debug.symbols`, scope `tunnel` for a download, `session` for an unpack) held
+by the client that started it, so it stops when that client disconnects or the tunnel drops.
+`estimatedBytes` is a 7 GB guess until the phone has been asked once (`estimated: false`
+afterwards). The demo daemon keeps a made-up set whose starting state follows the scenario (`ready`,
+`expiring` → `outdated`, `fresh` → `missing`, or `IOSSTUDIO_DEMO_SYMBOLS`), and
+`debug.symbols {action: "demo", state}` switches it to `missing`, `outdated`, `incomplete`,
+`failed`, `ready` or `kept` (ready, with the download kept).
 
 #### The helper side (`iosstudio-helper debug ...`)
 

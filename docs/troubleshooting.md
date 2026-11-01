@@ -115,9 +115,13 @@ The phone only reports hangs when Hang Detection is on. On the iPhone, open Sett
 
 The debugger is lldb from the Swift toolchain, and it needs Python 3.12. Install "Debugger support" in Setup; it builds Python from source, so it takes a while. If the message says lldb itself is missing or didn't start, install or repair Swift in Setup.
 
+### Attaching the debugger takes minutes
+
+Look at the Debug symbols card on iPhone › Debug. If it says Needs an update or Incomplete, press Update symbols (or Unpack again, if it offers that). Symbols unpacked by older versions of iOS Studio don't include libdispatch, so while attaching lldb has to look up one symbol about a thousand times over the connection, and over Wi-Fi that takes a couple of minutes with the app paused. Your current symbols keep working while the update runs. A USB cable also makes attaching faster.
+
 ### "The debug symbols need about N GB free while they download"
 
-The download is about 6 GB per iOS version, and only a few hundred MB stay once it's done. Free some space (Toolchain shows what can go safely), then try again. Debugging works without the symbols, but Swift strings and arrays can read wrong and system frames show only library names.
+The download is about 7 GB per iOS version, and only a few hundred MB stay once it's done. Free some space (Toolchain shows what can go safely), then try again. Debugging works without the symbols, but Swift strings and arrays can read wrong and system frames show only library names.
 
 ## Building
 

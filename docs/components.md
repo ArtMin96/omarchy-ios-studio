@@ -514,6 +514,8 @@ the keyboard.
   ```
 - **DeviceDebugView**: the iPhone › Debug tab. Props: `app`. It loads itself when it becomes visible (`debug check`,
   `debug sources`, `debug.symbols`) and owns the backtrace stream; the breakpoint session is a `DebugSessionPanel`.
+  Its Debug symbols card follows the status `state`: a StatusPill, the reason or error, one primary fix
+  (`symFix`: download, update, unpack or retry), Remove (confirmed) and the Keep the download switch.
 - **DebugSessionPanel**: a breakpoint session on one app (helper `debug session` as a `Stream`; commands are
   written to its stdin). Props: `app`, `bundleId`, `appName`, `appRunning`, `sources` (`debug sources` files),
   `hasLocalBuild`, `blocked`; read-only `phase` (`idle|starting|running|stopped|ended|failed`) and `live`.

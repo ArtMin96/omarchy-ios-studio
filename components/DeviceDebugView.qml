@@ -7,8 +7,10 @@ import ".."
 import "../Model.js" as Model
 
 // iPhone › Debug: LLDB on your own apps. Pick an app, capture a backtrace of every thread, or run a
-// breakpoint session (DebugSessionPanel). The symbols card downloads the iPhone's Swift runtime once
-// so lldb reads Swift values right. Helper group `debug`, daemon `debug.symbols`.
+// breakpoint session (DebugSessionPanel). The symbols card downloads the iPhone's Swift runtime and
+// system libraries once per iOS build so lldb reads Swift values right and attaches quickly; it
+// shows whether the set is ready, outdated, incomplete or failed and offers the one fix for each.
+// Helper group `debug`, daemon `debug.symbols`.
 ColumnLayout {
   id: root
   required property var app
@@ -43,6 +45,19 @@ ColumnLayout {
   readonly property var symP: symProgress
   readonly property bool symDownloading: !!(symbols && symbols.downloading) || (!!symP && (symP.phase === "downloading" || symP.phase === "extracting" || symP.phase === "starting"))
   readonly property bool symEnough: !symbols || !symbols.freeBytes || symbols.freeBytes >= (symbols.estimatedBytes || 0)
+  // missing | downloading | extracting | ready | outdated | incomplete | failed
+  readonly property string symState: !symbols ? "" : (symDownloading ? (symP && symP.phase === "extracting" ? "extracting" : "downloading")
+                                                     : (symbols.state || (symbols.ready ? "ready" : "missing")))
+  readonly property bool symCanUnpack: !!(symbols && symbols.canUnpack)
+  readonly property bool symNeedsUpdate: !!(symbols && symbols.update && symbols.update.needed) && !symDownloading
+  // the one fix the card offers: download | update | unpack | retry | "" (nothing to do)
+  readonly property string symFix: {
+    var st = root.symState
+    if (st === "" || st === "ready" || st === "downloading" || st === "extracting") return ""
+    if (root.symCanUnpack) return "unpack"
+    return st === "missing" ? "download" : (st === "failed" ? "retry" : "update")
+  }
+  readonly property bool symOnDisk: !!symbols && ((symbols.sizeOnDisk || 0) > 0 || (symbols.downloadKept || 0) > 0)
 
   function check() {
     root.checkStatus = "loading"
@@ -87,23 +102,43 @@ ColumnLayout {
     })
   }
 
+  function symRequest(args, timeout) {
+    root.symBusy = true
+    root.svc.request("debug.symbols", args, function(ok, d) {
+      root.symBusy = false
+      if (ok) { root.symbols = d; root.symbolsError = null; root.symProgress = d.progress || null }
+      else root.symbolsError = d
+    }, timeout || 30000)
+  }
   function downloadSymbols() {
     var s = root.symbols || {}
-    var need = s.estimatedBytes || 0
+    var need = Model.formatBytes(s.estimatedBytes || 0)
+    var update = root.symState === "outdated" || root.symState === "incomplete"
+    var keep = s.keepDownload ? "keeps the download (Keep the download is on)" : "keeps only those libraries (a few hundred MB) and deletes the rest"
     root.app.confirm({
-      title: "Download debug symbols?",
-      message: "iOS Studio copies your iPhone's system libraries (about " + Model.formatBytes(need) + ") over the connection, keeps only the Swift runtime (a few hundred MB) and deletes the rest. It needs that much free space while it runs, and takes 10–30 minutes over Wi-Fi. Keep the iPhone awake and this window open.",
-      confirmText: "Download", glyph: Model.Glyph.download,
-      onConfirm: function() {
-        root.symBusy = true
-        root.svc.request("debug.symbols", { action: "download" }, function(ok, d) {
-          root.symBusy = false
-          if (ok) { root.symbols = d; root.symbolsError = null }
-          else root.symbolsError = d
-        }, 120000)
-      }
+      title: update ? "Update debug symbols?" : "Download debug symbols?",
+      message: "iOS Studio copies your iPhone's system libraries (about " + need + ") over the connection, unpacks the Swift runtime and the system libraries lldb needs, then " + keep + ". It needs that much free space while it runs and takes 10–30 minutes over Wi-Fi. Keep the iPhone awake and this window open."
+               + (update ? " The symbols you have now keep working until the new ones are ready." : ""),
+      confirmText: update ? "Update" : "Download", glyph: Model.Glyph.download,
+      onConfirm: function() { root.symRequest({ action: "download", force: update }, 120000) }
     })
   }
+  function unpackSymbols() { root.symRequest({ action: "unpack" }) }
+  function fixSymbols() {
+    if (root.symFix === "unpack") root.unpackSymbols()
+    else root.downloadSymbols()
+  }
+  function removeSymbols() {
+    var s = root.symbols || {}
+    var size = (s.sizeOnDisk || 0) + (s.downloadKept || 0)
+    root.app.confirm({
+      title: "Remove debug symbols?",
+      message: "This deletes the debug symbols for iOS " + s.ios + " (" + s.build + ")" + (s.downloadKept ? " and the kept download" : "") + ", " + Model.formatBytes(size) + " in all. Debugging still works without them, but Swift values can read wrong and attaching is slower. Getting them back means downloading again.",
+      confirmText: "Remove", destructive: true, glyph: Model.Glyph.trash,
+      onConfirm: function() { root.symRequest({ action: "remove" }) }
+    })
+  }
+  function setKeepDownload(on) { root.symRequest({ action: "status", keepDownload: on }) }
   function cancelSymbols() {
     root.svc.request("debug.symbols", { action: "cancel" }, function(ok, d) { if (ok) root.symbols = d })
   }
@@ -173,6 +208,26 @@ ColumnLayout {
       Layout.fillWidth: true
       text: "Only your own apps are listed: iOS lets a debugger attach only to apps built and signed for development, so App Store and system apps can't be debugged."
       size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    }
+  }
+
+  // slow-attach hint: an outdated set makes every attach take minutes over Wi-Fi
+  RowLayout {
+    Layout.fillWidth: true
+    visible: !!root.current && root.symNeedsUpdate
+    spacing: Style.spacing.md
+    Icon { glyph: Model.Glyph.warn; color: Theme.levelColor("warn"); Layout.alignment: Qt.AlignVCenter }
+    AppText {
+      Layout.fillWidth: true
+      text: "Attaching may take minutes until the debug symbols are " + (root.symState === "incomplete" ? "unpacked again." : "updated.") + " The app stays paused meanwhile."
+      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+    }
+    ActionButton {
+      text: root.symFix === "unpack" ? "Unpack again" : "Update symbols"; glyph: root.symFix === "unpack" ? Model.Glyph.refresh : Model.Glyph.download
+      compact: true; kind: "ghost"
+      enabled: root.svc.connected && (root.symFix === "unpack" || root.symEnough)
+      busy: root.symBusy
+      onClicked: root.fixSymbols()
     }
   }
 
@@ -263,27 +318,60 @@ ColumnLayout {
 
   // ---------------------------------------------------------------- symbols
   Card {
+    id: symCard
     Layout.fillWidth: true
     title: "Debug symbols"
     glyph: Model.Glyph.layers
-    glyphColor: root.symbols && root.symbols.ready ? Theme.success : Theme.dim
-    subtitle: !root.symbols ? "Checking…"
-              : (root.symbols.ready ? "Ready for iOS " + root.symbols.ios + " (" + root.symbols.build + ")" + (root.symbols.sizeOnDisk ? " · " + Model.formatBytes(root.symbols.sizeOnDisk) : "")
-                 : (root.symbols.ios ? "Not downloaded for iOS " + root.symbols.ios + " (" + root.symbols.build + ")" : "Not downloaded"))
+    glyphColor: root.symState === "ready" ? Theme.success : Theme.dim
+    subtitle: {
+      var s = root.symbols
+      if (!s) return "Checking…"
+      var v = s.ios ? "iOS " + s.ios + " (" + s.build + ")" : ""
+      if (!s.sizeOnDisk) return v
+      return v + " · " + Model.formatBytes(s.sizeOnDisk) + (s.libs ? " · " + s.libs + " libraries" : "")
+    }
+    actions: [
+      StatusPill {
+        visible: root.symState !== ""
+        level: ({ ready: "ok", outdated: "warn", incomplete: "warn", failed: "error", downloading: "busy", extracting: "busy" })[root.symState] || "info"
+        text: ({ ready: "Ready", outdated: "Needs an update", incomplete: "Incomplete", failed: "Failed",
+                 downloading: "Downloading", extracting: "Unpacking", missing: "Not downloaded" })[root.symState] || ""
+      }
+    ]
 
-
+    // what this state means
     AppText {
       Layout.fillWidth: true
-      visible: !!(root.symbols && root.symbols.ready)
+      visible: root.symState === "ready"
       text: "lldb uses them by itself for this iOS version. A phone on another iOS version needs its own download."
       size: "small"; tone: "dim"; wrapMode: Text.WordWrap
     }
     AppText {
       Layout.fillWidth: true
-      visible: !(root.symbols && root.symbols.ready)
-      text: "Optional, once per iOS version. Without them, backtraces and breakpoints still work, but Swift values such as String and Array can read wrong and system frames show only library names."
+      visible: root.symState === "missing"
+      text: "Optional, once per iOS version. Without them, backtraces and breakpoints still work, but Swift values such as String and Array can read wrong, system frames show only library names and attaching is slow."
       size: "small"; tone: "dim"; wrapMode: Text.WordWrap
     }
+    AppText {
+      Layout.fillWidth: true
+      visible: root.symNeedsUpdate
+      text: (root.symbols && root.symbols.update && root.symbols.update.reason ? root.symbols.update.reason : "")
+            + (root.symCanUnpack ? " The download is kept, so unpacking again takes about a minute." : " Updating downloads them again; the ones you have keep working meanwhile.")
+      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+    }
+    AppText {
+      Layout.fillWidth: true
+      visible: !root.symDownloading && !!root.symbols && !!root.symbols.error
+      text: root.symbols && root.symbols.error ? root.symbols.error.message : ""
+      size: "small"; tone: "error"; wrapMode: Text.WordWrap
+    }
+    AppText {
+      Layout.fillWidth: true
+      visible: !!(root.symP && root.symP.phase === "cancelled") && !root.symDownloading
+      text: root.symP ? (root.symP.message || "") : ""
+      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+    }
+
     ProgressTrack {
       Layout.fillWidth: true
       visible: root.symDownloading
@@ -296,13 +384,7 @@ ColumnLayout {
     }
     AppText {
       Layout.fillWidth: true
-      visible: !!(root.symP && (root.symP.phase === "failed" || root.symP.phase === "cancelled")) && !root.symDownloading
-      text: root.symP ? (root.symP.message || "") : ""
-      size: "small"; tone: root.symP && root.symP.phase === "failed" ? "error" : "dim"; wrapMode: Text.WordWrap
-    }
-    AppText {
-      Layout.fillWidth: true
-      visible: !!root.symbols && !root.symbols.ready && !root.symDownloading && !root.symEnough
+      visible: root.symFix !== "" && root.symFix !== "unpack" && !root.symEnough
       text: "Needs about " + Model.formatBytes(root.symbols ? root.symbols.estimatedBytes : 0) + " free; this computer has " + Model.formatBytes(root.symbols ? root.symbols.freeBytes : 0) + "."
       size: "small"; tone: "warn"; wrapMode: Text.WordWrap
     }
@@ -314,26 +396,65 @@ ColumnLayout {
       banner: true
       onRetry: root.refreshSymbols()
     }
+
+    // actions: the one fix for this state, Remove, Cancel while running
     RowLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.md
-      visible: !!root.symbols && !root.symbols.ready
+      visible: !!root.symbols && (root.symFix !== "" || root.symDownloading || root.symOnDisk)
       AppText {
         Layout.fillWidth: true
-        text: root.symbols && !root.symbols.downloading ? "About " + Model.formatBytes(root.symbols.estimatedBytes || 0) + " to download · " + Model.formatBytes(root.symbols.freeBytes || 0) + " free" : ""
-        size: "small"; tone: "faint"
+        text: {
+          var s = root.symbols
+          if (!s || root.symDownloading) return ""
+          if (root.symFix === "unpack") return "Unpacks the kept download · no download needed"
+          if (root.symFix !== "") return "About " + Model.formatBytes(s.estimatedBytes || 0) + " to download · " + Model.formatBytes(s.freeBytes || 0) + " free"
+          return ""
+        }
+        size: "small"; tone: "faint"; elide: Text.ElideRight
       }
       ActionButton {
-        visible: !root.symDownloading
-        text: "Download debug symbols"; glyph: Model.Glyph.download
-        enabled: root.svc.connected && root.symEnough
+        visible: root.symOnDisk && !root.symDownloading
+        text: "Remove"; glyph: Model.Glyph.trash; kind: "ghost"
+        enabled: !root.symBusy
+        onClicked: root.removeSymbols()
+      }
+      ActionButton {
+        visible: root.symFix !== "" && !root.symDownloading
+        kind: "primary"
+        text: ({ download: "Download debug symbols", update: "Update symbols", unpack: "Unpack again", retry: "Try again" })[root.symFix] || ""
+        glyph: root.symFix === "unpack" || root.symFix === "retry" ? Model.Glyph.refresh : Model.Glyph.download
+        enabled: root.svc.connected && (root.symFix === "unpack" || root.symEnough)
         busy: root.symBusy
-        onClicked: root.downloadSymbols()
+        onClicked: root.fixSymbols()
       }
       ActionButton {
         visible: root.symDownloading
         text: "Cancel"; glyph: Model.Glyph.close; kind: "ghost"
         onClicked: root.cancelSymbols()
+      }
+    }
+
+    // keep the raw download for a later "Unpack again"
+    RowLayout {
+      Layout.fillWidth: true
+      visible: !!root.symbols
+      spacing: Style.spacing.md
+      ToggleSwitch {
+        checked: !!(root.symbols && root.symbols.keepDownload)
+        enabled: !root.symBusy
+        onToggled: root.setKeepDownload(!checked)
+      }
+      AppText {
+        Layout.fillWidth: true
+        text: {
+          var s = root.symbols || {}
+          var kept = s.downloadKept || 0
+          return "Keep the download so symbols can be unpacked again without downloading"
+                 + (kept ? " · " + Model.formatBytes(kept) + " kept" : " · about " + Model.formatBytes(s.estimatedBytes || 0))
+        }
+        size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+        TapHandler { onTapped: if (!root.symBusy) root.setKeepDownload(!(root.symbols && root.symbols.keepDownload)) }
       }
     }
   }

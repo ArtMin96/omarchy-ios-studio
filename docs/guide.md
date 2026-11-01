@@ -247,9 +247,25 @@ Open iPhone › Debug and pick your app. Only your own apps are listed: iOS lets
 
 - Capture backtrace, for an app that hangs or spins: the app pauses for a few seconds while the debugger reads every thread, then runs on. The thread that stopped on an exception (else the main thread) opens first, and your own code is highlighted with its file and line. Click a frame to copy it.
 - Breakpoints: pick a file from the app's Sources and type a line, or type a function name such as `ForecastModel.refresh`. Then press Start debugging. Attach to the running app keeps it as it is; Restart it paused closes it and starts it again, paused until the debugger is ready, so breakpoints in startup code also hit. When the app stops, you see where, the call stack and the variables of the selected frame. Continue, Step over, Step in and Step out move on; Pause stops a running app. Detach ends debugging and the app keeps running, and the stop button quits the app instead.
-- Debug symbols: a one-time download per iOS version (about 6 GB while it runs, a few hundred MB kept). Without them everything still works, but Swift values such as strings and arrays can read wrong and system frames show only library names. It needs ipsw from Setup.
+- Debug symbols: the iPhone's Swift runtime and the system libraries lldb needs, downloaded once per iOS version. Without them everything still works, but Swift values such as strings and arrays can read wrong, system frames show only library names and attaching is slow. It needs ipsw from Setup. See [Debug symbols](#debug-symbols) below.
 
 The debugger is lldb from the Swift toolchain. It needs Python 3.12, which Setup's optional "Debugger support" step installs; the Debug tab links there when it's missing. Over Wi-Fi, attaching takes about 30 seconds.
+
+#### Debug symbols
+
+The Debug symbols card at the bottom of iPhone › Debug shows where the symbols for the phone's iOS version stand and offers one button to fix them:
+
+| The card says | What it means | Button |
+|---|---|---|
+| Not downloaded | No symbols for this iOS version yet. | Download debug symbols |
+| Ready | lldb uses them by itself. | none (Remove only) |
+| Needs an update | They came from an older version of iOS Studio and miss system libraries, so attaching can take minutes over Wi-Fi while the app stays paused. They still work until you update. | Update symbols |
+| Incomplete | Some libraries are missing; the card names them. | Update symbols |
+| Failed | The last download or unpack failed; the card shows why. | Try again |
+
+When the download is still on disk, the button is Unpack again instead: it unpacks the libraries from that download in about a minute, without downloading anything. That happens after a failed or cancelled unpack, and whenever Keep the download is on. Updating keeps your current symbols working until the new ones are ready, and Cancel leaves them as they were. While the symbols need an update, the Debug tab also shows a warning under the app picker with the same button.
+
+Disk use: the download is about 7 GB and needs that much free space while it runs. The unpacked symbols take a few hundred MB. Keep the download (the switch under the buttons) keeps the 7 GB so the symbols can be unpacked again later; it's off by default, and turning it off deletes a kept download once the symbols are ready. Remove deletes the symbols and any kept download for this iOS version, after asking. Everything lives in `~/.cache/ios-studio/DeviceSupport/`.
 
 ### Free space
 
