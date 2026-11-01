@@ -16,7 +16,7 @@ PageFrame {
   property int cursor: -1
 
   title: "iPhone"
-  subtitle: showDevice ? "Apps, screen, files, network, performance and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
+  subtitle: showDevice ? "Apps, screen, files, network, performance, debugging and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
 
   // A simulated condition changes the whole phone: say so next to the title on every tab.
   status: StatusPill {
@@ -44,6 +44,7 @@ PageFrame {
     { key: "network", label: "Network", glyph: Model.Glyph.network, level: svc.conditionActive || svc.capturing ? "warn" : "",
       count: svc.conditionActive ? "On" : (svc.capturing ? "Rec" : undefined) },
     { key: "performance", label: "Performance", glyph: Model.Glyph.speedometer },
+    { key: "debug", label: "Debug", glyph: Model.Glyph.bug },
     { key: "profiles", label: "Profiles", glyph: Model.Glyph.signature, count: profileWarn() || undefined, level: profileWarn() ? "warn" : "" },
     { key: "info", label: "Info", glyph: Model.Glyph.info }
   ]
@@ -189,6 +190,11 @@ PageFrame {
   DevicePerformanceView {
     Layout.fillWidth: true
     visible: page.showDevice && page.tab === "performance" && page.svc.connected
+    app: page.app
+  }
+  DeviceDebugView {
+    Layout.fillWidth: true
+    visible: page.showDevice && page.tab === "debug" && page.svc.connected
     app: page.app
   }
   DeviceProfilesView {

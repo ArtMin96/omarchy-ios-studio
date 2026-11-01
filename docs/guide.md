@@ -64,6 +64,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
 | Performance | Measures one app over time: CPU, memory, energy, frame rate, network, disk and battery, with a report of anything unusual. See [Measure how my app performs](#measure-how-my-app-performs). |
+| Debug | Pauses one of your own apps to show what every thread is doing, or stops it at breakpoints so you can step through your code. See [Debugging](#debug-my-app-on-the-iphone). |
 | Profiles | The signing profiles on the phone, active and expired. |
 | Info | Name, model, iOS version, UDID, serial number, network addresses, battery and storage. |
 
@@ -219,6 +220,16 @@ Camera code is hard to test by pointing the phone at things. Files › Camera te
 3. On the iPhone page, open Files › Camera test. Pick the app, add images or videos (or drop them on the list) and press Run test.
 
 iOS Studio copies the files into the app's Documents/CameraTestInput, restarts the app with `-cameraTestMode 1`, waits for the app to write Documents/CameraTestOutput/done.json, and copies the results back. You get done.json, any images the app wrote, the app's log during the run and a warning if it crashed. If no done.json shows up before the timeout, the app is missing the hook or the launch argument.
+
+### Debug my app on the iPhone
+
+Open iPhone › Debug and pick your app. Only your own apps are listed: iOS lets a debugger attach only to apps built and signed for development, so App Store and system apps can't be debugged. For readable results, build and run the app from Projects first, so iOS Studio has its build.
+
+- Capture backtrace, for an app that hangs or spins: the app pauses for a few seconds while the debugger reads every thread, then runs on. The thread that stopped on an exception (else the main thread) opens first, and your own code is highlighted with its file and line. Click a frame to copy it.
+- Breakpoints: pick a file from the app's Sources and type a line, or type a function name such as `ForecastModel.refresh`. Then press Start debugging. Attach to the running app keeps it as it is; Restart it paused closes it and starts it again, paused until the debugger is ready, so breakpoints in startup code also hit. When the app stops, you see where, the call stack and the variables of the selected frame. Continue, Step over, Step in and Step out move on; Pause stops a running app. Detach ends debugging and the app keeps running, and the stop button quits the app instead.
+- Debug symbols: a one-time download per iOS version (about 6 GB while it runs, a few hundred MB kept). Without them everything still works, but Swift values such as strings and arrays can read wrong and system frames show only library names. It needs ipsw from Setup.
+
+The debugger is lldb from the Swift toolchain. It needs Python 3.12, which Setup's optional "Debugger support" step installs; the Debug tab links there when it's missing. Over Wi-Fi, attaching takes about 30 seconds.
 
 ### Free space
 

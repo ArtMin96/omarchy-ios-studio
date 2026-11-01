@@ -19,8 +19,8 @@ States: `done`, `missing`, `broken` (installed but not working: shows **Repair**
 | `xtool` | Toolchain | xtool | Builds, signs and installs iPhone apps from Linux; compiled on your computer. | – | 1.8 GB build, ~7–14 min | pin from omarchy-apple-dev + cherry-pick xtool-org/xtool `70e1568` (#406, Apple sign-in 503 fix); heartbeat progress |
 | `rcodesign` | Toolchain | rcodesign | Signs App Store / TestFlight uploads. | – | 10 MB | GitHub release, sha256-pinned |
 | `pymobiledevice3` | Toolchain | iPhone connection tools | Talks to your iPhone over USB or Wi-Fi. | – | 335 MB, 1–2 min | venv `~/.local/share/ios-studio/venv`, `pymobiledevice3==11.49.0`; links `~/pymobile3-venv` to it if absent |
-| `ipsw` | Toolchain | ipsw (optional) | Readable stack traces in the debugger. | – | 40 MB | GitHub release, sha256-pinned |
-| `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. | yes | 10–20 min | AUR build |
+| `ipsw` | Toolchain | ipsw (optional) | Readable stack traces in the debugger. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release, sha256-pinned |
+| `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. Without it lldb doesn't start, and iPhone › Debug sends you here (`debug check` → `needs-python`). | yes | 10–20 min | AUR build |
 | `xcode` | Apple | Xcode 27.1 download | The iOS SDK only comes inside Apple's Xcode download. Download it once in your browser; iOS Studio finds it in Downloads. | – | ~2 GB download | `setup xip --open` / `--watch` / `--use PATH` |
 | `sdk` | Apple | iOS SDK | Apple's iOS frameworks prepared for Linux. | – | 7 GB (15 GB free while building), 20–30 min | `xtool sdk build` → cache `~/.cache/xtool/darwin-iPhoneOS<v>.xtoolsdk`, then `install-toolchain.sh --mode full --repair` (registers it, darwin tools, macro server) |
 | `apple-id` | Apple | Apple Account | Sign in so apps can be signed for your iPhone. | – | a minute | `{kind:"page", page:"account", action:"signin"}` |

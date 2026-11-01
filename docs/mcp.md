@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 68 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 74 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -133,6 +133,7 @@ The server has 68 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
 | Performance | `ios_metrics_start`, `ios_metrics_summary`, `ios_metrics_series`, `ios_metrics_events`, `ios_metrics_stop`, `ios_launch_profile`, `ios_memory_leaks` |
 | Files and camera tests | `ios_media_list`, `ios_media_pull`, `ios_files_list`, `ios_files_pull`, `ios_files_push`, `ios_files_delete`, `ios_camera_test` |
+| Debugger | `ios_debug_backtrace`, `ios_debug_session_start`, `ios_debug_session_wait`, `ios_debug_session_command`, `ios_debug_session_end`, `ios_debug_symbols_status` |
 
 `ios_metrics_start(bundle_id)` samples an app about once a second in the device service (CPU, memory, threads, energy, display frame rate, GPU, network, disk, wakeups and battery). The service keeps about an hour and computes the stats, so `ios_metrics_summary` stays around 1 to 2 KB: min, average, 95th percentile and max of the main series, the memory trend, CPU spikes, frame-rate drops, hitches, battery drain, energy by component, and anomalies in plain words, worst first. `ios_metrics_series` downsamples one metric to at most 60 buckets and saves every sample as a CSV, returned as a path and a resource link. `ios_metrics_events` pages through hangs, jetsam kills, crashes and hitches by cursor. A session ends with `ios_metrics_stop` or when the agent's session ends. `ios_launch_profile` quits and relaunches the app, and `ios_memory_leaks` pauses it while its memory is scanned, so both are dry runs unless `confirm=true`. They run as jobs: when the reply says `running`, call again with its `job_id`.
 
@@ -154,6 +155,9 @@ A few tools need more explanation:
 - `ios_files_list`, `ios_files_pull`, `ios_files_push` and `ios_files_delete` work in an app's files: the whole container for your own builds, Documents for App Store apps that share files. A push that would replace files returns `needs_confirm` and changes nothing until it's repeated with `confirm=true`; `ios_files_delete` is a dry run until `confirm=true`.
 - `ios_camera_test` runs your app's camera code on test images and videos and reports a summary of its `done.json`, the output files, key log lines and any crash. The app needs a small hook: see [camera-testing.md](camera-testing.md).
 - Copies and camera tests can take longer than one call. They keep running in the server and return `state: "running"` with a `transfer_id` or `test_id`; calling the same tool again with that id waits for the result, and `cancel=true` stops it.
+- The debugger tools attach LLDB to one of your own apps, which pauses it. `ios_debug_backtrace` needs `confirm=true` and runs as a job: if it's still running after `wait_seconds`, the agent calls it again with the `job_id`. It returns the top 20 frames of the crashed thread (or the main one), the other threads grouped by identical stacks, and a file with every frame.
+- `ios_debug_session_start` sets breakpoints (`File.swift:42` or a function name) and returns a `session_id`. `ios_debug_session_wait` waits for the next stop, and `ios_debug_session_command` steps (`next`, `step`, `finish`, `continue`, `pause`) or inspects (`frame_variables`, and `evaluate` with an expression of at most 500 characters). A stop shows its file:line, the top 20 frames and frame 0's variables one level deep. `ios_debug_session_end` detaches, so the app keeps running, or quits it with `kill=true`. A session nobody polls for 10 minutes detaches by itself, and so does every session when the server stops.
+- `ios_debug_symbols_status` says whether lldb is installed and whether this iPhone's debug symbols are downloaded. The download (about 6 GB, once per iOS version) only starts from iOS Studio's iPhone › Debug tab.
 
 The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), large outputs a tool saved to a file (`iosstudio://cache/{kind}/{name}`), the last known iPhone state, the troubleshooting guide and this page. Each one returns at most 100 KB and says which tool reads the rest.
 
@@ -170,6 +174,7 @@ Build logs, crash reports and the phone's log can be megabytes long, and an agen
 - Large artifacts go to files under `~/.cache/ios-studio/mcp/`. The result gives the path, the size and a `resource_link`, plus an excerpt that fits the budget. `ios_crash_get` returns the parsed summary and reads the rest one `section` at a time (`threads`, `images`, `raw`), paged with `start_line`.
 - Screenshots are JPEG, at most 1568 pixels on the long edge. The quality steps down from 80 to 65 and then 50 until the image is under 350 KB. PNG is sent only if it fits.
 - Errors are one line plus a next step. Details are cut at 300 characters, and raw stderr never goes into a result; the error points to the log file instead.
+- A debugger backtrace shows 20 frames of one thread and groups the others by identical stacks (12 groups at most); every frame of every thread goes to `~/.cache/ios-studio/mcp/debug/`. A debugger stop shows 20 frames and 30 variables, with values cut at 200 characters.
 - Other lists have caps too: `ios_process_list` returns 50 by default and 200 at most, and account and signing lists show 20 with totals. Free-form `data` and dry-run `would` lists stop at 20 items with "+N more".
 
 ## Safety

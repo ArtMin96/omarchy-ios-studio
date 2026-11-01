@@ -462,3 +462,13 @@ the keyboard.
   ```qml
   DeviceTransferBar { Layout.fillWidth: true; transfer: root.transfer; verb: "Importing"; onCancel: svc.request("transfer.cancel", { transferId: id }, null) }
   ```
+- **DeviceDebugView**: the iPhone › Debug tab. Props: `app`. It loads itself when it becomes visible (`debug check`,
+  `debug sources`, `debug.symbols`) and owns the backtrace stream; the breakpoint session is a `DebugSessionPanel`.
+- **DebugSessionPanel**: a breakpoint session on one app (helper `debug session` as a `Stream`; commands are
+  written to its stdin). Props: `app`, `bundleId`, `appName`, `appRunning`, `sources` (`debug sources` files),
+  `hasLocalBuild`, `blocked`; read-only `phase` (`idle|starting|running|stopped|ended|failed`) and `live`.
+  `start()`, `send(cmd, extra)`, `end(kill)`. Its Stream's `quitMessage` detaches, so closing the window lets the app run.
+- **DebugBacktraceView**: collapsible threads of a captured backtrace. Props: `app`, `backtrace` (`{threads,
+  crashedThread, selectedThread}`). The crashed thread, else the selected one, starts open; clicking a frame copies it.
+- **DebugFrameRow**: one stack frame (`{index, function, module, file?, line?, inApp}`): your own code in the accent
+  colour, file:line, module. Props: `frame`, `selected`, `tooltip`; signal `activated()`.

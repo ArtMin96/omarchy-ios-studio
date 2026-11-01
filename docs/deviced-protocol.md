@@ -217,6 +217,7 @@ the tunnel is up.
 | `metrics.state` | MetricsSession | a metrics session started, changed status or stopped (also in the welcome) |
 | `transfer` | Transfer (see [Files](#files)) | during `media.pull`, `container.pull/push` and inside `cameratest.run`, at most 4 a second, plus one final `done` / `failed` / `cancelled` |
 | `cameratest` | `{testId, step, state, title, detail}` | each step of `cameratest.run` (`running`, `done`, `failed`) |
+| `debugSymbols` | `{phase, fraction?, received?, total?, rate?, eta?, done?, count?, message?, ready?, error?, ts}` | during a `debug.symbols` download (at most twice a second) |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -866,6 +867,96 @@ helper/device_link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes af
 | `locked` | the iPhone is locked |
 | `incompatible` / `bad-signature` | iOS version/architecture mismatch, invalid signature |
 | `install-failed` | anything else (`detail` holds the installer's text) |
+
+### Debugging (`debug.*`), used by iPhone › Debug and the `debug` helper group
+
+LLDB on the user's own (development-signed) apps. The daemon only provides the plumbing: it
+forwards the phone's debugserver (`com.apple.internal.dt.remote.debugproxy`) to a loopback port
+through its own tunnel (`Session.port_forward`, no second tunnel) and finds or launches the app's
+process over the shared DVT connection (`ProcessControl`). `bin/iosstudio-helper debug ...`
+(`helper/debugger.py`) runs lldb against that port.
+
+| cmd | args | reply data |
+|---|---|---|
+| `debug.start` | `{bundleId, launch?: "auto" \| "attach" \| "suspended" \| "none", args?: [str], env?: {}, udid?}` | `{bundleId, port, host, pid, launched, remotePath, executable, ios, build, sysroot, symbolsReady}` |
+| `debug.stop` | `{bundleId, kill?: bool, pid?}` | `{bundleId, stopped, sharedWith, killed}` |
+| `debug.symbols` | `{action?: "status" \| "download" \| "cancel", force?: bool, udid?}` | Symbols status (below); `download` adds `{started: true, total}` |
+
+`launch`: `attach` needs the app running (else `not-running`). `suspended` launches it paused,
+killing a running copy, so startup code can be debugged. `auto` (default) attaches when it runs
+and launches it suspended otherwise. `none` opens only the forward (pid `null`), for diagnostics.
+The forward opens before the launch, so lldb can attach before iOS's launch watchdog fires.
+
+The forward is a resource `debug:<bundleId>` (scope `tunnel`). Each client holds it once; it
+closes on `debug.stop`, when the client disconnects, when the tunnel drops or the device changes,
+at shutdown, and an hour after the last `debug.start`. While one client holds it, another client's
+`debug.start` for that app answers `busy`. `debug.stop {kill: true, pid}` also kills the process,
+for a suspended launch that never got attached.
+
+`remotePath` is the executable's path on the phone (lldb needs it to match the local binary to the
+installed one). `sysroot` is `~/.cache/ios-studio/DeviceSupport/<ios> (<build>)`, the directory lldb
+gets as `platform select remote-ios --sysroot`; `symbolsReady` says whether its `Symbols/` is complete.
+
+Errors besides the common ones: `not-found` (not installed), `not-debuggable` (App Store or system
+app), `not-running`, `busy`, `no-space`, `needs-ipsw` (fix → Setup step `ipsw`).
+
+Symbols status:
+
+```json
+{"ios": "27.2", "build": "24B115", "dir": "<home>/.cache/ios-studio/DeviceSupport/27.2 (24B115)",
+ "sysroot": "…same…", "ready": false, "downloading": false, "estimatedBytes": 6000000000,
+ "estimated": true, "freeBytes": 120000000000, "ipsw": true, "sizeOnDisk": null,
+ "progress": {"phase": "downloading", "fraction": 0.42, "received": 2520000000, "total": 6000000000}}
+```
+
+`download` lists the phone's dyld shared cache (`com.apple.dt.remoteFetchSymbols`), checks that the
+download plus 1 GB fits on the disk (`no-space` otherwise), and returns at once. The download runs
+in the background with `debugSymbols` events: `downloading` (bytes, rate, ETA), `extracting`
+(`ipsw dyld extract` of `/usr/lib/swift/*` and `libobjc`, `done` of `count`), then `done`,
+`failed` or `cancelled`. Afterwards the cache itself is deleted and only `Symbols/` stays (a few
+hundred MB), marked complete with `Symbols/.ios-studio-complete`. Files that were already fully
+downloaded are kept when an interrupted download starts again. The download is a resource
+(`debug.symbols`, scope `tunnel`) held by the client that started it, so it stops when that
+client disconnects or the tunnel drops. `estimatedBytes` is a 6 GB guess until the phone has been
+asked once (`estimated: false` afterwards). `device.info` also reports `debugSymbols: bool`.
+
+#### The helper side (`iosstudio-helper debug ...`)
+
+| action | what it does |
+|---|---|
+| `debug check` | one-shot: `{ready, lldb, lldbVersion, python, error?}`. lldb is `<toolchain>/usr/bin/lldb` (the Swift toolchain Setup installs); it links `libpython3.12`, so without Setup's "Debugger support" step (`python312`) the error's fix opens that step |
+| `debug sources --bundle-id B` | one-shot: `{project, files: [{path, rel, name, lines}], localBuild}` for the project whose bundle id `B` is (`XTL-<TEAM>.<id>` matches `<id>`) |
+| `debug backtrace --bundle-id B` | stream: `debug.start` (attach), attach, read every thread, detach, `debug.stop`. `done.data` = `{threads, crashedThread, selectedThread, pid, localBuild, symbolsReady, ended}` |
+| `debug session --bundle-id B [--launch auto\|attach\|suspended] [--breakpoints '<json>'] [--commands '<json>'] [--stop-at-attach]` | stream: an interactive session |
+
+The stream emits `step`, `notice` and `done` like other helper streams, plus `started {port, pid,
+launched, ...}`, `console {text}` (lldb's own output), `attached`, `breakpoints {items: [{id, spec,
+locations, resolved, hits}]}`, `running`, `stopped {stopId, reason, description, thread: {index,
+frames}, threads, breakpoint?, locals: {frame, function, variables}}`, `variables`, `evaluated`,
+`backtrace`, `ack {cmd, ok, message?}` and `exited`. A frame is `{index, function, module, pc,
+offset?, file?, line?, column?, inApp}`; a variable is `{name, type, value?, error?, childCount,
+children?}` (one level deep, 20 children at most). `reason` is `breakpoint`, `step`, `exception`,
+`signal`, `paused` or `watchpoint`.
+
+Commands go to the session's stdin as JSON lines: `{"cmd": "continue"}` and `next` (step over),
+`step` (step in), `finish` (step out), `pause`, `detach`, `kill`, `frame_variables {frame?, depth?}`,
+`select_frame {frame}`, `evaluate {expr}`, `backtrace`, `breakpoint_add {spec}`,
+`breakpoint_delete {id}`, `status`. An optional `requestId` comes back on the answer.
+`{"cancel": true}`, SIGTERM and the end of stdin all detach. A breakpoint `spec` is `File.swift:42`
+or a function name. Whatever ends the session, the app is detached (or killed with `kill`) before
+the helper releases the forward.
+
+lldb runs through its Python API (`helper/lldb_driver.py` under `/usr/bin/python3.12` with the path
+from `lldb -P`), using the steps omarchy-ios-kit uses for a userspace tunnel:
+`target.memory-module-load-level minimal`, `platform select remote-ios --sysroot <DeviceSupport>`, a
+target for the local `xtool/<App>.app/<exe>` with its platform path set to `remotePath`, an
+asynchronous `process connect connect://127.0.0.1:<port>` (a synchronous one waits forever), then
+`process attach --pid <pid>`. With no local build it attaches with only system symbols and says so.
+
+#### Checking the forward without attaching
+
+`debug.start {launch: "none"}` touches no process. A debugserver answers a gdb-remote packet on
+the port, for example `$qHostInfo#9b` gets `+$cputype:…;ostype:ios;…#xx`. Then `debug.stop`.
 
 ## One-shot mode
 

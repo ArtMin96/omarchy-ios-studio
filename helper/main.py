@@ -26,6 +26,7 @@ MODULES = {
     "build": "projects",
     "app": "appconfig",
     "agents": "agents",
+    "debug": "debugger",
 }
 
 

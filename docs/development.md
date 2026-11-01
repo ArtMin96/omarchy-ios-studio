@@ -27,6 +27,8 @@ helper/
   main.py            helper router: group name -> module
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
   agents.py          Settings › AI agents: connect the MCP server to coding agents
+  debugger.py        iPhone › Debug: backtraces and breakpoint sessions (group `debug`)
+  lldb_driver.py     runs inside lldb's Python (python3.12) and drives lldb for debugger.py
   deviced.py         device daemon core: session, tunnel, device list, dispatch (pymobiledevice3)
   deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
   deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
@@ -40,7 +42,7 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (68 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (74 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
@@ -69,7 +71,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
