@@ -5,8 +5,9 @@ Stdlib only. Used two ways:
 * As a library by the daemons (deviced.py for the real phone, deviced_demo.py for demo mode):
   `Broker(backend).run()` listens on $XDG_RUNTIME_DIR/ios-studio[-demo]/deviced.sock, speaks the
   JSON-lines protocol per connection, broadcasts device-wide events to subscribed clients, keeps
-  one syslog stream to the phone with per-client filters, reference-counts the mirror and exits
-  after an idle grace period with no clients.
+  one syslog stream to the phone with per-client filters, owns the per-client session resources
+  (deviced_kit.Resources: mirror, port forwards, ...) and exits after an idle grace period with
+  no clients.
 * As the launcher behind bin/iosstudio-deviced (`device_broker.py launch ...`): connects to the live
   daemon (spawning a detached one when none is running) and bridges its own stdin/stdout to the
   socket, so a client that speaks JSON lines over stdio (the GUI's Stream) needs no changes.
@@ -20,9 +21,11 @@ Backend interface (duck-typed):
     syslog_open(pid: int)                       start the one phone stream (-1 = no phone filter)
     async syslog_close()
     async syslog_resolve(bundle_id) -> (executable | None, full bundle id)
+    async client_gone(client)                   optional: a client disconnected (after its resources)
     async shutdown()                            close the tunnel and everything else
 The backend calls broker.emit(name, data) for device-wide events and feeds syslog entries to
-broker.syslog.feed(entry) / .stream_state(...) / .stream_failed(error).
+broker.syslog.feed(entry) / .stream_state(...) / .stream_failed(error). broker.resources is the
+shared deviced_kit.Resources; the broker releases a client's holds when it disconnects.
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from device_client import runtime_dir  # noqa: E402
+import deviced_kit  # noqa: E402
 
 VERSION = "1"
 IDLE_DEFAULT_S = 120.0
@@ -371,7 +375,7 @@ class Client:
         return {"id": self.id, "name": self.name, "since": self.since,
                 "events": sorted(self.events) if self.events is not None else None,
                 "syslog": b.syslog.subs[self].filters if self in b.syslog.subs else None,
-                "mirror": self in b.mirror_refs}
+                "mirror": b.resources.holds("mirror", self)}
 
 
 # ====================================================================== broker
@@ -389,7 +393,7 @@ class Broker:
         self.backend = None
         self.clients: set[Client] = set()
         self.syslog = SyslogHub(self)
-        self.mirror_refs: set[Client] = set()
+        self.resources = deviced_kit.Resources(log=log)
         self.loop: asyncio.AbstractEventLoop | None = None
         self._thread = threading.get_ident()
         self._ready = asyncio.Event()
@@ -435,8 +439,6 @@ class Broker:
         if threading.get_ident() != self._thread and self.loop is not None:
             self.loop.call_soon_threadsafe(self.emit, name, data)
             return
-        if name == "mirror" and isinstance(data, dict) and not data.get("running"):
-            self.mirror_refs.clear()
         obj = {"event": name, "data": data}
         for c in list(self.clients):
             if c.wants(name):
@@ -539,15 +541,16 @@ class Broker:
             self.clients.discard(c)
             log(f"{c.name} disconnected ({len(self.clients)} client(s) left)")
             self.syslog.client_gone(c)
-            if c in self.mirror_refs:
-                self.mirror_refs.discard(c)
-                if not self.mirror_refs:
-                    asyncio.create_task(self._quiet_dispatch("mirror.stop", {}))
+            asyncio.create_task(self._client_gone(c))
             self._check_idle()
 
-    async def _quiet_dispatch(self, cmd, args):
-        with contextlib.suppress(Exception):
-            await self.backend.dispatch(cmd, args)
+    async def _client_gone(self, c: Client):
+        """Release what the client held (mirror, port forwards, ...), then tell the backend."""
+        await self.resources.client_gone(c)
+        hook = getattr(self.backend, "client_gone", None)
+        if hook is not None:
+            with contextlib.suppress(Exception):
+                await hook(c)
 
     async def _request(self, c: Client, m: dict):
         rid = m.get("id")
@@ -589,18 +592,6 @@ class Broker:
             return await self.syslog.set_filters(c, a.get("filters") or {})
         if cmd == "syslog.stop":
             return await self.syslog.stop(c)
-        if cmd == "mirror.start":
-            self.mirror_refs.add(c)
-            try:
-                return await self.backend.dispatch(cmd, a)
-            except BaseException:
-                self.mirror_refs.discard(c)
-                raise
-        if cmd == "mirror.stop":
-            self.mirror_refs.discard(c)
-            if self.mirror_refs:
-                return {"running": False, "sharedWith": len(self.mirror_refs)}
-            return await self.backend.dispatch(cmd, a)
         return await self.backend.dispatch(cmd, a)
 
 

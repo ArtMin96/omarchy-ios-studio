@@ -55,6 +55,7 @@ def load_pmd3() -> argparse.Namespace:
         from pymobiledevice3.remote import tunnel_service
         from pymobiledevice3.remote.core_device.app_service import AppServiceService
         from pymobiledevice3.remote.core_device.icon_service import IconService
+        from pymobiledevice3.remote import userspace_tunnel
         from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscoveryService
         from pymobiledevice3.remote.userspace_tunnel import UserspaceDialPlane, UserspaceRsdTunnel
         from pymobiledevice3.services.afc import AfcService
@@ -102,6 +103,7 @@ def load_pmd3() -> argparse.Namespace:
         get_remote_pairing_record_filename=get_remote_pairing_record_filename,
         iter_remote_pair_records_by_identifier=iter_remote_pair_records_by_identifier,
         tunnel_service=tunnel_service,
+        userspace_tunnel=userspace_tunnel,
         AppServiceService=AppServiceService,
         IconService=IconService,
         RemoteServiceDiscoveryService=RemoteServiceDiscoveryService,
@@ -172,6 +174,40 @@ class _SkippedAddresses(logging.Handler):
             self.skipped.append(msg.removeprefix("Skipping remote pairing service "))
 
 
+class _WifiTunnelHandle:
+    """Stands in for pymobiledevice3's UserspaceRsdTunnel in userspace_tunnel._active_tunnel.
+
+    pymobiledevice3 only publishes a tunnel there when UserspaceRsdTunnel opens it (our USB path).
+    The Wi-Fi path builds the same stack by hand, so without this USERSPACE_ACTIVE stays False and
+    device-initiated media (DisplayService video via screen_stream.open_media_receiver ->
+    UserspaceUdp) would bind a host kernel socket the phone can't reach. userspace_stack_addr()
+    reads `.tun.addr`; establish_userspace_rsd() reads `.rsd` and `.serial`.
+    """
+
+    def __init__(self, tun, rsd, serial: str):
+        self.tun = tun
+        self.rsd = rsd
+        self.serial = serial
+
+
+@contextlib.contextmanager
+def _published(pmd3, handle):
+    ut = pmd3.userspace_tunnel
+    if not hasattr(ut, "_active_tunnel") or ut._active_tunnel is not None:
+        # Older/newer pymobiledevice3 without the attribute, or (never with the daemon's single
+        # tunnel) one is published already: leave it alone.
+        yield
+        return
+    ut._active_tunnel = handle
+    ut.USERSPACE_ACTIVE = True
+    try:
+        yield
+    finally:
+        if ut._active_tunnel is handle:
+            ut._active_tunnel = None
+            ut.USERSPACE_ACTIVE = False
+
+
 @contextlib.asynccontextmanager
 async def wifi_rsd(pmd3, udid: str):
     """A connected RSD over Wi-Fi, and where the phone answered."""
@@ -208,7 +244,8 @@ async def wifi_rsd(pmd3, udid: str):
                     auxiliary_metadata=tunnel.auxiliary_metadata)
                 await asyncio.wait_for(rsd.connect(), timeout=RSD_TIMEOUT_S)
                 try:
-                    yield rsd, where
+                    with _published(pmd3, _WifiTunnelHandle(tun, rsd, udid)):
+                        yield rsd, where
                 finally:
                     with contextlib.suppress(Exception):
                         await rsd.close()

@@ -66,7 +66,8 @@ class DeviceError(Exception): .code .message .fix (dict | None) .detail (str | N
   .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
   "timeout", "disconnected", "daemon-unavailable".
 
-socket_path(demo=None) -> pathlib.Path    $XDG_RUNTIME_DIR/ios-studio[-demo]/deviced.sock
+socket_path(demo=None) -> pathlib.Path    <base>/ios-studio[-demo]/deviced.sock, where <base> is
+                                           $IOSSTUDIO_RUNTIME_DIR if set, else $XDG_RUNTIME_DIR
 deviced_path() -> pathlib.Path             <repo>/bin/iosstudio-deviced (next to this file)
 
 Global state (shared by every client): the active device (`device.select`), the simulated location
@@ -85,7 +86,7 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterable
 
-__all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path"]
+__all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path", "runtime_dir"]
 
 PROTOCOL_VERSION = "1"
 _MAX_LINE = 16 * 1024 * 1024
@@ -128,9 +129,16 @@ def _demo_flag(demo) -> str | None:
     return demo if isinstance(demo, str) and demo else "ready"
 
 
+def runtime_base() -> Path:
+    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else
+    $XDG_RUNTIME_DIR."""
+    base = os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("XDG_RUNTIME_DIR") \
+        or f"/tmp/ios-studio-{os.getuid()}"
+    return Path(base)
+
+
 def runtime_dir(demo=None) -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/ios-studio-{os.getuid()}"
-    return Path(base) / ("ios-studio-demo" if _demo_flag(demo) else "ios-studio")
+    return runtime_base() / ("ios-studio-demo" if _demo_flag(demo) else "ios-studio")
 
 
 def socket_path(demo=None) -> Path:

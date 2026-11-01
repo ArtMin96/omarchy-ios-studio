@@ -1,25 +1,26 @@
 """iosstudio-deviced: the long-running iPhone daemon, shared by the GUI and other clients.
 
 Runs under the pymobiledevice3 venv python (common.pymd3_python()). Protocol: docs/deviced-protocol.md.
-`--serve`: the per-user broker (helper/device_broker.py) on $XDG_RUNTIME_DIR/ios-studio/deviced.sock;
-clients reach it through bin/iosstudio-deviced's stdio bridge or helper/device_client.py.
+`--serve`: the per-user broker (helper/device_broker.py) on $XDG_RUNTIME_DIR/ios-studio/deviced.sock
+($IOSSTUDIO_RUNTIME_DIR overrides the base); clients reach it through bin/iosstudio-deviced's stdio
+bridge or helper/device_client.py.
 `--once <cmd> '<json>'`: standalone one-shot (used when no daemon is running).
 One tunnel to the active device stays open; it reconnects with backoff. Requests run concurrently
 as asyncio tasks, so a slow request never blocks events or other requests.
+
+This file is the core: the session (tunnel, reconnect, shared DVT and service access), the device
+list, and dispatch. Commands live in feature modules under helper/deviced_features/ (loaded by
+deviced_kit.load_features); see docs/development.md#device-daemon-features.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import os
-import platform
-import posixpath
-import re
-import signal
 import sys
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -27,161 +28,43 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import deviced_core as core  # noqa: E402
+
+core.init_output()
+
 import common  # noqa: E402
 from common import HelperError, fix  # noqa: E402
 import device_broker  # noqa: E402
-import device_crash  # noqa: E402
 import device_link as link  # noqa: E402
+import deviced_kit as kit  # noqa: E402
 from device_models import marketing_name  # noqa: E402
-
-VERSION = "1"
-SCREENS_DIR = common.CACHE_DIR / "screens"
-ICONS_DIR = common.CACHE_DIR / "icons"
-CRASH_DIR = common.CACHE_DIR / "crashes"
-DEVICE_CACHE = common.CACHE_DIR / "devices.json"
-LAST_DEVICE = common.STATE_DIR / "last-device"
-DEVICE_STATE = common.STATE_DIR / "device.json"   # read by Setup while the daemon isn't running
+from deviced_core import (  # noqa: E402
+    DEVICE_CACHE, DEVICE_STATE, LAST_DEVICE, PAIR_FIX, TUNNEL_WAIT_S, VERSION,
+    battery_view, classify, dlog, emit, err, is_connection_error, send,
+)
 
 BACKOFF = [3, 5, 10, 20, 30]
 HEALTH_EVERY_S = 60
-TUNNEL_WAIT_S = 25
 DISCOVERY_EVERY_S = 3
-
-# syslog batching/buffering per client lives in device_broker.py
-SYSLOG_MSG_MAX = 8192
-LEVELS = {"debug": 0, "info": 1, "default": 2, "error": 3, "fault": 4}
-# os_trace raw level byte -> our name
-RAW_LEVEL = {0x00: "default", 0x01: "info", 0x02: "debug", 0x03: "default", 0x10: "error", 0x11: "fault"}
-
-PAIR_HELP_WIFI = ("On your iPhone, open Settings › Developer › Paired Macs and tap this computer "
-                  "under “Other Devices”.")
-
-
-# ---------------------------------------------------------------- output
-
-_out_lock = threading.Lock()
-# The protocol owns a private copy of stdout; fd 1 itself is pointed at stderr so that nothing a
-# library prints (pymobiledevice3's rich progress bars redirect sys.stdout while installing) can
-# ever corrupt the JSON lines.
-_OUT = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
-os.dup2(2, 1)
-sys.stdout = sys.stderr
-ONCE = False   # --once mode: events go to stderr, only the single reply goes to stdout
-BROKER: device_broker.Broker | None = None   # --serve mode: events go to the subscribed clients
-
-
-def send(obj: dict) -> None:
-    line = json.dumps(obj, separators=(",", ":"), default=str)
-    with _out_lock:
-        try:
-            _OUT.write(line + "\n")
-            _OUT.flush()
-        except (BrokenPipeError, ValueError, OSError):
-            os._exit(0)
-
-
-def emit(name: str, data) -> None:
-    if ONCE:
-        if name in ("connection", "installProgress", "pair"):
-            dlog(f"{name}: {json.dumps(data, default=str)[:300]}")
-        return
-    if BROKER is not None:
-        BROKER.emit(name, data)
-        return
-    send({"event": name, "data": data})
-
-
-def dlog(text: str, level: str = "debug") -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] deviced: {text}", file=sys.stderr, flush=True)
-
-
-class _LogBridge(logging.Handler):
-    def emit(self, record):  # noqa: D401 - logging API
-        if record.levelno >= logging.WARNING:
-            dlog(f"{record.name}: {record.getMessage()}")
-
-
-# ---------------------------------------------------------------- errors
-
-def err(code: str, message: str, fix_: dict | None = None, detail: str | None = None) -> HelperError:
-    return HelperError(code, message, fix_, detail)
-
-
-PAIR_FIX = fix("Pair iPhone", "device", action="pair")
-
-
-def classify(exc: BaseException, pmd3=None) -> HelperError:
-    """Plain-language HelperError for any exception from the phone."""
-    if isinstance(exc, HelperError):
-        return exc
-    name = type(exc).__name__
-    text = f"{name}: {exc}"
-    low = text.lower()
-    if isinstance(exc, link.UnreachableError):
-        return err("unreachable", "Can't reach your iPhone. Make sure it's awake, unlocked and on "
-                   "the same Wi-Fi (or plugged in).", fix("Retry", "device", action="reconnect"), text)
-    if isinstance(exc, link.ApiError):
-        return err("pmd3-api", "The iPhone tools need repair.", fix("Repair", "setup", step="pymobiledevice3"), text)
-    if "locked" in low or name == "PasswordRequiredError":
-        return err("locked", "Your iPhone is locked. Unlock it and try again.", None, text)
-    if "developermode" in low.replace(" ", "") or name == "DeveloperModeIsNotEnabledError":
-        return err("developer-mode-off", "Developer Mode is off on your iPhone.",
-                   fix("Turn on Developer Mode", "device", action="devmode"), text)
-    if name in ("NotPairedError", "PairingError", "InvalidHostIDError", "PairingDialogResponsePendingError",
-                "UserDeniedPairingError") or isinstance(exc, link.NotPairedError):
-        return err("not-trusted", "This computer isn't trusted by your iPhone yet.", PAIR_FIX, text)
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError, asyncio.IncompleteReadError)) \
-            or name in ("ConnectionTerminatedError", "ConnectionFailedError", "StreamClosedError"):
-        return err("unreachable", "The connection to your iPhone dropped. Trying again…",
-                   fix("Retry", "device", action="reconnect"), text)
-    return err("failed", "Something went wrong talking to your iPhone.", None, text)
-
-
-def is_connection_error(exc: BaseException) -> bool:
-    return classify(exc).code == "unreachable"
-
-
-# ---------------------------------------------------------------- small utils
-
-def png_size(data: bytes) -> tuple[int, int]:
-    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
-        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
-    return 0, 0
-
-
-def write_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
-
-
-def safe_name(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", s)[:200]
-
-
-def battery_view(b: dict | None) -> dict | None:
-    if not b:
-        return None
-    health = None
-    design, full = b.get("DesignCapacity"), b.get("NominalChargeCapacity") or b.get("AppleRawMaxCapacity")
-    if design and full:
-        with contextlib.suppress(Exception):
-            health = max(0, min(100, round(100 * float(full) / float(design))))
-    return {
-        "level": b.get("CurrentCapacity"),
-        "charging": bool(b.get("IsCharging")),
-        "external": bool(b.get("ExternalConnected")),
-        "cycleCount": b.get("CycleCount"),
-        "health": health,
-        "temperature": round(b["Temperature"] / 100, 1) if isinstance(b.get("Temperature"), (int, float)) else None,
-    }
 
 
 # ---------------------------------------------------------------- device session
 
 class Session:
-    """The active device: one tunnel, reconnect with backoff, shared DVT channels."""
+    """The active device: one tunnel, reconnect with backoff, and shared access to its services.
+
+    Feature modules reach the phone only through this object (never a second tunnel):
+      await s.get_rsd()                        the connected RemoteServiceDiscoveryService
+      async with s.open_service(Cls, ...)      a lockdown-over-RSD service for one call
+      await s.cached_service(key, Cls, ...)    the same, kept open until the tunnel drops
+      async with s.house_arrest(bundle_id)     an app's container over AFC (VendContainer/VendDocuments)
+      await s.get_dvt() / s.dvt_instrument()   the shared DVT connection and cached instruments
+      async with s.dvt_channel(Cls)            an instrument channel on the shared DVT connection
+      async with s.dedicated_dvt()             a DVT connection of its own (long-held instruments)
+      await s.port_forward(...)                a loopback TCP port piped to a service on the phone
+      s.userspace_udp()                        a UDP socket on the tunnel's stack (device-initiated media)
+      s.data / s.tunnel_data                   per-session / per-tunnel feature state
+    """
 
     def __init__(self, daemon: "Daemon", udid: str):
         self.d = daemon
@@ -201,9 +84,11 @@ class Session:
         self.dvt_stack: contextlib.AsyncExitStack | None = None
         self.dvt = None
         self.dvt_lock = asyncio.Lock()
-        self.shot = None
-        self.loc = None
-        self.location: dict | None = None
+        self.instruments: dict = {}        # key -> instrument entered on dvt_stack
+        self.services: dict = {}           # key -> service kept open on the current tunnel
+        self._svc_locks: dict = {}
+        self.data: dict = {}               # feature state for this device (survives reconnects)
+        self.tunnel_data: dict = {}        # feature state for the current tunnel (cleared on drop)
         self.last_connection: dict | None = None
 
     # -- lifecycle
@@ -307,10 +192,15 @@ class Session:
         was = self.rsd is not None
         self.rsd = None
         self.connected.clear()
-        self.dvt = self.shot = self.loc = None
+        self.dvt = None
+        self.instruments = {}
         stack, self.dvt_stack = self.dvt_stack, None
         if stack is not None:
             asyncio.create_task(self._close_stack(stack))
+        services, self.services = self.services, {}
+        for svc in services.values():
+            asyncio.create_task(self._close_service(svc))
+        self.tunnel_data = {}
         if was:
             self.d.on_disconnected(self)
 
@@ -318,6 +208,11 @@ class Session:
     async def _close_stack(stack):
         with contextlib.suppress(BaseException):
             await asyncio.wait_for(stack.aclose(), 5)
+
+    @staticmethod
+    async def _close_service(svc):
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(svc.__aexit__(None, None, None), 5)
 
     async def _hold(self):
         """Stay connected until dropped; refresh battery etc. periodically (doubles as health check)."""
@@ -360,6 +255,15 @@ class Session:
             raise err("unreachable", "Can't reach your iPhone. Make sure it's awake and on the same "
                       "Wi-Fi, or plug it in.", fix("Retry", "device", action="reconnect"))
         return self.rsd
+
+    @property
+    def transport(self) -> str | None:
+        return self.where.get("transport") if self.rsd is not None else None
+
+    def require_usb(self, what: str = "This"):
+        """Raise needs-usb unless the current tunnel runs over the cable (e.g. pcapd)."""
+        if self.where.get("transport") != "usb":
+            raise err("needs-usb", f"{what} needs your iPhone plugged in with a USB cable.")
 
     # -- info
     def static_info(self) -> dict:
@@ -427,6 +331,110 @@ class Session:
             raise conn_err[0]
         return out
 
+    # -- lockdown-over-RSD services
+    @staticmethod
+    async def _make(factory, *args, **kw):
+        obj = factory(*args, **kw)
+        if inspect.isawaitable(obj):
+            obj = await obj
+        return obj
+
+    @contextlib.asynccontextmanager
+    async def open_service(self, factory, *args, **kw):
+        """`async with s.open_service(AfcService) as afc:` one service connection for this call.
+
+        factory(rsd, *args, **kw) is a pymobiledevice3 service class (AfcService, PcapdService,
+        DiagnosticsService, ...) or a coroutine function returning one (HouseArrestService.create).
+        The object is entered as an async context manager and closed on exit.
+        """
+        rsd = await self.get_rsd()
+        obj = await self._make(factory, rsd, *args, **kw)
+        async with obj as svc:
+            yield svc
+
+    async def cached_service(self, key: str, factory, *args, **kw):
+        """Like open_service, but the entered service stays open and is shared until the tunnel
+        drops (or forget_service(key)). Use for services called often (e.g. AFC browsing)."""
+        if key in self.services:
+            return self.services[key]
+        lock = self._svc_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if key in self.services:
+                return self.services[key]
+            rsd = await self.get_rsd()
+            obj = await self._make(factory, rsd, *args, **kw)
+            svc = await obj.__aenter__()
+            if self.rsd is not rsd:   # the tunnel changed while we opened it
+                await self._close_service(obj)
+                raise err("unreachable", "The connection to your iPhone dropped. Trying again…",
+                          fix("Retry", "device", action="reconnect"))
+            self.services[key] = svc
+            return svc
+
+    async def forget_service(self, key: str):
+        """Close a cached service (e.g. after it broke); the next cached_service() opens a new one."""
+        svc = self.services.pop(key, None)
+        if svc is not None:
+            await self._close_service(svc)
+
+    def house_arrest(self, bundle_id: str, documents: bool = False):
+        """`async with s.house_arrest("com.example.app") as afc:` an app's container (VendContainer)
+        or only its Documents (documents=True, VendDocuments) as an AfcService."""
+        from pymobiledevice3.services.house_arrest import HouseArrestService
+        return self.open_service(HouseArrestService.create, bundle_id, documents_only=documents)
+
+    async def service_connection(self, name: str, checkin: bool = True):
+        """A raw pymobiledevice3 ServiceConnection to an RSD service (caller closes it). checkin=True
+        for `*.shim.remote` lockdown services, False for developer services such as debugproxy."""
+        rsd = await self.get_rsd()
+        if checkin:
+            return await rsd.start_lockdown_service(name)
+        return await rsd.start_lockdown_service_without_checkin(name)
+
+    @contextlib.asynccontextmanager
+    async def usb_lockdown(self, autopair: bool = False):
+        """A plain lockdown client over usbmux (USB only), for the few services RSD doesn't offer."""
+        if self.udid not in self.d.usb:
+            raise err("needs-usb", "Plug your iPhone in with a USB cable for this.")
+        lockdown = await self.pmd3.create_using_usbmux(serial=self.udid, autopair=autopair)
+        try:
+            yield lockdown
+        finally:
+            with contextlib.suppress(Exception):
+                await lockdown.close()
+
+    # -- port forwarding (debugserver, WebDriverAgent, ...)
+    async def port_forward(self, *, service: str | None = None, port: int | None = None,
+                           checkin: bool = False, local_port: int = 0, host: str = "127.0.0.1") -> core.PortForward:
+        """Listen on host:local_port (0 = any free port) and pipe each connection through this
+        tunnel to an RSD service by name (service="com.apple.internal.dt.remote.debugproxy") or to a
+        TCP port on the phone (port=8100). Returns a started PortForward (.port, .stop()). Hold it
+        with d.resources so it closes with the client / tunnel."""
+        if (service is None) == (port is None):
+            raise ValueError("pass service= or port=")
+        rsd = await self.get_rsd()
+        if service is not None:
+            rsd.get_service_port(service)   # InvalidServiceError now rather than per connection
+
+        async def connect():
+            r = await self.get_rsd()
+            if service is not None:
+                return await (r.start_lockdown_service(service) if checkin
+                              else r.start_lockdown_service_without_checkin(service))
+            return await r.create_service_connection(int(port))
+        return await core.PortForward(connect, service or f"port {port}", host, local_port).start()
+
+    # -- userspace UDP (device-initiated media, e.g. DisplayService video)
+    def udp_available(self) -> bool:
+        return self.rsd is not None and bool(getattr(self.pmd3.userspace_tunnel, "USERSPACE_ACTIVE", False))
+
+    def userspace_udp(self):
+        """A UDP socket on the tunnel's userspace stack (.local_ip, .port, recv, sendto, close).
+        pymobiledevice3's screen_stream.open_media_receiver() picks this up by itself."""
+        if not self.udp_available():
+            raise err("unreachable", "Not connected to your iPhone.")
+        return self.pmd3.userspace_tunnel.UserspaceUdp()
+
     # -- DVT channels
     async def ensure_ddi(self):
         rsd = await self.get_rsd()
@@ -448,6 +456,7 @@ class Session:
             emit("deviceInfo", {"udid": self.udid, "ddiMounted": True})
 
     async def get_dvt(self):
+        """The shared DVT (instruments) connection, opened lazily (mounting the DDI if needed)."""
         async with self.dvt_lock:
             if self.dvt is not None and self.dvt_stack is not None:
                 return self.dvt
@@ -462,139 +471,84 @@ class Session:
             self.dvt_stack = stack
             return self.dvt
 
-    async def screenshot(self) -> bytes:
+    def reset_dvt(self):
+        """Forget the shared DVT connection and its instruments (it broke); the next use reopens it."""
+        self.dvt = None
+        self.instruments = {}
+        stack, self.dvt_stack = self.dvt_stack, None
+        if stack:
+            asyncio.create_task(self._close_stack(stack))
+
+    async def dvt_instrument(self, key: str, factory, *args, **kw):
+        """An instrument (Screenshot, LocationSimulation, Sysmontap, ...) opened once on the shared
+        DVT connection and kept until it's reset or the tunnel drops. factory(dvt, *args, **kw)."""
+        dvt = await self.get_dvt()
+        async with self.dvt_lock:
+            inst = self.instruments.get(key)
+            if inst is None:
+                if self.dvt is not dvt or self.dvt_stack is None:
+                    raise err("unreachable", "The connection to your iPhone dropped. Trying again…",
+                              fix("Retry", "device", action="reconnect"))
+                inst = await self.dvt_stack.enter_async_context(factory(dvt, *args, **kw))
+                self.instruments[key] = inst
+            return inst
+
+    @contextlib.asynccontextmanager
+    async def dvt_channel(self, factory, *args, **kw):
+        """`async with s.dvt_channel(ProcessControl) as pc:` a channel on the shared DVT connection
+        for this call only."""
+        dvt = await self.get_dvt()
+        async with factory(dvt, *args, **kw) as inst:
+            yield inst
+
+    @contextlib.asynccontextmanager
+    async def dedicated_dvt(self):
+        """A DVT connection of its own over the same tunnel, for instruments held for a long time
+        (condition inducer, sysmontap) so they never block or break the shared one."""
+        await self.ensure_ddi()
+        rsd = await self.get_rsd()
+        async with self.pmd3.DvtProvider(rsd) as dvt:
+            yield dvt
+
+    async def dvt_retry(self, fn, fail: BaseException | None = None):
+        """await fn() using the shared DVT connection; if it breaks with a connection error, rebuild
+        the connection once and try again."""
         for attempt in range(2):
-            dvt = await self.get_dvt()
+            await self.get_dvt()
             try:
-                async with self.dvt_lock:
-                    if self.shot is None:
-                        self.shot = await self.dvt_stack.enter_async_context(self.pmd3.Screenshot(dvt))
-                    shot = self.shot
-                return await asyncio.wait_for(shot.get_screenshot(), 15)
+                return await fn()
             except BaseException as exc:  # noqa: BLE001
                 if isinstance(exc, asyncio.CancelledError):
                     raise
-                # DVT channel broke: rebuild it once
-                self.dvt = self.shot = self.loc = None
-                stack, self.dvt_stack = self.dvt_stack, None
-                if stack:
-                    asyncio.create_task(self._close_stack(stack))
+                self.reset_dvt()
                 if attempt or not is_connection_error(exc):
                     raise
-        raise err("failed", "Couldn't take a screenshot.")
-
-    async def location_set(self, lat: float, lon: float):
-        dvt = await self.get_dvt()
-        async with self.dvt_lock:
-            if self.loc is None:
-                self.loc = await self.dvt_stack.enter_async_context(self.pmd3.LocationSimulation(dvt))
-            await self.loc.set(lat, lon)
-        self.location = {"lat": lat, "lon": lon}
-
-    async def location_clear(self):
-        if self.loc is None:
-            dvt = await self.get_dvt()
-            async with self.dvt_lock:
-                self.loc = await self.dvt_stack.enter_async_context(self.pmd3.LocationSimulation(dvt))
-        async with self.dvt_lock:
-            await self.loc.clear()
-        self.location = None
-
-
-# ---------------------------------------------------------------- syslog
-
-class PhoneSyslog:
-    """The one os_trace stream to the phone. Per-client filters live in device_broker.SyslogHub."""
-
-    def __init__(self, daemon: "Daemon"):
-        self.d = daemon
-        self.task: asyncio.Task | None = None
-
-    def open(self, session: Session, pid: int):
-        self.task = asyncio.create_task(self._run(session, pid))
-
-    async def close(self):
-        t, self.task = self.task, None
-        if t:
-            t.cancel()
-            with contextlib.suppress(BaseException):
-                await t
-
-    @staticmethod
-    def _entry(e, min_level: int) -> dict | None:
-        lvl = RAW_LEVEL.get(int(e.level), "default")
-        if LEVELS[lvl] < min_level:
-            return None   # no subscriber wants this level: skip building it
-        msg = e.message or ""
-        if len(msg) > SYSLOG_MSG_MAX:
-            msg = msg[:SYSLOG_MSG_MAX] + "…"
-        try:
-            ts = e.timestamp.timestamp()
-        except Exception:  # noqa: BLE001
-            ts = time.time()
-        return {"ts": ts, "process": posixpath.basename(e.filename or ""), "pid": e.pid, "level": lvl,
-                "subsystem": e.label.subsystem if e.label else "", "category": e.label.category if e.label else "",
-                "message": msg, "image": posixpath.basename(e.image_name or "")}
-
-    async def _run(self, session: Session, pid: int):
-        hub = BROKER.syslog
-        first = True
-        while True:
-            try:
-                rsd = await session.get_rsd(timeout=TUNNEL_WAIT_S if first else 3600)
-                await hub.resolve_missing()
-                if hub.reconnecting or first:
-                    hub.stream_state(False, None)
-                first = False
-                n = 0
-                dlog(f"syslog: streaming (pid filter {pid})")
-                async for entry in session.pmd3.OsTraceService(lockdown=rsd).syslog(pid=pid):
-                    if n == 0:
-                        dlog("syslog: first entry")
-                    item = self._entry(entry, hub.min_level())
-                    if item is not None:
-                        hub.feed(item)
-                    n += 1
-                    if n % 256 == 0:
-                        await asyncio.sleep(0)  # let flushes and requests run
-                raise ConnectionError("the log stream ended")
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exc:  # noqa: BLE001
-                e = classify(exc)
-                dlog(f"syslog: {exc!r}")
-                if e.code == "unreachable":
-                    session.drop("syslog stream broke")
-                    hub.stream_state(True, None)
-                    await asyncio.sleep(2)
-                    continue
-                if first and e.code in ("not-paired", "not-trusted"):
-                    hub.stream_failed(e.to_json())
-                    return
-                hub.stream_state(True, e.to_json())
-                await asyncio.sleep(5)
+        raise fail or err("failed", "The developer tools connection to your iPhone failed.")
 
 
 # ---------------------------------------------------------------- the daemon
 
 class Daemon:
-    def __init__(self, pmd3):
+    def __init__(self, pmd3, resources: kit.Resources | None = None):
         self.pmd3 = pmd3
         self.usb: set[str] = set()
         self.wifi: dict[str, str] = {}
         self.lockdown: set[str] = set()
         self.cache: dict = common.load_json(DEVICE_CACHE, {}) or {}
         self.session: Session | None = None
-        self.syslog = PhoneSyslog(self)
         self.disc_task: asyncio.Task | None = None
-        self.mirror_task: asyncio.Task | None = None
-        self.mirror_fps = 1.0
-        self.pair_task: asyncio.Task | None = None
-        self.pair_code_fut: asyncio.Future | None = None
-        self.icon_task: asyncio.Task | None = None
-        self.sizes_task: asyncio.Task | None = None
         self._last_devices = None
         self.stopping = asyncio.Event()
+        self.resources = resources or kit.Resources(log=dlog)
+        self.registry = kit.FeatureRegistry(log=dlog)
+        self._register_core(self.registry.module("core"))
+        kit.load_features(self.registry, "deviced_features")
+        if self.registry.failed:
+            dlog(f"features that failed to load: {', '.join(sorted(self.registry.failed))}")
+
+    def client(self):
+        """The client whose request is running (key for d.resources), None in --once mode."""
+        return core.current_client()
 
     # -- devices
     def remember(self, udid: str, info: dict):
@@ -606,12 +560,13 @@ class Daemon:
 
     def write_state(self, s: "Session"):
         """~/.local/state/ios-studio/device.json: what Setup needs when the daemon isn't running."""
-        if ONCE and s.rsd is None and not s.info:
+        if core.ONCE and s.rsd is None and not s.info:
             return
         info = s.info or {}
         cached = self.cache.get(s.udid, {})
         old = common.load_json(DEVICE_STATE, {}) or {}
         same = old.get("udid") == s.udid
+
         def pick(key, ikey=None):
             v = info.get(ikey or key)
             if v is None or v == "":
@@ -712,9 +667,8 @@ class Daemon:
         old = self.session
         self.session = None
         if old:
-            await self.mirror_stop()
-            if BROKER is not None:
-                await BROKER.syslog.stop_all()
+            await self.resources.release_all("session", ("tunnel", "session"))
+            await self.registry.run_hooks("session_end", self, old)
             await old.close()
         s = Session(self, udid)
         self.session = s
@@ -729,6 +683,11 @@ class Daemon:
 
     def on_disconnected(self, s: Session):
         self.publish_devices()
+        asyncio.create_task(self._tunnel_dropped(s))
+
+    async def _tunnel_dropped(self, s: Session):
+        await self.resources.release_all("tunnel", ("tunnel",))
+        await self.registry.run_hooks("tunnel_drop", self, s)
 
     def need_session(self, args: dict) -> Session:
         udid = args.get("udid")
@@ -742,583 +701,64 @@ class Daemon:
         s = self.need_session(args)
         return s, await s.get_rsd()
 
-    # -- mirror
-    async def mirror_stop(self):
-        t, self.mirror_task = self.mirror_task, None
-        if t:
-            t.cancel()
-            with contextlib.suppress(BaseException):
-                await t
-            emit("mirror", {"running": False, "fps": self.mirror_fps})
+    # -------------------------------------------------------- core commands
 
-    async def _mirror(self, s: Session):
-        seq = 0
-        fails = 0
-        safe = safe_name(s.udid)
-        while True:
-            t0 = time.monotonic()
-            try:
-                png = await s.screenshot()
-                fails = 0
-                path = SCREENS_DIR / f"mirror-{safe}-{seq % 2}.png"
-                await asyncio.to_thread(write_bytes, path, png)
-                w, h = png_size(png)
-                seq += 1
-                emit("frame", {"path": str(path), "seq": seq, "ts": time.time(), "width": w, "height": h})
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exc:  # noqa: BLE001
-                fails += 1
-                e = classify(exc)
-                dlog(f"mirror: {exc!r}")
-                if e.code == "unreachable" and fails < 30:
-                    await asyncio.sleep(2)
-                    continue
-                self.mirror_task = None
-                emit("mirror", {"running": False, "fps": self.mirror_fps, "error": e.to_json()})
-                return
-            delay = 1.0 / self.mirror_fps - (time.monotonic() - t0)
-            if delay > 0:
-                await asyncio.sleep(delay)
+    def _register_core(self, reg):
+        @reg.command("daemon.ping")
+        async def c_daemon_ping(d, a):
+            return {"pong": True, "ts": time.time()}
 
-    # -- icons
-    def icon_path(self, udid: str, bundle_id: str) -> Path:
-        return ICONS_DIR / safe_name(udid) / f"{safe_name(bundle_id)}.png"
-
-    async def fetch_icons(self, s: Session, bundle_ids: list[str]):
-        try:
-            rsd = await s.get_rsd()
-            async with self.pmd3.IconService(rsd) as svc:
-                for bid in bundle_ids:
-                    path = self.icon_path(s.udid, bid)
-                    if path.exists():
-                        continue
-                    try:
-                        icon = await asyncio.wait_for(svc.fetch_icon(bundle_identifier=bid, width=60, height=60, scale=2), 10)
-                    except BaseException as exc:  # noqa: BLE001
-                        if is_connection_error(exc):
-                            raise
-                        continue
-                    await asyncio.to_thread(write_bytes, path, icon.png_data)
-                    emit("appIcon", {"udid": s.udid, "bundleId": bid, "path": str(path)})
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:  # noqa: BLE001
-            dlog(f"icons: {exc!r}")
-
-    async def fetch_sizes(self, s: Session, kind: str):
-        """Sizes are slow to compute (~9 s over Wi-Fi), so they follow apps.list as an event."""
-        try:
-            rsd = await s.get_rsd()
-            apps = await self.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
-                application_type=kind, calculate_sizes=True)
-            sizes = {bid: int(i.get("StaticDiskUsage") or 0) + int(i.get("DynamicDiskUsage") or 0)
-                     for bid, i in apps.items() if i.get("StaticDiskUsage") is not None}
-            emit("appSizes", {"udid": s.udid, "sizes": sizes})
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:  # noqa: BLE001
-            dlog(f"sizes: {exc!r}")
-
-    # -------------------------------------------------------- commands
-
-    async def c_daemon_ping(self, a):
-        return {"pong": True, "ts": time.time()}
-
-    async def c_daemon_shutdown(self, a):
-        asyncio.get_running_loop().call_later(0.1, self.stopping.set)
-        return {}
-
-    async def c_devices_list(self, a):
-        return self.device_list()
-
-    async def c_device_select(self, a):
-        udid = a.get("udid")
-        if not udid:
-            raise err("bad-args", "Which iPhone? (udid missing)")
-        if udid not in self.usb and udid not in self.wifi and udid not in self.cache:
-            raise err("not-found", "That iPhone isn't around right now.")
-        await self.select(udid)
-        return next((d for d in self.device_list() if d["udid"] == udid), {})
-
-    async def c_device_reconnect(self, a):
-        s = self.need_session(a)
-        s.reconnect_now()
-        return {}
-
-    async def c_device_info(self, a):
-        s, _ = await self.rsd(a)
-        if a.get("fresh") or "battery" not in s.info:
-            s.info.update(await s.dynamic_info())
-        self.write_state(s)
-        info = dict(s.info)
-        info.update(transport=s.where.get("transport"), address=s.where.get("address", ""),
-                    wifiPaired=s.udid in self.wifi, usbPaired=s.udid in self.lockdown,
-                    location=s.location, locked=s.state == "locked")
-        return info
-
-    # apps
-    async def c_apps_list(self, a):
-        s, rsd = await self.rsd(a)
-        kind = "Any" if a.get("system") else "User"
-        apps = await self.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
-            application_type=kind, calculate_sizes=bool(a.get("sizes", False)))
-        running: dict[str, int] = {}
-        with contextlib.suppress(BaseException):
-            async with self.pmd3.AppServiceService(rsd) as svc:
-                for p in await asyncio.wait_for(svc.list_processes(), 10):
-                    url = p.get("executableURL")
-                    path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
-                    if ".app/" in path and "processIdentifier" in p:
-                        running[path.split(".app/")[0].rstrip("/").removeprefix("file://") + ".app"] = int(p["processIdentifier"])
-        out = []
-        for bid, info in apps.items():
-            path = info.get("Path", "")
-            pid = None
-            for rp, rpid in running.items():
-                if path and (rp.endswith(path) or path.endswith(rp)):
-                    pid = rpid
-                    break
-            signer = info.get("SignerIdentity", "") or ""
-            icon = self.icon_path(s.udid, bid)
-            size = None
-            if info.get("StaticDiskUsage") is not None:
-                size = int(info.get("StaticDiskUsage") or 0) + int(info.get("DynamicDiskUsage") or 0)
-            out.append({
-                "bundleId": bid,
-                "name": info.get("CFBundleDisplayName") or info.get("CFBundleName") or bid,
-                "version": info.get("CFBundleShortVersionString", ""),
-                "build": info.get("CFBundleVersion", ""),
-                "developer": signer.startswith(("Apple Development", "iPhone Developer")) or bool(info.get("ProfileValidated") and "Development" in signer),
-                "signer": signer,
-                "removable": info.get("ApplicationType") == "User" or bool(info.get("IsRemovable", False)),
-                "hidden": "hidden" in (info.get("SBAppTags") or []),
-                "system": info.get("ApplicationType") == "System",
-                "executable": info.get("CFBundleExecutable", ""),
-                "path": path,
-                "size": size,
-                "icon": str(icon) if icon.exists() else None,
-                "running": pid is not None,
-                "pid": pid,
-            })
-        out.sort(key=lambda x: (x["name"] or "").lower())
-        if a.get("sizes") is None and (self.sizes_task is None or self.sizes_task.done()):
-            self.sizes_task = asyncio.create_task(self.fetch_sizes(s, kind))
-        if a.get("icons", True):
-            missing = [x["bundleId"] for x in out if not x["icon"]]
-            if missing and (self.icon_task is None or self.icon_task.done()):
-                self.icon_task = asyncio.create_task(self.fetch_icons(s, missing))
-        return out
-
-    async def _app_pids(self, rsd, bundle_id: str) -> list[int]:
-        apps = await self.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
-            application_type="Any", bundle_identifiers=[bundle_id])
-        info = apps.get(bundle_id)
-        if not info:
-            raise err("not-found", "That app isn't installed on your iPhone.")
-        app_path = (info.get("Path") or "").rstrip("/")
-        exe = info.get("CFBundleExecutable") or ""
-        pids = []
-        async with self.pmd3.AppServiceService(rsd) as svc:
-            for p in await svc.list_processes():
-                url = p.get("executableURL")
-                path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
-                path = path.removeprefix("file://")
-                if (app_path and path.startswith(app_path + "/")) or (exe and path.endswith(f".app/{exe}")):
-                    if "processIdentifier" in p:
-                        pids.append(int(p["processIdentifier"]))
-        return sorted(set(pids))
-
-    async def c_app_launch(self, a):
-        bid = a.get("bundleId")
-        if not bid:
-            raise err("bad-args", "Which app? (bundleId missing)")
-        s, rsd = await self.rsd(a)
-        await s.ensure_ddi()
-        try:
-            async with self.pmd3.AppServiceService(rsd) as svc:
-                res = await svc.launch_application(bid, list(a.get("args") or []), True, False, dict(a.get("env") or {}))
-        except self.pmd3.exceptions.CoreDeviceError as exc:
-            code, reason = link.launch_failure(getattr(exc, "user_info", None))
-            if code == "Locked":
-                raise err("locked", "Your iPhone is locked. Unlock it, then press Launch again.", None, str(exc))
-            low = f"{reason} {exc}".lower()
-            if "untrusted" in low or "not been explicitly trusted" in low or "profile" in low and "trust" in low:
-                raise err("untrusted-developer", "Your iPhone doesn't trust this developer yet. On the iPhone open "
-                          "Settings › General › VPN & Device Management, tap your Apple Development profile and Trust.",
-                          None, str(exc))
-            raise err("launch-failed", f"The app didn't start{': ' + reason if reason else '.'}", None, str(exc))
-        pid = None
-        with contextlib.suppress(Exception):
-            tok = res.get("processToken") if isinstance(res, dict) else None
-            pid = (tok or {}).get("processIdentifier")
-        return {"bundleId": bid, "pid": pid}
-
-    async def c_app_kill(self, a):
-        bid = a.get("bundleId")
-        if not bid:
-            raise err("bad-args", "Which app? (bundleId missing)")
-        s, rsd = await self.rsd(a)
-        pids = await self._app_pids(rsd, bid)
-        async with self.pmd3.AppServiceService(rsd) as svc:
-            for pid in pids:
-                await svc.send_signal_to_process(pid, int(signal.SIGKILL))
-        return {"bundleId": bid, "killed": pids}
-
-    async def c_app_install(self, a):
-        raw = str(a.get("path") or "").strip()
-        if not raw:
-            raise err("bad-args", "Which app file? (path missing)")
-        path = Path(raw).expanduser()
-        if not path.exists():
-            raise err("not-found", "The app file to install wasn't found. Build the app again and retry.", None, str(path))
-        if not (path.suffix == ".ipa" or (path.is_dir() and path.suffix == ".app")):
-            raise err("bad-args", "Only a signed .ipa (or .app folder) can be installed.", None, str(path))
-        try:
-            bid = await asyncio.to_thread(link.package_bundle_id, path)
-        except Exception as exc:  # noqa: BLE001
-            raise err("bad-package", "That app file is damaged or isn't a signed iPhone app.", None, repr(exc))
-        s, rsd = await self.rsd(a)
-        sp = str(path)
-        emit("installProgress", {"path": sp, "percent": 0, "status": "uploading"})
-        last = [-1]
-
-        def progress(pct, *_):
-            p = int(pct)
-            if p != last[0]:
-                last[0] = p
-                emit("installProgress", {"path": sp, "percent": p, "status": "installing"})
-
-        t0 = time.monotonic()
-        try:
-            await self.pmd3.InstallationProxyService(lockdown=rsd).install_from_local(path, "Install", None, progress)
-        except BaseException as exc:  # noqa: BLE001
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            raise link.install_error(exc, classify)
-        installed = None
-        with contextlib.suppress(BaseException):
-            apps = await self.pmd3.InstallationProxyService(lockdown=rsd).get_apps(application_type="User")
-            for k in sorted(apps):
-                if bid and (k == bid or k.endswith("." + bid)):
-                    installed = k
-                    break
-        emit("installProgress", {"path": sp, "percent": 100, "status": "done"})
-        with contextlib.suppress(OSError):
-            if installed:
-                self.icon_path(s.udid, installed).unlink(missing_ok=True)
-        return {"path": sp, "bundleId": installed or bid, "packageBundleId": bid,
-                "seconds": round(time.monotonic() - t0, 1)}
-
-    async def c_app_uninstall(self, a):
-        bid = a.get("bundleId")
-        if not bid:
-            raise err("bad-args", "Which app? (bundleId missing)")
-        s, rsd = await self.rsd(a)
-        await self.pmd3.InstallationProxyService(lockdown=rsd).uninstall(bid)
-        with contextlib.suppress(OSError):
-            self.icon_path(s.udid, bid).unlink()
-        return {"bundleId": bid}
-
-    async def c_processes_list(self, a):
-        s, rsd = await self.rsd(a)
-        async with self.pmd3.AppServiceService(rsd) as svc:
-            procs = await svc.list_processes()
-        out = []
-        for p in procs:
-            url = p.get("executableURL")
-            path = (url.get("relative", "") if isinstance(url, dict) else str(url or "")).removeprefix("file://")
-            is_app = ".app/" in path
-            if a.get("appsOnly") and not is_app:
-                continue
-            out.append({"pid": p.get("processIdentifier"), "name": posixpath.basename(path.rstrip("/")),
-                        "path": path, "isApp": is_app})
-        out.sort(key=lambda x: (x["name"] or "").lower())
-        return out
-
-    # screen
-    async def c_screenshot(self, a):
-        s, _ = await self.rsd(a)
-        png = await s.screenshot()
-        path = SCREENS_DIR / f"shot-{time.strftime('%Y%m%d-%H%M%S')}.png"
-        await asyncio.to_thread(write_bytes, path, png)
-        w, h = png_size(png)
-        return {"path": str(path), "width": w, "height": h, "bytes": len(png), "ts": time.time()}
-
-    async def c_mirror_start(self, a):
-        s = self.need_session(a)
-        try:
-            fps = float(a.get("fps", 1.0))
-        except (TypeError, ValueError):
-            fps = 1.0
-        self.mirror_fps = max(0.2, min(4.0, fps))
-        if self.mirror_task is None or self.mirror_task.done():
-            await s.get_rsd()
-            self.mirror_task = asyncio.create_task(self._mirror(s))
-        emit("mirror", {"running": True, "fps": self.mirror_fps})
-        return {"running": True, "fps": self.mirror_fps}
-
-    async def c_mirror_stop(self, a):
-        await self.mirror_stop()
-        return {"running": False}
-
-    # location
-    async def c_location_set(self, a):
-        try:
-            lat, lon = float(a["lat"]), float(a["lon"])
-        except (KeyError, TypeError, ValueError):
-            raise err("bad-args", "Enter a latitude and longitude (numbers).")
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            raise err("bad-args", "Latitude must be between -90 and 90, longitude between -180 and 180.")
-        s, _ = await self.rsd(a)
-        await s.location_set(lat, lon)
-        emit("deviceInfo", {"udid": s.udid, "location": s.location})
-        return {"lat": lat, "lon": lon}
-
-    async def c_location_clear(self, a):
-        s, _ = await self.rsd(a)
-        await s.location_clear()
-        emit("deviceInfo", {"udid": s.udid, "location": None})
-        return {}
-
-    # ddi / dev mode
-    async def c_ddi_status(self, a):
-        s, rsd = await self.rsd(a)
-        async with self.pmd3.MobileImageMounterService(lockdown=rsd) as m:
-            mounted = bool(await m.is_image_mounted(self.pmd3.image_type_for_device(rsd)))
-        s.info["ddiMounted"] = mounted
-        return {"mounted": mounted}
-
-    async def c_ddi_mount(self, a):
-        s, _ = await self.rsd(a)
-        await s.ensure_ddi()
-        return {"mounted": True}
-
-    async def c_devmode_status(self, a):
-        s, rsd = await self.rsd(a)
-        enabled = bool(await rsd.get_developer_mode_status())
-        s.info["developerMode"] = enabled
-        return {"enabled": enabled}
-
-    async def c_devmode_reveal(self, a):
-        """Show the Developer Mode switch in Settings (needs lockdown: USB, or RSD if supported)."""
-        s = self.need_session(a)
-        if s.udid in self.usb:
-            lockdown = await self.pmd3.create_using_usbmux(serial=s.udid, autopair=False)
-            try:
-                await self.pmd3.AmfiService(lockdown).reveal_developer_mode_option_in_ui()
-            finally:
-                with contextlib.suppress(Exception):
-                    await lockdown.close()
+        @reg.command("daemon.shutdown")
+        async def c_daemon_shutdown(d, a):
+            asyncio.get_running_loop().call_later(0.1, d.stopping.set)
             return {}
-        rsd = await s.get_rsd()
-        try:
-            await self.pmd3.AmfiService(rsd).reveal_developer_mode_option_in_ui()
-        except BaseException as exc:  # noqa: BLE001
-            raise err("needs-usb", "To show the Developer Mode switch, plug your iPhone in with a cable once. "
-                      "Or open Settings › Privacy & Security on the iPhone — the switch is at the bottom.",
-                      None, repr(exc))
-        return {}
 
-    # profiles
-    async def c_profiles_list(self, a):
-        s, rsd = await self.rsd(a)
-        async with self.pmd3.MisagentService(lockdown=rsd) as m:
-            raw = await m.copy_all()
-        out = []
-        for p in raw:
-            try:
-                plist = p.plist if hasattr(p, "plist") else link.parse_profile(bytes(p))
-                out.append(link.profile_summary(plist))
-            except (KeyError, TypeError, ValueError) as exc:
-                dlog(f"profile skipped: {exc!r}")
-        out.sort(key=lambda x: x["expires"], reverse=True)
-        return out
+        @reg.command("daemon.features")
+        async def c_daemon_features(d, a):
+            return {**d.registry.describe(), "resources": d.resources.describe()}
 
-    # crashes
-    async def c_crash_list(self, a):
-        s, rsd = await self.rsd(a)
-        want = (a.get("process") or "").strip()
-        async with self.pmd3.CrashReportsManager(rsd) as c:
-            if a.get("flush", True):
-                with contextlib.suppress(BaseException):
-                    await asyncio.wait_for(c.flush(), 20)
-            paths = await c.ls("/", depth=2)
-        out = []
-        for p in paths:
-            item = device_crash.classify(p)
-            if not item:
-                continue
-            if want and item["process"] != want:
-                continue
-            out.append(item)
-        out.sort(key=lambda x: x["ts"], reverse=True)
-        return out
+        @reg.command("devices.list")
+        async def c_devices_list(d, a):
+            return d.device_list()
 
-    async def c_crash_pull(self, a):
-        name = a.get("name") or ""
-        if not name or ".." in name.split("/"):
-            raise err("bad-args", "Which crash report? (name missing)")
-        s, rsd = await self.rsd(a)
-        local = CRASH_DIR / safe_name(s.udid) / safe_name(posixpath.basename(name))
-        if not local.exists():
-            async with self.pmd3.CrashReportsManager(rsd) as c:
-                try:
-                    data = await c.afc.get_file_contents(name if name.startswith("/") else "/" + name)
-                except BaseException as exc:  # noqa: BLE001
-                    e = classify(exc)
-                    if e.code == "failed":
-                        raise err("not-found", "That crash report is no longer on your iPhone.", None, repr(exc))
-                    raise e
-            await asyncio.to_thread(write_bytes, local, data)
-        text = await asyncio.to_thread(local.read_text, "utf-8", "replace")
-        return {"path": str(local), "summary": device_crash.parse_ips(text)}
+        @reg.command("device.select")
+        async def c_device_select(d, a):
+            udid = a.get("udid")
+            if not udid:
+                raise err("bad-args", "Which iPhone? (udid missing)")
+            if udid not in d.usb and udid not in d.wifi and udid not in d.cache:
+                raise err("not-found", "That iPhone isn't around right now.")
+            await d.select(udid)
+            return next((x for x in d.device_list() if x["udid"] == udid), {})
 
-    # syslog.start / syslog.filter / syslog.stop are per client: device_broker.SyslogHub, backed by
-    # the syslog_* methods below.
+        @reg.command("device.reconnect")
+        async def c_device_reconnect(d, a):
+            s = d.need_session(a)
+            s.reconnect_now()
+            return {}
 
-    # pairing
-    async def c_pair_status(self, a):
-        recs = []
-        for u in sorted(set(self.wifi) | self.lockdown):
-            recs.append({"udid": u, "wifi": u in self.wifi, "usb": u in self.lockdown, "path": self.wifi.get(u, "")})
-        return {"records": recs, "usb": sorted(self.usb)}
+        @reg.command("device.info")
+        async def c_device_info(d, a):
+            s, _ = await d.rsd(a)
+            if a.get("fresh") or "battery" not in s.info:
+                s.info.update(await s.dynamic_info())
+            d.write_state(s)
+            info = dict(s.info)
+            info.update(transport=s.where.get("transport"), address=s.where.get("address", ""),
+                        wifiPaired=s.udid in d.wifi, usbPaired=s.udid in d.lockdown)
+            info.update(d.registry.info(d, s))
+            info.update(locked=s.state == "locked")
+            return info
 
-    async def c_pair_start(self, a):
-        if self.pair_task and not self.pair_task.done():
-            raise err("busy", "Pairing is already in progress.")
-        method = a.get("method") or ("usb" if self.usb else "wifi")
-        if method not in ("usb", "wifi"):
-            raise err("bad-args", "Pairing method must be usb or wifi.")
-        if method == "usb":
-            udid = a.get("udid") or (sorted(self.usb)[0] if self.usb else None)
-            if not udid or udid not in self.usb:
-                raise err("unreachable", "Plug your iPhone in with a USB cable and unlock it, then try again.")
-            self.pair_task = asyncio.create_task(self._pair_usb(udid))
-        else:
-            self.pair_task = asyncio.create_task(self._pair_wifi(float(a.get("timeout", 300))))
-        return {"started": True, "method": method}
-
-    async def c_pair_code(self, a):
-        fut = self.pair_code_fut
-        if not fut or fut.done():
-            raise err("bad-args", "No pairing code was asked for.")
-        code = re.sub(r"\D", "", str(a.get("code", "")))
-        if len(code) != 6:
-            raise err("bad-args", "The code has 6 digits.")
-        fut.set_result(code)
-        return {}
-
-    async def c_pair_cancel(self, a):
-        t = self.pair_task
-        if t and not t.done():
-            t.cancel()
-            with contextlib.suppress(BaseException):
-                await t
-        return {}
-
-    def _pair_event(self, phase, method, message, **kw):
-        emit("pair", {"phase": phase, "method": method, "message": message, "code": kw.pop("code", None),
-                      "udid": kw.pop("udid", None), **kw})
-
-    async def _pair_usb(self, udid: str):
-        p = self.pmd3
-        m = "usb"
-        try:
-            self._pair_event("starting", m, "Talking to your iPhone over the cable…", udid=udid)
-            lockdown = None
-            try:
-                lockdown = await p.create_using_usbmux(serial=udid, autopair=False)
-                paired = bool(getattr(lockdown, "paired", False))
-            except BaseException:  # noqa: BLE001
-                paired = False
-            if not paired:
-                if lockdown is not None:
-                    with contextlib.suppress(Exception):
-                        await lockdown.close()
-                self._pair_event("trust", m, "Unlock your iPhone and tap “Trust”, then enter your iPhone passcode.", udid=udid)
-                lockdown = await p.create_using_usbmux(serial=udid, autopair=True, pair_timeout=120)
-            self._pair_event("waiting", m, "Setting up Wi-Fi access…", udid=udid)
-            path = link.record_path(p, udid)
-            had = path.exists()
-            try:
-                svc = await p.tunnel_service.RemotePairingLockdownService.create(lockdown)
-                identifier = getattr(svc, "identifier", "")
-                try:
-                    await svc.connect(autopair=not had)
-                except p.exceptions.RemotePairingCompletedError:
-                    pass
-                finally:
-                    with contextlib.suppress(Exception):
-                        await svc.close()
-            finally:
-                with contextlib.suppress(Exception):
-                    await lockdown.close()
-            if path.exists():
-                link.pin_record(path, identifier)
-            self.wifi = link.wifi_records(p)
-            self.lockdown = link.lockdown_records()
-            self._pair_event("done", m, "Paired. Your iPhone now works over USB and Wi-Fi.", udid=udid,
-                             name=self.cache.get(udid, {}).get("name", ""))
-            await self.select(udid)
-            self.session.reconnect_now()
-        except asyncio.CancelledError:
-            self._pair_event("cancelled", m, "Pairing cancelled.")
-            raise
-        except BaseException as exc:  # noqa: BLE001
-            e = classify(exc)
-            msg = e.message
-            if type(exc).__name__ in ("PairingDialogResponsePendingError", "UserDeniedPairingError"):
-                msg = "The iPhone didn't confirm “Trust”. Unlock it and try again."
-            self._pair_event("failed", m, msg, detail=e.detail or repr(exc))
-
-    async def _pair_wifi(self, timeout: float):
-        ts = self.pmd3.tunnel_service
-        m = "wifi"
-        try:
-            info = ts.PairableHostInfo(name=f"iOS Studio on {platform.node()}")
-            self._pair_event("waiting", m, PAIR_HELP_WIFI + " Developer Mode must be on.")
-
-            def on_pin(pin):
-                self._pair_event("show-code", m, "Type this code on your iPhone", code=str(pin))
-
-            def on_wait(elapsed):
-                self._pair_event("waiting", m, PAIR_HELP_WIFI, elapsed=int(elapsed))
-
-            result = await ts.serve_pairable_host(info, pin_callback=on_pin, timeout=timeout,
-                                                  waiting_callback=on_wait)
-            peer = result.peer_device
-            udid = peer.udid or ""
-            with contextlib.suppress(Exception):
-                link.pin_record(Path(result.record_path), info.identifier)
-            self.wifi = link.wifi_records(self.pmd3)
-            if udid:
-                self.cache.setdefault(udid, {}).update(name=peer.name or "", productType=peer.model or "",
-                                                      model=marketing_name(peer.model or ""))
-                with contextlib.suppress(OSError):
-                    common.save_json(DEVICE_CACHE, self.cache)
-            self._pair_event("done", m, "Paired over Wi-Fi.", udid=udid, name=peer.name)
-            if udid:
-                await self.select(udid)
-                self.session.reconnect_now()
-        except asyncio.CancelledError:
-            self._pair_event("cancelled", m, "Pairing cancelled.")
-            raise
-        except (asyncio.TimeoutError, TimeoutError):
-            self._pair_event("failed", m, "No iPhone started pairing. Open Settings › Developer › Paired Macs on "
-                             "the iPhone while this window waits (both on the same Wi-Fi).")
-        except BaseException as exc:  # noqa: BLE001
-            e = classify(exc)
-            self._pair_event("failed", m, e.message if e.code != "failed" else "Pairing didn't finish. Try again.",
-                             detail=e.detail or repr(exc))
+        reg.commit()
 
     # -------------------------------------------------------- dispatch
 
     async def dispatch(self, cmd: str, args: dict):
-        fn = getattr(self, "c_" + cmd.replace(".", "_").replace("-", "_"), None)
+        fn = self.registry.lookup(cmd)
         if fn is None:
             raise err("bad-args", f"Unknown command {cmd!r}.")
-        return await fn(args if isinstance(args, dict) else {})
+        return await fn(self, args if isinstance(args, dict) else {})
 
     def error_json(self, exc: BaseException, cmd: str) -> dict:
         e = classify(exc)
@@ -1328,17 +768,17 @@ class Daemon:
             self.session.drop(f"{cmd}: {exc!r}")
         return e.to_json()
 
-    async def handle(self, msg: dict):
-        """--once mode: one request, reply through send()."""
+    async def handle(self, msg: dict) -> dict:
+        """--once mode: one request -> its reply object."""
         rid = msg.get("id")
         cmd = str(msg.get("cmd") or "")
         try:
             data = await self.dispatch(cmd, msg.get("args") or {})
-            send({"id": rid, "ok": True, "data": data if data is not None else {}})
+            return {"id": rid, "ok": True, "data": data if data is not None else {}}
         except asyncio.CancelledError:
-            send({"id": rid, "ok": False, "error": {"code": "cancelled", "message": "Cancelled."}})
+            return {"id": rid, "ok": False, "error": {"code": "cancelled", "message": "Cancelled."}}
         except BaseException as exc:  # noqa: BLE001
-            send({"id": rid, "ok": False, "error": self.error_json(exc, cmd)})
+            return {"id": rid, "ok": False, "error": self.error_json(exc, cmd)}
 
     # -------------------------------------------------------- broker backend (device_broker.py)
 
@@ -1351,39 +791,41 @@ class Daemon:
             if s.last_connection:
                 out.append(("connection", s.last_connection))
             if s.info:
-                out.append(("deviceInfo", {"udid": s.udid, **s.info, "location": s.location}))
-        if self.mirror_task is not None and not self.mirror_task.done():
-            out.append(("mirror", {"running": True, "fps": self.mirror_fps}))
+                out.append(("deviceInfo", {"udid": s.udid, **s.info, **self.registry.info(self, s)}))
+        out.extend(await self.registry.welcome(self))
         return out
 
+    def _syslog(self):
+        phone = self.registry.provided.get("syslog")
+        if phone is None:
+            raise err("failed", "The live log isn't available (its module failed to load; see deviced.log).")
+        return phone
+
     def syslog_target(self, args: dict) -> str:
+        self._syslog()
         return self.need_session(args).udid
 
     def syslog_open(self, pid: int):
-        self.syslog.open(self.session, pid)
+        self._syslog().open(self.session, pid)
 
     async def syslog_close(self):
-        await self.syslog.close()
+        phone = self.registry.provided.get("syslog")
+        if phone is not None:
+            await phone.close()
 
     async def syslog_resolve(self, bid: str):
         """bundleId filter -> (executable, installed bundle id). Never waits for the tunnel."""
-        s = self.session
-        if s is None or s.rsd is None:
-            return None, None
-        apps = await self.pmd3.InstallationProxyService(lockdown=s.rsd).get_apps(application_type="Any")
-        for k, v in apps.items():
-            if k == bid or k.endswith("." + bid):
-                return v.get("CFBundleExecutable") or None, k
-        return None, bid
+        return await self._syslog().resolve(self.session, bid)
+
+    async def client_gone(self, client):
+        await self.registry.run_hooks("client_gone", self, client)
 
     async def shutdown(self):
         self.stopping.set()
         if self.disc_task:
             self.disc_task.cancel()
-        await self.mirror_stop()
-        await self.syslog.close()
-        if self.pair_task:
-            self.pair_task.cancel()
+        await self.resources.release_all("shutdown")
+        await self.registry.run_hooks("shutdown", self)
         if self.session:
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(self.session.close(), 5)
@@ -1425,8 +867,7 @@ class BrokenBackend:
 
 async def once(cmd: str, raw_args: str) -> int:
     """`iosstudio-deviced --once <cmd> '<json args>'`: open the tunnel, run one command, print one reply."""
-    global ONCE, send
-    ONCE = True
+    core.ONCE = True
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
 
     def reply(obj: dict) -> int:
@@ -1444,7 +885,7 @@ async def once(cmd: str, raw_args: str) -> int:
     except link.ApiError as exc:
         return reply({"ok": False, "error": classify(exc).to_json()})
     d = Daemon(pmd3)
-    if not hasattr(d, "c_" + cmd.replace(".", "_").replace("-", "_")):
+    if not d.registry.has(cmd):
         return reply({"ok": False, "error": {"code": "bad-args", "message": f"Unknown command {cmd!r}."}})
     d.usb = set(await link.usb_udids(pmd3))
     d.wifi = link.wifi_records(pmd3)
@@ -1458,16 +899,8 @@ async def once(cmd: str, raw_args: str) -> int:
     d.session = s
     s.start()
     out: dict = {}
-
-    def capture(obj):
-        out.update(obj)
     try:
-        real_send = send
-        send = capture  # handle() replies through send()
-        try:
-            await d.handle({"id": None, "cmd": cmd, "args": args})
-        finally:
-            send = real_send
+        out = await d.handle({"id": None, "cmd": cmd, "args": args})
     finally:
         with contextlib.suppress(BaseException):
             await asyncio.wait_for(d.shutdown(), 6)
@@ -1475,28 +908,46 @@ async def once(cmd: str, raw_args: str) -> int:
     return reply(out or {"ok": False, "error": {"code": "failed", "message": "No reply."}})
 
 
+def _other_real_daemon() -> str | None:
+    """With IOSSTUDIO_RUNTIME_DIR set (parallel worktrees, tests), a second real daemon would open a
+    second tunnel and knock out the phone link of the user's own daemon. Refuse while that one is up."""
+    if not os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("IOSSTUDIO_ALLOW_SECOND_TUNNEL") == "1":
+        return None
+    env = dict(os.environ)
+    env.pop("IOSSTUDIO_RUNTIME_DIR")
+    base = env.get("XDG_RUNTIME_DIR") or f"/tmp/ios-studio-{os.getuid()}"
+    default = Path(base) / "ios-studio" / "deviced.sock"
+    if default != device_broker.paths(None)["sock"] and device_broker.socket_alive(default):
+        return str(default)
+    return None
+
+
 async def serve() -> int:
     """`iosstudio-deviced --serve`: the shared daemon (normally started detached by the bridge)."""
-    global BROKER
     broker = device_broker.Broker(demo=None)
     if not broker.acquire():
         return 0   # another daemon is live; its socket serves everybody
     broker.redirect_stderr()
-    with contextlib.suppress(Exception):
-        _OUT.close()   # nothing is written to the original stdout in this mode
-    BROKER = broker
+    core.close_output()   # nothing is written to the original stdout in this mode
+    core.BROKER = broker
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
-    logging.getLogger().addHandler(_LogBridge())
+    logging.getLogger().addHandler(core.LogBridge())
 
     async def make(_broker):
+        other = _other_real_daemon()
+        if other:
+            dlog(f"refusing to open a second tunnel: the daemon on {other} owns the iPhone")
+            return BrokenBackend(err("busy", "Another iOS Studio device service already owns the iPhone; a second "
+                                     "one would break its connection. Use demo mode (IOSSTUDIO_DEMO=1) here.",
+                                     None, other))
         try:
             pmd3 = await asyncio.to_thread(link.load_pmd3)
         except link.ApiError as exc:
             dlog(f"pymobiledevice3 unusable: {exc!r}")
             return BrokenBackend(exc)
-        d = Daemon(pmd3)
+        d = Daemon(pmd3, broker.resources)
         d.disc_task = asyncio.create_task(d.discovery())
-        dlog(f"pymobiledevice3 {pmd3.version} loaded")
+        dlog(f"pymobiledevice3 {pmd3.version} loaded; features: {', '.join(d.registry.loaded)}")
         return d
     return await broker.run(make)
 
@@ -1518,8 +969,7 @@ def main() -> int:
         return 0
     finally:
         # Tunnel threads/sockets must never keep the process alive after the app quits.
-        with contextlib.suppress(Exception):
-            _OUT.flush()
+        core.flush_output()
         os._exit(code)
 
 

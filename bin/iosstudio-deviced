@@ -2,6 +2,9 @@
 # iOS Studio device daemon: JSON lines on stdin/stdout (docs/deviced-protocol.md).
 #
 # The daemon is a shared per-user broker on $XDG_RUNTIME_DIR/ios-studio[-demo]/deviced.sock.
+# IOSSTUDIO_RUNTIME_DIR=<dir> replaces $XDG_RUNTIME_DIR as the base for the socket, lock and log
+# (and the demo daemon's files), so parallel checkouts can each run their own demo daemon. A real
+# daemon under it refuses to start while the default one is up (one tunnel to the phone only).
 #   iosstudio-deviced                    bridge stdio to the live daemon (starting one if needed)
 #   iosstudio-deviced --serve            be the daemon (detached; normally started by the bridge)
 #   iosstudio-deviced --once <cmd> '{}'  one request: via the live daemon, else standalone

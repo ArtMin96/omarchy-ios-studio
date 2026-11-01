@@ -19,6 +19,11 @@ $XDG_RUNTIME_DIR/ios-studio-demo/deviced.sock    demo mode    (IOSSTUDIO_DEMO se
   deviced.log    the daemon's stderr (truncated at each start)
 ```
 
+`IOSSTUDIO_RUNTIME_DIR=<dir>` replaces `$XDG_RUNTIME_DIR` in both paths, for the bridge, the
+daemons and `device_client.py`. It gives a checkout or test run a private daemon. A real daemon
+under a custom directory answers every request with `busy` while the default one is live, because
+a second tunnel would break the first one's link.
+
 | invocation | what it does |
 |---|---|
 | `iosstudio-deviced` | connects to the socket; if nothing answers it starts `iosstudio-deviced --serve` detached (own session) and waits for the socket (≤30 s). Then it bridges stdin↔socket until either side closes. stdlib python, starts in ~0.1 s. |
@@ -26,7 +31,11 @@ $XDG_RUNTIME_DIR/ios-studio-demo/deviced.sock    demo mode    (IOSSTUDIO_DEMO se
 | `iosstudio-deviced --once <cmd> '<json>'` | one request through the live daemon if there is one (no second tunnel), otherwise the standalone one-shot mode below. |
 
 Implementation: `helper/device_broker.py` (stdlib), shared by `helper/deviced.py` and
-`helper/deviced_demo.py`.
+`helper/deviced_demo.py`. Each daemon is a small core (session, tunnel, devices, dispatch) plus
+one feature module per command group in `helper/deviced_features/` (demo:
+`helper/deviced_demo_features/`). A module that fails to load is skipped and logged, and its
+commands answer `bad-args` ("Unknown command"); `daemon.features` reports it. How to add one:
+[development.md](development.md#device-daemon-features).
 
 **Per connection.** Each connection is a client with the framing below. Request `id`s are scoped
 to the connection (two clients may both use `id: 1`; each reply goes back to the connection that
@@ -74,6 +83,11 @@ the same batching and limits per client (100 ms, ≤200 entries per batch, 1000-
 filters on exactly that one pid; otherwise the phone sends everything and entries below every
 subscriber's `minLevel` are skipped before they're built. The phone stream starts with the first
 subscriber and stops when the last one stops or disconnects.
+
+**Held resources.** Features that keep something running on the phone for a client (the mirror;
+later conditions, captures, port forwards) hold it as a reference-counted resource. It is
+released when the last client holding it stops it or disconnects, after an optional timeout, when
+the active device changes, at shutdown, and for tunnel-bound resources when the tunnel drops.
 
 **Mirror.** Reference counted: `mirror.start` adds the client, `mirror.stop` removes it and the
 frames stop only when no client holds it (the reply then says `{running: false, sharedWith: n}`
@@ -227,6 +241,7 @@ plugging in a cable switches transport on the next reconnect.
 |---|---|---|
 | `daemon.ping` | – | `{pong: true, ts}` |
 | `daemon.shutdown` | `{all?}` | `{}`; closes this client's connection (see [Broker](#broker)) |
+| `daemon.features` | – | `{loaded: [module…], failed: {module: error}, commands: {module: [cmd…]}, resources: [{key, scope, holders, since, timeout}]}` |
 | `devices.list` | – | `[Device…]` |
 | `device.select` | `{udid}` | `Device`; makes it active, (re)opens its tunnel |
 | `device.reconnect` | `{udid?}` | `{}`; drops the tunnel and reconnects now (resets backoff) |

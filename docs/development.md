@@ -27,11 +27,15 @@ helper/
   main.py            helper router: group name -> module
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
   agents.py          Settings › AI agents: connect the MCP server to coding agents
-  deviced.py         device daemon backend (pymobiledevice3)
+  deviced.py         device daemon core: session, tunnel, device list, dispatch (pymobiledevice3)
+  deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
+  deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
+  deviced_features/  one module per feature group of the real daemon (screen, apps, syslog, ...)
   device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
   device_client.py   asyncio client for the broker (used by the MCP server)
   device_link.py, device_crash.py, device_models.py   device helpers
   demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
+  deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
   iosstudio_mcp/     the MCP server: server.py, tools/*.py (48 tools), prompts, resources
@@ -88,6 +92,81 @@ Requests and replies are JSON lines with an `id`. The daemon also pushes events 
 The daemon also has a `--once <cmd> '<json>'` mode for background jobs (the daily auto-renew timer uses it to install), and it writes the last known device state to `~/.local/state/ios-studio/device.json`.
 
 Every command and event is documented in [deviced-protocol.md](deviced-protocol.md).
+
+### Device daemon features
+
+`deviced.py` is only the core. Each feature group is a module in `helper/deviced_features/`, with a demo twin of the same name in `helper/deviced_demo_features/`. At start the daemon imports every module there (files starting with `_` are skipped) and calls its `register(reg)`. When a module fails to import or register, the daemon logs the traceback to `deviced.log`, skips the module and keeps serving the rest. `daemon.features` lists what loaded, what failed and which module owns each command. A command name that is already taken makes the second module fail, so two features can't silently shadow each other.
+
+A feature module:
+
+```python
+# helper/deviced_features/perf.py
+from deviced_core import emit, err          # never `import deviced` (it runs as __main__)
+from deviced_kit import CursorRing
+
+def register(reg):
+    ring = CursorRing(max_items=5000, max_bytes=4 << 20)
+
+    @reg.command("perf.start")
+    async def start(d, a):                    # d: the Daemon, a: the request args
+        s = d.need_session(a)                 # raises no-device / bad-args
+        async def open_():
+            ...                               # start sampling, return a handle
+        async def close(handle, reason):      # reason: released, client, tunnel, session, shutdown, timeout
+            ...
+        await d.resources.acquire("perf", d.client(), open_, close, scope="tunnel", timeout=600)
+        return {"running": True}
+
+    @reg.command("perf.read")
+    async def read(d, a):
+        return await ring.wait_read(a.get("cursor"), timeout=min(float(a.get("wait", 0)), 20))
+
+    @reg.on_tunnel_drop                       # also: on_client_gone, on_session_end, on_shutdown
+    def dropped(d, session): ...
+
+    @reg.info                                 # merged into device.info and the welcome deviceInfo
+    def info(d, session): return {}
+```
+
+Handlers get `(d, args)` and raise `err(code, message, fix, detail)` for a plain-language error. Any other exception goes through `classify()`, and a connection error drops the tunnel so the session reconnects. `d.client()` is the asking client (`None` in `--once` mode).
+
+The phone must only be reached through the session's existing tunnel. A second tunnel (another `UserspaceRsdTunnel` or `pymobiledevice3 remote ...`) breaks the daemon's link. The session (`s = d.need_session(a)`) offers:
+
+| need | call |
+|---|---|
+| the RSD | `rsd = await s.get_rsd()` (waits up to 25 s for a reconnect) |
+| a lockdown-over-RSD service for one call | `async with s.open_service(AfcService) as afc:` (also `PcapdService`, `DiagnosticsService`, or a coroutine such as `HouseArrestService.create`) |
+| the same, kept open until the tunnel drops | `afc = await s.cached_service("afc", AfcService)`; `await s.forget_service("afc")` after it breaks |
+| an app's container | `async with s.house_arrest(bundle_id, documents=False) as afc:` (VendContainer, or VendDocuments with `documents=True`) |
+| a raw service connection | `conn = await s.service_connection(name, checkin=True)` (caller closes it) |
+| the shared DVT connection | `dvt = await s.get_dvt()` (mounts the DDI first) |
+| a DVT instrument kept open | `sm = await s.dvt_instrument("sysmon", Sysmontap)`; `s.reset_dvt()` if the channel broke |
+| a DVT channel for one call | `async with s.dvt_channel(ProcessControl) as pc:` |
+| a DVT connection of its own | `async with s.dedicated_dvt() as dvt:` (long-held things such as the condition inducer) |
+| retry once on a broken DVT link | `await s.dvt_retry(fn)` |
+| a loopback port into the phone | `fw = await s.port_forward(service="com.apple.internal.dt.remote.debugproxy")` or `port=8100`; `fw.port`, `await fw.stop()` |
+| UDP for device-initiated media | `s.udp_available()`, `s.userspace_udp()`; pymobiledevice3's `screen_stream.open_media_receiver()` uses it by itself |
+| USB-only services | `s.require_usb("Packet capture")`, `async with s.usb_lockdown() as lockdown:` |
+| feature state | `s.data` (this device), `s.tunnel_data` (cleared when the tunnel drops) |
+
+Import pymobiledevice3 classes the core doesn't load (`HouseArrestService`, `PcapdService`, `DisplayService`, `ConditionInducer`, ...) at the top of your feature module. If pymobiledevice3 changes, only that module fails to load.
+
+`d.resources` (`deviced_kit.Resources`) holds things that stay open for clients: a mirror stream, a condition, a perf tap, a packet capture, a port forward. `acquire(key, client, open_fn, close_fn, scope=..., timeout=...)` counts one hold per client and runs `open_fn` once. `release(key, client)` returns how many holders are left and closes the resource at zero. The resource also closes when its last holder disconnects, after `timeout` seconds (`touch(key)` restarts the timer), on a tunnel drop (`scope="tunnel"`), on a device switch (`"tunnel"` or `"session"`) and at shutdown (all scopes). `forget(key)` drops a resource that ended by itself. Use it for anything that changes the phone, so a crashed client never leaves a network condition switched on. `screen.py`'s mirror is a working example.
+
+`deviced_kit.CursorRing` buffers streamed entries with bounds on count and bytes. `read(cursor)` returns `entries`, `nextCursor`, `hasMore`, `missed` and `bufferStart`, with the same semantics as the MCP server's `ios_logs_read`.
+
+The demo twin registers the same command names with made-up data. Its handlers get `(ctx, args)`, where `ctx` is the demo backend (`ctx.resources`, `ctx.client()`). A plain `def` handler runs in a worker thread, an `async def` one on the event loop. Shared fake data and `event()` live in `deviced_demo_core`. Document new commands and events in [deviced-protocol.md](deviced-protocol.md).
+
+To test in parallel checkouts without touching anyone else's daemon, give each one its own runtime directory:
+
+```bash
+export IOSSTUDIO_RUNTIME_DIR=$XDG_RUNTIME_DIR/ios-$NAME IOSSTUDIO_DEMO=1   # keep it short: socket paths max out at 107 bytes
+python3 helper/device_client.py daemon.features     # starts this checkout's demo daemon on demand
+python3 helper/device_client.py device.info
+python3 helper/device_client.py daemon.shutdown '{"all": true}'
+```
+
+`IOSSTUDIO_RUNTIME_DIR` replaces `$XDG_RUNTIME_DIR` as the base of `ios-studio[-demo]/` (socket, lock, log, demo files) for `bin/iosstudio-deviced`, `device_client.py` and the MCP server. A real daemon started under it answers every request with `busy` while the default real daemon is running, because a second tunnel would break the first one's connection.
 
 ## Running from source
 
