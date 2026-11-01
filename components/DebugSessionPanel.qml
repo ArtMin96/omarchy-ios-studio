@@ -193,7 +193,7 @@ ColumnLayout {
   }
   AppText {
     Layout.fillWidth: true
-    visible: !root.hasLocalBuild
+    visible: !root.hasLocalBuild && !root.live   // while live, the helper's own notice says it
     text: "No build of this app was found on this computer, so file:line breakpoints won't resolve and your own frames show as addresses. Run it once from Projects first."
     size: "small"; tone: "warn"; wrapMode: Text.WordWrap
   }

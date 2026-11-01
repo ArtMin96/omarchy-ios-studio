@@ -28,6 +28,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -109,35 +110,133 @@ def find_project(bundle_id: str) -> tuple[Path | None, dict | None]:
     return None, None
 
 
+def _app_executable(app: Path) -> Path | None:
+    try:
+        exe = plistlib.loads((app / "Info.plist").read_bytes()).get("CFBundleExecutable")
+    except Exception:  # noqa: BLE001
+        return None
+    return app / exe if exe and (app / exe).is_file() else None
+
+
+def _ipa_executable(ipa: Path) -> Path | None:
+    """The executable inside an .ipa, unpacked once into the cache (refreshed when the .ipa changes)."""
+    import zipfile
+    try:
+        st = ipa.stat()
+        with zipfile.ZipFile(ipa) as z:
+            names = z.namelist()
+            plists = [n for n in names if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n)]
+            if not plists:
+                return None
+            exe = plistlib.loads(z.read(plists[0])).get("CFBundleExecutable")
+            member = plists[0].rsplit("/", 1)[0] + "/" + str(exe)
+            if not exe or member not in names:
+                return None
+            out = common.CACHE_DIR / "debug-builds" / f"{ipa.parent.parent.name}-{int(st.st_mtime)}-{st.st_size}" / str(exe)
+            if not out.is_file():
+                out.parent.mkdir(parents=True, exist_ok=True)
+                tmp = out.with_suffix(".part")
+                with z.open(member) as src, open(tmp, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                tmp.replace(out)
+            return out
+    except (OSError, ValueError, KeyError, Exception):  # noqa: BLE001  (a broken zip must not break the debugger)
+        return None
+
+
 def local_executable(path: Path, info: dict) -> str | None:
-    """The executable inside the project's last xtool build (xtool/<App>.app), if there is one."""
-    cands = [path / "xtool" / f"{info.get('product')}.app"] + sorted((path / "xtool").glob("*.app"))
-    for app in cands:
-        plist = app / "Info.plist"
-        if not plist.is_file():
-            continue
+    """The app's executable from its newest build on this computer: xtool/<App>.app, xtool's build
+    folder (.build/<config>/<Product>-App, which is what gets signed and installed) or the
+    executable inside xtool/<App>.ipa. None when the project was never built here."""
+    product = str(info.get("product") or "")
+    found: list[Path] = []
+    xt = path / "xtool"
+    for app in ([xt / f"{product}.app"] if product else []) + sorted(xt.glob("*.app")):
+        exe = _app_executable(app)
+        if exe:
+            found.append(exe)
+    if product:
+        for cfg in ("debug", "release"):
+            exe = path / ".build" / cfg / f"{product}-App"
+            if exe.is_file():
+                found.append(exe)
+        for exe in sorted((path / ".build").glob(f"out/Products/*-iphoneos/{product}-App")):
+            found.append(exe)
+    if not found:
+        for ipa in sorted(xt.glob("*.ipa")):
+            exe = _ipa_executable(ipa)
+            if exe:
+                found.append(exe)
+    if not found:
+        return None
+    return str(max(found, key=lambda p: p.stat().st_mtime))
+
+
+_PATH_ARG = re.compile(r'\bpath\s*:\s*"([^"]+)"')
+_SKIP_SOURCE_DIRS = {".build", ".git", ".swiftpm", "xtool", "DerivedData", "Pods", "node_modules", "build"}
+
+
+def _is_test_dir(name: str) -> bool:
+    return name.lower() in ("tests", "test") or name.endswith("Tests")
+
+
+def source_roots(path: Path, depth: int = 2) -> list[Path]:
+    """Folders holding the app's Swift code: Sources/, the target paths in Package.swift (projects
+    often point the target somewhere else, e.g. a generated folder of symlinks) and the local
+    packages it depends on (`.package(path: …)`), up to `depth` levels of packages."""
+    roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(p: Path) -> None:
         try:
-            exe = plistlib.loads(plist.read_bytes()).get("CFBundleExecutable")
-        except Exception:  # noqa: BLE001
-            continue
-        if exe and (app / exe).is_file():
-            return str(app / exe)
-    return None
+            r = p.resolve()
+        except OSError:
+            return
+        if r.is_dir() and r not in seen and not _is_test_dir(r.name):
+            seen.add(r)
+            roots.append(p)
+
+    def visit(pkg: Path, level: int) -> None:
+        add(pkg / "Sources")
+        manifest = pkg / "Package.swift"
+        try:
+            text = manifest.read_text(errors="replace")
+        except OSError:
+            return
+        for rel in _PATH_ARG.findall(text):
+            target = (pkg / rel)
+            if (target / "Package.swift").is_file():           # a local package dependency
+                if level < depth and target.resolve() not in seen:
+                    visit(target, level + 1)
+            else:                                              # a target's own path
+                add(target)
+
+    visit(path, 0)
+    return roots
 
 
 def swift_sources(path: Path) -> list[dict]:
     out = []
-    src = path / "Sources"
-    for f in sorted(src.rglob("*.swift")) if src.is_dir() else []:
-        if any(part.startswith(".") for part in f.relative_to(path).parts):
-            continue
-        try:
-            lines = sum(1 for _ in f.open("rb"))
-        except OSError:
-            lines = None
-        out.append({"path": str(f), "rel": str(f.relative_to(path)), "name": f.name, "lines": lines})
-        if len(out) >= MAX_SOURCES:
-            break
+    seen: set[str] = set()
+    for root in source_roots(path):
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+            dirnames[:] = sorted(d for d in dirnames
+                                 if not d.startswith(".") and d not in _SKIP_SOURCE_DIRS and not _is_test_dir(d))
+            for name in sorted(filenames):
+                if not name.endswith(".swift"):
+                    continue
+                f = Path(dirpath) / name
+                real = os.path.realpath(f)
+                if real in seen:
+                    continue
+                seen.add(real)
+                try:
+                    lines = sum(1 for _ in open(real, "rb"))
+                except OSError:
+                    lines = None
+                out.append({"path": real, "rel": os.path.relpath(real, path), "name": name, "lines": lines})
+                if len(out) >= MAX_SOURCES:
+                    return out
     return out
 
 
