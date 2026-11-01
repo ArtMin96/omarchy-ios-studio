@@ -59,12 +59,8 @@ try:
         VIDEO_STREAM_MIN_VERSION, DisplayService, is_media_in_use_error)
     from pymobiledevice3.remote.core_device.screen_stream import depacketize_hevc
     STREAM_IMPORT_ERROR = None
-    try:
-        from pymobiledevice3.remote.core_device.screen_capture_service import ScreenCaptureService
-    except Exception:  # noqa: BLE001
-        ScreenCaptureService = None
 except Exception as _exc:  # noqa: BLE001 - only the stream mode is lost
-    DisplayService = ScreenCaptureService = None
+    DisplayService = None
     STREAM_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 REC_DIR = common.CACHE_DIR / "recordings"
@@ -279,13 +275,13 @@ async def capture_png(s) -> bytes:
 
 class ShotStats:
     """Per-stage timings of the screenshot pipeline, logged to deviced.log every 5 s:
-    mirror: 5.0 s, 19 frames (3.8/s, gap 263 ms) | rpc 251 ms (dvt) | wait 3 | decode 160 | scale+encode 21
+    mirror: 5.0 s, 19 frames (3.8/s, gap 263 ms) | rpc 251 ms (19 shots) | wait 3 | decode 160 | scale+encode 21
             | write 1 ms (pyav) | skipped 1 (converter busy), held 0 (acks)"""
 
     EVERY = 5.0
 
-    def __init__(self, source: str, backend: str):
-        self.source, self.backend = source, backend
+    def __init__(self, backend: str):
+        self.backend = backend
         self.t0 = time.monotonic()
         self.reset()
 
@@ -312,7 +308,7 @@ class ShotStats:
             return f"{1000 * sum(xs) / len(xs):.0f}" if xs else "-"
         gap = sorted(self.gaps)[len(self.gaps) // 2] if self.gaps else 0
         dlog(f"mirror: {span:.1f} s, {self.frames} frames ({self.frames / span:.1f}/s, gap {1000 * gap:.0f} ms) "
-             f"| rpc {ms(self.rpc)} ms ({self.source}, {len(self.rpc)} shots) | wait {ms(self.wait)} "
+             f"| rpc {ms(self.rpc)} ms ({len(self.rpc)} shots) | wait {ms(self.wait)} "
              f"| decode {ms(self.dec)} | scale+encode {ms(self.enc)} | write {ms(self.wr)} ms ({self.backend}) "
              f"| skipped {self.skipped} (converter busy), held {self.held} (acks)")
         self.t0 = now
@@ -333,38 +329,14 @@ class ShotEngine:
         self.conv = PngConverter()
         self.slot: tuple | None = None                     # (png, rpc start, rpc end): newest PNG waiting
         self.ready = asyncio.Event()
-        self.source = m.source
-        self.stats = ShotStats(self.source, self.conv.backend)
-        self.cd = None                                     # CoreDevice ScreenCaptureService, kept open
-
-    # -- capture
-    async def _capture(self) -> bytes:
-        if self.source == "coredevice" and ScreenCaptureService is not None:
-            if self.cd is None:
-                rsd = await self.s.get_rsd()
-                svc = ScreenCaptureService(rsd)
-                await asyncio.wait_for(svc.connect(), 15)
-                self.cd = svc
-            try:
-                r = await asyncio.wait_for(self.cd.capture_screenshot(), 15)
-            except BaseException:
-                await self._close_cd()
-                raise
-            return bytes(r.get("image") or b"")
-        return await capture_png(self.s)
-
-    async def _close_cd(self):
-        svc, self.cd = self.cd, None
-        if svc is not None:
-            with contextlib.suppress(BaseException):
-                await asyncio.wait_for(svc.close(), 2)
+        self.stats = ShotStats(self.conv.backend)
 
     async def _capture_loop(self) -> None:
         fails = 0
         while True:
             t0 = time.monotonic()
             try:
-                png = await self._capture()
+                png = await capture_png(self.s)
                 fails = 0
             except asyncio.CancelledError:
                 raise
@@ -423,7 +395,7 @@ class ShotEngine:
                 dlog(f"mirror (screenshot): frame conversion failed {exc!r}")
 
     async def run(self) -> None:
-        dlog(f"mirror (screenshot): capture via {self.source}, decode via {self.conv.backend}")
+        dlog(f"mirror (screenshot): capture via dvt, decode via {self.conv.backend}")
         conv = asyncio.create_task(self._convert_loop(), name="mirror-convert")
         try:
             await self._capture_loop()
@@ -431,7 +403,6 @@ class ShotEngine:
             conv.cancel()
             with contextlib.suppress(BaseException):
                 await conv
-            await self._close_cd()
 
 
 # ====================================================================== stream engine
@@ -1042,7 +1013,6 @@ class Mirror:
         self.fps: float | None = None    # None: as fast as the mode allows
         self.scale = 0.5
         self.quality = 70
-        self.source = "dvt"              # screenshot source: dvt (instruments) | coredevice (screencaptureservice)
         self.sink = FrameSink()
         self.viewers: set = set()
         self.notice: str | None = None
@@ -1073,7 +1043,7 @@ class Mirror:
         out = {"running": self.running(), "fps": self.fps or (STREAM_FPS[1] if self.mode == "stream" else SHOT_FPS[1]),
                "mode": self.mode if self.running() else None, "requestedMode": self.requested,
                "measuredFps": self.sink.measured_fps() if self.running() else 0.0,
-               "dropped": self.sink.dropped, "scale": self.scale, "quality": self.quality, "source": self.source,
+               "dropped": self.sink.dropped, "scale": self.scale, "quality": self.quality,
                "recording": self.recorder is not None and self.recorder.state == "recording"}
         if self.notice and self.running():
             out["notice"] = self.notice
@@ -1303,14 +1273,6 @@ def register(reg):
                 raise err("bad-args", "mode must be auto, stream or screenshot.")
             changed = mode != m.requested
             m.requested = mode
-        if a.get("source") is not None:
-            src = str(a.get("source"))
-            if src not in ("dvt", "coredevice"):
-                raise err("bad-args", "source must be dvt or coredevice.")
-            if src == "coredevice" and ScreenCaptureService is None:
-                raise err("bad-args", "This pymobiledevice3 has no CoreDevice screenshot service.")
-            changed = changed or src != m.source
-            m.source = src
         if a.get("fps") is not None:
             m.fps = clamp(a.get("fps"), SHOT_FPS[0], STREAM_FPS[1], 1.0)
         if a.get("scale") is not None:
