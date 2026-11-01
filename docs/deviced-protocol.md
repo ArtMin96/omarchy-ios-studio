@@ -311,7 +311,7 @@ background (CoreDevice icon service) and sends one `appIcon` event per icon.
 | cmd | args | reply data |
 |---|---|---|
 | `screenshot` | `{udid?, save?: bool}` | `{path, width, height, bytes, ts}` |
-| `mirror.start` | `{udid?, mode?: "auto", fps?, scale?: 0.5, quality?: 70}` | `{running: true, fps, mode, requestedMode, scale, quality}`; takes a mirror reference |
+| `mirror.start` | `{udid?, mode?: "auto", fps?, scale?: 0.5, quality?: 70, source?: "dvt"}` | `{running: true, fps, mode, requestedMode, scale, quality}`; takes a mirror reference |
 | `mirror.stop` | – | `{running: false, sharedWith?}`; releases it (frames stop when nobody holds one) |
 | `mirror.ack` | `{seq}` | `{}`; the client has shown frame `seq` (backpressure, below) |
 | `mirror.status` | – | the `mirror` event fields plus `{available, viewers, record}` |
@@ -329,9 +329,15 @@ background (CoreDevice icon service) and sends one `appIcon` event per icon.
   camera or microphone. Every way out of a stream (stop, release, disconnect, tunnel drop, device
   switch, shutdown) sends `stop_all_streams` to the phone, and if the tunnel is down at that
   moment it is sent as soon as the tunnel is back.
-- `screenshot`: DVT screenshots in a loop. Each PNG is converted to a downscaled JPEG while the
-  next one is captured. It runs as fast as the phone answers, about 3 to 5 a second, up to `fps`
-  (at most 8).
+- `screenshot`: screenshots in a loop, from the DVT screenshot instrument (`source: "dvt"`, the
+  default) or CoreDevice's screen capture service (`source: "coredevice"`). The next screenshot is
+  requested as soon as the previous one arrives, while a worker thread turns the newest PNG into a
+  downscaled JPEG, one at a time; a PNG that arrives while the worker is busy replaces the one
+  waiting. PNGs are decoded with libavcodec through PyAV (Pillow without it). The rate is
+  whichever is slower, the phone's screenshot call or the conversion, up to `fps` (at most 8).
+  Every 5 s `deviced.log` gets one timing line: `mirror: 5.0 s, 19 frames (3.8/s, gap 252 ms) |
+  rpc 251 ms (dvt, 20 shots) | wait 0 | decode 165 | scale+encode 23 | write 0 ms (pyav) |
+  skipped 0 (converter busy), held 0 (acks)`.
 - `auto` tries `stream` and falls back to `screenshot`, with a plain-language `notice` in the
   `mirror` event, when the iPhone runs an older iOS (`noticeCode: "unsupported"`), when an app holds
   the camera or microphone (`media-in-use`, the phone's CoreDevice error 9022), when the video

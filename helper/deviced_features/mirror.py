@@ -59,8 +59,12 @@ try:
         VIDEO_STREAM_MIN_VERSION, DisplayService, is_media_in_use_error)
     from pymobiledevice3.remote.core_device.screen_stream import depacketize_hevc
     STREAM_IMPORT_ERROR = None
+    try:
+        from pymobiledevice3.remote.core_device.screen_capture_service import ScreenCaptureService
+    except Exception:  # noqa: BLE001
+        ScreenCaptureService = None
 except Exception as _exc:  # noqa: BLE001 - only the stream mode is lost
-    DisplayService = None
+    DisplayService = ScreenCaptureService = None
     STREAM_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 REC_DIR = common.CACHE_DIR / "recordings"
@@ -133,15 +137,50 @@ def to_jpeg(img, scale: float, quality: int):
     return buf.getvalue(), img.size[0], img.size[1]
 
 
-def png_to_frame(png: bytes, scale: float, quality: int):
-    """(data, ext, w, h, full_w, full_h): JPEG when Pillow is there, else the PNG unchanged."""
-    fw, fh = png_size(png)
-    if Image is None:
-        return png, "png", fw, fh, fw, fh
-    with Image.open(io.BytesIO(png)) as im:
-        im.load()
-        data, w, h = to_jpeg(im, scale, quality)
-        return data, "jpg", w, h, im.size[0], im.size[1]
+class PngConverter:
+    """PNG screenshot -> downscaled JPEG, timed per stage. Decodes with libavcodec's PNG decoder through
+    PyAV (about 30 % faster than Pillow on a busy 6.7 MB frame: ~160 vs ~230 ms, and it scales in the
+    same pass); falls back to Pillow, and to the PNG unchanged without Pillow. Both decoders release
+    the GIL, so the event loop keeps receiving the next screenshot meanwhile. Not thread-safe: the
+    screenshot engine runs one conversion at a time."""
+
+    def __init__(self):
+        self.codec = None
+        self.use_av = av is not None and Image is not None
+        self.backend = "pyav" if self.use_av else ("pillow" if Image is not None else "none")
+
+    def convert(self, png: bytes, scale: float, quality: int):
+        """-> (data, ext, w, h, decode_s, encode_s)."""
+        if Image is None:
+            w, h = png_size(png)
+            return png, "png", w, h, 0.0, 0.0
+        if self.use_av:
+            try:
+                return self._av(png, scale, quality)
+            except Exception as exc:  # noqa: BLE001 - odd PNG or PyAV trouble: Pillow from now on
+                dlog(f"mirror (screenshot): PyAV PNG decode failed ({exc!r}); using Pillow")
+                self.use_av, self.codec, self.backend = False, None, "pillow"
+        t0 = time.perf_counter()
+        with Image.open(io.BytesIO(png)) as im:
+            im.load()
+            t1 = time.perf_counter()
+            data, w, h = to_jpeg(im, scale, quality)
+        return data, "jpg", w, h, t1 - t0, time.perf_counter() - t1
+
+    def _av(self, png: bytes, scale: float, quality: int):
+        if self.codec is None:
+            self.codec = av.CodecContext.create("png", "r")
+        t0 = time.perf_counter()
+        frames = self.codec.decode(av.Packet(png))
+        if not frames:
+            raise ValueError("no picture in the PNG")
+        fr = frames[-1]
+        t1 = time.perf_counter()
+        tw, th = max(2, round(fr.width * scale)), max(2, round(fr.height * scale))
+        img = fr.reformat(width=tw, height=th, format="rgb24", interpolation="AREA").to_image()
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=int(quality))
+        return buf.getvalue(), "jpg", tw, th, t1 - t0, time.perf_counter() - t1
 
 
 def uncollapse(img):
@@ -238,53 +277,161 @@ async def capture_png(s) -> bytes:
     return await s.dvt_retry(take, err("failed", "Couldn't take a screenshot."))
 
 
+class ShotStats:
+    """Per-stage timings of the screenshot pipeline, logged to deviced.log every 5 s:
+    mirror: 5.0 s, 19 frames (3.8/s, gap 263 ms) | rpc 251 ms (dvt) | wait 3 | decode 160 | scale+encode 21
+            | write 1 ms (pyav) | skipped 1 (converter busy), held 0 (acks)"""
+
+    EVERY = 5.0
+
+    def __init__(self, source: str, backend: str):
+        self.source, self.backend = source, backend
+        self.t0 = time.monotonic()
+        self.reset()
+
+    def reset(self):
+        self.rpc, self.wait, self.dec, self.enc, self.wr = [], [], [], [], []
+        self.frames = 0
+        self.skipped = 0
+        self.held = 0
+        self.gaps: list[float] = []
+        self.last_pub: float | None = None
+
+    def published(self, now: float):
+        if self.last_pub is not None:
+            self.gaps.append(now - self.last_pub)
+        self.last_pub = now
+        self.frames += 1
+
+    def maybe_log(self):
+        now = time.monotonic()
+        span = now - self.t0
+        if span < self.EVERY:
+            return
+        def ms(xs):
+            return f"{1000 * sum(xs) / len(xs):.0f}" if xs else "-"
+        gap = sorted(self.gaps)[len(self.gaps) // 2] if self.gaps else 0
+        dlog(f"mirror: {span:.1f} s, {self.frames} frames ({self.frames / span:.1f}/s, gap {1000 * gap:.0f} ms) "
+             f"| rpc {ms(self.rpc)} ms ({self.source}, {len(self.rpc)} shots) | wait {ms(self.wait)} "
+             f"| decode {ms(self.dec)} | scale+encode {ms(self.enc)} | write {ms(self.wr)} ms ({self.backend}) "
+             f"| skipped {self.skipped} (converter busy), held {self.held} (acks)")
+        self.t0 = now
+        last = self.last_pub
+        self.reset()
+        self.last_pub = last
+
+
 class ShotEngine:
+    """Two loops: the capture loop starts the next screenshot RPC as soon as the previous one returns
+    (paced only by the fps cap), and the converter turns the newest PNG into a JPEG in a worker thread,
+    one at a time. A PNG that arrives while the converter is busy replaces the one waiting (newest
+    wins), so the frame rate is min(1/rpc, 1/convert) instead of 1/(rpc + convert)."""
     mode = "screenshot"
 
     def __init__(self, m: "Mirror", s):
         self.m, self.s = m, s
+        self.conv = PngConverter()
+        self.slot: tuple | None = None                     # (png, rpc start, rpc end): newest PNG waiting
+        self.ready = asyncio.Event()
+        self.source = m.source
+        self.stats = ShotStats(self.source, self.conv.backend)
+        self.cd = None                                     # CoreDevice ScreenCaptureService, kept open
 
-    def _convert(self, png: bytes, t: float) -> None:
-        m = self.m
+    # -- capture
+    async def _capture(self) -> bytes:
+        if self.source == "coredevice" and ScreenCaptureService is not None:
+            if self.cd is None:
+                rsd = await self.s.get_rsd()
+                svc = ScreenCaptureService(rsd)
+                await asyncio.wait_for(svc.connect(), 15)
+                self.cd = svc
+            try:
+                r = await asyncio.wait_for(self.cd.capture_screenshot(), 15)
+            except BaseException:
+                await self._close_cd()
+                raise
+            return bytes(r.get("image") or b"")
+        return await capture_png(self.s)
+
+    async def _close_cd(self):
+        svc, self.cd = self.cd, None
+        if svc is not None:
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(svc.close(), 2)
+
+    async def _capture_loop(self) -> None:
+        fails = 0
+        while True:
+            t0 = time.monotonic()
+            try:
+                png = await self._capture()
+                fails = 0
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:  # noqa: BLE001
+                fails += 1
+                e = classify(exc)
+                dlog(f"mirror (screenshot): {exc!r}")
+                if e.code == "unreachable" and fails < 30:
+                    await asyncio.sleep(2)
+                    continue
+                raise e from None
+            t1 = time.monotonic()
+            self.stats.rpc.append(t1 - t0)
+            if self.slot is not None:
+                self.stats.skipped += 1        # the converter is still on an older one: drop the waiting PNG
+            self.slot = (png, t0, t1)
+            self.ready.set()
+            self.stats.maybe_log()
+            delay = self.m.shot_interval() - (time.monotonic() - t0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+    # -- convert (one at a time)
+    def _convert(self, png: bytes, t: float, got: float) -> None:
+        m, st = self.m, self.stats
+        st.wait.append(time.monotonic() - got)      # from the RPC's return to the converter picking it up
         rec = m.recorder if m.recorder is not None and m.recorder.mode == self.mode else None
-        show = bool(m.viewers) and m.sink.ready(0)
+        show = bool(m.viewers)
+        if show and not m.sink.ready(0):
+            st.held += 1
+            show = False
         if not show and rec is None:
             return
-        data, ext, w, h, _, _ = png_to_frame(png, m.scale, m.quality)
+        data, ext, w, h, dec, enc = self.conv.convert(png, m.scale, m.quality)
+        st.dec.append(dec)
+        st.enc.append(enc)
+        t2 = time.monotonic()
         if show:
             m.sink.publish(data, ext, w, h, self.mode)
         if rec is not None:
             rec.add_frame(data, ext, t)
+        st.wr.append(time.monotonic() - t2)
+        st.published(time.monotonic())
+
+    async def _convert_loop(self) -> None:
+        while True:
+            await self.ready.wait()
+            self.ready.clear()
+            item, self.slot = self.slot, None
+            if item is None:
+                continue
+            png, t, got = item
+            try:
+                await asyncio.to_thread(self._convert, png, t, got)
+            except Exception as exc:  # noqa: BLE001 - one bad frame mustn't stop the mirror
+                dlog(f"mirror (screenshot): frame conversion failed {exc!r}")
 
     async def run(self) -> None:
-        pending: asyncio.Future | None = None
-        fails = 0
+        dlog(f"mirror (screenshot): capture via {self.source}, decode via {self.conv.backend}")
+        conv = asyncio.create_task(self._convert_loop(), name="mirror-convert")
         try:
-            while True:
-                t0 = time.monotonic()
-                try:
-                    png = await capture_png(self.s)
-                    fails = 0
-                except asyncio.CancelledError:
-                    raise
-                except BaseException as exc:  # noqa: BLE001
-                    fails += 1
-                    e = classify(exc)
-                    dlog(f"mirror (screenshot): {exc!r}")
-                    if e.code == "unreachable" and fails < 30:
-                        await asyncio.sleep(2)
-                        continue
-                    raise e from None
-                if pending is not None:          # at most one conversion in flight
-                    with contextlib.suppress(Exception):
-                        await pending
-                pending = asyncio.ensure_future(asyncio.to_thread(self._convert, png, t0))
-                delay = self.m.shot_interval() - (time.monotonic() - t0)
-                if delay > 0:
-                    await asyncio.sleep(delay)
+            await self._capture_loop()
         finally:
-            if pending is not None:
-                pending.cancel()
+            conv.cancel()
+            with contextlib.suppress(BaseException):
+                await conv
+            await self._close_cd()
 
 
 # ====================================================================== stream engine
@@ -895,6 +1042,7 @@ class Mirror:
         self.fps: float | None = None    # None: as fast as the mode allows
         self.scale = 0.5
         self.quality = 70
+        self.source = "dvt"              # screenshot source: dvt (instruments) | coredevice (screencaptureservice)
         self.sink = FrameSink()
         self.viewers: set = set()
         self.notice: str | None = None
@@ -925,7 +1073,7 @@ class Mirror:
         out = {"running": self.running(), "fps": self.fps or (STREAM_FPS[1] if self.mode == "stream" else SHOT_FPS[1]),
                "mode": self.mode if self.running() else None, "requestedMode": self.requested,
                "measuredFps": self.sink.measured_fps() if self.running() else 0.0,
-               "dropped": self.sink.dropped, "scale": self.scale, "quality": self.quality,
+               "dropped": self.sink.dropped, "scale": self.scale, "quality": self.quality, "source": self.source,
                "recording": self.recorder is not None and self.recorder.state == "recording"}
         if self.notice and self.running():
             out["notice"] = self.notice
@@ -1155,6 +1303,14 @@ def register(reg):
                 raise err("bad-args", "mode must be auto, stream or screenshot.")
             changed = mode != m.requested
             m.requested = mode
+        if a.get("source") is not None:
+            src = str(a.get("source"))
+            if src not in ("dvt", "coredevice"):
+                raise err("bad-args", "source must be dvt or coredevice.")
+            if src == "coredevice" and ScreenCaptureService is None:
+                raise err("bad-args", "This pymobiledevice3 has no CoreDevice screenshot service.")
+            changed = changed or src != m.source
+            m.source = src
         if a.get("fps") is not None:
             m.fps = clamp(a.get("fps"), SHOT_FPS[0], STREAM_FPS[1], 1.0)
         if a.get("scale") is not None:
