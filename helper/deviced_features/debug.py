@@ -332,8 +332,8 @@ def register(reg):
         if free < total - have + SPACE_MARGIN:
             gb = (total - have + SPACE_MARGIN) / 1e9
             raise err("no-space", f"The debug symbols need about {gb:.1f} GB free while they download; this computer "
-                      f"has {free / 1e9:.1f} GB. Free some space (Setup › Disk shows what can go), then try again.",
-                      fix("Free space", "setup"))
+                      f"has {free / 1e9:.1f} GB. Free some space (Toolchain shows what can go), then try again.",
+                      fix("Free space", "toolchain"))
         base.mkdir(parents=True, exist_ok=True)
 
         def open_():
