@@ -653,6 +653,15 @@ class CrashList(Budgeted, Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
+class CrashFrame(BaseModel):
+    """One of the app's own frames resolved against the build that crashed (crash symbolication)."""
+    index: int = Field(description="Frame number in the crashed thread")
+    function: str | None = None
+    file: str | None = Field(None, description="Source file, relative to the project")
+    line: int | None = None
+    column: int | None = None
+
+
 class CrashDetail(Budgeted, Out):
     BULK: ClassVar[tuple[str, ...]] = ("text",)
     name: str
@@ -675,6 +684,14 @@ class CrashDetail(Budgeted, Out):
     end_line: int | None = None
     total_lines: int | None = None
     text: str | None = Field(None, description="The section's lines")
+    symbolicated: Literal["full", "partial", "none", "not-needed"] | None = Field(
+        None, description="full: every app frame of the crashed thread resolved to file:line; partial: some, or "
+                          "names only; none: no matching build (see symbolication_note); not-needed: no app frames")
+    symbolication_note: str | None = Field(None, description="Why symbolication is partial or none, and what to do")
+    project_path: str | None = Field(None, description="Project the matching build came from; app_frames' files "
+                                                       "are relative to it")
+    app_frames: list[CrashFrame] = Field(default_factory=list, description="The crashed thread's app frames "
+                                                                           "with function, file and line")
     next_steps: list[str] = Field(default_factory=list)
 
 

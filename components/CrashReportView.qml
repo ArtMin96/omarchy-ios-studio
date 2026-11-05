@@ -55,6 +55,22 @@ Item {
 
   readonly property string ownImage: item ? (item.process || "") : ""
 
+  // Crash symbolication (helper/crash_symbols.py): file:line for the app's frames, from the build that crashed.
+  readonly property var sym: summary && summary.symbolication ? summary.symbolication : null
+  readonly property string symLevel: !sym ? "" : (sym.status === "full" ? "ok" : (sym.status === "not-needed" ? "" : "warn"))
+  readonly property string symNote: {
+    if (!sym || sym.status === "not-needed") return ""
+    if (sym.status === "full") return "File and line numbers come from the build that crashed. Click a frame to open it."
+    return [sym.message || "", sym.hint || ""].filter(function(s) { return s !== "" }).join(" ")
+  }
+  function openFrame(info) {
+    if (!info || !info.file || !root.app.projects) return
+    var project = root.sym && root.sym.project ? root.sym.project : ""
+    var file = info.path || info.file
+    if (project === "") { root.app.toast("Couldn't tell which project this build came from", "warn"); return }
+    root.app.projects.openInEditor({ path: project }, file, info.line, info.column)
+  }
+
   property string reportText: ""
   onPathChanged: reportText = ""
   FileView {
@@ -180,19 +196,33 @@ Item {
             spacing: Style.spacing.xs
             Repeater {
               model: root.summary && root.summary.frames ? root.summary.frames : []
-              delegate: Text {
+              delegate: CrashFrameRow {
                 required property var modelData
                 required property int index
-                readonly property bool mine: root.ownImage !== "" && String(modelData).indexOf(root.ownImage) >= 0
                 width: frames.width
                 text: String(modelData)
-                elide: Text.ElideRight
-                color: mine ? Commons.Color.foreground : Theme.dim
-                font.bold: mine
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
+                info: root.sym && root.sym.frames ? (root.sym.frames[index] || null) : null
+                mine: root.ownImage !== "" && String(modelData).indexOf(root.ownImage) >= 0
+                onClicked: root.openFrame(info)
               }
             }
+          }
+        }
+        // symbolication status: says why app frames have no file:line, and what fixes it
+        RowLayout {
+          Layout.fillWidth: true
+          visible: root.symNote !== ""
+          spacing: Style.spacing.md
+          Icon {
+            Layout.alignment: Qt.AlignTop
+            glyph: root.symLevel === "ok" ? Model.Glyph.info : Model.Glyph.warn
+            color: root.symLevel === "ok" ? Theme.faint : Theme.warn
+            size: Style.font.bodySmall
+          }
+          AppText {
+            Layout.fillWidth: true
+            text: root.symNote
+            size: "small"; tone: "dim"; wrapMode: Text.WordWrap
           }
         }
       }

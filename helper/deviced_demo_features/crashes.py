@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+import crash_symbols
 from deviced_demo_core import DIR, TEAM
 
 
@@ -44,11 +45,35 @@ def crash_pull(name: str) -> dict:
                "crashedThread": 0, "frames": frames, "bugType": "309", "incident": "11111111-2222-4333-8444-555555555555"}
     if proc == "JetsamEvent":
         summary.update(exceptionType=None, signal=None, terminationReason="Memory pressure", frames=[], bugType="298")
+    else:
+        crash_symbols.apply(summary, demo_symbols(proc))
     header = {"app_name": proc, "timestamp": summary["date"], "app_version": "1.2.0", "bug_type": summary["bugType"],
               "os_version": summary["osVersion"], "incident_id": summary["incident"]}
     path.write_text(json.dumps(header) + "\n" + json.dumps({"exception": {"type": summary["exceptionType"], "signal": summary["signal"]},
                                                             "frames": frames}, indent=2) + "\n")
     return {"path": str(path), "summary": summary}
+
+
+def demo_symbols(proc: str) -> dict:
+    """What crash_symbols.symbolicate() returns for the demo crashes: WeatherGlance's build is in the symbol
+    cache (file:line), HabitTracker's crash came from a build made before symbols were kept."""
+    if proc != "WeatherGlance":
+        return crash_symbols.make_result(
+            "none", "no-build", f"No build on this computer matches {proc} in this report (UUID "
+            "8d1e4c2a-3b5f-4a61-9c7e-2f0b6d5a4e13). It was built before iOS Studio kept symbols, on another "
+            "computer, or the project was rebuilt since.", crash_symbols.HINT_REBUILD)
+    project = str(Path.home() / "Developer" / proc)
+
+    def at(fn: str, file: str | None = None, line: int | None = None, col: int | None = None) -> dict:
+        out = {"image": proc, "function": fn, "line": line, "column": col}
+        if file:
+            out.update(file=f"Sources/{proc}/{file}", path=f"{project}/Sources/{proc}/{file}")
+        return out
+    return crash_symbols.make_result(
+        "full", "ok", "Resolved the app's frames to file:line.", project=project,
+        frames={"0:4": at("ForecastStore.load(from:)", "ForecastStore.swift", 57, 31),
+                "0:5": at("closure #1 in ContentView.body.getter", "ContentView.swift", 24, 13),
+                "0:9": at("main")})
 
 
 def register(reg):

@@ -494,7 +494,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   problems and full log.
 - **CrashBrowser / CrashReportView**: the Logs page's Crashes tab (`app`; `scope` `mine`/`all`) and one report
   (`app`, `item` = a CrashItem): a plain-language summary card, the crashed thread and the full report, with
-  `save()` (to `~/Downloads`) and `copy()`.
+  `save()` (to `~/Downloads`) and `copy()`. The crashed thread's frames are **CrashFrameRow**s (`text`, `info` =
+  an entry of `summary.symbolication.frames` or null, `mine`; signal `clicked()`): a resolved app frame shows
+  its function with file:line below, and a click opens it in the editor; under them, the symbolication status.
 - **DeviceConnect**: "Connect your iPhone", shown when no paired iPhone is known: cable or Wi-Fi. Props: `app`;
   signal `pairRequested(method)`.
 - **DevicePairSheet**: the pairing sheet, driven by the daemon's `pair` events (`app.device.pair`). Props: `app`;
