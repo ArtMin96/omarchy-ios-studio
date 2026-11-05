@@ -31,7 +31,7 @@ from pymobiledevice3.services.remote_fetch_symbols import RemoteFetchSymbolsServ
 
 import common
 from common import fix
-from deviced_core import dlog, emit, err
+from deviced_core import dlog, emit, err, installed_apps
 
 DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
 FORWARD_TIMEOUT = 3600          # seconds a forward lives without a new debug.start
@@ -316,7 +316,7 @@ class Symbols:
         self.publish(phase="extracting", fraction=None, message="Unpacking system libraries…", done=0)
         proc = await asyncio.create_subprocess_exec(ipsw, "dyld", "info", str(cache), "--dylibs",
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        out, _ = await proc.communicate()
+        out, _ = await communicate(proc)
         listed = {m.group(0) for m in re.finditer(r"/\S+$", out.decode(errors="replace"), re.M)}
         paths = wanted_libs(listed)
         if not any(p.startswith(SWIFT_PREFIX) for p in paths):
@@ -337,7 +337,7 @@ class Symbols:
                 x = await asyncio.create_subprocess_exec(ipsw, "dyld", "extract", str(cache), p.rsplit("/", 1)[1],
                                                          "--slide", "-o", str(dest), stdout=asyncio.subprocess.DEVNULL,
                                                          stderr=asyncio.subprocess.PIPE)
-                _, e = await x.communicate()
+                _, e = await communicate(x)
             if (sym / rel).is_file():
                 done.append(rel)
             else:
@@ -350,6 +350,19 @@ class Symbols:
         if "usr/lib/swift/libswiftCore.dylib" not in done:
             raise err("failed", "Unpacking the Swift runtime failed.", None, "libswiftCore.dylib missing after extract")
         return {"format": FORMAT, "libs": sorted(done), "failed": sorted(failed)}
+
+
+async def communicate(proc) -> tuple[bytes, bytes]:
+    """proc.communicate(), but a cancelled job (debug.symbols cancel, shutdown) kills the child
+    instead of leaving ipsw running."""
+    try:
+        return await proc.communicate()
+    except asyncio.CancelledError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), 5)
+        raise
 
 
 def main_cache(dsc: Path) -> Path | None:
@@ -421,7 +434,7 @@ def register(reg):
         if launch not in ("attach", "suspended", "auto", "none"):   # none: the forward only (diagnostics)
             raise err("bad-args", "launch must be attach, suspended, auto or none.")
         s, rsd = await d.rsd(a)
-        apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
+        apps = await installed_apps(d.pmd3, rsd,
             application_type="Any", bundle_identifiers=[bid])
         info = apps.get(bid)
         if not info:

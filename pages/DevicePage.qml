@@ -103,6 +103,17 @@ PageFrame {
     return false
   }
 
+  // ---- the daemon keeps crashing (DeviceService gave up restarting it)
+  ErrorState {
+    Layout.fillWidth: true
+    visible: page.svc.status === "error"
+    banner: true
+    app: page.app
+    error: page.svc.error
+    retryText: "Retry"
+    onRetry: page.svc.start()
+  }
+
   // ---- onboarding
   DeviceConnect {
     Layout.fillWidth: true
@@ -230,7 +241,7 @@ PageFrame {
       text: "Don't see Developer Mode? Plug the iPhone in and press “Show the switch”, or run one of your apps once from Projects."
     }
     footer: [
-      ActionButton { text: "Show the switch"; glyph: Model.Glyph.eye; enabled: page.usbPresent(); tooltip: page.usbPresent() ? "" : "Needs the cable"; onClicked: page.svc.revealDevMode() },
+      ActionButton { text: "Show the switch"; glyph: Model.Glyph.eye; disabled: !page.usbPresent(); tooltip: page.usbPresent() ? "" : "Needs the cable"; onClicked: page.svc.revealDevMode() },
       ActionButton { text: "Done"; kind: "primary"; onClicked: { devModeSheet.close(); page.svc.refreshInfo(true) } }
     ]
   }

@@ -182,14 +182,14 @@ PageFrame {
   ColumnLayout {
     Layout.fillWidth: true
     visible: page.svc.signedIn
-    spacing: Style.spacing.xxl
+    spacing: Style.spacing.huge      // same gap between cards as the page itself
 
     // ---------------------------------------------------- identity + health
     GridLayout {
       Layout.fillWidth: true
       columns: page.width > Style.space(940) ? 2 : 1
       columnSpacing: Style.spacing.xxl
-      rowSpacing: Style.spacing.xxl
+      rowSpacing: Style.spacing.huge
 
       // identity
       Card {
@@ -290,11 +290,12 @@ PageFrame {
           anchors.margins: Style.spacing.panelPadding
           spacing: Style.spacing.md
 
+          // header styled like a Card title
           RowLayout {
             Layout.fillWidth: true
-            spacing: Style.spacing.md
+            spacing: Style.spacing.lg
             Icon { glyph: Model.Glyph.signature; color: healthCard.lv === "info" ? Theme.dim : Theme.levelColor(healthCard.lv); size: Style.font.icon }
-            AppText { Layout.fillWidth: true; text: "App signing"; strong: true }
+            AppText { Layout.fillWidth: true; text: "App signing"; size: "title"; strong: true }
           }
 
           Skeleton { Layout.fillWidth: true; visible: healthCard.loading; lines: 3; rowHeight: Style.font.heading }
@@ -487,6 +488,9 @@ PageFrame {
               return kind === "profile" ? page.svc.expiryFor(ts) : Model.expiryStatus(ts, page.svc.now)
             }
             Layout.fillWidth: true
+            // bleed into the card padding so the text lines up with the card's own content
+            Layout.leftMargin: -Style.spacing.rowPaddingX
+            Layout.rightMargin: -Style.spacing.md
             hasCursor: page.cursor === gi
             onHovered: function(h) { if (h) page.cursor = gi }
             onClicked: page.copyRow({ kind: kind, item: it })

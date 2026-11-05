@@ -60,7 +60,8 @@ PageFrame {
 | `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and `activated(params)`. |
 | `app.openSetupStep(id)` | `nav("setup", {step: id})` |
 | `app.toast(text, level?)` | level: `info` (default), `ok`, `warn`, `error` |
-| `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. |
+| `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. Returns a handle. A dialog asked for while another is open is queued and shown after it, so no question is lost. |
+| `app.closeConfirm(handle)` | Close that dialog (or drop it from the queue) unanswered: neither callback runs. Use it when whatever asked has gone away (e.g. the job that wanted an answer ended). |
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo` and the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming`. Pages may add keys. |
@@ -159,10 +160,15 @@ Icon { glyph: Model.Glyph.phone; size: Style.font.iconLarge; color: Theme.dim; s
 ## ActionButton
 
 `text`, `glyph`, `kind: "primary" | "secondary" (default) | "ghost" | "danger"`, `busy` (spinner, ignores
-clicks), `enabled`, `compact`, `tooltip`, `hasCursor`; signals `clicked()`, `hovered(bool)`.
-Use one `primary` per view, for the main call to action.
+clicks), `enabled`, `disabled`, `compact`, `tooltip`, `hasCursor`; read-only `interactive`; signals `clicked()`,
+`hovered(bool)`. Use one `primary` per view, for the main call to action.
+
+`enabled: false` dims the button and blocks clicks **and** hover, so its tooltip never shows. `disabled: true`
+dims it and blocks clicks but keeps hover and the tooltip: use it whenever the tooltip explains why the button
+can't be used yet.
 ```qml
 ActionButton { text: "Run on iPhone"; glyph: Model.Glyph.play; kind: "primary"; busy: svc.building; onClicked: svc.run(p) }
+ActionButton { text: "Install"; disabled: !app.device.connected; tooltip: disabled ? "Connect your iPhone first" : "" }
 ```
 
 ## IconButton
@@ -321,20 +327,24 @@ ProgressTrack { Layout.fillWidth: true; value: ev.fraction; label: ev.detail; tr
 
 ## StepRow
 
-A wizard step. Props: `number`, `title`, `description`, `state`
+A wizard step. Props: `number`, `title`, `description`, `stepState`
 (`done|missing|running|failed|pending|optional|skipped`), `meta` ("≈ 900 MB · 3 min"), `actionText`,
 `actionGlyph`, `actionKind` (auto: primary when missing or failed), `actionEnabled`, `actionBusy`
-(default `state === "running"`), `progress` (-1 hides it), `progressIndeterminate`, `progressText`,
-`progressTrailing`, `logLines` (array of strings or `{text, level}`), `errorText`, `expanded`,
-`hasCursor`, `extra` (more controls under the description); signals `action()`, `hovered(bool)`,
-`toggled(expanded)`.
+(default `stepState === "running"`), `progress` (-1 hides it), `progressIndeterminate`, `progressText`,
+`progressTrailing`, `errorText`, `expanded`, `hasCursor`, `extra` (more controls under the description);
+read-only `logCount`; signals `action()`, `hovered(bool)`, `toggled(expanded)`.
+
+The log is fed imperatively (it keeps the last 400 lines): `setLog(lines)` replaces it, `appendLog(text)` adds
+a line, `clearLog()` empties it. With `app.setup`, load `svc.logLines(id)` once, then follow its
+`stepLog(id, text)` and `stepLogCleared(id)` signals (`""` = every step), as `SetupPage.qml` does.
 ```qml
 StepRow {
   Layout.fillWidth: true
-  number: index + 1; title: s.title; description: s.description; state: s.state; meta: s.meta
+  number: index + 1; title: s.title; description: s.description; stepState: s.state; meta: s.meta
   actionText: s.state === "done" ? "Repair" : "Install"; actionGlyph: Model.Glyph.download
   progress: s.progress === undefined ? -1 : s.progress; progressText: s.detail
-  logLines: svc.logs[s.id] || []; errorText: s.error ? s.error.message : ""
+  errorText: s.error ? s.error.message : ""
+  Component.onCompleted: setLog(svc.logLines(s.id))
   onAction: svc.install(s.id)
 }
 ```
@@ -423,12 +433,14 @@ the keyboard.
   session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
 - **DevicePhoneFrame**: a drawn iPhone that shows a screenshot or mirror frame. Props: `source` (file URL),
   `live` with `liveLabel` (the corner marker, e.g. `"REC 0:12"`), `dimmed`, `rotationSteps`, `glyph`,
-  `placeholder`, `screenAspect` (default the iPhone 17 Pro's), `clickable` + `clicked()`. Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
+  `placeholder`, `screenAspect` (default the iPhone 17 Pro's), `clickable` + `clicked()`, `mirrorService`
+(set it to `app.device`: the frame then counts as a mirror viewer while visible, and DeviceService pauses the
+live mirror when no frame can be seen). Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
   once it's ready, and a frame that arrives while one is still loading replaces the queued one. The rounded
   mask is one layer effect on the container. `frameShown(url)` fires for every frame shown; pass it to
   `app.device.ackFrame(url)` so the daemon doesn't send faster than the window can draw.
   ```qml
-  DevicePhoneFrame { source: app.device.screenSource; live: app.device.mirroring
+  DevicePhoneFrame { source: app.device.screenSource; live: app.device.mirroring; mirrorService: app.device
                      onFrameShown: function(url) { app.device.ackFrame(url) } }
   ```
 - **DeviceScreenView**: the iPhone › Screen tab: the live view (Smooth, Screenshots or AirPlay through UxPlay),
@@ -458,8 +470,16 @@ the keyboard.
 - **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
   slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
   `log` (the LogView); signal `closeRequested()`.
-- **BuildDiagnosticRow**: one compiler diagnostic. Props: `diag` (`{severity, file, line, col?, message}`),
-  `projectPath`, `hasCursor`; signals `clicked()` (opens the file at the line), `hovered(bool)`.
+- **BuildDiagnosticRow**: one build diagnostic. Props: `diag` (`{severity, message, category?, file?, line?, col?,
+  hint?, details?}`, see `helper/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
+  the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
+  `package`, `signing`, `device`, `toolchain`, `config`, `other` (a row with a file and no category counts as
+  `compiler`). Non-compiler rows show their category label, up to three `details` lines and the `hint` (what to do).
+- **ProjectService build diagnostics** (`app.projects`): `diagnostics` is a `ListModel` of `{n}` rows, errors
+  before warnings before notes, kept outside `build`; `diagnostic(n)` returns the object (it never changes once
+  added) and `diagnosticList()` a copy of all of them. `errorCount` and `warningCount` count up while the build
+  runs; `diagnosticAdded(d)` fires per new one. Bind a Repeater/ListView to `diagnostics` and read
+  `svc.diagnostic(model.n)` in the delegate.
 - **LogDeviceTab / LogSyslogView**: the Logs page's Device log tab (`app`) and its live list.
   LogSyslogView takes SyslogEntry batches with `push(batch)` (batched every 80 ms, the last `maxLines`, default
   5000) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,

@@ -6,7 +6,12 @@ with `wait()` (long-poll), answer prompts with `respond()`, and stop it with `ca
 `shutdown()` kills every running job; the lifespan calls it when the server exits.
 
 A job may carry a `finisher` coroutine that runs after the helper reports success and before the job
-is marked finished (ios_run uses it to install and launch the app through the device client).
+is marked finished (ios_run uses it to install and launch the app through the device client). It runs as
+its own task: cancel() cancels it, and a finisher calls job.check_cancel() between its steps. A job
+reaches a terminal state only after its helper and its finisher have both stopped.
+
+Malformed helper output never kills the pump: unknown or ill-typed fields are ignored, an over-long line
+is skipped, and any other error fails the job with a message and stops the helper.
 """
 from __future__ import annotations
 
@@ -31,9 +36,15 @@ MAX_LOG_LINES = 20_000       # ring buffer; older lines stay in the helper's log
 MAX_LINE_CHARS = 4_000
 MAX_DIAGNOSTICS = 1_000
 MAX_FINISHED_JOBS = 50
+FINISHED_LINES = 2_000       # a finished job keeps only its newest lines in memory (the rest: log file)
+CANCEL_SETTLE = 15.0         # seconds cancel() waits for the helper and finisher to stop
 TERMINAL = ("succeeded", "failed", "cancelled")
 
 Finisher = Callable[["Job"], Awaitable[None]]
+
+
+class JobCancelled(Exception):
+    """Raised by Job.check_cancel() inside a finisher once the job was asked to stop."""
 
 
 @dataclass
@@ -69,6 +80,7 @@ class Job:
     cancel_requested: bool = False
     poll_mark: tuple[int, int, int] | None = None   # (line_count, errors, warnings) at the last status
     _task: asyncio.Task | None = None
+    _finisher_task: asyncio.Task | None = None
 
     # ---------------------------------------------------------------- derived
     @property
@@ -92,6 +104,11 @@ class Job:
         for ln in str(text).splitlines() or [""]:
             self.lines.append(ln[:MAX_LINE_CHARS])
             self.line_count += 1
+
+    def check_cancel(self) -> None:
+        """For finishers: stop between steps once cancel() was called."""
+        if self.cancel_requested:
+            raise JobCancelled()
 
     def touch(self) -> None:
         self._progress_seq += 1
@@ -160,7 +177,7 @@ class JobManager:
         done_seen = False
 
         async def read_stderr() -> None:
-            async for raw in proc.stderr:
+            async for raw in read_lines(proc.stderr):
                 text = raw.decode(errors="replace").rstrip()
                 if text:
                     job.add_line(f"[helper stderr] {text}")
@@ -168,13 +185,13 @@ class JobManager:
 
         err_task = asyncio.create_task(read_stderr())
         try:
-            async for raw in proc.stdout:
+            async for raw in read_lines(proc.stdout):
                 line = raw.decode(errors="replace").strip()
                 if not line:
                     continue
                 try:
                     ev = json.loads(line)
-                except json.JSONDecodeError:
+                except ValueError:
                     job.add_line(line)
                     job.touch()
                     continue
@@ -194,28 +211,66 @@ class JobManager:
                     job.error = {"code": "helper-exited", "message": f"The helper stopped without a result (exit {code})."}
                     self._finish(job, "failed")
             elif job.result is not None and job.state == "running" and job.finisher:
-                try:
-                    await job.finisher(job)
-                except ToolError as exc:
-                    job.error = {"code": "post-build", "message": str(exc)}
-                    self._finish(job, "failed")
-                except Exception as exc:  # noqa: BLE001
-                    log.exception("finisher failed for %s", job.id)
-                    job.error = {"code": "post-build", "message": f"Installing after the build failed: {exc}"}
-                    self._finish(job, "failed")
+                if job.cancel_requested:
+                    job.error = {"code": "cancelled", "message": "Cancelled after the build, before installing."}
+                    self._finish(job, "cancelled")
                 else:
-                    if not job.finished:
-                        self._finish(job, "succeeded")
+                    await self._run_finisher(job)
             elif job.result is not None and job.state == "running":
                 self._finish(job, "succeeded")
         except asyncio.CancelledError:
+            if job._finisher_task and not job._finisher_task.done():
+                job._finisher_task.cancel()
             await self._kill(job, graceful=False)
             raise
+        except Exception as exc:  # noqa: BLE001  never leave a job half-alive with its helper still running
+            log.exception("reading the helper's output failed for %s", job.id)
+            if not job.finished:
+                job.error = {"code": "internal", "message": f"The server couldn't read the helper's output "
+                                                            f"({type(exc).__name__}: {exc}); the job was stopped."}
+            await self._kill(job, graceful=False)
+            self._finish(job, "failed")
         finally:
             if not err_task.done():
                 err_task.cancel()
             if not job.finished:
                 self._finish(job, "cancelled" if job.cancel_requested else "failed")
+            if job.proc is not None and job.proc.returncode is not None:
+                job.proc = None      # reaped: drop the transports with it
+
+    async def _run_finisher(self, job: Job) -> None:
+        """Run job.finisher as its own task (so cancel() can stop it) and settle the job from its outcome."""
+        assert job.finisher
+        ft = asyncio.create_task(job.finisher(job), name=f"job-{job.id}-finish")
+        job._finisher_task = ft
+        try:
+            await asyncio.wait({ft})
+        except asyncio.CancelledError:
+            ft.cancel()
+            raise
+        exc = None if ft.cancelled() else ft.exception()
+        if ft.cancelled() or isinstance(exc, JobCancelled):
+            step = next((sid for sid, st in job.steps.items() if st.get("state") == "running"), None)
+            for st in job.steps.values():
+                if st.get("state") in ("running", "pending"):
+                    st["state"] = "cancelled"
+            msg = "Cancelled after the build."
+            if step == "install":
+                msg = ("Cancelled while installing: the iPhone may still finish installing this build, but the app "
+                       "won't be launched.")
+            elif step == "launch":
+                msg = "Cancelled while launching; the app is installed."
+            job.error = {"code": "cancelled", "message": msg}
+            self._finish(job, "cancelled")
+        elif isinstance(exc, ToolError):
+            job.error = {"code": "post-build", "message": str(exc)}
+            self._finish(job, "failed")
+        elif exc is not None:
+            log.error("finisher failed for %s", job.id, exc_info=exc)
+            job.error = {"code": "post-build", "message": f"Installing after the build failed: {exc}"}
+            self._finish(job, "failed")
+        elif not job.finished:
+            self._finish(job, "succeeded")
 
     def _apply(self, job: Job, ev: dict) -> bool:
         """Fold one event into the job. Returns True on the final `done` event."""
@@ -224,14 +279,16 @@ class JobManager:
             job.info = {k: v for k, v in ev.items() if k != "event"}
             job.project = job.project or ev.get("project")
         elif name == "step":
-            job.set_step(str(ev.get("id")), ev.get("title"), str(ev.get("state") or ""),
-                         detail=ev.get("detail"), owner=ev.get("owner"), reason=ev.get("reason"),
-                         error=(ev.get("error") or {}).get("message") if isinstance(ev.get("error"), dict) else None)
+            err = ev.get("error")
+            job.set_step(str(ev.get("id")), _text(ev.get("title")), str(ev.get("state") or ""),
+                         detail=_text(ev.get("detail")), owner=_text(ev.get("owner")), reason=_text(ev.get("reason")),
+                         error=_text(err.get("message") if isinstance(err, dict) else err))
         elif name == "progress":
-            if ev.get("fraction") is not None:
-                job.progress = float(ev["fraction"])
-            job.progress_detail = str(ev.get("detail") or job.progress_detail)
-            job.eta = ev.get("eta")
+            frac = _number(ev.get("fraction"))
+            if frac is not None:
+                job.progress = min(1.0, max(0.0, frac))
+            job.progress_detail = _text(ev.get("detail")) or job.progress_detail
+            job.eta = _number(ev.get("eta"))
         elif name == "log":
             job.add_line(str(ev.get("text", "")))
         elif name == "notice":
@@ -242,6 +299,8 @@ class JobManager:
             if len(job.diagnostics) < MAX_DIAGNOSTICS:
                 job.diagnostics.append({k: v for k, v in ev.items() if k != "event"})
         elif name == "prompt":
+            if not isinstance(ev.get("options", []), list):
+                ev["options"] = []
             job.pending_prompt = {k: v for k, v in ev.items() if k != "event"}
             job.state = "needs_input"
             job.add_line(f"[prompt {ev.get('id')}] {ev.get('title') or ''} {ev.get('message', '')}".strip())
@@ -250,19 +309,23 @@ class JobManager:
         elif name == "done":
             job.pending_prompt = None
             if ev.get("ok"):
-                job.result = ev.get("data") or {}
+                data = ev.get("data")
+                job.result = data if isinstance(data, dict) else {}
                 if job.state == "needs_input":
                     job.state = "running"
                 if not job.finisher:
                     self._finish(job, "succeeded")
             else:
-                err = ev.get("error") or {}
-                build = err.pop("build", None) if isinstance(err, dict) else None
+                err = ev.get("error")
+                if not isinstance(err, dict):   # a bare string (or nothing): keep it as the message
+                    err = {"code": "failed", "message": _text(err) or "The job failed."}
+                build = err.pop("build", None)
                 job.error = err
-                if build:
+                if isinstance(build, dict):
                     job.result = build
-                    for d in build.get("diagnostics") or []:
-                        if d not in job.diagnostics and len(job.diagnostics) < MAX_DIAGNOSTICS:
+                    diags = build.get("diagnostics")
+                    for d in diags if isinstance(diags, list) else []:
+                        if isinstance(d, dict) and d not in job.diagnostics and len(job.diagnostics) < MAX_DIAGNOSTICS:
                             job.diagnostics.append(d)
                 self._finish(job, "cancelled" if err.get("code") == "cancelled" else "failed")
             return True
@@ -280,7 +343,27 @@ class JobManager:
             except Exception:  # noqa: BLE001
                 pass
         log.info("job %s %s in %.1fs", job.id, state, job.elapsed)
+        self._release(job)
         job.touch()
+
+    def _release(self, job: Job) -> None:
+        """Shrink a finished job to what status and log calls still need (50 are kept): the newest
+        FINISHED_LINES lines (ios_build_log reads older ones from the log file; a job without one gets its
+        full output spilled to a file first) and no finisher. The process handle stays until the pump has
+        reaped it."""
+        if len(job.lines) > FINISHED_LINES:
+            if not job.info.get("logFile") and not job.info.get("spillFile"):
+                try:
+                    from . import budget as B
+                    path, _, _ = B.spill("\n".join(job.lines), "build-logs", f"{job.id}.log")
+                    job.info["spillFile"] = path
+                    job.info["spillFirstLine"] = job.first_line
+                except OSError:
+                    pass
+            job.lines = deque(list(job.lines)[-FINISHED_LINES:], maxlen=FINISHED_LINES)
+        job.finisher = None
+        if job.proc is not None and job.proc.returncode is not None:
+            job.proc = None
 
     # ---------------------------------------------------------------- wait / respond / cancel
     async def wait(self, job: Job, seconds: float,
@@ -329,17 +412,26 @@ class JobManager:
             raise ToolError(f"Job {job.id} stopped before the answer arrived.")
 
     async def cancel(self, job: Job) -> Job:
+        """Stop the helper (or the finisher, if the build is done and it is installing) and wait until the
+        job has really stopped, so nothing is installed or launched after the job says cancelled."""
         if job.finished:
             return job
         job.cancel_requested = True
         job.add_line("[cancel requested]")
-        try:
-            await self._write(job, {"cancel": True})
-            if job.pending_prompt:
-                await self._write(job, {"prompt": job.pending_prompt.get("id"), "cancel": True})
-        except ToolError:
-            pass
-        await self._kill(job, graceful=True)
+        ft = job._finisher_task
+        if ft is not None and not ft.done():
+            ft.cancel()
+        else:
+            try:
+                await self._write(job, {"cancel": True})
+                if job.pending_prompt:
+                    await self._write(job, {"prompt": job.pending_prompt.get("id"), "cancel": True})
+            except ToolError:
+                pass
+            await self._kill(job, graceful=True)
+        pump = job._task
+        if pump is not None and not pump.done():
+            await asyncio.wait({pump}, timeout=CANCEL_SETTLE)
         if not job.finished:
             job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
             self._finish(job, "cancelled")
@@ -380,3 +472,43 @@ class JobManager:
                 j._task.cancel()
             if j.proc:
                 helper.kill_group(j.proc.pid)
+
+
+# ---------------------------------------------------------------- tolerant parsing
+
+def _text(v: Any) -> str | None:
+    if v is None or isinstance(v, (dict, list)):
+        return None
+    return str(v)
+
+
+def _number(v: Any) -> float | None:
+    if isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+async def read_lines(stream: asyncio.StreamReader):
+    """Lines of a stream like `async for`, but a line over the reader's limit is skipped (with a marker
+    line) instead of raising, so one huge event can't stop the job from reading the rest."""
+    skipping = False
+    while True:
+        try:
+            raw = await stream.readuntil(b"\n")
+        except asyncio.IncompleteReadError as exc:
+            if exc.partial and not skipping:
+                yield exc.partial
+            return
+        except asyncio.LimitOverrunError as exc:
+            await stream.read(max(1, exc.consumed))
+            skipping = True
+            continue
+        if skipping:
+            skipping = False
+            yield b"[helper output line too long; skipped]"
+            continue
+        yield raw

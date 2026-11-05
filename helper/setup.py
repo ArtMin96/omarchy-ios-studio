@@ -18,9 +18,7 @@ yay/makepkg never run as root; AUR packages are built as the user (runuser insid
 """
 from __future__ import annotations
 
-import glob
 import hashlib
-import json
 import mmap
 import os
 import re
@@ -38,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import common
-from common import (CACHE_DIR, DATA_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR, VENV_DIR, HelperError,
+from common import (CACHE_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR, VENV_DIR, HelperError,
                     event, fix, ok)
 
 # ------------------------------------------------------------------ pins (one place)
@@ -958,7 +956,7 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     good_cache = next((c for c in caches if c["current"] and c["complete"] and c["ios"].split(".")[0] == major), None)
     ctx.update(bundle=bundle, caches=caches, good_cache=good_cache)
     if bundle and installed_stamp == stamp and matching and not extras_missing:
-        sdk_state, sdk_det = "done", f"iOS {matching[-1]} SDK" + (f", spare copy in the cache" if good_cache else "")
+        sdk_state, sdk_det = "done", f"iOS {matching[-1]} SDK" + (", spare copy in the cache" if good_cache else "")
     elif bundle and installed_stamp and installed_stamp != stamp:
         sdk_state, sdk_det = "broken", "Built by an older xtool; it needs rebuilding"
     elif bundle and ios_vers and not matching:
@@ -987,7 +985,7 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     else:
         xstate, xdet = "missing", f"Download Xcode {rec_ver} from Apple (about {fmt_bytes(approx)})"
     steps.append(S("xcode", f"Xcode {rec_ver} download", "Apple",
-                   f"The iOS SDK only comes inside Apple's Xcode download. You download it once in your browser with a free Apple Account; iOS Studio finds it in Downloads by itself.",
+                   "The iOS SDK only comes inside Apple's Xcode download. You download it once in your browser with a free Apple Account; iOS Studio finds it in Downloads by itself.",
                    xstate, xdet, size=f"about {fmt_bytes(approx)} download", time_="depends on your connection",
                    interactive=True, auto=False, essential=sdk_state != "done",
                    action={"kind": "open-url", "label": "Open download page", "url": DIRECT_XIP.format(v=rec_ver) if "." in rec_ver else DOWNLOAD_PAGE.format(v=rec_ver),
@@ -1593,7 +1591,6 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
             t = ctx.by_id[dep]["title"]
             raise HelperError("needs-step", f"Install “{t}” first.", fix(f"Install {t}", "setup", step=dep))
     ad = ctx.c.get("apple_dev") or i_apple_dev(ctx, step_id)
-    stamp = ctx.c["stamp"]
     major = ctx.c["xcode_major"]
     cache = ctx.c.get("good_cache")
     xip_path = ctx.flags.get("xip")
@@ -2006,7 +2003,6 @@ def disk_items() -> list[dict]:
     superseded_libs = [p for p in APPLE_DEV_LIB.glob("xtool-*") if p.is_dir() and p != active_lib]
     # source trees of superseded builds (same naming: lib/xtool-X <-> cache/xtool-X)
     superseded_src = [APPLE_DEV_CACHE / p.name for p in superseded_libs if (APPLE_DEV_CACHE / p.name).is_dir()]
-    active_src = APPLE_DEV_CACHE / active_lib.name if active_lib else None
     build_trees = [p / ".build" for p in APPLE_DEV_CACHE.glob("*") if (p / ".build").is_dir() and p not in superseded_src]
     if ad and (ad / "tools/darwin-tools/.build").is_dir():
         build_trees.append(ad / "tools/darwin-tools/.build")

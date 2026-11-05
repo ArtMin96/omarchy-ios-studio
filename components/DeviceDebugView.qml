@@ -441,6 +441,8 @@ ColumnLayout {
       visible: !!root.symbols
       spacing: Style.spacing.md
       ToggleSwitch {
+        // track lines up with the text above it (the cursor-ring margin sits outside)
+        Layout.leftMargin: cursorRing ? -cursorPad : 0
         checked: !!(root.symbols && root.symbols.keepDownload)
         enabled: !root.symBusy
         onToggled: root.setKeepDownload(!checked)

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -30,7 +32,7 @@ from ..jobs import Job
 from ..models import (ActionResult, AppBrief, AppInstallResult, AppLaunchResult, AppList, DeviceDetails, DeviceEntry,
                       DeviceList, DevicePrepare, LocationResult, ProcessInfo, ProcessList, ScreenshotInfo)
 from ..state import AppState, get_state, resolve_project
-from . import READ_REMOTE, ann, dry_run, page_of, tool
+from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
 
 log = logging.getLogger("iosstudio.device")
 
@@ -71,6 +73,8 @@ def _next_for(code: str, fix: dict | None) -> str | None:
         "disconnected": "The device service restarted. Retry the call.",
         "daemon-unavailable": "The iPhone service couldn't start. Run ios_toolchain_check (pymobiledevice3 step), "
                               "or ask the user to open iOS Studio: ios_open_app(page='device').",
+        "socket-path-too-long": "Set IOSSTUDIO_RUNTIME_DIR to a shorter folder (socket paths max out at 107 bytes), "
+                                "then restart the MCP server.",
     }
     if code in table:
         return table[code]
@@ -86,7 +90,7 @@ def device_tool_error(exc: Exception, not_found: str | None = None) -> ToolError
     nxt = not_found if code == "not-found" and not_found else _next_for(code, getattr(exc, "fix", None))
     detail = getattr(exc, "detail", None)
     out = f"{msg} [{code}]"
-    if detail and code in ("failed", "install-failed", "ddi", "bad-package"):
+    if detail and code in ("failed", "install-failed", "ddi", "bad-package", "daemon-unavailable"):
         out += f" Detail: {str(detail).strip()[:300]}"
     if nxt:
         out += f" Next: {nxt}"
@@ -232,6 +236,129 @@ async def _install_for_job(state: AppState, udid: str, ipa: str, job: Job) -> di
     if res.get("bundleId") and job.result is not None:
         job.result["installedBundleId"] = res["bundleId"]
     return res
+
+
+class AppInstallStatus(AppInstallResult):
+    """AppInstallResult plus the state of the background install (ios_app_install, ios_app_run_and_capture)."""
+    state: Literal["running", "succeeded"] = Field("succeeded", description="running: still installing; call "
+                                                   "the same tool again with install_id")
+    install_id: str | None = Field(None, description="Pass back as install_id to wait for this install")
+    progress: float | None = Field(None, description="0-1 while installing")
+    progress_detail: str | None = None
+    elapsed_seconds: float | None = None
+
+
+@dataclass
+class InstallJob:
+    """One app.install running in this server, so a tool can return before it ends (installs over Wi-Fi
+    can take minutes) and a later call can wait for it."""
+    id: str
+    pkg: str
+    started: float = field(default_factory=time.time)
+    task: asyncio.Task | None = None
+    percent: float | None = None
+    status: str = ""
+    result: dict | None = None
+    error: BaseException | None = None
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    @property
+    def finished(self) -> bool:
+        return self.task is not None and self.task.done()
+
+
+_install_ids = itertools.count(1)
+INSTALLS_KEPT = 10
+
+
+def _installs(state: AppState) -> dict[str, InstallJob]:
+    return state.extras.setdefault("device.installs", {})
+
+
+def start_install(state: AppState, udid: str | None, pkg: str, project: dict | None = None) -> InstallJob:
+    """Start app.install as a background task of this server (it keeps going if the tool call returns or the
+    client gives up), recording the install on the project when it ends."""
+    jobs = _installs(state)
+    for k in [k for k, j in jobs.items() if j.finished][:max(0, len(jobs) - INSTALLS_KEPT)]:
+        jobs.pop(k, None)
+    job = InstallJob(id=f"i{int(time.time()) % 100000}-{next(_install_ids)}", pkg=pkg)
+
+    def prog(pct: float, status: str) -> None:
+        job.percent, job.status = pct, status
+        job.changed.set()
+
+    async def run() -> None:
+        try:
+            u = udid or await state.active_udid()
+            job.result = await install_ipa(state, udid, pkg, prog)
+            if project:
+                try:
+                    await helper.call("projects", "record-install", {"path": project["path"], "udid": u,
+                                                                     "via": "wifi", "ipa": pkg})
+                except ToolError:
+                    pass
+        except BaseException as exc:  # noqa: BLE001 - kept for the status
+            job.error = exc
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+        finally:
+            job.changed.set()
+
+    jobs[job.id] = job
+    job.task = asyncio.create_task(run(), name=f"install-{job.id}")
+    return job
+
+
+def get_install(state: AppState, install_id: str) -> InstallJob:
+    job = _installs(state).get(install_id.strip())
+    if job is None:
+        known = ", ".join(_installs(state)) or "none"
+        raise ToolError(f"Unknown install_id '{install_id}' (known here: {known}). Ids live only while this MCP "
+                        "server runs; start the install again.")
+    return job
+
+
+async def wait_install(job: InstallJob, seconds: float, on_progress=None) -> None:
+    """Wait up to `seconds` (≤ MAX_WAIT) for the install, calling on_progress(percent, status) as it moves."""
+    deadline = time.monotonic() + max(0.0, min(seconds, MAX_WAIT))
+    while not job.finished:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        job.changed.clear()
+        try:
+            await asyncio.wait_for(job.changed.wait(), min(left, 5.0))
+        except asyncio.TimeoutError:
+            pass
+        if on_progress and job.percent is not None:
+            try:
+                await on_progress(job.percent, job.status)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def install_status(job: InstallJob, next_step: str | None = None) -> AppInstallStatus:
+    """The install's result, or state='running'; raises the install's error if it failed."""
+    if not job.finished:
+        pct = job.percent
+        return AppInstallStatus(
+            installed=False, state="running", install_id=job.id, path=helper.tilde(job.pkg),
+            progress=round(pct / 100, 3) if pct is not None else None,
+            progress_detail=f"{job.status or 'installing'} {pct:.0f}%" if pct is not None else "starting",
+            elapsed_seconds=round(time.time() - job.started, 1),
+            next_steps=[next_step or f"Still installing. Call ios_app_install(install_id='{job.id}', "
+                                     "wait_seconds=20) again to wait for it."])
+    if job.error is not None:
+        if isinstance(job.error, ToolError):
+            raise ToolError(str(job.error))
+        raise ToolError(f"Installing {helper.tilde(job.pkg)} failed: {job.error}")
+    res = job.result or {}
+    bid = res.get("bundleId")
+    return AppInstallStatus(installed=True, state="succeeded", install_id=job.id, bundle_id=bid,
+                            package_bundle_id=res.get("packageBundleId"), path=helper.tilde(job.pkg),
+                            seconds=res.get("seconds"), elapsed_seconds=round(time.time() - job.started, 1),
+                            next_steps=[f"Launch it and see what happens: ios_app_run_and_capture(bundle_id='{bid}')."
+                                        if bid else "Launch it with ios_app_launch."])
 
 
 async def launch(state: AppState, udid: str | None, bundle_id: str, args: list[str] | None = None,
@@ -515,9 +642,11 @@ def register(mcp: MCPServer) -> None:
             if nxt_off is not None else None
         if scope == "own" and not items and not query:
             nxt.append("None of your apps are installed. ios_run(project_path) builds and installs one.")
-        return AppList(scope=scope, total=len(items), count=len(page), offset=offset, has_more=nxt_off is not None,
-                       next_offset=nxt_off, apps=page, own_apps=own, next_steps=nxt, note=note,
-                       truncated=nxt_off is not None, omitted=len(items) - len(page))
+        return fit_page(AppList(scope=scope, total=len(items), count=len(page), offset=offset,
+                                has_more=nxt_off is not None, next_offset=nxt_off, apps=page, own_apps=own,
+                                next_steps=nxt, note=note, truncated=nxt_off is not None,
+                                omitted=len(items) - len(page)), "apps", offset,
+                        lambda k, end: f"Showing {k} of {len(items)}; call again with offset={end}, or narrow with query.")
 
     @tool(mcp, annotations=ann("Install app", read_only=False, destructive=False, idempotent=False, open_world=True))
     async def ios_app_install(
@@ -526,14 +655,19 @@ def register(mcp: MCPServer) -> None:
                                                       "'~/Projects/MyApp/xtool/MyApp.ipa'")] = None,
         project_path: Annotated[str | None, Field(description="Instead of path: install this project's last signed "
                                                               "build")] = None,
+        install_id: Annotated[str | None, Field(description="Wait for an install started earlier (from a result with "
+                                                            "state='running') instead of starting one")] = None,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for the install "
+                                                                           "before returning state='running'")] = 20,
         udid: Udid = None,
-    ) -> AppInstallResult:
+    ) -> AppInstallStatus:
         """Install an already signed .ipa/.app on the iPhone over the current connection (Wi-Fi or USB);
         ~10 s for a typical app, with progress notifications. Replaces an installed copy and keeps its data.
-        To build AND install, use ios_run instead. Fails with app-limit when a free Apple ID already has
-        3 apps on the phone. Then ios_app_launch or ios_app_run_and_capture."""
+        Runs in the background: if it takes longer than wait_seconds (≤25) the result has state='running'
+        and an install_id; call again with install_id to keep waiting. To build AND install, use ios_run
+        instead. Fails with app-limit when a free Apple ID already has 3 apps on the phone. Then
+        ios_app_launch or ios_app_run_and_capture."""
         state = get_state(ctx)
-        pkg, proj = await package_for(state, path, project_path)
         last = [-1.0]
 
         async def prog(pct: float, status: str) -> None:
@@ -541,19 +675,13 @@ def register(mcp: MCPServer) -> None:
                 last[0] = pct
                 await ctx.report_progress(pct, 100, message=f"{status} {pct:.0f}%")
 
-        u = udid or await state.active_udid()
-        res = await install_ipa(state, udid, pkg, prog)
-        bid = res.get("bundleId")
-        if proj:
-            try:
-                await helper.call("projects", "record-install", {"path": proj["path"], "udid": u, "via": "wifi",
-                                                                 "ipa": pkg})
-            except ToolError:
-                pass
-        return AppInstallResult(installed=True, bundle_id=bid, package_bundle_id=res.get("packageBundleId"),
-                                path=helper.tilde(pkg), seconds=res.get("seconds"),
-                                next_steps=[f"Launch it and see what happens: ios_app_run_and_capture(bundle_id='{bid}')."
-                                            if bid else "Launch it with ios_app_launch."])
+        if install_id:
+            job = get_install(state, install_id)
+        else:
+            pkg, proj = await package_for(state, path, project_path)
+            job = start_install(state, udid, pkg, proj)
+        await wait_install(job, wait_seconds, prog)
+        return install_status(job)
 
     @tool(mcp, annotations=ann("Launch app", read_only=False, destructive=False, idempotent=False, open_world=True))
     async def ios_app_launch(

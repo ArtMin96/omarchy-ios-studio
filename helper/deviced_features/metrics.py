@@ -42,7 +42,7 @@ import common
 import device_crash
 import deviced_core as core
 import metrics_core
-from deviced_core import classify, dlog, emit, err, safe_name, write_bytes
+from deviced_core import classify, dlog, emit, err, installed_apps, safe_name, write_bytes
 
 PROC_ATTRS = ["pid", "cpuUsage", "physFootprint", "memResidentSize", "threadCount", "memCompressed", "nfiles",
               "machPortCount", "wqBlockedThreads", "memAnonPeak", "powerScore",
@@ -57,6 +57,7 @@ SYS_ATTRS = ["netBytesIn", "netBytesOut", "diskBytesRead", "diskBytesWritten", "
 BACKOFF = [2, 5, 10, 20, 30]
 FRESH_S = 5.0            # a tap value older than this isn't used in a row
 BATTERY_EVERY_S = 5.0
+DEAD_KEEP = 512         # exited pids remembered (only the followed app's matters)
 GAUGE_FRESH_S = 2.5     # a polled gauge value older than this (a skipped sample) isn't used
 POLL_TIMEOUT_S = 4.0     # one request/response gauge sample; slower counts as a skipped sample
 REBUILD_AFTER = 5        # ticks in a row with every polled gauge failing before the connection is rebuilt
@@ -66,6 +67,8 @@ HITCH_MS = 33.4          # a frame interval longer than two 60 Hz frames counts 
 HITCH_SIGNPOSTS = {("com.apple.coreanimation", "FrameUpdate"), ("com.apple.coreanimation", "Commit"),
                    ("com.apple.UIKit", "UpdateSequence")}
 EXPORT_DIR = common.CACHE_DIR / "metrics"
+MEMGRAPHS_KEEP = 10             # leak-check .memgraph files kept next to the CSV exports
+MEMGRAPHS_MAX_BYTES = 500 << 20
 MB = 1024 * 1024
 
 
@@ -187,7 +190,7 @@ class ProcessTap(Tap):
         self.sys_attrs: list[str] = []
         self.rows: dict[int, tuple[float, list, tuple | None]] = {}   # pid -> (t, values, (t, values) before)
         self.system: dict = {}
-        self.dead: set[int] = set()
+        self.dead: dict[int, None] = {}   # recently exited pids, oldest first (bounded: DEAD_KEEP)
 
     def view(self, pid: int) -> dict | None:
         hit = self.rows.get(pid)
@@ -230,10 +233,12 @@ class ProcessTap(Tap):
                 if isinstance(vals, (list, tuple)):
                     old = self.rows.get(p)
                     self.rows[p] = (now, list(vals), (old[0], old[1]) if old else None)
-                    self.dead.discard(p)
+                    self.dead.pop(p, None)
         for pid in row.get("DeadProcesses") or []:
             with contextlib.suppress(TypeError, ValueError):
-                self.dead.add(int(pid))
+                self.dead[int(pid)] = None
+                if len(self.dead) > DEAD_KEEP:
+                    del self.dead[next(iter(self.dead))]
                 self.rows.pop(int(pid), None)
                 self.hub.on_dead(int(pid))
 
@@ -393,6 +398,7 @@ class GaugeTap(Tap):
                 await asyncio.wait_for(svc.stop_sampling_for_pids_([p]), POLL_TIMEOUT_S)
             current.discard(p)
             gauge.latest.pop(p, None)
+            gauge.count.pop(p, None)
         if not current:
             gauge.ok()
             return
@@ -790,7 +796,7 @@ class Backend:
     async def _exe(self, s, bid: str) -> tuple[str | None, str, str | None]:
         """(executable, installed bundle id, display name) of an installed app."""
         rsd = await s.get_rsd()
-        apps = await s.pmd3.InstallationProxyService(lockdown=rsd).get_apps(application_type="Any")
+        apps = await installed_apps(s.pmd3, rsd, application_type="Any")
         for k, v in apps.items():
             if k == bid or k.endswith("." + bid):
                 return v.get("CFBundleExecutable") or None, k, v.get("CFBundleDisplayName") or v.get("CFBundleName")
@@ -895,7 +901,7 @@ class Backend:
             dlog(f"metrics {sess.id}: crash check: {exc!r}")
             return
         for p in paths:
-            item = device_crash.classify(p)
+            item = device_crash.classify(p, (s.info or {}).get("timeZone"))
             if not item or item["ts"] < exit_ts - 120:
                 continue
             if item["kind"] == "jetsam":
@@ -1013,6 +1019,7 @@ class Backend:
         if graph.data:
             p = EXPORT_DIR / f"{safe_name(name or exe or 'app')}-{time.strftime('%Y%m%d-%H%M%S')}.memgraph"
             await asyncio.to_thread(write_bytes, p, graph.data)
+            await asyncio.to_thread(common.prune, EXPORT_DIR.glob("*.memgraph"), MEMGRAPHS_KEEP, MEMGRAPHS_MAX_BYTES)
             out.update(memgraphPath=str(p), memgraphBytes=len(graph.data))
         out["verdict"] = ("No leaks found." if not graph.leaked_count else
                           f"{graph.leaked_count} leaked allocation{'s' if graph.leaked_count != 1 else ''} found. "

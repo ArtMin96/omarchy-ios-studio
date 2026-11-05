@@ -234,7 +234,7 @@ ColumnLayout {
       text: root.running ? "Running…" : "Run test"
       glyph: Model.Glyph.play; kind: "primary"
       busy: root.running
-      enabled: !!root.current && root.inputs.length > 0 && root.svc.connected
+      disabled: !root.current || root.inputs.length === 0 || !root.svc.connected
       tooltip: !root.svc.connected ? "Connect your iPhone first" : (root.inputs.length ? "" : "Add at least one test file")
       onClicked: root.run()
     }

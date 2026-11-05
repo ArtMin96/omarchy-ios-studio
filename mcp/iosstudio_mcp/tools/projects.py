@@ -5,7 +5,10 @@ builds into an iPhone app). Sources live in Sources/<Product>/.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
+import time
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -16,7 +19,7 @@ from .. import helper
 from ..models import (ActionResult, Convertible, ProjectBrief, ProjectChange, ProjectDetail, ProjectList, Template,
                       TemplateList)
 from ..state import existing_dir, get_state, resolve_project
-from . import READ, ann, dry_run, page_of, tool
+from . import MAX_WAIT, READ, ann, dry_run, fit_page, page_of, tool
 
 ProjectPath = Annotated[str, Field(description="Project folder (absolute or ~/…) or a project name from "
                                                "ios_project_list, e.g. '~/Developer/WeatherGlance' or 'WeatherGlance'")]
@@ -76,13 +79,14 @@ def register(mcp: MCPServer) -> None:
                        "register an existing folder with ios_project_add.")
         note = f"Showing {len(page)} of {len(items)}; call again with offset={nxt_off}, or narrow with query." \
             if nxt_off is not None else None
-        return ProjectList(
+        return fit_page(ProjectList(
             total=len(items), count=len(page), offset=offset, has_more=nxt_off is not None, next_offset=nxt_off,
             projects=page, note=note, truncated=nxt_off is not None, omitted=len(items) - len(page),
             convertible=[Convertible(name=c.get("name", ""), path=c.get("path", ""), reason=c.get("reason"))
                          for c in (data.get("convertible") or [])[:20]],
             missing=(data.get("missing") or [])[:20], roots=(data.get("roots") or [])[:20], default_dir=data.get("defaultDir"),
-            next_steps=nxt)
+            next_steps=nxt), "projects", offset,
+            lambda k, end: f"Showing {k} of {len(items)}; call again with offset={end}, or narrow with query.")
 
     @tool(mcp, annotations=READ("Project details"))
     async def ios_project_info(project_path: ProjectPath, ctx: Context) -> ProjectDetail:
@@ -116,24 +120,55 @@ def register(mcp: MCPServer) -> None:
         bundle_id: Annotated[str | None, Field(description="e.g. 'com.yourname.WeatherGlance'; default: "
                                                            "<prefix>.<name>")] = None,
         git: Annotated[bool, Field(description="Initialise a git repo with a first commit")] = True,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for it (≤25 s); "
+                                                                           "if it isn't done by then, call again "
+                                                                           "with the same arguments")] = 20,
     ) -> ProjectChange:
         """Create a new SwiftUI iPhone app from a template and register it with iOS Studio.
 
         Writes <directory>/<name>/ with Package.swift, xtool.yml and Sources/<name>/. Fails if the folder
-        exists. Returns the new project; next, edit its sources and build with ios_build_start.
+        exists. Returns the new project; next, edit its sources and build with ios_build_start. Usually
+        takes a few seconds; if it is still running after wait_seconds, the result says so (done=false)
+        and calling again with the same arguments waits for the same creation instead of starting another.
         """
         if not NAME_RE.match(name):
             raise ToolError("App names start with a letter and use only letters, digits and _ (no spaces).")
         if bundle_id and not BUNDLE_RE.match(bundle_id):
             raise ToolError("bundle_id must look like com.yourname.AppName (letters, digits, dots and dashes).")
+        try:
+            ids = [str(t.get("id")) for t in (await helper.call("projects", "templates")).get("templates") or []
+                   if t.get("id")]
+        except Exception:  # noqa: BLE001 - the helper still validates it
+            ids = []
+        if ids and template not in ids:
+            raise ToolError(f"Unknown template '{template}'. Valid ids: {', '.join(ids)} (see ios_project_templates).")
         flags = {"name": name, "template": template, "bundle_id": bundle_id, "git": None if git else "0"}
         if directory:
             d = helper.expand(directory)
             if not helper.inside_home(d):
                 raise ToolError("directory must be inside your home folder (or a folder listed in IOSSTUDIO_MCP_ALLOW_PATHS).")
             flags["dir"] = str(d)
-        data = await helper.call("projects", "new", flags, timeout=90)
-        get_state(ctx).invalidate_projects()
+        state = get_state(ctx)
+        creating: dict = state.extras.setdefault("projects.creating", {})
+        key = (name, flags.get("dir") or "")
+        entry = creating.get(key)
+        if entry is None:
+            entry = creating[key] = (asyncio.create_task(helper.call("projects", "new", flags, timeout=90)), time.time())
+        task, started = entry
+        deadline = time.monotonic() + min(wait_seconds, MAX_WAIT)
+        while not task.done() and time.monotonic() < deadline:   # heartbeat for clients that reset on progress
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), min(5.0, max(0.0, deadline - time.monotonic())))
+            if not task.done():
+                await ctx.report_progress(round(time.time() - started), None, message=f"Creating {name}")
+        if not task.done():
+            return ProjectChange(done=False, message=f"Still creating {name} ({round(time.time() - started)} s so far).",
+                                 next_steps=[f"Call ios_project_create(name='{name}'"
+                                             + (f", directory='{directory}'" if directory else "")
+                                             + ") again to wait for it."])
+        creating.pop(key, None)
+        data = task.result()     # raises the helper's ToolError, as before
+        state.invalidate_projects()
         if _is_demo_stub(data):
             return ProjectChange(done=False, message=f"Demo mode: {name} was not really created.",
                                  next_steps=DEMO_NEXT)

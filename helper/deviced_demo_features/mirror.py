@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 
+import common
 import demo_art
 from deviced_demo_core import DIR, event
 
@@ -215,6 +216,7 @@ class Mirror:
         rec.claimed = True
         event("record", rec.snapshot())
         result = rec.finalize()
+        common.prune((DIR / "recordings").glob("rec-*.mp4"), 20, 2 << 30, also=(".png",))   # as the real daemon
         rec.result = result
         rec.state = result["state"]
         self.last_record = rec.snapshot()

@@ -211,7 +211,7 @@ ColumnLayout {
     Item { Layout.fillWidth: true }
     ActionButton {
       text: "Start debugging"; glyph: Model.Glyph.bug; kind: "primary"
-      enabled: root.bundleId !== "" && !root.blocked && (root.launchMode !== "attach" || root.appRunning)
+      disabled: root.bundleId === "" || root.blocked || (root.launchMode === "attach" && !root.appRunning)
       tooltip: root.launchMode === "attach" && !root.appRunning ? "The app isn't running; open it first or restart it paused" : ""
       onClicked: root.start()
     }

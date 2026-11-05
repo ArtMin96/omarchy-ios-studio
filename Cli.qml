@@ -18,6 +18,8 @@ import Quickshell.Io
 // opts (optional 5th arg): { timeout: ms (default 120000), program: [argv prefix] }
 Item {
   id: root
+  // Non-visual: hidden so a Layout it sits in doesn't give it a slot and a gap.
+  visible: false
 
   // argv prefix. Defaults to bin/iosstudio-helper next to this file.
   property var program: [decodeURIComponent(String(Qt.resolvedUrl("bin/iosstudio-helper")).replace(/^file:\/\//, ""))]

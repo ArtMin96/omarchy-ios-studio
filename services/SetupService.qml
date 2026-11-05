@@ -15,7 +15,8 @@ import "../Model.js" as Model
 //   app.setup.essentialMissing ids; non-empty -> status "needs-setup" (AppState opens Setup on first run)
 //   app.setup.install(id) / installAll() / cancel()
 //   app.setup.runs[id]         {state: running|done|failed, fraction, detail, eta, error}
-//   app.setup.logs[id]         [lines]
+//   app.setup.logLines(id)     [lines] so far (last 400); new ones arrive as stepLog(id, text),
+//                              and stepLogCleared(id) ("" = every step) when an install starts
 //   app.setup.prompt           pending helper prompt {id, kind, message, options} or null; answer(value)
 //   app.setup.xip              watcher state {state: idle|watching|downloading|checking|found|rejected, ...}
 Item {
@@ -37,7 +38,9 @@ Item {
 
   // installs
   property var runs: ({})
-  property var logs: ({})
+  // step id -> [lines]. Changed in place (no change signal); readers follow stepLog instead,
+  // so a log line doesn't copy every step's log and rebuild the row's view.
+  property var _logs: ({})
   property bool installing: installer.running
   property string runningStep: ""
   property bool runningAll: false
@@ -49,6 +52,8 @@ Item {
   readonly property bool watchingXip: watcher.running
 
   signal installFinished(string stepId, bool ok, var error)
+  signal stepLog(string stepId, string text)
+  signal stepLogCleared(string stepId)
 
   readonly property var groups: ["System", "Toolchain", "Apple", "iPhone"]
 
@@ -148,18 +153,25 @@ Item {
     root.runs = r
   }
 
+  function logLines(id) { return (root._logs[id] || []).slice() }
+
   function _log(id, text) {
     if (!id) id = root.runningStep || "_all"
-    var l = Object.assign({}, root.logs)
-    var arr = (l[id] || []).slice(-399)
+    var arr = root._logs[id] || (root._logs[id] = [])
     arr.push(text)
-    l[id] = arr
-    root.logs = l
+    if (arr.length > 450) arr.splice(0, arr.length - 400)
+    root.stepLog(id, text)
+  }
+
+  function _clearLog(id) {
+    if (id) delete root._logs[id]
+    else root._logs = ({})
+    root.stepLogCleared(id || "")
   }
 
   function install(id, extraArgs) {
     if (root.installing) { root.app.toast("Another step is still installing.", "warn"); return }
-    var l = Object.assign({}, root.logs); l[id] = []; root.logs = l
+    root._clearLog(id)
     root._setRun(id, { state: "running", fraction: -1, detail: "Starting…", eta: null, error: null })
     root.runningStep = id
     root.runningAll = false
@@ -170,7 +182,7 @@ Item {
     if (root.installing) return
     root.runningAll = true
     root.runningStep = ""
-    root.logs = ({})
+    root._clearLog("")
     installer.start(["setup", "install", "--all"])
   }
 
@@ -308,12 +320,20 @@ Item {
     function onInfoChanged() { if (root.loaded) { root.steps = root._merge(root.raw ? root.raw.steps : []); root._recompute() } }
   }
 
-  // Re-check now and then while the app is open (cheap: ~0.3 s), so a step
-  // finished elsewhere (browser download, sign-in) shows up.
+  // Re-check now and then while the window has focus, so a step finished elsewhere (browser
+  // download, sign-in) shows up. A check runs ~17 commands (~0.8 s CPU), so not in the
+  // background: coming back to the window re-checks if the last check is a minute old.
+  readonly property int recheckInterval: 60000
   Timer {
-    interval: 60000; repeat: true
-    running: !root.installing
+    interval: root.recheckInterval; repeat: true
+    running: !root.installing && root.app.windowFocused
     onTriggered: root.refresh()
+  }
+  Connections {
+    target: root.app
+    function onWindowFocusedChanged() {
+      if (root.app.windowFocused && !root.installing && root.loaded && Date.now() - root.checkedAt > root.recheckInterval) root.refresh()
+    }
   }
 
   Component.onCompleted: root.refresh()

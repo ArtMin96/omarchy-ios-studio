@@ -1,0 +1,13 @@
+Building for debugging...
+[Provisioning 1 / 4]
+[Pre-planning 1 / 67]
+[Planning deferred tasks]
+error: /home/user/Developer/NoModule/Sources/NoModule/App.swift:1:8 unable to resolve module dependency: 'NotARealModule'
+error: SwiftDriver NoModule normal arm64 com.apple.xcode.tools.swift.compiler failed with a nonzero exit code. Command line:     cd /home/user/Developer/NoModule/xtool
+    builtin-SwiftDriver -- /usr/lib/swift/usr/bin/swiftc -parse-as-library -resource-dir /home/user/.config/swiftpm/swift-sdks/darwin.artifactbundle/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift -Xcc -resource-dir -Xcc /home/user/.config/swiftpm/swift-sdks/darwin.artifactbund …
+error: Build failed
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

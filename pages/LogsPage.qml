@@ -21,7 +21,6 @@ PageFrame {
           : "Every build you ran, with its log and problems."
   scrollable: false
   maxContentWidth: Style.space(1500)
-  spacing: Style.spacing.xl
 
   readonly property var tabs: [
     { key: "device", label: "Device log", glyph: Model.Glyph.console },
@@ -102,8 +101,10 @@ PageFrame {
     return false
   }
 
+  // Same gaps around the tabs as the iPhone page.
   PageTabs {
     Layout.fillWidth: true
+    Layout.topMargin: Style.spacing.md
     tabs: page.tabs
     current: page.tab
     onSelected: function(k) { page.setTab(k) }

@@ -46,13 +46,15 @@ from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from device_client import runtime_dir  # noqa: E402
+from device_client import runtime_dir, socket_path_error  # noqa: E402
 import deviced_kit  # noqa: E402
 
 VERSION = "1"
 IDLE_DEFAULT_S = 120.0
 MAX_LINE = 16 * 1024 * 1024
 CLIENT_BUFFER_MAX = 32 * 1024 * 1024   # a client that stops reading is disconnected
+LOG_MAX = 4 * 1024 * 1024               # deviced.log (tmpfs, so RAM) moves to deviced.log.1 past this
+LOG_CHECK_S = 30.0
 
 SYSLOG_FLUSH_S = 0.1
 SYSLOG_BATCH = 200
@@ -401,10 +403,15 @@ class Broker:
         self._idle_handle: asyncio.TimerHandle | None = None
         self._server: asyncio.AbstractServer | None = None
         self._lock_fd: int | None = None
+        self._log_redirected = False
 
     # -- single instance
     def acquire(self, wait: float = 10.0) -> bool:
         """Take the lock file. False when another live daemon owns it (caller should exit)."""
+        bad = socket_path_error(self.p["sock"])
+        if bad is not None:   # clients check this too and report it; never serve a socket that can't exist
+            log(f"{bad.message} ({bad.detail})")
+            return False
         _prepare_dir(self.p["dir"])
         fd = os.open(self.p["lock"], os.O_RDWR | os.O_CREAT, 0o600)
         deadline = time.monotonic() + wait
@@ -432,6 +439,30 @@ class Broker:
         os.dup2(fd, 2)
         os.close(fd)
         os.chdir("/")
+        self._log_redirected = True
+
+    def _rotate_log(self) -> None:
+        """Size-based rotation: past LOG_MAX the log becomes deviced.log.1 (replacing the older one)
+        and a new deviced.log starts."""
+        try:
+            if os.fstat(2).st_size < LOG_MAX:
+                return
+            with contextlib.suppress(Exception):
+                sys.stderr.flush()
+            log_path = self.p["log"]
+            os.replace(log_path, log_path.with_name(log_path.name + ".1"))
+            fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.dup2(fd, 1)
+            os.dup2(fd, 2)
+            os.close(fd)
+            log("log rotated (the previous part is deviced.log.1)")
+        except OSError:
+            pass
+
+    async def _log_loop(self) -> None:
+        while True:
+            await asyncio.sleep(LOG_CHECK_S)
+            self._rotate_log()
 
     # -- events
     def emit(self, name: str, data) -> None:
@@ -480,11 +511,14 @@ class Broker:
             with contextlib.suppress(NotImplementedError, AttributeError):
                 self.loop.add_signal_handler(getattr(__import__("signal"), sig), self.stop)
         self._check_idle()
+        log_task = asyncio.create_task(self._log_loop()) if self._log_redirected else None
         try:
             self.backend = await make_backend(self)
             self._ready.set()
             await self._stopping.wait()
         finally:
+            if log_task is not None:
+                log_task.cancel()
             log("shutting down")
             self._server.close()
             with contextlib.suppress(FileNotFoundError):
@@ -704,6 +738,11 @@ def once_via_socket(s: socket.socket, cmd: str, raw_args: str) -> int:
     return reply({"ok": False, "error": {"code": "unreachable", "message": "The iPhone service stopped before answering."}})
 
 
+def pycache_args() -> list[str]:
+    """Pass our -X pycache_prefix (set by bin/iosstudio-deviced) on to the python we start."""
+    return ["-X", f"pycache_prefix={sys.pycache_prefix}"] if sys.pycache_prefix else []
+
+
 def launch(argv: list[str]) -> int:
     """device_broker.py launch <deviced> <python> <server.py> [--once <cmd> [json]]"""
     deviced, py, server = argv[0], argv[1], argv[2]
@@ -723,7 +762,13 @@ def launch(argv: list[str]) -> int:
         if s is not None:
             with s:
                 return once_via_socket(s, rest[1], rest[2] if len(rest) > 2 else "{}")
-        os.execv(py, [py, "-I", "-B", server, *rest])
+        os.execv(py, [py, "-I", *pycache_args(), server, *rest])
+    bad = socket_path_error(p["sock"])
+    if bad is not None:
+        # the same `ready` error bin/iosstudio-deviced sends when the iPhone tools are missing
+        print(json.dumps({"event": "ready", "data": {"version": VERSION, "pymobiledevice3": None,
+                                                     "error": bad.to_json()}}), flush=True)
+        return 3
     s = connect_or_spawn(p["sock"], deviced)
     if s is None:
         print(f"deviced: the daemon didn't come up; see {p['log']}", file=sys.stderr, flush=True)

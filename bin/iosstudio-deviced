@@ -29,5 +29,7 @@ else
     exit 3
   fi
 fi
-if [[ ${1:-} == --serve ]]; then exec "$py" -I -B "$server" --serve; fi
-exec /usr/bin/python3 -I -B "$helper/device_broker.py" launch "$self" "$py" "$server" "$@"
+# Compiled modules go to the user's cache, not the repo (-I ignores PYTHON* variables, hence -X).
+pycache="${XDG_CACHE_HOME:-$HOME/.cache}/ios-studio/pycache"
+if [[ ${1:-} == --serve ]]; then exec "$py" -I -X pycache_prefix="$pycache" "$server" --serve; fi
+exec /usr/bin/python3 -I -X pycache_prefix="$pycache" "$helper/device_broker.py" launch "$self" "$py" "$server" "$@"

@@ -24,7 +24,7 @@ from pymobiledevice3.exceptions import AfcException, AfcFileNotFoundError, AppNo
 from pymobiledevice3.services.house_arrest import HouseArrestService
 
 import device_files as df
-from deviced_core import classify, dlog, emit, err, safe_name
+from deviced_core import classify, dlog, emit, err, installed_apps, safe_name
 from deviced_core import is_connection_error as _is_conn
 from common import CACHE_DIR, HOME, fix
 
@@ -195,7 +195,7 @@ async def app_info(d, s, bid: str) -> dict:
     if bid in cache:
         return cache[bid]
     rsd = await s.get_rsd()
-    apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(application_type="Any", bundle_identifiers=[bid])
+    apps = await installed_apps(d.pmd3, rsd, application_type="Any", bundle_identifiers=[bid])
     info = apps.get(bid)
     if not info:
         raise err("not-found", "That app isn't installed on your iPhone.")

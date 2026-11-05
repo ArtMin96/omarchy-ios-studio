@@ -106,6 +106,7 @@ ShellRoot {
           clip: true
 
           Repeater {
+            id: pageLoaders
             model: Model.PAGES
             delegate: Loader {
               id: loader
@@ -120,6 +121,14 @@ ShellRoot {
               function ensure() {
                 if (wanted && !item && status !== Loader.Loading)
                   setSource(Qt.resolvedUrl("pages/" + modelData.file), { app: app })
+              }
+              // After a failed load: load the file again. The engine caches the broken component
+              // by URL, so each retry asks for a new one (?retry=N).
+              property int attempts: 0
+              function reload() {
+                attempts++
+                setSource("")
+                setSource(Qt.resolvedUrl("pages/" + modelData.file) + "?retry=" + attempts, { app: app })
               }
               onWantedChanged: ensure()
               Component.onCompleted: ensure()
@@ -141,8 +150,23 @@ ShellRoot {
             app: app
             title: "This page couldn't load"
             message: "Part of iOS Studio failed to start. Check `qs log` for details."
-            onRetry: { var m = Object.assign({}, app.visited); app.visited = m }
-            Timer { id: loadCheck; property bool failed: false; interval: 1500; running: true; repeat: true; onTriggered: failed = !app.pageItems[app.page] }
+            onRetry: {
+              for (var i = 0; i < pageLoaders.count; i++) {
+                var l = pageLoaders.itemAt(i)
+                if (l && l.current) l.reload()
+              }
+              loadCheck.failed = false
+              loadCheck.restart()
+            }
+            // Runs only while the current page is still loading; 1.5 s without it means it failed.
+            Timer {
+              id: loadCheck
+              property bool failed: false
+              interval: 1500
+              running: app.visited[app.page] === true && !app.pageItems[app.page]
+              onRunningChanged: if (running) failed = false
+              onTriggered: failed = !app.pageItems[app.page]
+            }
           }
         }
       }

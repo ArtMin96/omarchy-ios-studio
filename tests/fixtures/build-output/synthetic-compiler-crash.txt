@@ -1,0 +1,15 @@
+[8/20] Compiling HabitTracker StreakView.swift
+Please submit a bug report (https://swift.org/contributing/#reporting-bugs) and include the crash backtrace.
+Stack dump:
+0.	Program arguments: /usr/lib/swift/usr/bin/swift-frontend -frontend -c -primary-file /home/user/Developer/HabitTracker/Sources/HabitTracker/StreakView.swift -target arm64-apple-ios17.0
+1.	Swift version 6.4.2 (swift-6.4.2-RELEASE)
+2.	Compiling with effective version 6
+3.	While evaluating request TypeCheckSourceFileRequest(source_file "/home/user/Developer/HabitTracker/Sources/HabitTracker/StreakView.swift")
+4.	While type-checking 'body' (at /home/user/Developer/HabitTracker/Sources/HabitTracker/StreakView.swift:18:9)
+5.	While type-checking expression at [/home/user/Developer/HabitTracker/Sources/HabitTracker/StreakView.swift:19:13 - line:24:5]
+ #0 0x000055d1c0f5e1a8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/usr/lib/swift/usr/bin/swift-frontend+0x7f5e1a8)
+ #1 0x000055d1c0f5c0be llvm::sys::RunSignalHandlers() (/usr/lib/swift/usr/bin/swift-frontend+0x7f5c0be)
+ #2 0x000055d1c0f5e83a SignalHandler(int, siginfo_t*, void*) Signals.cpp:0:0
+error: compile command failed due to signal 11 (use -v to see invocation)
+error: Build failed
+Error: exited(1)

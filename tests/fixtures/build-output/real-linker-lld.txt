@@ -1,0 +1,66 @@
+Building for debugging...
+[Computing dependencies]
+[Pre-planning 1 / 67]
+[Planning deferred tasks]
+[20 / 32] LinkErr
+[28 / 98]
+[31 / 98]
+[33 / 98]
+[40 / 98]
+[42 / 98]
+[45 / 98]
+[46 / 98]
+[47 / 98]
+[48 / 98]
+[50 / 98]
+[51 / 98]
+[55 / 98]
+[56 / 98]
+[59 / 98]
+[60 / 98]
+[68 / 98]
+[73 / 98]
+[75 / 98]
+[76 / 98]
+[77 / 98]
+[80 / 98]
+[81 / 98]
+[82 / 98]
+[83 / 98]
+[86 / 98] LinkErr
+[92 / 98] LinkErr
+[94 / 98] LinkErr-App-product
+[94 / 98] LinkErr
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: error: undefined symbol: another_missing_one
+>>> referenced by App.swift:5 (/home/user/Developer/LinkErr/Sources/LinkErr/App.swift:5)
+>>>               /home/user/Developer/LinkErr/.build/out/Products/Debug-iphoneos/LinkErr.o(App.o):(symbol $s7LinkErr5useIts5Int32VyF+0x14)
+
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: error: undefined symbol: totally_missing_function
+>>> referenced by App.swift:5 (/home/user/Developer/LinkErr/Sources/LinkErr/App.swift:5)
+>>>               /home/user/Developer/LinkErr/.build/out/Products/Debug-iphoneos/LinkErr.o(App.o):(symbol $s7LinkErr5useIts5Int32VyF+0xc)
+
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: error: duplicate symbol: dup_symbol_x
+>>> defined in <compiler-generated>:0 (/<compiler-generated>:0)
+>>>            /home/user/Developer/LinkErr/.build/out/Products/Debug-iphoneos/LinkErr.o(App.o)
+>>> defined in <compiler-generated>:0 (/<compiler-generated>:0)
+>>>            /home/user/Developer/LinkErr/.build/out/Products/Debug-iphoneos/LinkErr.o(Other.o)
+
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: auto-linked framework not found for -framework UIUtilities
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: auto-linked framework not found for -framework CoreAudioTypes
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: auto-linked framework not found for -framework UIUtilities
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: ld64.lld: warning: auto-linked framework not found for -framework CoreAudioTypes
+/home/user/Developer/LinkErr/xtool/.xtool-tmp/Package.swift: LinkErr-App-product: clang: error: linker command failed with exit code 1 (use -v to see invocation)
+error: Ld /home/user/Developer/LinkErr/.build/out/Products/Debug-iphoneos/LinkErr-App normal failed with a nonzero exit code. Command line:     cd /home/user/Developer/LinkErr/xtool/.xtool-tmp
+    /usr/lib/swift/usr/bin/swiftc -target arm64-apple-ios17.0 -emit-executable -sdk /home/user/.config/swiftpm/swift-sdks/darwin.artifactbundle/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS27.1.sdk -Xclang-linker -resource-dir -Xclang-linker /home/user/.config/swiftpm/swift …
+error: Build failed
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

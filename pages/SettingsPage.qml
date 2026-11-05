@@ -139,6 +139,9 @@ PageFrame {
         required property var modelData
         required property int index
         Layout.fillWidth: true
+        // bleed into the card padding so the folder icon lines up with the card's own content
+        Layout.leftMargin: -Style.spacing.rowPaddingX
+        Layout.rightMargin: -Style.spacing.md
         glyph: Model.Glyph.folderOpen
         title: String(modelData).replace(page.app.home, "~")
         subtitle: String(modelData).indexOf(page.app.home + "/") === 0 ? "In your home folder" : String(modelData)
@@ -314,12 +317,12 @@ PageFrame {
     radius: Style.cornerRadius
     color: Util.alpha(Commons.Color.urgent, 0.04)
     borderSpec: Border.flat(Util.alpha(Commons.Color.urgent, 0.35), Style.normalBorderWidth)
-    implicitHeight: uz.implicitHeight + Style.spacing.huge * 2
+    implicitHeight: uz.implicitHeight + Style.spacing.panelPadding * 2
 
     RowLayout {
       id: uz
       anchors.fill: parent
-      anchors.margins: Style.spacing.huge
+      anchors.margins: Style.spacing.panelPadding
       spacing: Style.spacing.huge
       ColumnLayout {
         Layout.fillWidth: true

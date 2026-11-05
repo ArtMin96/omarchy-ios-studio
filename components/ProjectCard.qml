@@ -142,8 +142,10 @@ BorderSurface {
           Layout.fillWidth: true
           spacing: Style.spacing.lg
           Icon { glyph: Model.Glyph.folder; size: Style.font.bodySmall; color: Theme.faint }
-          AppText { text: root.project.displayPath || ""; tone: "faint"; size: "small"; elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.minimumWidth: Style.space(60) }
-          Icon { visible: !!root.project.branch; glyph: Model.Glyph.link; size: Style.font.bodySmall; color: Theme.faint }
+          // The branch follows the path (the path only takes what it needs), so it sits in the same
+          // place whether or not the card shows a signing badge on the right.
+          AppText { text: root.project.displayPath || ""; tone: "faint"; size: "small"; elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.maximumWidth: implicitWidth + 1; Layout.minimumWidth: Style.space(60) }
+          Icon { visible: !!root.project.branch; glyph: Model.Glyph.link; size: Style.font.bodySmall; color: Theme.faint; Layout.leftMargin: Style.spacing.md }
           AppText { visible: !!root.project.branch; text: root.project.branch || ""; tone: "faint"; size: "small"; elide: Text.ElideRight; Layout.maximumWidth: Style.space(160) }
           Item { Layout.fillWidth: true }
         }
@@ -175,7 +177,7 @@ BorderSurface {
         text: "Run"
         glyph: Model.Glyph.play
         kind: "primary"
-        enabled: !root.otherBuilding && !root.project.generated
+        disabled: root.otherBuilding || root.project.generated
         tooltip: root.project.generated ? "Built by its own scripts" : (root.svc && !root.svc.canRun ? "Connect your iPhone first" : "Build, install and open on your iPhone (Enter)")
         onClicked: root.run()
       }

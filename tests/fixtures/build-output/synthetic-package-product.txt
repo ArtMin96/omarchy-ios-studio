@@ -1,0 +1,2 @@
+error: 'habittracker': product 'Charts' required by package 'habittracker' target 'HabitTracker' not found in package 'swift-charts'.
+Error: exited(1)

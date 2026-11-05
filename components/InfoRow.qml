@@ -21,7 +21,8 @@ Item {
 
   signal copied(string value)
 
-  implicitHeight: Math.max(valueText.implicitHeight, copyBtn.visible ? copyBtn.implicitHeight : 0) + Style.spacing.sm * 2
+  // Room for the copy button on every row, so rows with and without one are the same height.
+  implicitHeight: Math.max(valueText.implicitHeight, copyBtn.implicitHeight) + Style.spacing.sm * 2
   implicitWidth: labelWidth + valueText.implicitWidth
 
   RowLayout {
@@ -29,7 +30,9 @@ Item {
     spacing: Style.spacing.lg
 
     RowLayout {
+      // fixed width: a long value must not squeeze the label column, or values stop lining up
       Layout.preferredWidth: root.labelWidth
+      Layout.minimumWidth: root.labelWidth
       Layout.maximumWidth: root.labelWidth
       spacing: Style.spacing.md
       Icon { visible: root.glyph !== ""; glyph: root.glyph; color: Theme.faint; size: Style.font.bodySmall }

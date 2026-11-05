@@ -302,12 +302,12 @@ PageFrame {
     radius: Style.cornerRadius
     color: Util.alpha(Commons.Color.urgent, 0.04)
     borderSpec: Border.flat(Util.alpha(Commons.Color.urgent, 0.35), Style.normalBorderWidth)
-    implicitHeight: dz.implicitHeight + Style.spacing.huge * 2
+    implicitHeight: dz.implicitHeight + Style.spacing.panelPadding * 2
 
     ColumnLayout {
       id: dz
       anchors.fill: parent
-      anchors.margins: Style.spacing.huge
+      anchors.margins: Style.spacing.panelPadding
       spacing: Style.spacing.lg
 
       RowLayout {

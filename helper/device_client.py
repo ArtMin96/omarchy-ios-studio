@@ -64,7 +64,7 @@ Synthetic events (generated locally, delivered to iterators/callbacks that want 
 
 class DeviceError(Exception): .code .message .fix (dict | None) .detail (str | None);
   .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
-  "timeout", "disconnected", "daemon-unavailable".
+  "timeout", "disconnected", "daemon-unavailable", "socket-path-too-long".
 
 socket_path(demo=None) -> pathlib.Path    <base>/ios-studio[-demo]/deviced.sock, where <base> is
                                            $IOSSTUDIO_RUNTIME_DIR if set, else $XDG_RUNTIME_DIR
@@ -143,6 +143,21 @@ def runtime_dir(demo=None) -> Path:
 
 def socket_path(demo=None) -> Path:
     return runtime_dir(demo) / "deviced.sock"
+
+
+SOCKET_PATH_MAX = 107   # AF_UNIX sun_path is 108 bytes on Linux, one of them the closing NUL
+
+
+def socket_path_error(path) -> DeviceError | None:
+    """A runtime folder so deep that the socket path doesn't fit AF_UNIX (a long IOSSTUDIO_RUNTIME_DIR
+    in a dev setup): a clear error instead of a daemon that never comes up."""
+    n = len(os.fsencode(str(path)))
+    if n <= SOCKET_PATH_MAX:
+        return None
+    return DeviceError("socket-path-too-long",
+                       f"The iPhone service can't start: its socket path is {n} bytes long and the limit is "
+                       f"{SOCKET_PATH_MAX}. Set IOSSTUDIO_RUNTIME_DIR (or XDG_RUNTIME_DIR) to a shorter folder.",
+                       None, str(path))
 
 
 def deviced_path() -> Path:
@@ -288,6 +303,9 @@ class DeviceClient:
         return None   # exit 0: another daemon won the race; keep waiting for its socket
 
     async def _open(self) -> None:
+        bad = socket_path_error(self.socket)
+        if bad is not None:
+            raise bad
         ok = await self._try_connect()
         if not ok and self.spawn:
             try:

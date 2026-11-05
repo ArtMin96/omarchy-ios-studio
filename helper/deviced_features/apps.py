@@ -7,7 +7,7 @@ import posixpath
 import signal
 
 import device_link as link
-from deviced_core import dlog, emit, err, icon_path, is_connection_error, write_bytes
+from deviced_core import dlog, emit, err, icon_path, installed_apps, is_connection_error, write_bytes
 
 
 async def fetch_icons(d, s, bundle_ids: list[str]):
@@ -36,7 +36,7 @@ async def fetch_sizes(d, s, kind: str):
     """Sizes are slow to compute (~9 s over Wi-Fi), so they follow apps.list as an event."""
     try:
         rsd = await s.get_rsd()
-        apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
+        apps = await installed_apps(d.pmd3, rsd,
             application_type=kind, calculate_sizes=True)
         sizes = {bid: int(i.get("StaticDiskUsage") or 0) + int(i.get("DynamicDiskUsage") or 0)
                  for bid, i in apps.items() if i.get("StaticDiskUsage") is not None}
@@ -48,7 +48,7 @@ async def fetch_sizes(d, s, kind: str):
 
 
 async def app_pids(d, rsd, bundle_id: str) -> list[int]:
-    apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
+    apps = await installed_apps(d.pmd3, rsd,
         application_type="Any", bundle_identifiers=[bundle_id])
     info = apps.get(bundle_id)
     if not info:
@@ -78,7 +78,7 @@ def register(reg):
     async def c_apps_list(d, a):
         s, rsd = await d.rsd(a)
         kind = "Any" if a.get("system") else "User"
-        apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(
+        apps = await installed_apps(d.pmd3, rsd,
             application_type=kind, calculate_sizes=bool(a.get("sizes", False)))
         running: dict[str, int] = {}
         with contextlib.suppress(BaseException):

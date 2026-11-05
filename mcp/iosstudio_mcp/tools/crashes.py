@@ -99,20 +99,6 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
             size = len(raw.encode())
         except OSError:
             raw = ""
-    text = None
-    rng: dict = {}
-    note = None
-    if section != "summary" and raw:
-        lines = raw.splitlines() if section == "raw" else render_section(raw, section)
-        window = [B.clip(ln, 1000) for ln in lines[start_line:start_line + max_lines]]
-        page = B.take(window, len(window), B.room(max_bytes, B.RESERVE * 2), from_end=False)
-        end = start_line + len(page.items)
-        text = "\n".join(page.items)
-        rng = {"start_line": start_line, "end_line": end, "total_lines": len(lines)}
-        if end < len(lines) or start_line > 0:
-            note = (f"Showing {section} lines {start_line}–{end - 1} of {len(lines)}"
-                    + (f"; call again with start_line={end} for more" if end < len(lines) else "")
-                    + f". The whole report is {helper.tilde(path)}.")
     nxt = []
     frames = [B.clip(f, 300) for f in (s.get("frames") or [])][:FRAMES]
     proc = s.get("process")
@@ -130,14 +116,39 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
     if file:
         links.append(ResourceLink(type="resource_link", uri=f"iosstudio://crashes/{file}", name=file,
                                   mime_type="text/plain", size=size, description=f"Raw crash report ({size} bytes)"))
-    return CrashDetail(name=name, path=helper.tilde(path) or "", resource_uri=f"iosstudio://crashes/{file}" if file else None,
-                       process=proc, bundle_id=s.get("bundleId"), app_version=s.get("appVersion"),
-                       os_version=s.get("osVersion"), date=s.get("date"), exception_type=s.get("exceptionType"),
-                       signal=s.get("signal"),
-                       termination_reason=B.clip(s.get("terminationReason"), 600) if s.get("terminationReason") else None,
-                       crashed_thread=s.get("crashedThread"), frames=frames, size=size, section=section, text=text,
-                       next_steps=nxt, truncated=bool(note), note=note, full_output_path=helper.tilde(path) or None,
-                       **rng).with_budget(max_bytes, links)
+    out = CrashDetail(name=name, path=helper.tilde(path) or "", resource_uri=f"iosstudio://crashes/{file}" if file else None,
+                      process=proc, bundle_id=s.get("bundleId"), app_version=s.get("appVersion"),
+                      os_version=s.get("osVersion"), date=s.get("date"), exception_type=s.get("exceptionType"),
+                      signal=s.get("signal"),
+                      termination_reason=B.clip(s.get("terminationReason"), 600) if s.get("terminationReason") else None,
+                      crashed_thread=s.get("crashedThread"), frames=frames, size=size, section=section,
+                      next_steps=nxt, full_output_path=helper.tilde(path) or None).with_budget(max_bytes, links)
+    if section != "summary" and raw:
+        lines = raw.splitlines() if section == "raw" else render_section(raw, section)
+        window = [B.clip(ln, 1000) for ln in lines[start_line:start_line + max_lines]]
+
+        def page_note(end: int) -> str | None:
+            if end >= len(lines) and start_line == 0:
+                return None
+            return (f"Showing {section} lines {start_line}–{end - 1} of {len(lines)}"
+                    + (f"; call again with start_line={end} for more" if end < len(lines) else "")
+                    + f". The whole report is {helper.tilde(path)}.")
+
+        # Size the window by what the other fields (frames, reason, the note itself) leave of the budget, so
+        # the result never needs cutting: a cut would leave end_line past lines the caller never saw.
+        out.frames = []                     # the summary's; a section page is about its own lines
+        if out.termination_reason:
+            out.termination_reason = B.clip(out.termination_reason, 200)
+        out.start_line, out.end_line, out.total_lines = start_line, len(lines), len(lines)
+        out.note, out.truncated = page_note(start_line), True
+        others = B.result_size(B.dump(out), CrashDetail.BULK)
+        avail = max(500, int((B.ceiling(out) - others - 200) * 0.47))
+        page = B.take(window, len(window), avail, from_end=False)
+        end = start_line + len(page.items)
+        out.text, out.end_line = "\n".join(page.items), end
+        out.note = page_note(end)
+        out.truncated = out.note is not None
+    return out
 
 
 def cap_text(text: str, tool_hint: str, cap: int = RESOURCE_CAP) -> str:

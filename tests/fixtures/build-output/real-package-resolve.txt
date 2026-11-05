@@ -1,0 +1,9 @@
+Fetching https://github.com/apple/swift-collections.git from cache
+Fetched https://github.com/apple/swift-collections.git from cache (1.34s)
+Computing version for https://github.com/apple/swift-collections.git
+error: Dependencies could not be resolved because no versions of 'swift-collections' match the requirement 99.0.0..<100.0.0 and root depends on 'swift-collections' 99.0.0..<100.0.0.
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

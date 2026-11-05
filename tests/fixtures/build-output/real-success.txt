@@ -1,0 +1,33 @@
+Building for debugging...
+[Computing dependencies]
+[Pre-planning 1 / 67]
+[Planning deferred tasks]
+[20 / 32] Good
+[28 / 97]
+[31 / 97]
+[33 / 97]
+[40 / 97]
+[42 / 97]
+[43 / 97]
+[45 / 97]
+[47 / 97]
+[48 / 97]
+[50 / 97]
+[51 / 97]
+[55 / 97]
+[59 / 97]
+[60 / 97]
+[69 / 97]
+[73 / 97]
+[76 / 97]
+[80 / 97]
+[82 / 97]
+[85 / 97] Good
+[93 / 97] Good
+[96 / 97] Good-App-product
+Build complete! (13.82 secs)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.
+Wrote to /home/user/Developer/Good/xtool/Good.app

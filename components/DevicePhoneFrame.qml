@@ -8,7 +8,9 @@ import "../Model.js" as Model
 // It's a depiction of the device, so it keeps its physical rounded corners even on
 // square-cornered themes.
 //   DevicePhoneFrame { width: …; source: app.device.screenSource; live: app.device.mirroring
-//                      onFrameShown: function(url) { app.device.ackFrame(url) } }
+//                      onFrameShown: function(url) { app.device.ackFrame(url) }; mirrorService: app.device }
+// With mirrorService set, the frame counts itself as a viewer while it's visible: DeviceService
+// pauses the live mirror when nobody can see it (the page is hidden) and resumes it when shown.
 // Mirror frames are double-buffered: the next one decodes in a hidden Image and the two swap
 // once it's Ready, so a frame is never shown half-loaded. A frame that arrives while one is
 // still decoding replaces the queued one (latest wins). frameShown(url) fires for each frame shown.
@@ -24,6 +26,7 @@ Item {
   property int rotationSteps: 0             // 0..3, quarter turns clockwise
   property real screenAspect: 1206 / 2622   // iPhone 17 Pro
   property bool clickable: false
+  property var mirrorService: null
   signal clicked()
   signal frameShown(string url)
 
@@ -54,7 +57,17 @@ Item {
     if (root._pending !== "") { var next = root._pending; root._pending = ""; root._load(next) }
   }
   onSourceChanged: _load(root.source)
-  Component.onCompleted: _load(root.source)
+  Component.onCompleted: { _load(root.source); _countViewer() }
+
+  property bool _counted: false
+  function _countViewer() {
+    var want = root.visible && !!root.mirrorService
+    if (want === root._counted) return
+    root._counted = want
+    root.mirrorService.mirrorViewers += want ? 1 : -1
+  }
+  onVisibleChanged: _countViewer()
+  Component.onDestruction: if (root._counted && root.mirrorService) root.mirrorService.mirrorViewers -= 1
 
   implicitWidth: Style.space(180)
   implicitHeight: implicitWidth / screenAspect

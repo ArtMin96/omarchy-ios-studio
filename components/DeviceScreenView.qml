@@ -116,6 +116,7 @@ GridLayout {
     placeholder: !root.svc.connected ? "Connect your iPhone to see its screen"
                : (root.airplayView ? "AirPlay opens its own window" : "Press Start to watch your iPhone's screen here")
     onFrameShown: function(url) { root.svc.ackFrame(url) }
+    mirrorService: root.svc
     Behavior on Layout.preferredWidth { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     Behavior on Layout.preferredHeight { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
   }

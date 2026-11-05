@@ -9,6 +9,10 @@ Scenarios:
   ready     everything set up, signed in, iPhone connected, three apps (default for "1")
   expiring  like ready, but app signing expires in about 20 hours
   fresh     a new machine: tools missing, not signed in, no iPhone
+
+Builds: HabitTracker always fails with two compiler errors. IOSSTUDIO_DEMO_FAIL=linker or =package makes
+every other project's build fail too, with an undefined-symbol link error or a package version conflict;
+that output goes through the real parser (diagnostics.py), so its categories and hints are the real ones.
 """
 from __future__ import annotations
 
@@ -246,6 +250,9 @@ def _build_stream(kind: str, flags: dict) -> int:
              "Compiling " + name + " Model.swift", "Linking " + name, "Signing with Apple Development: " + NAME, "Packaging " + name + ".ipa"]
     if name == "HabitTracker":   # the demo project with a broken branch: fails to compile, like its history
         return _failing_build(kind, path, name, bundle, steps[:2], lines)
+    fail = os.environ.get("IOSSTUDIO_DEMO_FAIL", "").strip().lower()
+    if fail in DEMO_FAILURES:
+        return _parsed_failure(fail, kind, path, name, bundle, steps)
     for i, (sid, title) in enumerate(steps):
         common.step(sid, title, "running", detail=title + "…")
         for j in range(3):
@@ -288,6 +295,70 @@ def _failing_build(kind: str, path: str, name: str, bundle: str, steps: list, li
     return 1
 
 
+def _linker_output(path: str, name: str) -> list[str]:
+    pkg = f"{path}/xtool/.xtool-tmp/Package.swift: {name}-App-product: ld64.lld"
+    return ["Building for debugging...", f"[41 / 44] Compiling {name} ContentView.swift", f"[43 / 44] Linking {name}",
+            f"{pkg}: warning: This version of lld does not support linking for platform iOS. Proceed at your own risk.",
+            f"{pkg}: error: undefined symbol: $s{len(name)}{name}13ShareExporterC6exportyyF",
+            f">>> referenced by ContentView.swift:31 ({path}/Sources/{name}/ContentView.swift:31)",
+            f">>>               {path}/.build/arm64-apple-ios/debug/{name}.build/ContentView.swift.o:"
+            f"($s{len(name)}{name}11ContentViewV4bodyQrvg)",
+            f"{pkg}: error: undefined symbol: _OBJC_CLASS_$_CKContainer",
+            f">>> referenced by CloudSync.swift ({path}/.build/arm64-apple-ios/debug/{name}.build/CloudSync.swift.o)",
+            f"{path}/xtool/.xtool-tmp/Package.swift: {name}-App-product: clang: error: linker command failed "
+            "with exit code 1 (use -v to see invocation)",
+            "error: fatalError", "Error: exited(1)"]
+
+
+def _package_output(path: str, name: str) -> list[str]:
+    return ["Fetching https://github.com/apple/swift-collections.git from cache",
+            "Fetched https://github.com/apple/swift-collections.git from cache (1.34s)",
+            "Computing version for https://github.com/apple/swift-collections.git",
+            "error: Dependencies could not be resolved because no versions of 'swift-collections' match the "
+            "requirement 99.0.0..<100.0.0 and root depends on 'swift-collections' 99.0.0..<100.0.0.",
+            "Error: exited(1)"]
+
+
+# failure -> (output, the step it fails in, steps before it, error message)
+DEMO_FAILURES = {"linker": (_linker_output, "link", "Linking failed"),
+                 "package": (_package_output, "resolve", "Swift packages couldn't be resolved")}
+
+
+def _parsed_failure(fail: str, kind: str, path: str, name: str, bundle: str, steps: list) -> int:
+    """A failed build whose output is parsed by the real diagnostics parser (IOSSTUDIO_DEMO_FAIL)."""
+    import diagnostics
+    make, fail_step, lead = DEMO_FAILURES[fail]
+    out = make(path, name)
+    parser = diagnostics.Parser(demangler=lambda names: {})   # no swift-demangle needed (or wanted) here
+    diags: list[dict] = []
+    for i, (sid, title) in enumerate(steps):
+        common.step(sid, title, "running", detail=title + "…")
+        common.progress((i + 1) / (len(steps) + 1), title + "…", 4)
+        time.sleep(0.4)
+        if sid != fail_step:
+            common.log(f"[{i + 1}/{len(steps)}] {title}")
+            common.step(sid, title, "done")
+            continue
+        for line in out:
+            common.log(line)
+            for d in parser.feed(line):
+                diags.append(d)
+                common.event("diagnostic", **d)
+        for d in parser.finish(failed=True):
+            diags.append(d)
+            common.event("diagnostic", **d)
+        common.step(sid, title, "failed")
+        break
+    errors = [d for d in diags if d.get("severity") == "error"]
+    first = errors[0]["message"] if errors else "see the log"
+    msg = f"{lead}: {first}"
+    build = {"project": name, "name": name, "path": path, "kind": kind, "config": "debug", "result": "failed",
+             "duration": 6.3, "time": NOW, "errors": len(errors), "warnings": len(diags) - len(errors),
+             "bundleId": bundle, "diagnostics": diags, "errorCode": "build-failed", "errorMessage": msg}
+    common.event("done", ok=False, error={"code": "build-failed", "message": msg, "build": build})
+    return 1
+
+
 def _fake_log(flags: dict) -> dict:
     f = str(flags.get("file") or "")
     failed = "habits" in f
@@ -300,6 +371,30 @@ def _fake_log(flags: dict) -> dict:
         "error: build failed (2 errors)" if failed else "Signed and packaged in 48.2 s",
     ])
     return {"text": text.replace(HOME, "~"), "file": f, "truncated": False}
+
+
+def _demo_install_steps(action: str, flags: dict) -> None:
+    """Step events like the real `setup install`/`setup xip --use`, so the UI never keeps a step 'running'."""
+    if action == "xip":
+        if flags.get("use"):
+            common.step("xcode", "Checking Xcode", "running")
+            common.step("xcode", "Checking Xcode", "skipped", reason="Demo mode: nothing is installed.")
+        return
+    try:
+        steps = _setup_check({}).get("steps", [])
+    except Exception:  # noqa: BLE001
+        steps = []
+    titles = {s.get("id"): s.get("title") or s.get("id") for s in steps}
+    sid = flags.get("step")
+    if flags.get("all"):
+        todo = [s.get("id") for s in steps if s.get("canAutoInstall")]
+    elif sid and sid is not True:
+        todo = [str(sid)]
+    else:
+        todo = []
+    for sid in todo:
+        common.step(sid, titles.get(sid) or sid, "running")
+        common.step(sid, titles.get(sid) or sid, "skipped", reason="Demo mode: nothing is installed.")
 
 
 # ================================================================ router
@@ -357,6 +452,7 @@ def run(group: str, action: str, flags: dict) -> int:
     # Anything that would change something real is a harmless no-op in demo mode.
     if group == "setup" and action in ("install", "xip"):
         common.event("notice", id="demo", level="info", message="Demo mode: nothing is installed.")
+        _demo_install_steps(action, flags)
         return common.done(True, {"installed": [], "dryRun": True})
     if group == "toolchain" and action in ("clean", "remove-all"):
         return common.done(True, {"demo": True})

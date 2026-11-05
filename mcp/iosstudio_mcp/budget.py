@@ -16,7 +16,7 @@ Helpers here are pure (no MCP calls), so future tools can reuse them:
     paginate(items, cursor, limit, render, max_bytes) -> Page with an opaque next_cursor
     grep(lines, pattern, context, max_matches)
     fold_repeats(items, key)          consecutive duplicates -> (item, count)
-    group_diags(diags, root)          compiler diagnostics grouped by severity + message
+    group_diags(diags, root)          build diagnostics grouped by severity + category + message
     spill(data, kind, name)           -> (path, size, ResourceLink)
     fit_image(src, max_dim, max_bytes)
 """
@@ -241,32 +241,51 @@ def rel_path(path: str, root: str | None) -> str:
     return "~" + p[len(home):] if p == home or p.startswith(home + "/") else p
 
 
+DIAG_DETAILS = 8            # detail lines per diagnostic group (symbols of a linker block, …)
+DIAG_DETAIL_CUT = 200
+
+
+def diag_category(d: dict) -> str:
+    """A diagnostic's category; builds from before categories existed only had compiler file:line ones."""
+    return str(d.get("category") or ("compiler" if d.get("file") else "other"))
+
+
 def group_diags(diags: Iterable[dict], root: str | None = None, include_notes: bool = False,
                 max_locations: int = 3, message_cut: int = LINE_CUT) -> list[dict]:
-    """Compiler diagnostics -> groups keyed by severity and normalised message (quoted names masked), errors
-    first: {severity, message, count, locations: ['Sources/App/File.swift:12:5', … first 3], more_locations}."""
+    """Build diagnostics -> groups keyed by severity, category and normalised message (quoted names masked),
+    errors first: {severity, category, message, count, locations: ['Sources/App/File.swift:12:5', … first 3],
+    more_locations, hint?, details?}. Location-less diagnostics (linker, package, signing, …) have no locations."""
     groups: dict[tuple, dict] = {}
     for d in diags:
         sev = str(d.get("severity") or "error")
         if sev in ("note", "remark") and not include_notes:
             continue
+        cat = diag_category(d)
         msg = " ".join(str(d.get("message") or "").split())
-        key = (sev, _QUOTED.sub("'…'", msg))
+        key = (sev, cat, _QUOTED.sub("'…'", msg))
         g = groups.get(key)
         if g is None:
-            g = groups[key] = {"severity": sev, "message": msg, "count": 0, "locations": [], "variants": set()}
+            g = groups[key] = {"severity": sev, "category": cat, "message": msg, "count": 0, "locations": [],
+                               "variants": set(), "located": 0}
+            if d.get("hint"):
+                g["hint"] = clip(" ".join(str(d["hint"]).split()), ERROR_CUT)
+            if isinstance(d.get("details"), list) and d["details"]:
+                g["details"] = [clip(str(x), DIAG_DETAIL_CUT) for x in d["details"][:DIAG_DETAILS]]
         g["count"] += 1
         g["variants"].add(msg)
-        loc = rel_path(str(d.get("file") or ""), root)
+        if not d.get("file"):
+            continue
+        g["located"] += 1
+        loc = rel_path(str(d.get("file")), root)
         if d.get("line"):
             loc += f":{d.get('line')}" + (f":{d.get('col')}" if d.get("col") else "")
-        if loc and loc not in g["locations"] and len(g["locations"]) < max_locations:
+        if loc not in g["locations"] and len(g["locations"]) < max_locations:
             g["locations"].append(loc)
     out = []
     for g in sorted(groups.values(), key=lambda g: _RANK.get(g["severity"], 4)):
         extra = len(g.pop("variants")) - 1
         g["message"] = clip(g["message"], message_cut) + (f" (and {extra} similar)" if extra > 0 else "")
-        g["more_locations"] = max(0, g["count"] - len(g["locations"]))
+        g["more_locations"] = max(0, g.pop("located") - len(g["locations"]))
         out.append(g)
     return out
 
@@ -465,27 +484,61 @@ def result_size(data: dict, bulk_fields: Sequence[str] = ()) -> int:
     return nbytes(render_text(data, bulk_fields)) + nbytes(_json(data))
 
 
-def _largest_list(data: dict, skip: Sequence[str] = ()) -> tuple[dict, str, int] | None:
-    """(container, key, size) of the biggest list with more than one item, one level deep, not in `skip`."""
+WALK_DEPTH = 8              # how deep enforce() looks for lists and strings to cut
+WALK_NODES = 5_000          # and how many values it visits per pass
+STR_FLOOR = 200             # strings this short are never clipped (longer ones are halved)
+# Keys whose string values must come back unchanged (cursors, ids, paths a later call passes back).
+_KEEP_KEY = re.compile(r"(cursor|^ids?$|_id$|path$|^uri$|^url$|^note$|^file$|_file$)", re.I)
+
+
+def _walk(data: dict, skip: Sequence[str]):
+    """(container, key, value, protected) for every value under `data`, breadth first, up to WALK_DEPTH levels
+    and WALK_NODES values. Top-level keys in `skip` (the bulk fields) are left out."""
+    queue: list[tuple[Any, Any, Any, int, bool]] = [(data, k, v, 0, bool(_KEEP_KEY.search(str(k))))
+                                                    for k, v in data.items() if k not in skip]
+    seen = 0
+    while queue and seen < WALK_NODES:
+        nxt: list = []
+        for cont, key, val, depth, prot in queue:
+            seen += 1
+            if seen > WALK_NODES:
+                break
+            yield cont, key, val, prot
+            if depth >= WALK_DEPTH:
+                continue
+            if isinstance(val, dict):
+                nxt += [(val, k, v, depth + 1, bool(_KEEP_KEY.search(str(k)))) for k, v in val.items()]
+            elif isinstance(val, list):
+                nxt += [(val, i, v, depth + 1, prot) for i, v in enumerate(val)]
+        queue = nxt
+
+
+def _largest_list(data: dict, skip: Sequence[str] = ()) -> tuple[Any, Any, int] | None:
+    """(container, key, size) of the biggest list with more than one item anywhere in `data` (bounded
+    walk), not under a top-level key in `skip`."""
     best = None
-    for k, v in data.items():
-        if k in skip:
-            continue
-        cands = [(data, k, v)]
-        if isinstance(v, dict):
-            cands += [(v, k2, v2) for k2, v2 in v.items()]
-        for cont, key, val in cands:
-            if isinstance(val, list) and len(val) > 1:
-                size = len(json.dumps(val, separators=(",", ":"), default=str))
-                if best is None or size > best[2]:
-                    best = (cont, key, size)
+    for cont, key, val, _ in _walk(data, skip):
+        if isinstance(val, list) and len(val) > 1:
+            size = len(json.dumps(val, separators=(",", ":"), default=str))
+            if best is None or size > best[2]:
+                best = (cont, key, size)
+    return best
+
+
+def _longest_string(data: dict, skip: Sequence[str] = ()) -> tuple[Any, Any, int] | None:
+    """(container, key, length) of the longest clippable string anywhere in `data` (bounded walk)."""
+    best = None
+    for cont, key, val, prot in _walk(data, skip):
+        if isinstance(val, str) and not prot and len(val) > STR_FLOOR and (best is None or len(val) > best[2]):
+            best = (cont, key, len(val))
     return best
 
 
 def enforce(data: dict, bulk_fields: Sequence[str], limit: int) -> tuple[dict, str]:
     """Shrink `data` until text block + structuredContent together fit `limit` bytes: first the bulk fields
-    (lines kept from the start, with a marker line), then the biggest lists (halved), then long strings.
-    Marks the result truncated with a note on what was cut. Returns (structuredContent, text)."""
+    (lines kept from the start, with a marker line), then the biggest lists (halved), then the longest
+    strings (halved), at any depth. Cursors, ids, paths and the note are never cut. Marks the result
+    truncated with a note on what was cut. Returns (structuredContent, text)."""
     if result_size(data, bulk_fields) <= limit:
         return data, render_text(data, bulk_fields)
     cuts: list[str] = []
@@ -500,24 +553,24 @@ def enforce(data: dict, bulk_fields: Sequence[str], limit: int) -> tuple[dict, s
             cuts.append(f"{page.omitted} of {len(lines)} lines of {f}")
             kept = page.items + [f"…[{page.omitted} more lines cut to fit the output budget]"]
             data[f] = "\n".join(kept) if isinstance(v, str) else kept
-    for _ in range(40):
+    for _ in range(80):
         if result_size(data, bulk_fields) <= limit:
             break
         hit = _largest_list(data, bulk_fields)
-        if hit is None:
-            # last resort: clip the longest strings
-            longest = max(((k, v) for k, v in data.items() if isinstance(v, str)), key=lambda kv: len(kv[1]),
-                          default=None)
-            if longest is None or len(longest[1]) <= 200:
-                break
-            data[longest[0]] = clip(longest[1], len(longest[1]) // 2)
-            cuts.append(f"field {longest[0]}")
+        lng = _longest_string(data, bulk_fields)
+        # halve a list unless one string alone is bigger than the biggest list
+        if hit is not None and (lng is None or hit[2] >= lng[2]):
+            cont, key, _ = hit
+            n = len(cont[key])
+            keep = max(1, n // 2)
+            cont[key] = cont[key][:keep]
+            cuts.append(f"{key} {n}→{keep}" if isinstance(key, str) else f"a nested list {n}→{keep}")
             continue
-        cont, key, _ = hit
-        n = len(cont[key])
-        keep = max(1, n // 2)
-        cont[key] = cont[key][:keep]
-        cuts.append(f"{key} {n}→{keep}")
+        if lng is None:
+            break
+        cont, key, n = lng
+        cont[key] = clip(cont[key], n // 2)
+        cuts.append(f"field {key}" if isinstance(key, str) else "a long string in a list")
     if cuts:
         data["truncated"] = True
         why = "Cut to fit the output budget (" + ", ".join(dict.fromkeys(cuts)) + "); narrow the request " \

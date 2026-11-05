@@ -6,8 +6,12 @@ installs (t-N) and renewals (r-N).
 """
 from __future__ import annotations
 
+import asyncio
 import bisect
+import json
+import os
 import re
+from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -33,6 +37,11 @@ Config = Annotated[Literal["debug", "release"], Field(description="Build configu
 MaxBytes = Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                          "structuredContent together (default 12000 bytes)")]
 
+DEMO_INSTALL_SECONDS = 1.5
+# The helper's build logs (helper/projects.py BUILD_LOGS); ios_build_log reads them directly.
+BUILD_LOGS = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ios-studio" / "build-logs"
+MAX_LOG_READ = 32 * 1024 * 1024    # a bigger log is read from its tail; line numbers stay those of the file
+
 LEVEL_RX = {"error": re.compile(r"\berror\b|\bfatal\b|\bfailed\b|\bfailure\b", re.I),
             "warning": re.compile(r"\berror\b|\bwarning\b|\bfatal\b|\bfailed\b|\bfailure\b", re.I)}
 
@@ -49,10 +58,16 @@ def make_installer(state: AppState, launch: bool):
             return
         udid, ipa, bundle = r.get("udid"), r.get("ipa"), r.get("bundleId")
         if helper.demo_mode() and state.install_app is None:
-            r.update(installed=True, needsInstall=False, launched=launch, pid=4242 if launch else None)
+            job.check_cancel()
+            job.set_step("install", "Installing", "running", owner="mcp")
+            job.touch()
+            await asyncio.sleep(DEMO_INSTALL_SECONDS)
             job.set_step("install", "Installing", "done")
+            r.update(installed=True, needsInstall=False)
+            job.check_cancel()
             if launch:
                 job.set_step("launch", "Launching", "done")
+                r.update(launched=True, pid=4242)
             job.next_steps.append("Demo mode: the install and launch were simulated.")
             return
         if state.install_app is None or not ipa or not udid:
@@ -61,6 +76,7 @@ def make_installer(state: AppState, launch: bool):
                 "aren't available in this server. Plug the iPhone in and rerun with via='usb', or ask the user "
                 "to press Run in iOS Studio (ios_open_app(page='projects')).")
             return
+        job.check_cancel()
         job.set_step("install", "Installing", "running", owner="mcp")
         job.current_step = "install"
         job.touch()
@@ -72,6 +88,7 @@ def make_installer(state: AppState, launch: bool):
                               {"path": job.project_path, "udid": udid, "via": "wifi", "ipa": ipa})
         except ToolError:
             pass
+        job.check_cancel()
         if launch and bundle and state.launch_app:
             job.set_step("launch", "Launching", "running", owner="mcp")
             job.touch()
@@ -113,6 +130,28 @@ async def start_build(state: AppState, ctx: Context, project_path: str, action: 
                                 finisher=finisher)
 
 
+def _latest_in_builds_file(project_path: str) -> str | None:
+    try:
+        with open(BUILD_LOGS.parent / "builds.json", encoding="utf-8") as fh:
+            hist = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(hist, list):
+        return None
+    rows = [e for e in hist if isinstance(e, dict) and e.get("path") == project_path and e.get("logFile")]
+    rows.sort(key=lambda e: e.get("time") or 0)
+    return str(rows[-1]["logFile"]) if rows else None
+
+
+async def _latest_log_file(project_path: str) -> str | None:
+    """The log file of a project's newest build: straight from builds.json (no helper process), or from
+    the helper in demo mode, whose history is made up."""
+    if helper.demo_mode():
+        hist = await _history(project_path, 1)
+        return hist[0].get("logFile") if hist else None
+    return await asyncio.to_thread(_latest_in_builds_file, project_path)
+
+
 async def _history(project_path: str | None, limit: int) -> list[dict]:
     flags = {"limit": max(limit, 50)}
     if project_path:
@@ -121,6 +160,49 @@ async def _history(project_path: str | None, limit: int) -> list[dict]:
     builds = [b for b in data.get("builds") or [] if not project_path or b.get("path") == project_path]
     builds.sort(key=lambda b: b.get("time") or 0, reverse=True)
     return builds[:limit]
+
+
+def build_log_path(name: str) -> Path | None:
+    """A build log the helper wrote: a path (or bare file name) inside BUILD_LOGS, else None."""
+    p = Path(os.path.expanduser(str(name)))
+    if not p.is_absolute():
+        p = BUILD_LOGS / p
+    try:
+        p = p.resolve()
+        root = BUILD_LOGS.resolve()
+    except OSError:
+        return None
+    return p if root in p.parents and p.is_file() else None
+
+
+def read_log(path: Path, max_read: int = MAX_LOG_READ) -> tuple[list[str], int] | None:
+    """(lines, number of the first line) of a log file, None if it can't be read. A file over max_read
+    bytes is read from its tail, starting at a line boundary; the lines skipped are counted so the line
+    numbers match the whole file."""
+    try:
+        with open(path, "rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
+            skipped = 0
+            if size > max_read:
+                start = size - max_read
+                left = start
+                while left > 0:
+                    chunk = fh.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    skipped += chunk.count(b"\n")
+                    left -= len(chunk)
+                fh.seek(start)
+                data = fh.read()
+                cut = data.find(b"\n")
+                if cut >= 0:       # finish the line the window starts inside, so it isn't half a line
+                    data = data[cut + 1:]
+                    skipped += 1
+            else:
+                data = fh.read()
+    except OSError:
+        return None
+    return data.decode("utf-8", "replace").splitlines(), skipped
 
 
 def select_lines(numbered: list[tuple[int, str]], *, grep: str | None = None, level: str = "all",
@@ -229,7 +311,8 @@ def register(mcp: MCPServer) -> None:
         """Start a build in the background and return its build_id immediately (or after wait_seconds).
 
         Then poll ios_build_status(build_id, wait_seconds=20) until state is succeeded/failed; on failure
-        read ios_build_diagnostics (file:line errors) and ios_build_log. A first build resolves packages
+        read ios_build_diagnostics (compiler, linker, package, signing and device errors with fix hints) and,
+        only if that isn't enough, ios_build_log. A first build resolves packages
         and can take several minutes; later ones are much faster. ipa/install/run sign with the user's
         Apple ID (free teams: 7-day profiles, 3 apps per iPhone). Use ios_run for the
         build-install-launch shortcut. One job per project at a time.
@@ -287,6 +370,8 @@ def register(mcp: MCPServer) -> None:
         project_path: Annotated[str | None, Field(description="Use the latest build of this project (live or "
                                                               "from history)")] = None,
         severity: Annotated[Literal["all", "error", "warning"], Field(description="Only errors, only warnings, or both")] = "all",
+        category: Annotated[Literal["all", "compiler", "linker", "package", "signing", "device", "toolchain", "config",
+                                    "other"], Field(description="Only this kind of problem")] = "all",
         include_notes: Annotated[bool, Field(description="Also return compiler notes")] = False,
         grouped: Annotated[bool, Field(description="Group repeated messages (count + first 3 locations); false "
                                                    "lists every diagnostic")] = True,
@@ -294,8 +379,11 @@ def register(mcp: MCPServer) -> None:
         limit: Annotated[int, Field(ge=1, le=100, description="Max entries to return")] = 25,
         max_bytes: MaxBytes = None,
     ) -> DiagnosticsPage:
-        """Compiler errors and warnings, errors first, grouped by message: each entry has severity, message,
-        count and the first 3 'file:line:col' locations (relative to the project). Paginated with
+        """Why a build failed, as structured entries, errors first, grouped by message. Each entry has severity,
+        category (compiler, linker, package, signing, device, toolchain, config, other), message, count, the
+        first 3 'file:line:col' locations (relative to the project) when there is one, and for non-compiler
+        problems a one-line `hint` (naming the tool that fixes it) plus a few `details` (e.g. the undefined
+        symbols and who references them). `categories` counts entries per category. Paginated with
         offset/next_offset; notes are left out unless include_notes=true.
 
         Pass build_id for a build started in this session, or project_path for that project's latest
@@ -332,19 +420,35 @@ def register(mcp: MCPServer) -> None:
         errors = sum(1 for d in diags if d.get("severity") == "error")
         warnings = sum(1 for d in diags if d.get("severity") == "warning")
         notes = sum(1 for d in diags if d.get("severity") == "note")
+        cats: dict[str, int] = {}
+        for d in diags:
+            if d.get("severity") in ("error", "warning"):
+                cats[B.diag_category(d)] = cats.get(B.diag_category(d), 0) + 1
+        err_cats = list(dict.fromkeys(B.diag_category(d) for d in diags if d.get("severity") == "error"))
         if severity != "all":
             diags = [d for d in diags if d.get("severity") in (severity, "note")]
+        if category != "all":
+            diags = [d for d in diags if B.diag_category(d) == category]
         if grouped:
             entries = B.group_diags(diags, root, include_notes)
         else:
             entries = [g for d in diags for g in B.group_diags([d], root, include_notes)]
         page, nxt_off = page_of(entries, offset, limit, lambda g: DiagGroup(**g), max_bytes)
         nxt = []
-        if errors:
+        if "compiler" in err_cats:
             nxt.append("Open each file at the given line, fix the error, then rebuild with "
                        "ios_build_start(action='compile').")
-        elif result == "failed":
-            nxt.append("No compiler diagnostics: the failure is elsewhere. Read ios_build_log(level='error').")
+        others = [c for c in err_cats if c != "compiler"]
+        if others:
+            nxt.append(f"{', '.join(others).capitalize()} error(s): follow each entry's hint, then rebuild with "
+                       "ios_build_start.")
+        if others and set(others) <= {"other"}:
+            nxt.append("Those errors have no known fix: ios_build_log(grep='error', context=3) shows the lines "
+                       "around them.")
+        elif result == "failed" and not errors:
+            nxt.append("No error was recognised in the output (last resort): read ios_build_log(level='error').")
+        if category != "all" and not entries:
+            nxt.append(f"No {category} entries in this build; `categories` counts what there is.")
         note = None
         if nxt_off is not None:
             note = (f"Showing {len(page)} of {len(entries)} entries; call again with offset={nxt_off} for more"
@@ -355,7 +459,8 @@ def register(mcp: MCPServer) -> None:
             nxt.append(f"{notes} compiler notes hidden; include_notes=true shows them.")
         return DiagnosticsPage(source=source, project=project, build_result=result, total=len(entries),
                                count=len(page), offset=offset, has_more=nxt_off is not None, next_offset=nxt_off,
-                               errors=errors, warnings=warnings, notes=notes, diagnostics=page, next_steps=nxt,
+                               errors=errors, warnings=warnings, notes=notes, categories=cats, diagnostics=page,
+                               next_steps=nxt,
                                truncated=nxt_off is not None, omitted=len(entries) - len(page),
                                note=note).with_budget(max_bytes)
 
@@ -387,13 +492,14 @@ def register(mcp: MCPServer) -> None:
         with offset=, or search with grep (plus context) or level='error'. The lines come as plain text
         after the JSON header, numbered '<n>: text' (grep context lines '<n>- text'); repeated lines fold
         into one with ×N and lines are cut at 300 characters (line_chars). Results stay under 12 KB unless
-        max_bytes raises it, and `note` says what was left out. Use ios_build_diagnostics first for compiler
-        errors; use this for link, signing, package-resolution or install failures."""
+        max_bytes raises it, and `note` says what was left out. Use ios_build_diagnostics first: it already
+        sums up compiler, linker, package, signing and device errors. Read this for context it doesn't give."""
         state = get_state(ctx)
         source, lfile = "", None
         lines: list[str]
         first = 0
         job = None
+        from_disk = False
         if not build_id and not log_file and project_path:
             proj = await resolve_project(state, project_path)
             live = state.jobs.latest_for(proj["path"])
@@ -401,22 +507,41 @@ def register(mcp: MCPServer) -> None:
                 build_id = live.id
         if build_id:
             job = state.jobs.get(build_id)
-            lines, first, source, lfile = list(job.lines), job.first_line, f"build {job.id}", job.info.get("logFile")
+            lfile = job.info.get("logFile")
+            disk = lfile if job.finished and job.first_line > 0 and isinstance(lfile, str) else None
+            loaded = await asyncio.to_thread(read_log, Path(disk)) if disk else None
+            if loaded is None and job.finished and job.first_line > 0 and job.info.get("spillFile"):
+                loaded = await asyncio.to_thread(read_log, Path(job.info["spillFile"]))
+                if loaded is not None:
+                    lfile = job.info["spillFile"]
+                    loaded = (loaded[0], loaded[1] + int(job.info.get("spillFirstLine") or 0))
+            if loaded is not None:      # finished and trimmed in memory: the whole log from disk
+                lines, first = loaded
+                source, from_disk = f"build {job.id} (log file)", True
+            else:
+                lines, first, source = list(job.lines), job.first_line, f"build {job.id}"
         else:
-            flags: dict = {}
             if log_file:
-                flags["file"] = log_file
+                want = log_file
             elif project_path:
                 p = await resolve_project(state, project_path)
-                hist = await _history(p["path"], 1)
-                if not hist or not hist[0].get("logFile"):
+                want = await _latest_log_file(p["path"])
+                if not want:
                     raise ToolError(f"{p.get('name')} has no build logs yet. Start a build with ios_build_start.")
-                flags["file"] = hist[0]["logFile"]
             else:
                 raise ToolError("Pass build_id, project_path or log_file.")
-            data = await helper.call("build", "log", flags)
-            lines = (data.get("text") or "").splitlines()
-            source, lfile = "log file", data.get("file")
+            path = build_log_path(want)
+            loaded = await asyncio.to_thread(read_log, path) if path else None
+            if loaded is not None:
+                lines, first = loaded
+                source, lfile, from_disk = "log file", str(path), True
+            elif helper.demo_mode():    # demo builds have made-up logs that only the helper knows
+                data = await helper.call("build", "log", {"file": want})
+                lines = (data.get("text") or "").splitlines()
+                source, lfile = "log file", data.get("file")
+            else:
+                raise ToolError("That build log is gone (logs of builds older than the newest 300 are deleted). "
+                                "ios_build_history lists the ones that are left.")
         numbered = list(enumerate(lines, start=first))
         r = select_lines(numbered, grep=grep, level=level, context=context, max_matches=max_matches, tail=tail,
                          head=head, before=before, offset=offset, limit=limit, line_chars=line_chars,
@@ -425,7 +550,10 @@ def register(mcp: MCPServer) -> None:
         note = log_note(r, total, grep)
         links: list = []
         full = helper.tilde(lfile) if lfile else None
-        if job is not None and first > 0:
+        if first > 0 and from_disk:
+            note = (note + " " if note else "") + f"Lines before {first} weren't read (the log is over " \
+                   f"{MAX_LOG_READ // (1024 * 1024)} MB); the full log is {full}."
+        elif job is not None and first > 0:
             note = (note + " " if note else "") + f"Lines before {first} are no longer in memory" + \
                    (f"; the full log is {full}." if full else ".")
         if note and not lfile and job is not None:   # only in memory: write it out so nothing is lost
@@ -473,8 +601,10 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, annotations=ann("Cancel build", read_only=False, destructive=False, idempotent=True))
     async def ios_build_cancel(ctx: Context, build_id: BuildId) -> BuildStatus:
-        """Stop a running build or job and everything it started (xtool, swift-build). Safe: nothing is
-        installed half-way. Returns the final status."""
+        """Stop a running build or job and everything it started (xtool, swift-build), and wait until it
+        has stopped. Cancelled before the install step, nothing is installed or launched; cancelled while
+        an ios_run is installing over Wi-Fi, the iPhone may still finish that install but the app isn't
+        launched (the status `error` says which). Returns the final status."""
         state = get_state(ctx)
         job = await state.jobs.cancel(state.jobs.get(build_id))
         return job_status(job)

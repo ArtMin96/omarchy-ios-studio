@@ -1,0 +1,11 @@
+Fetching https://github.com/nonexistent-org-zzq/does-not-exist-pkg.git
+Fetching https://github.com/nonexistent-org-zzq/does-not-exist-pkg.git
+error: Failed to clone repository https://github.com/nonexistent-org-zzq/does-not-exist-pkg.git:
+    Cloning into bare repository '/home/user/Developer/PkgFetch/.build/repositories/does-not-exist-pkg-394a9e27'...
+    remote: Repository not found.
+    fatal: repository 'https://github.com/nonexistent-org-zzq/does-not-exist-pkg.git/' not found
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

@@ -24,9 +24,12 @@ import deviced_core as core
 import device_files as df
 from deviced_core import classify, dlog, emit, err, safe_name
 from deviced_features import files as F
+import common
 from common import CACHE_DIR
 
 OUT_DIR = CACHE_DIR / "cameratest"
+RUNS_KEEP = 20                  # test result folders kept (newest first)
+RUNS_MAX_BYTES = 1 << 30
 STEPS = [("check", "Check the app"), ("clear", "Clear the test folders"), ("push", "Copy the test files"),
          ("launch", "Launch the app"), ("wait", "Wait for results"), ("pull", "Copy the results"),
          ("crashes", "Look for crash reports")]
@@ -84,6 +87,7 @@ def register(reg):
         tr = d.registry.provided.get("transfers")
         tid = str(a.get("testId") or (tr.new_id("ct") if tr else f"ct{int(time.time())}"))
         out = OUT_DIR / safe_name(tid)
+        await asyncio.to_thread(common.prune, OUT_DIR.glob("*"), RUNS_KEEP, RUNS_MAX_BYTES, protect=[out])
         steps = Steps(tid)
         started = time.time()
         result = {"testId": tid, "bundleId": bid, "args": args, "env": env, "timeout": timeout,

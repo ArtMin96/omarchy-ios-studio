@@ -54,10 +54,16 @@ class ActionResult(Out):
 
 class DiagGroup(Out):
     severity: str = Field(description="error | warning | note")
+    category: str | None = Field(None, description="compiler | linker | package | signing | device | toolchain | "
+                                                   "config | other")
     message: str
     count: int = 1
-    locations: list[str] = Field(default_factory=list, description="First 'file:line:col', relative to the project")
+    locations: list[str] = Field(default_factory=list, description="First 'file:line:col', relative to the project "
+                                                                   "(none for location-less problems)")
     more_locations: int = 0
+    hint: str | None = Field(None, description="What usually fixes it, naming the tool to use where there is one")
+    details: list[str] = Field(default_factory=list, description="A few lines of context, such as the undefined "
+                                                                 "symbols and who references them")
 
 
 class BuildBrief(Out):
@@ -273,6 +279,7 @@ class DiagnosticsPage(Budgeted, Out):
     errors: int
     warnings: int
     notes: int = 0
+    categories: dict[str, int] = Field(default_factory=dict, description="Errors and warnings per category")
     diagnostics: list[DiagGroup]
     next_steps: list[str] = Field(default_factory=list)
 
@@ -622,7 +629,8 @@ class LogRead(Budgeted, Out):
 class CrashBrief(Out):
     name: str = Field(description="Pass to ios_crash_get")
     process: str | None = None
-    date: str | None = None
+    date: str | None = Field(None, description="When it was written, in the iPhone's local time (ISO; includes the "
+                                               "UTC offset when the phone's time zone is known)")
     kind: str | None = Field(None, description="crash | fault | resource | jetsam | hang | other")
 
 

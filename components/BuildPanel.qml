@@ -18,9 +18,16 @@ Item {
   property string tab: "log"
   readonly property var b: svc ? svc.build : ({})
   readonly property var result: b.result || null
-  readonly property var diags: b.diagnostics || []
-  readonly property int errorCount: diags.filter(function(d) { return d.severity === "error" }).length
-  readonly property int warningCount: diags.filter(function(d) { return d.severity === "warning" }).length
+  // Diagnostics stay out of `build` (ProjectService.diagnostics: a ListModel, errors first).
+  readonly property int diagCount: svc ? svc.diagnostics.count : 0
+  readonly property int errorCount: svc ? svc.errorCount : 0
+  readonly property int warningCount: svc ? svc.warningCount : 0
+  // Only reassigned when a step changes, not on every progress tick, so the step rows stay put.
+  property var steps: []
+  onBChanged: {
+    var st = b.steps || []
+    if (st !== steps && (st.length > 0 || steps.length > 0)) steps = st
+  }
   readonly property alias log: logView
 
   signal closeRequested()
@@ -183,8 +190,10 @@ Item {
         retryText: "Try again"
         onRetry: root.svc.runAgain()
         onFixed: function(fix) {
-          if (fix && fix.action === "open-diagnostic" && root.diags.length) {
-            var d = root.diags.filter(function(x) { return x.severity === "error" })[0] || root.diags[0]
+          if (fix && fix.action === "open-diagnostic" && root.diagCount) {
+            var all = root.svc.diagnosticList()
+            var located = all.filter(function(x) { return !!x.file })
+            var d = located.filter(function(x) { return x.severity === "error" })[0] || located[0] || all[0]
             root.svc.openInEditor({ path: root.b.path }, d.file, d.line, d.col)
           } else if (fix && fix.action === "log") {
             root.tab = "log"
@@ -197,10 +206,10 @@ Item {
       // ---------------------------------------------------------- steps
       ColumnLayout {
         Layout.fillWidth: true
-        visible: (root.b.steps || []).length > 0
+        visible: root.steps.length > 0
         spacing: Style.spacing.sm
         Repeater {
-          model: root.b.steps || []
+          model: root.steps
           delegate: RowLayout {
             required property var modelData
             Layout.fillWidth: true
@@ -236,7 +245,7 @@ Item {
         visible: !!root.b.kind
         current: root.tab
         tabs: [
-          { key: "problems", label: "Problems", glyph: Model.Glyph.warn, count: root.diags.length || undefined, level: root.errorCount ? "error" : (root.warningCount ? "warn" : "") },
+          { key: "problems", label: "Problems", glyph: Model.Glyph.warn, count: root.diagCount || undefined, level: root.errorCount ? "error" : (root.warningCount ? "warn" : "") },
           { key: "log", label: "Log", glyph: Model.Glyph.console }
         ]
         onSelected: function(k) { root.tab = k }
@@ -272,33 +281,33 @@ Item {
           EmptyState {
             Layout.fillWidth: true
             Layout.topMargin: Style.spacing.huge
-            visible: root.diags.length === 0
+            visible: root.diagCount === 0
             compact: true
             glyph: root.b.active ? Model.Glyph.hammer : Model.Glyph.checkCircle
             level: root.b.active ? "" : "ok"
             title: root.b.active ? "No problems so far" : "No problems"
-            text: root.b.active ? "Compiler errors and warnings show up here as they happen." : "The compiler didn't report any errors or warnings."
+            text: root.b.active ? "Errors and warnings show up here as they happen." : "The build didn't report any errors or warnings."
           }
 
           ListView {
             id: diagList
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: root.diags.length > 0
+            visible: root.diagCount > 0
             clip: true
             spacing: Style.spacing.xs
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            model: root.diags.slice().sort(function(a, x) { var r = { error: 0, warning: 1, note: 2 }; var ra = r[a.severity], rx = r[x.severity]; return (ra === undefined ? 3 : ra) - (rx === undefined ? 3 : rx) })
+            model: root.svc ? root.svc.diagnostics : null
             delegate: BuildDiagnosticRow {
-              required property var modelData
+              required property int n
               required property int index
               width: diagList.width
-              diag: modelData
+              diag: root.svc.diagnostic(n) || ({})
               projectPath: root.b.path || ""
               hasCursor: diagList.currentIndex === index
               onHovered: function(h) { if (h) diagList.currentIndex = index }
-              onClicked: root.svc.openInEditor({ path: root.b.path }, modelData.file, modelData.line, modelData.col)
+              onClicked: root.svc.openInEditor({ path: root.b.path }, diag.file, diag.line, diag.col)
             }
           }
         }

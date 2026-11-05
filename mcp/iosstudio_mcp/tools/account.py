@@ -159,7 +159,7 @@ def register(mcp: MCPServer) -> None:
                                     prefix="r", wait_seconds=wait_seconds, project_path=p["path"],
                                     project=p.get("name"), finisher=make_installer(state, launch=False))
 
-    @tool(mcp, annotations=ann("Automatic renewal", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, annotations=ann("Automatic renewal", read_only=False, destructive=True, idempotent=True))
     async def ios_project_autorenew(
         ctx: Context,
         action: Annotated[Literal["status", "enable", "disable"],
@@ -167,28 +167,30 @@ def register(mcp: MCPServer) -> None:
                                             "(a systemd user timer)")] = "status",
         project_path: Annotated[str | None, Field(description="With enable/disable: also include/exclude this "
                                                               "project in the renewal")] = None,
-        dry_run: Annotated[bool, Field(description="Show what enable/disable would change without doing it")] = False,
+        confirm: Annotated[bool, Field(description="With enable/disable: false (default) = dry run that lists the "
+                                                   "changes; true only after the user agreed")] = False,
     ) -> ActionResult:
         """Read or change automatic re-signing. When enabled, a daily systemd user timer renews every
         project marked for auto-renew whose signing has under 2 days left (the iPhone must be reachable).
-        Enabling installs a user service; ask the user before turning it on."""
+        enable installs that user service and disable removes it, so both are dry runs unless
+        confirm=true: show the user what would change, ask them, then repeat with confirm=true."""
         state = get_state(ctx)
         if action == "status":
             data = await helper.call("projects", "autorenew")
             return ActionResult(done=True, message="Automatic renewal is " +
                                 ("on." if data.get("enabled") else "off."), data=data)
         changes = []
-        if project_path:
-            p = await resolve_project(state, project_path)
-            if dry_run:
+        p = await resolve_project(state, project_path) if project_path else None
+        if not confirm:
+            if p:
                 changes.append(f"set autoRenew={action == 'enable'} for {p['path']}")
-            else:
-                await helper.call("projects", "set", {"path": p["path"], "auto_renew": "1" if action == "enable" else "0"})
-                state.invalidate_projects()
-        data = await helper.call("projects", "autorenew", {action: True, "dry_run": dry_run})
-        if dry_run:
-            return ActionResult(done=False, message="Dry run: nothing changed.",
-                                would=changes + list(data.get("actions") or []))
+            data = await helper.call("projects", "autorenew", {action: True, "dry_run": True})
+            return dry_run(f"This would {action} automatic renewal" + (f" and {'include' if action == 'enable' else 'exclude'} "
+                           f"{p.get('name')}" if p else "") + ".", changes + list(data.get("actions") or []))
+        if p:
+            await helper.call("projects", "set", {"path": p["path"], "auto_renew": "1" if action == "enable" else "0"})
+            state.invalidate_projects()
+        data = await helper.call("projects", "autorenew", {action: True, "dry_run": False})
         return ActionResult(done=True, message=f"Automatic renewal {'enabled' if action == 'enable' else 'disabled'}.",
                             data=data)
 
