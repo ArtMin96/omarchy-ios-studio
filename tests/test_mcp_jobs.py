@@ -170,7 +170,7 @@ class MalformedEvents(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(job.diagnostics), 1)
         d = job.diagnostics[0]
         self.assertEqual((d["severity"], d["category"], d["code"]), ("error", "config", "generated-project"))
-        self.assertIn("build script", d["hint"])
+        self.assertIn("ios_project_build_settings", d["hint"])
 
     async def test_build_failure_from_output_adds_no_refusal(self):
         mgr = JobManager()

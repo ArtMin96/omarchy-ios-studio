@@ -145,15 +145,22 @@ class ProjectDetail(ProjectBrief):
     ipa: str | None = Field(None, description="Last signed .ipa, if one exists")
     icon: str | None = None
     sources: str | None = Field(None, description="Folder holding the app's Swift sources")
+    build_settings: dict[str, Any] | None = Field(None, description="Per-project build settings that are set "
+                                                                    "(prebuild, env, openFiles, allowGenerated); "
+                                                                    "see ios_project_build_settings")
+    suggested_build_settings: dict[str, Any] | None = Field(None, description="Settings the project's own scripts "
+                                                                              "imply that aren't set yet, with reasons")
     next_steps: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_helper(cls, p: dict, next_steps: list[str] | None = None) -> "ProjectDetail":
         base = ProjectBrief.from_helper(p).model_dump()
         product = p.get("product")
+        bs = {k: v for k, v in (p.get("buildSettings") or {}).items() if v not in (None, False, {}, "")}
         return cls(**base, package=p.get("package"), product=product, generated=bool(p.get("generated")),
                    note=p.get("note"), ipa=p.get("ipa"), icon=p.get("icon"),
-                   sources=_sources_dir(p.get("path"), product),
+                   sources=_sources_dir(p.get("path"), product), build_settings=bs or None,
+                   suggested_build_settings=p.get("suggestedBuildSettings") or None,
                    next_steps=next_steps or [])
 
 

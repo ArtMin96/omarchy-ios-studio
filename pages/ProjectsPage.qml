@@ -43,6 +43,10 @@ Item {
     else if (p.action === "retry") { if (svc.build.path) { svc.runAgain(); page.panelOpen = true } }
     else if (p.action === "reveal" && p.path) { var r = svc.projectByPath(p.path); svc.reveal(r || { path: p.path }) }
     else if (p.action === "convert" && p.path) svc.convert(p.path)
+    else if (p.action === "build-settings") {
+      var bp = p.path ? svc.projectByPath(p.path) : (svc.build.path ? svc.projectByPath(svc.build.path) : null)
+      if (bp) Qt.callLater(function() { buildSettingsSheet.openFor(bp) })
+    }
     else if (p.action === "remove" && p.path) {
       var gone = svc.projectByPath(p.path) || { path: p.path, name: p.path.split("/").pop(), displayPath: p.path.replace(app.home, "~") }
       svc.remove(gone)
@@ -274,6 +278,7 @@ Item {
         onOpenFolder: page.svc.reveal(modelData)
         onRemoveFromList: page.svc.remove(modelData)
         onToggleAutoRenew: page.svc.setAutoRenew(modelData, !modelData.autoRenew)
+        onOpenBuildSettings: buildSettingsSheet.openFor(modelData)
         onShowBuild: page.panelOpen = true
       }
     }
@@ -345,6 +350,12 @@ Item {
     svc: page.svc
     opened: page.panelOpen
     onCloseRequested: page.panelOpen = false
+  }
+
+  ProjectBuildSettingsSheet {
+    id: buildSettingsSheet
+    app: page.app
+    svc: page.svc
   }
 
   ProjectNewSheet {

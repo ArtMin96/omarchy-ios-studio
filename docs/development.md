@@ -27,6 +27,7 @@ helper/
   main.py            helper router: group name -> module
   common.py          shared helper code: ok()/fail()/event(), paths, fix links
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
+  build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
   diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
   xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
@@ -52,7 +53,7 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (75 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (76 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp

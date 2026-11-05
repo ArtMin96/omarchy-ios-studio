@@ -33,10 +33,17 @@ def _is_demo_stub(data) -> bool:
 
 
 def _detail_next(p: dict) -> list[str]:
-    if p.get("generated"):
-        return ["This project generates its own xtool.yml, so iOS Studio won't build, run or renew it: use the "
-                "project's own build script. The iPhone tools (ios_app_run_and_capture, ios_logs_start, "
-                "ios_crash_list, ios_metrics_start, …) still work on the installed app by bundle id."]
+    if p.get("generated") and not (p.get("buildSettings") or {}).get("allowGenerated"):
+        out = ["This project generates its own xtool.yml, so iOS Studio won't build, run or renew it until its "
+               "build settings allow it: ios_project_build_settings(project_path, prebuild=<the script that "
+               "regenerates xtool.yml>, env=..., allow_generated=true) — a dry run first, then confirm=true after "
+               "the user agrees. Otherwise use the project's own build script. The iPhone tools "
+               "(ios_app_run_and_capture, ios_logs_start, ios_crash_list, ios_metrics_start, …) still work on the "
+               "installed app by bundle id."]
+        if p.get("suggestedBuildSettings"):
+            out.insert(0, "Its own scripts suggest build settings (suggested_build_settings): "
+                          "ios_project_build_settings(project_path, apply_suggested=true) shows them as a dry run.")
+        return out
     out = [f"Edit the Swift sources in {p.get('path')}/Sources/{p.get('product') or p.get('name')}/.",
            "Build with ios_build_start(project_path, action='compile'); run on the iPhone with ios_run(project_path)."]
     lb = p.get("lastBuild") or {}
@@ -93,7 +100,9 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, annotations=READ("Project details"))
     async def ios_project_info(project_path: ProjectPath, ctx: Context) -> ProjectDetail:
         """Details of one project: path, Swift sources folder, product, bundle id, minimum iOS, branch,
-        last build (result, errors, log file), signing expiry, auto-renew and the last signed .ipa.
+        last build (result, errors, log file), signing expiry, auto-renew, the last signed .ipa, its build
+        settings (prebuild, env, open-file limit, allow generated) and the settings its own build scripts
+        suggest (see ios_project_build_settings).
         """
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
@@ -255,7 +264,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         would = [f"Hide {p.get('name')} ({p.get('path')}) from the project list",
-                 "Forget its auto-renew flag and default iPhone", "Keep every file on disk"]
+                 "Forget its auto-renew flag, default iPhone and build settings", "Keep every file on disk"]
         if not confirm:
             return dry_run(f"This would remove {p.get('name')} from iOS Studio.", would)
         data = await helper.call("projects", "remove", {"path": p["path"]})

@@ -55,7 +55,14 @@ NEXT_BY_CODE: dict[str, str] = {
     "not-a-project": "Call ios_project_list, or make the folder an app with ios_project_convert / ios_project_create.",
     "needs-conversion": "Call ios_project_convert(project_path=...) to add an xtool.yml.",
     "not-convertible": "Create a fresh app with ios_project_create and move the code into it.",
-    "generated-project": "Build it with the project's own build script instead.",
+    "generated-project": "Call ios_project_info to see the suggested build settings, then (after asking the user) "
+                         "ios_project_build_settings(project_path, prebuild=<script that regenerates xtool.yml>, "
+                         "allow_generated=true, confirm=true); or build it with the project's own script.",
+    "prebuild-failed": "Read ios_build_log for the prebuild's output, fix the script or change the command with "
+                       "ios_project_build_settings, then rebuild.",
+    "open-files-limit": "Lower open_files with ios_project_build_settings, or ask the user to raise the hard "
+                        "open-file limit (it needs a new login session).",
+    "invalid-setting": "Fix the value and call ios_project_build_settings again.",
     "no-build": "Call ios_run (or ios_build_start action='ipa') to produce a signed build first.",
     "build-failed": "Call ios_build_diagnostics and ios_build_log(grep='error') for the failing lines.",
     "compile-errors": "Call ios_build_diagnostics for file:line errors, fix them, then rebuild.",
