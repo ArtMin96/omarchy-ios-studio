@@ -221,6 +221,8 @@ the tunnel is up.
 | `transfer` | Transfer (see [Files](#files)) | during `media.pull`, `container.pull/push` and inside `cameratest.run`, at most 4 a second, plus one final `done` / `failed` / `cancelled` |
 | `cameratest` | `{testId, step, state, title, detail}` | each step of `cameratest.run` (`running`, `done`, `failed`) |
 | `debugSymbols` | `{phase, fraction?, received?, total?, rate?, eta?, done?, count?, message?, ready?, error?, sizeOnDisk?, libs?, ts}` | during a `debug.symbols` download or unpack (at most twice a second) |
+| `console` | `{sessionId, bundleId, first, lines, skipped?}` | an app launched with the console printed (see [App console](#app-console-console-used-by-logs--console-and-ios_app_console_read)), every 100 ms |
+| `consoleState` | ConsoleSession | a console session started or stopped (also in the welcome) |
 | `log` | `{level, text}` | daemon diagnostics (optional to show) |
 
 ### Connection
@@ -286,7 +288,7 @@ Any field may be `null` when unknown (e.g. `battery` if the diagnostics service 
 | cmd | args | reply data |
 |---|---|---|
 | `apps.list` | `{udid?, system?: false, icons?: true, sizes?: bool}` | `[App…]` sorted by name (~0.7 s over Wi-Fi) |
-| `app.launch` | `{bundleId, args?: [str], env?: {}, udid?}` | `{bundleId, pid}` (mounts DDI first) |
+| `app.launch` | `{bundleId, args?: [str], env?: {}, udid?, console?: false}` | `{bundleId, pid}` (mounts DDI first); `console: true` also captures stdout/stderr and adds `console` (see [App console](#app-console-console-used-by-logs--console-and-ios_app_console_read)) |
 | `app.kill` | `{bundleId, udid?}` | `{bundleId, killed: [pid…]}` |
 | `app.uninstall` | `{bundleId, udid?}` | `{bundleId}` (UI must confirm first) |
 | `app.install` | `{path, udid?}` (signed `.ipa` or `.app` folder) | `{path, bundleId, packageBundleId, seconds}`; `bundleId` is the id as installed (free teams: `XTL-<TEAM>.<id>`) |
@@ -637,6 +639,49 @@ SyslogEntry:
 `syslogState` (per client): `{running, udid, filters, dropped, reconnecting, error?}`. When the tunnel drops,
 the daemon sets `reconnecting: true` and resumes the stream automatically after reconnecting
 (entries during the gap are lost).
+
+### App console (`console.*`), used by Logs › Console and `ios_app_console_read`
+
+What an app prints (Swift `print()`, stdout and stderr). `app.launch` with `console: true` (or
+`console.launch`, same arguments) opens CoreDevice's stdio socket (`com.apple.coredevice.openstdiosocket`)
+and launches the app attached to it; the daemon keeps everything the app writes until it exits. The
+console only exists for apps the daemon launched: an app that was already running has no stdout to
+attach to. Code: `helper/app_console.py` (buffers, commands), `deviced_features/console.py` (iPhone),
+`deviced_demo_features/console.py` (demo). More in [features/app-console.md](features/app-console.md).
+
+| cmd | args | reply data |
+|---|---|---|
+| `console.launch` | `{bundleId, args?, env?, udid?, splitStderr?: false}` | `{bundleId, pid, console: ConsoleSession}`; if the socket can't be opened the app is launched without it: `{bundleId, pid, console: {error: {code: "console-unavailable", message}}}` |
+| `console.read` | `{sessionId?` or `bundleId?, cursor?, limit?: 500 (≤5000), wait?: s ≤ 20}` | `{entries: [ConsoleLine…], cursor, nextCursor, hasMore, missed, bufferStart, total, session}`; `bundleId` picks that app's newest session (plain or `XTL-` form) |
+| `console.list` | `{bundleId?}` | `{sessions: [ConsoleSession…]}` newest first |
+| `console.stop` | `{sessionId?` or `bundleId?}` | ConsoleSession; stops capturing (closes the socket, see the note below) |
+| `console.clear` | `{sessionId?` or `bundleId?}` (none = all) | `{cleared: [id…]}`; drops the kept lines, numbering continues |
+
+ConsoleLine: `{"ts": 1730459123.456, "stream": "out", "text": "Loaded 3 places", "cut": 120}`.
+`stream` is `out` (stdout and stderr together: the iPhone's default, one pseudoterminal), `stdout` /
+`stderr` (when they come on separate sockets: `splitStderr`, or demo mode) or `meta` (a note from the
+daemon, such as how many lines were dropped). `cut` (only when > 0) counts the bytes of an over-long line
+that weren't kept.
+
+ConsoleSession: `{sessionId, bundleId, name, pid, status, running, streams: "merged" | "split", started,
+ended, lines, bufferStart, bytes, dropped, cutLines, owner, reason?, error?}`. `status` ∈ `running`,
+`ended` (the app exited), `stopped` (`console.stop`, device switch, daemon shutdown, or too many at
+once), `lost` (the connection broke; the app may still run).
+
+Events: `console` `{sessionId, bundleId, first, lines: [ConsoleLine…], skipped?}` every 100 ms while
+there are new lines (`first` is the number of `lines[0]`; at most 1000 per event, the rest are only in
+the buffer and counted in `skipped`), and `consoleState` (ConsoleSession) when a session starts or
+stops (also in the welcome).
+
+Limits, per session: lines are split on `\n` (a CR before it is dropped, a partial line is shown after a
+quiet second or when the app exits), invalid UTF-8 becomes U+FFFD, terminal escapes are removed, a line
+keeps its first 8 KB. The buffer keeps 10,000 lines or 2 MB. More than 2,000 lines a second (bursts of
+4,000 allowed) are dropped and counted in `dropped`, with a `meta` line saying how many. At most 6
+sessions capture at once (launching a 7th app stops the oldest); 4 ended ones are kept for reading.
+Relaunching the same app ends its previous session (the phone stops the old process).
+
+`splitStderr: true` asks the phone for a second socket for stderr. It's experimental (not checked on
+every iOS version); when the phone refuses, the launch falls back to one socket.
 
 ### Crash reports, used by the Logs page
 

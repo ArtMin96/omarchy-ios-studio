@@ -486,6 +486,10 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `emptyTitle`, `emptyText`, `selectedSeq`; read-only `count`, `shownCount`, `pendingCount`, `selectedRow`;
   `clear()`, `select(row)`, `selectNext(d)`, `deselect()`, `selectedText()`, `visibleText()`, `jumpToLatest()`;
   signal `copyRequested()`.
+- **LogConsoleTab**: the Logs page's Console tab (`app`): what an app launched with the console prints, in a
+  LogView without its toolbar (stderr lines are `warn`/`error`, meta = time). Launch, the session picker, filter,
+  stderr-only (when the streams are split), pause, copy, export and clear. Read-only `view`, `search`;
+  `togglePause()`, `copySelected()`. See [features/app-console.md](features/app-console.md).
 - **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history, then the selected build's summary,
   problems and full log.
 - **CrashBrowser / CrashReportView**: the Logs page's Crashes tab (`app`; `scope` `mine`/`all`) and one report

@@ -26,7 +26,9 @@ def register(reg):
     reg.command("apps.list", lambda ctx, a: apps_list())
 
     @reg.command("app.launch")
-    def launch(ctx, a):
+    async def launch(ctx, a):
+        if a.get("console") and ctx.registry.has("console.launch"):   # print() output: console.py
+            return await ctx.registry.lookup("console.launch")(ctx, a)
         running.add(a.get("bundleId"))
         pids[a.get("bundleId")] = 812
         return {"bundleId": a.get("bundleId"), "pid": 812}

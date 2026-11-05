@@ -390,7 +390,8 @@ Item {
           if (a === want || a.slice(-(want.length + 1)) === "." + want) { bid = a; break }
         }
       }
-      app.device.request("app.launch", { bundleId: bid, udid: data.udid }, function(ok2, res) {
+      // console: its print() output shows on Logs › Console (falls back to a plain launch if unavailable)
+      app.device.request("app.launch", { bundleId: bid, udid: data.udid, console: true }, function(ok2, res) {
         if (!root.building) return
         if (ok2) {
           _setStep("launch", "done")

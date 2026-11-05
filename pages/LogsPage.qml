@@ -17,6 +17,7 @@ PageFrame {
 
   title: "Logs"
   subtitle: tab === "device" ? "What your iPhone is saying right now, filtered to your apps."
+          : tab === "console" ? "What your app prints (print(), stdout and stderr) when iOS Studio launches it."
           : tab === "crashes" ? "Crash reports from your iPhone, explained."
           : "Every build you ran, with its log and problems."
   scrollable: false
@@ -24,6 +25,7 @@ PageFrame {
 
   readonly property var tabs: [
     { key: "device", label: "Device log", glyph: Model.Glyph.console },
+    { key: "console", label: "Console", glyph: Model.Glyph.consoleLine },
     { key: "crashes", label: "Crashes", glyph: Model.Glyph.crash, count: svc.newCrashCount > 0 ? svc.newCrashCount : undefined, level: "warn" },
     { key: "builds", label: "Build logs", glyph: Model.Glyph.hammer }
   ]
@@ -46,6 +48,7 @@ PageFrame {
     var p = params || {}
     var t = String(p.tab || "").toLowerCase()
     if (t === "log" || t === "live" || t === "syslog") t = "device"
+    if (t === "print" || t === "stdout" || t === "output") t = "console"
     if (t === "build") t = "builds"
     if (page.tabs.some(function(x) { return x.key === t })) page.tab = t
     else if (p.crash || p.action === "crashes") page.tab = "crashes"
@@ -58,13 +61,17 @@ PageFrame {
     else svc.refresh()
   }
 
-  function focusSearch() { if (tab === "device") deviceTab.search.focusField() }
+  function focusSearch() {
+    if (tab === "device") deviceTab.search.focusField()
+    else if (tab === "console") consoleTab.search.focusField()
+  }
 
   // Esc: deselect the line, then clear the search. (A QML method can't be named `escape`,
   // the shell calls goBack() instead.)
   function goBack() {
     if (tab === "device" && deviceTab.view.selectedSeq >= 0) { deviceTab.view.deselect(); return true }
     if (tab === "device" && deviceTab.search.text !== "") { deviceTab.search.clear(); return true }
+    if (tab === "console" && consoleTab.search.text !== "") { consoleTab.search.clear(); return true }
     return false
   }
 
@@ -72,7 +79,7 @@ PageFrame {
     if (event.key === Qt.Key_Escape) return goBack()
     var a = Model.keyAction(event)
     if (a === "left" || a === "right") {
-      var keys = ["device", "crashes", "builds"]
+      var keys = ["device", "console", "crashes", "builds"]
       var i = keys.indexOf(page.tab)
       page.tab = keys[(i + (a === "right" ? 1 : -1) + keys.length) % keys.length]
       return true
@@ -85,6 +92,13 @@ PageFrame {
       if (a === "copy") { deviceTab.copySelected(); return true }
       if (event.key === Qt.Key_Space) { deviceTab.togglePause(); return true }
       if (event.text === "s") { svc.streaming ? svc.stop() : svc.start(); return true }
+      return false
+    }
+    if (tab === "console") {
+      if (!consoleTab.ready) return false
+      if (a === "end") { consoleTab.view.scrollToEnd(); return true }
+      if (a === "copy") { consoleTab.copySelected(); return true }
+      if (event.key === Qt.Key_Space) { consoleTab.togglePause(); return true }
       return false
     }
     if (tab === "crashes") {
@@ -115,6 +129,7 @@ PageFrame {
     Layout.fillHeight: true
 
     LogDeviceTab { id: deviceTab; anchors.fill: parent; app: page.app; visible: page.tab === "device" }
+    LogConsoleTab { id: consoleTab; anchors.fill: parent; app: page.app; visible: page.tab === "console" }
     CrashBrowser { id: crashTab; anchors.fill: parent; app: page.app; visible: page.tab === "crashes" }
     LogBuildsTab { id: buildsTab; anchors.fill: parent; app: page.app; visible: page.tab === "builds" }
   }

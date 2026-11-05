@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import posixpath
 import signal
+import uuid
 
 import device_link as link
 from deviced_core import dlog, emit, err, icon_path, installed_apps, is_connection_error, write_bytes
@@ -135,11 +136,17 @@ def register(reg):
         bid = a.get("bundleId")
         if not bid:
             raise err("bad-args", "Which app? (bundleId missing)")
+        # console: true captures print() output (deviced_features/console.py), which calls back here
+        # with the stdio socket's identifier in `_stdio`.
+        stdio = a.get("_stdio") if isinstance(a.get("_stdio"), uuid.UUID) else None
+        if a.get("console") and stdio is None and d.registry.has("console.launch"):
+            return await d.registry.lookup("console.launch")(d, a)
         s, rsd = await d.rsd(a)
         await s.ensure_ddi()
         try:
             async with d.pmd3.AppServiceService(rsd) as svc:
-                res = await svc.launch_application(bid, list(a.get("args") or []), True, False, dict(a.get("env") or {}))
+                res = await svc.launch_application(bid, list(a.get("args") or []), True, False, dict(a.get("env") or {}),
+                                                   **({"stdio_identifier": stdio} if stdio else {}))
         except d.pmd3.exceptions.CoreDeviceError as exc:
             code, reason = link.launch_failure(getattr(exc, "user_info", None))
             if code == "Locked":

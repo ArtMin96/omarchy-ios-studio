@@ -131,6 +131,14 @@ Look at the Debug symbols card on iPhone › Debug. If it says Needs an update o
 
 The download is about 7 GB per iOS version, and only a few hundred MB stay once it's done. Free some space (Toolchain shows what can go safely), then try again. Debugging works without the symbols, but Swift strings and arrays can read wrong and system frames show only library names.
 
+### Nothing in Logs › Console
+
+The console only shows apps that iOS Studio launched: Run on a project, or Launch on the Console tab. An app you opened on the phone itself, or one that was already running, has nowhere to send its output. Messages from `os_log`, `Logger` and `NSLog` go to the iPhone's log instead, so look for them on the Device log tab. If a launch says it opened the app "without the console", the phone didn't offer one: update iOS Studio's iPhone tools in Setup and launch again.
+
+### print() output arrives late or all at once
+
+The phone gives the app a terminal for its output, so `print()` should show up line by line. If lines come in big chunks, something in the app switched stdout to full buffering, or writes without a newline (`print(x, terminator: "")` is shown after a second of quiet). Put `setvbuf(stdout, nil, _IOLBF, 0)` at the start of the app (or call `fflush(stdout)` after writing), and end lines with a newline. On the iPhone stdout and stderr share that terminal, so the stderr filter only appears in demo mode.
+
 ## Building
 
 ### "Your code has N errors"
