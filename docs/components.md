@@ -464,9 +464,14 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **ProjectCard**: one project on the Projects page. Props: `project`, `svc` (`app.projects`), `hasCursor`,
   `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
   `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
-  `showBuild()`, `hovered(bool)`.
+  `openBuildSettings()`, `showBuild()`, `hovered(bool)`; read-only `blocked` (a generated project its build
+  settings don't allow yet).
 - **ProjectNewSheet**: the New app sheet (name, template, location, bundle id). Props: `app`, `svc`,
   `template` (default `swiftui-app`); `open()`, `reset()`; signal `created(project)`.
+- **ProjectBuildSettingsSheet**: a project's Build settings sheet (prebuild command, environment variable rows,
+  open-file limit, Build generated project, and the project scripts' suggestions). Props: `app`, `svc`;
+  `openFor(project)`. Loads and saves through `svc.loadBuildSettings` / `svc.saveBuildSettings`. See
+  [features/project-build-settings.md](features/project-build-settings.md).
 - **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
   slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
   `log` (the LogView); signal `closeRequested()`.

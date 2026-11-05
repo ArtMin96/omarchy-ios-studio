@@ -83,7 +83,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
