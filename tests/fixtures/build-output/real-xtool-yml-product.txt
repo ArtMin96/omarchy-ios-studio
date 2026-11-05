@@ -1,0 +1,5 @@
+Error: Product name ('BadProduct') does not match the 'product' value in the schema ('Wrong')
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

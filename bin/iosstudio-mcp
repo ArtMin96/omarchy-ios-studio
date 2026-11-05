@@ -41,5 +41,7 @@ fi
 [[ ${1:-} == --prepare ]] && exit 0
 
 # PYTHONSAFEPATH: never import from the agent's working directory (a stray mcp.py there must not win).
-export PYTHONPATH="$pkg" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 IOSSTUDIO_REPO="$repo"
+# PYTHONPYCACHEPREFIX: compiled modules go to the user's cache, not the repo.
+export PYTHONPATH="$pkg" PYTHONSAFEPATH=1 IOSSTUDIO_REPO="$repo" \
+  PYTHONPYCACHEPREFIX="${XDG_CACHE_HOME:-$HOME/.cache}/ios-studio/pycache"
 exec "$venv/bin/python" -m iosstudio_mcp "$@"

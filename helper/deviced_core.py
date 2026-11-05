@@ -159,6 +159,12 @@ def write_bytes(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
+async def installed_apps(pmd3, rsd, **kw) -> dict:
+    """InstallationProxyService.get_apps(**kw) on a connection of its own, closed again afterwards."""
+    async with pmd3.InstallationProxyService(lockdown=rsd) as ip:
+        return await ip.get_apps(**kw)
+
+
 def safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", s)[:200]
 
@@ -248,21 +254,23 @@ class PortForward:
         self._conns.add(task)
         self.connections += 1
         remote = None
+        pipes: list[asyncio.Task] = []
         try:
             try:
                 remote = await self._connect()
             except Exception as exc:  # noqa: BLE001
                 dlog(f"forward {self.name}: can't reach the phone side: {exc!r}")
                 return
-            a = asyncio.create_task(self._pipe(lr, remote.writer))
-            b = asyncio.create_task(self._pipe(remote.reader, lw))
-            done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
-            for p in pending:
-                p.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            pipes = [asyncio.create_task(self._pipe(lr, remote.writer)),
+                     asyncio.create_task(self._pipe(remote.reader, lw))]
+            await asyncio.wait(pipes, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
             pass
         finally:
+            # one side ended, or stop() cancelled us: end the other pipe too (asyncio.wait doesn't)
+            for p in pipes:
+                p.cancel()
+            await asyncio.gather(*pipes, return_exceptions=True)
             if remote is not None:
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(remote.close(), 3)

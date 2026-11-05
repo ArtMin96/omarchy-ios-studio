@@ -94,6 +94,42 @@ def page_of(items: list, offset: int, limit: int, to_model, max_bytes: int | Non
     return out, (end if end < len(items) else None)
 
 
+def fit_page(model: Any, field: str, offset: int = 0, note=None) -> Any:
+    """Drop items from the end of a paged list (model.<field>) until the whole result fits its budget, so
+    to_result()'s enforce() never cuts that list: enforce would keep next_offset pointing past items the
+    caller never saw. Keeps count, has_more, next_offset (when the model has it), omitted, truncated and
+    the note in step; note(k, end) gives the note for k items ending at offset `end`."""
+    items = list(getattr(model, field))
+    limit = B.ceiling(model)
+    bulk = getattr(type(model), "BULK", ())
+    if len(items) <= 1 or B.result_size(B.dump(model), bulk) <= limit:
+        return model
+    total = int(getattr(model, "total", offset + len(items)))
+
+    def apply(k: int) -> bool:
+        end = offset + k
+        setattr(model, field, items[:k])
+        model.count = k
+        if "next_offset" in type(model).model_fields:
+            model.next_offset = end if end < total else None
+        if "has_more" in type(model).model_fields:
+            model.has_more = end < total
+        model.omitted = total - k
+        model.truncated = True
+        model.note = note(k, end) if note else f"Showing {k} of {total}; call again with offset={end}."
+        return B.result_size(B.dump(model), bulk) <= limit
+
+    lo, hi = 1, len(items) - 1          # largest k that fits; k=1 is kept even if it doesn't
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if apply(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    apply(lo)
+    return model
+
+
 def _slim(schema: Any, output: bool) -> Any:
     """Schema noise off: `title` keywords, `default: null`, and in output schemas every default. `anyOf`
     [X, null] with a plain X becomes X with "type": [T, "null"]. Validation is unchanged."""
@@ -226,14 +262,20 @@ def job_next_steps(job: Job) -> list[str]:
         if any(o.get("destructive") for o in p.get("options") or [] if isinstance(o, dict)):
             out.append("One option is destructive: never pick it unless the user explicitly chose it.")
     elif job.state == "failed":
-        if errors:
-            out.append(f"{errors} compiler error(s). Call ios_build_diagnostics(build_id='{bid}'), fix the files, "
-                       "then rebuild with ios_build_start(action='compile').")
+        cats = [B.diag_category(d) for d in job.diagnostics if d.get("severity") == "error"]
+        if "compiler" in cats:
+            out.append(f"{cats.count('compiler')} compiler error(s). Call ios_build_diagnostics(build_id='{bid}'), "
+                       "fix the files, then rebuild with ios_build_start(action='compile').")
+        others = list(dict.fromkeys(c for c in cats if c != "compiler"))
+        if others:
+            out.append(f"{', '.join(others).capitalize()} error(s): ios_build_diagnostics(build_id='{bid}') lists "
+                       "each one with a hint for the fix.")
         nxt = helper.next_step_for(job.error or {})
         if nxt and not (errors and (job.error or {}).get("code") in ("build-failed", "compile-errors")):
             out.append(nxt)
         if not errors:
-            out.append(f"ios_build_log(build_id='{bid}', grep='error|fail') shows what went wrong.")
+            out.append(f"No error was recognised in the output (last resort): ios_build_log(build_id='{bid}', "
+                       "grep='error|fail') shows what went wrong.")
     elif job.state == "succeeded":
         out.extend(job.next_steps)
         r = job.result or {}

@@ -40,7 +40,8 @@ class PhoneSyslog:
         """bundleId filter -> (executable, installed bundle id). Never waits for the tunnel."""
         if session is None or session.rsd is None:
             return None, None
-        apps = await session.pmd3.InstallationProxyService(lockdown=session.rsd).get_apps(application_type="Any")
+        async with session.pmd3.InstallationProxyService(lockdown=session.rsd) as ip:
+            apps = await ip.get_apps(application_type="Any")
         for k, v in apps.items():
             if k == bid or k.endswith("." + bid):
                 return v.get("CFBundleExecutable") or None, k
@@ -74,15 +75,18 @@ class PhoneSyslog:
                 first = False
                 n = 0
                 dlog(f"syslog: streaming (pid filter {pid})")
-                async for entry in session.pmd3.OsTraceService(lockdown=rsd).syslog(pid=pid):
-                    if n == 0:
-                        dlog("syslog: first entry")
-                    item = self._entry(entry, hub.min_level())
-                    if item is not None:
-                        hub.feed(item)
-                    n += 1
-                    if n % 256 == 0:
-                        await asyncio.sleep(0)  # let flushes and requests run
+                # Closed on every way out (stream end, error, cancel), not left to the garbage collector.
+                async with session.pmd3.OsTraceService(lockdown=rsd) as ost, \
+                        contextlib.aclosing(ost.syslog(pid=pid)) as entries:
+                    async for entry in entries:
+                        if n == 0:
+                            dlog("syslog: first entry")
+                        item = self._entry(entry, hub.min_level())
+                        if item is not None:
+                            hub.feed(item)
+                        n += 1
+                        if n % 256 == 0:
+                            await asyncio.sleep(0)  # let flushes and requests run
                 raise ConnectionError("the log stream ended")
             except asyncio.CancelledError:
                 raise

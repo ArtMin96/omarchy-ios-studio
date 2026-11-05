@@ -29,6 +29,15 @@ PageFrame {
   property string highlight: ""
   property var rowItems: ({})
 
+  // Install logs go straight to the step's row (StepRow.appendLog), one line at a time.
+  Connections {
+    target: page.svc
+    function onStepLog(stepId, text) { var it = page.rowItems[stepId]; if (it) it.appendLog(text) }
+    function onStepLogCleared(stepId) {
+      for (var id in page.rowItems) if (stepId === "" || id === stepId) page.rowItems[id].clearLog()
+    }
+  }
+
   // ------------------------------------------------------------ page hooks
   function activated(params) {
     if (params && params.step) {
@@ -188,14 +197,15 @@ PageFrame {
     radius: Style.cornerRadius
     color: Theme.surface
     borderSpec: Border.flat(Theme.hairline, Style.normalBorderWidth)
-    implicitHeight: heroCol.implicitHeight + Style.spacing.huge * 2
+    implicitHeight: heroCol.implicitHeight + Style.spacing.panelPadding * 2
 
+    // same insets as the Home and Apple ID heroes
     ColumnLayout {
       id: heroCol
       anchors.fill: parent
-      anchors.margins: Style.spacing.huge
-      anchors.leftMargin: Style.spacing.huge + Style.spacing.lg
-      anchors.rightMargin: Style.spacing.huge + Style.spacing.lg
+      anchors.margins: Style.spacing.panelPadding
+      anchors.leftMargin: Style.spacing.panelPadding + Style.spacing.md
+      anchors.rightMargin: Style.spacing.panelPadding + Style.spacing.md
       spacing: Style.spacing.xxl
 
       RowLayout {
@@ -401,7 +411,7 @@ PageFrame {
           number: flat + 1
           title: s.title
           description: s.state === "done" ? s.detail : s.description
-          state: vs
+          stepState: vs
           meta: page.metaFor(s)
           actionText: page.actionLabel(s)
           actionGlyph: page.actionGlyph(s)
@@ -413,13 +423,12 @@ PageFrame {
           progressIndeterminate: vs === "running" && (!r || r.fraction < 0)
           progressText: vs === "running" && r ? (r.detail || "Working…") : ""
           progressTrailing: vs === "running" && r ? page.etaText(r.eta) : ""
-          logLines: page.svc.logs[s.id] || []
           errorText: vs === "failed" ? (r && r.error && r.error.message ? r.error.message : s.detail) : ""
           hasCursor: page.cursor === flat || page.highlight === s.id
           onHovered: function(h) { if (h) page.cursor = flat }
           onAction: page.actOn(s)
 
-          Component.onCompleted: { var m = page.rowItems; m[s.id] = row; page.rowItems = m }
+          Component.onCompleted: { setLog(page.svc.logLines(s.id)); var m = page.rowItems; m[s.id] = row; page.rowItems = m }
           Component.onDestruction: { if (page.rowItems[s.id] === row) { var m = page.rowItems; delete m[s.id]; page.rowItems = m } }
 
           extra: [

@@ -6,24 +6,47 @@ import posixpath
 import re
 from datetime import datetime
 
+
+def _zone(tz: str | None):
+    """ZoneInfo for the phone's IANA time zone name, or None when unknown/invalid."""
+    if not tz:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 - unknown zone, missing tzdata
+        return None
+
 # <process>[.<kind>_resource]-YYYY-MM-DD-HHMMSS[.mmm].ips
 _NAME_RE = re.compile(r"^(?P<proc>.+?)-(?P<date>\d{4}-\d{2}-\d{2}-\d{6})(?:\.\d+)?\.ips(?:\.\w+)?$")
 
 
-def classify(path: str) -> dict | None:
-    """CrashItem for one device path, or None when it isn't a report file."""
+def classify(path: str, tz: str | None = None) -> dict | None:
+    """CrashItem for one device path, or None when it isn't a report file.
+
+    The date in the file name is the phone's local wall-clock time. With tz (the phone's IANA zone, e.g.
+    lockdown's TimeZone) it becomes an aware ISO date and an exact epoch ts. Without it the date stays
+    naive (no offset; dateLocal=True says it is the phone's local time) and ts guesses the computer's
+    zone, so it is off by the difference when the two zones differ."""
     file = posixpath.basename(path)
     if ".ips" not in file:
         return None
     m = _NAME_RE.match(file)
-    proc, ts, date = file, 0.0, ""
+    proc, ts, date, naive = file, 0.0, "", False
     if m:
         proc = m.group("proc")
         try:
             dt = datetime.strptime(m.group("date"), "%Y-%m-%d-%H%M%S")
-            date, ts = dt.isoformat(), dt.timestamp()
         except ValueError:
-            pass
+            dt = None
+        if dt is not None:
+            zone = _zone(tz)
+            if zone is not None:
+                dt = dt.replace(tzinfo=zone)
+                date, ts = dt.isoformat(), dt.timestamp()
+            else:
+                # Best guess: the phone is usually in the computer's zone.
+                date, ts, naive = dt.isoformat(), dt.timestamp(), True
     kind = "crash"
     if proc.startswith("JetsamEvent"):
         kind, proc = "jetsam", ""
@@ -42,9 +65,24 @@ def classify(path: str) -> dict | None:
         "process": proc,
         "date": date,
         "ts": ts,
+        "dateLocal": naive,
         "kind": kind,
         "retired": path.startswith("/Retired/"),
     }
+
+
+def header_time(stamp) -> tuple[str, float] | None:
+    """(ISO date with offset, epoch ts) for an .ips header timestamp such as
+    '2026-11-01 14:22:33.00 +0100' (the phone's local time plus its UTC offset), or None."""
+    if not isinstance(stamp, str):
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f %z", "%Y-%m-%d %H:%M:%S %z"):
+        try:
+            dt = datetime.strptime(stamp.strip(), fmt)
+        except ValueError:
+            continue
+        return dt.isoformat(), dt.timestamp()
+    return None
 
 
 def _frame_text(frame: dict, images: list) -> str:
@@ -72,6 +110,9 @@ def parse_ips(text: str) -> dict:
     out.update(process=h.get("app_name") or h.get("name"), bundleId=h.get("bundleID"),
                osVersion=h.get("os_version"), date=h.get("timestamp"),
                bugType=h.get("bug_type"), incident=h.get("incident_id"))
+    when = header_time(h.get("timestamp"))
+    if when:
+        out["dateIso"], out["ts"] = when
     if h.get("app_version"):
         out["appVersion"] = h["app_version"] + (f" ({h['build_version']})" if h.get("build_version") else "")
     try:

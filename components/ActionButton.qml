@@ -9,7 +9,9 @@ import qs.Ui
 //         "ghost"     borderless, for toolbars and inline actions
 //         "danger"    urgent-tinted, for destructive actions (still confirm!)
 //   busy: shows a spinning sync glyph and ignores clicks
-//   enabled: false dims and ignores clicks
+//   enabled: false dims and ignores clicks (and hover: a disabled item gets no mouse events)
+//   disabled: true dims and ignores clicks but keeps hover, so `tooltip` can say why.
+//             Use it whenever the tooltip explains the disabled state ("Connect your iPhone first").
 //
 //   ActionButton { text: "Install everything"; glyph: Model.Glyph.download; kind: "primary"; onClicked: … }
 Item {
@@ -22,7 +24,8 @@ Item {
   property bool hasCursor: false
   property string tooltip: ""
   property bool compact: false
-  readonly property bool interactive: root.enabled && !root.busy
+  property bool disabled: false
+  readonly property bool interactive: root.enabled && !root.disabled && !root.busy
 
   signal clicked()
   signal hovered(bool isHovered)
@@ -32,7 +35,7 @@ Item {
 
   implicitWidth: btn.implicitWidth
   implicitHeight: btn.implicitHeight
-  opacity: root.enabled ? 1 : 0.45
+  opacity: root.enabled && !root.disabled ? 1 : 0.45
 
   Behavior on opacity { NumberAnimation { duration: 120 } }
 
@@ -42,7 +45,7 @@ Item {
     anchors.fill: parent
     visible: root._primary || root.kind === "danger"
     radius: Style.cornerRadius
-    color: Util.alpha(root._tint, root._primary ? (btn.hot ? 0.30 : 0.22) : (btn.hot ? 0.16 : 0.08))
+    color: Util.alpha(root._tint, root._primary ? (btn.hot && !root.disabled ? 0.30 : 0.22) : (btn.hot && !root.disabled ? 0.16 : 0.08))
     border.width: Style.normalBorderWidth
     border.color: Util.alpha(root._tint, root._primary ? 0.85 : 0.5)
     Behavior on color { ColorAnimation { duration: 120 } }
@@ -65,5 +68,14 @@ Item {
     background: "transparent"
     onClicked: if (root.interactive) root.clicked()
     onHovered: function(h) { root.hovered(h) }
+  }
+
+  // disabled: swallow presses (no click, no press animation) and show a plain arrow, while
+  // hover still reaches the button underneath for its tooltip.
+  MouseArea {
+    anchors.fill: btn
+    visible: root.disabled
+    acceptedButtons: Qt.LeftButton | Qt.RightButton
+    cursorShape: Qt.ArrowCursor
   }
 }

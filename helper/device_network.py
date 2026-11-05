@@ -143,6 +143,7 @@ PCAP_MAX_S = 300
 PCAP_DEFAULT_MB = 50
 PCAP_MAX_MB = 500
 CAPTURES_KEEP = 20
+CAPTURES_MAX_BYTES = 2 << 30    # all kept captures together (one may be up to PCAP_MAX_MB)
 
 SERVICES = {("tcp", 443): "HTTPS", ("udp", 443): "QUIC", ("tcp", 80): "HTTP", ("udp", 53): "DNS",
             ("tcp", 53): "DNS", ("udp", 5353): "mDNS", ("udp", 123): "NTP", ("tcp", 5223): "Apple Push",
@@ -275,12 +276,8 @@ def capture_name(ts: float | None = None) -> str:
 
 
 def prune_captures(directory, keep: int = CAPTURES_KEEP) -> None:
-    try:
-        files = sorted(directory.glob("cap-*.pcapng"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for f in files[keep:]:
-            f.unlink(missing_ok=True)
-    except OSError:
-        pass
+    import common
+    common.prune(directory.glob("cap-*.pcapng"), keep, CAPTURES_MAX_BYTES)
 
 
 # ====================================================================== tiny pcapng writer (demo)

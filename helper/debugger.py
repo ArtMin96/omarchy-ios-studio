@@ -44,6 +44,8 @@ SETUP_DEBUGGER = fix("Install debugger support", "setup", step="debugger")
 ATTACH_TIMEOUT = 240        # seconds until the driver must have attached (minimal load level: ~30 s on Wi-Fi)
 DETACH_GRACE = 10           # seconds the driver gets to detach after we ask it to end
 MAX_SOURCES = 400
+DEBUG_BUILDS = common.CACHE_DIR / "debug-builds"   # executables unpacked from .ipa files, per project
+DEBUG_BUILDS_KEEP = 2
 
 
 @dataclass
@@ -55,8 +57,47 @@ class Toolchain:
     env: dict
 
 
+TOOLCHAIN_CACHE = common.CACHE_DIR / "lldb-toolchain.json"
+
+
+def _lldb_stamp(lldb: str) -> dict | None:
+    try:
+        real = os.path.realpath(lldb)
+        st = os.stat(real)
+    except OSError:
+        return None
+    return {"real": real, "mtime": st.st_mtime_ns, "size": st.st_size}
+
+
+def _env(lldb: str) -> dict:
+    root = Path(lldb).parent.parent.parent   # <root>/usr/bin/lldb
+    libs = [root / "usr/lib/swift/host/compiler", root / "usr/lib"]   # what lldb's own rpath points at
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = ":".join([str(x) for x in libs if x.is_dir()] +
+                                      ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else []))
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
 def toolchain() -> Toolchain:
-    """The Swift toolchain's lldb and the Python it links. Raises HelperError with a Setup fix."""
+    """The Swift toolchain's lldb and the Python it links. Raises HelperError with a Setup fix.
+
+    Asking lldb (-P, --version) takes about 0.4 s, so a working answer is cached on disk and reused
+    while /usr/bin/swift points at the same toolchain and lldb is the same file."""
+    c = common.load_json(TOOLCHAIN_CACHE)
+    if isinstance(c, dict) and c.get("swift") == os.path.realpath("/usr/bin/swift") \
+            and c.get("stamp") == _lldb_stamp(str(c.get("lldb") or "")) and Path(str(c.get("python"))).is_file():
+        return Toolchain(c["lldb"], c["version"], c["python"], c["pythonpath"], _env(c["lldb"]))
+    tc = _toolchain()
+    with contextlib.suppress(OSError):
+        common.save_json(TOOLCHAIN_CACHE, {"swift": os.path.realpath("/usr/bin/swift"), "lldb": tc.lldb,
+                                           "stamp": _lldb_stamp(tc.lldb), "version": tc.version,
+                                           "python": tc.python, "pythonpath": tc.pythonpath})
+    return tc
+
+
+def _toolchain() -> Toolchain:
     from setup import toolchain_root   # the same lookup Setup uses (realpath of /usr/bin/swift)
     root = toolchain_root()
     lldb = root / "usr/bin/lldb" if root else None
@@ -82,18 +123,12 @@ def toolchain() -> Toolchain:
     if not python.is_file():
         raise HelperError("needs-python", f"The debugger needs Python {ver}, which isn't installed. Install "
                           "“Debugger support” in Setup (it takes a while: it's built from source).", SETUP_DEBUGGER)
-    libs = [root / "usr/lib/swift/host/compiler", root / "usr/lib"]   # what lldb's own rpath points at
-    env = dict(os.environ)
-    env["LD_LIBRARY_PATH"] = ":".join([str(x) for x in libs if x.is_dir()] +
-                                      ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else []))
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
     try:
         v = subprocess.run([str(lldb), "--version"], capture_output=True, text=True, timeout=20).stdout
         version = (v.strip().splitlines() or [""])[0]
     except (OSError, subprocess.TimeoutExpired):
         version = ""
-    return Toolchain(str(lldb), version, str(python), pypath, env)
+    return Toolchain(str(lldb), version, str(python), pypath, _env(str(lldb)))
 
 
 # ---------------------------------------------------------------- projects and local builds
@@ -132,13 +167,18 @@ def _ipa_executable(ipa: Path) -> Path | None:
             member = plists[0].rsplit("/", 1)[0] + "/" + str(exe)
             if not exe or member not in names:
                 return None
-            out = common.CACHE_DIR / "debug-builds" / f"{ipa.parent.parent.name}-{int(st.st_mtime)}-{st.st_size}" / str(exe)
+            proj = ipa.parent.parent.name
+            out = DEBUG_BUILDS / f"{proj}-{int(st.st_mtime)}-{st.st_size}" / str(exe)
             if not out.is_file():
                 out.parent.mkdir(parents=True, exist_ok=True)
                 tmp = out.with_suffix(".part")
                 with z.open(member) as src, open(tmp, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 tmp.replace(out)
+                # one folder per rebuilt .ipa: keep this project's newest few
+                mine = re.compile(re.escape(proj) + r"-\d+-\d+")
+                common.prune((d for d in DEBUG_BUILDS.iterdir() if mine.fullmatch(d.name)), DEBUG_BUILDS_KEEP,
+                             min_keep=1, protect=[out.parent])
             return out
     except (OSError, ValueError, KeyError, Exception):  # noqa: BLE001  (a broken zip must not break the debugger)
         return None

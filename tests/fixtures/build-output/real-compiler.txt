@@ -1,0 +1,54 @@
+Building for debugging...
+[Provisioning 2 / 4]
+[Pre-planning 1 / 67]
+[Planning deferred tasks]
+[20 / 32] Bad2
+[28 / 97]
+[31 / 97]
+[33 / 97]
+[40 / 97]
+[41 / 97]
+[42 / 97]
+[43 / 97]
+[46 / 97]
+[48 / 97]
+[51 / 97]
+[55 / 97]
+[56 / 97]
+[59 / 97]
+[60 / 97]
+[69 / 97]
+[75 / 97]
+[76 / 97]
+[77 / 97]
+[80 / 97]
+[82 / 97]
+error: SwiftCompile normal arm64 failed with a nonzero exit code. Command line:     cd /home/user/Developer/Bad2/xtool
+    
+/home/user/Developer/Bad2/Sources/Bad2/App.swift:4:8: error: type 'S' does not conform to protocol 'Identifiable'
+2 | @main struct Bad2App: App { var body: some Scene { WindowGroup { Text("Hi") } } }
+3 | func f() -> Int { return undefinedThing + 1 }
+4 | struct S: Identifiable {}
+  |        |- error: type 'S' does not conform to protocol 'Identifiable'
+  |        `- note: add stubs for conformance
+5 | 
+
+Swift.Identifiable.id:2:12: note: candidate would match if 'S' conformed to 'AnyObject'
+1 | protocol Identifiable {
+2 | public var id: ObjectIdentifier { get }}
+  |            `- note: candidate would match if 'S' conformed to 'AnyObject'
+3 | 
+
+Swift.Identifiable.id:2:5: note: protocol requires property 'id' with type 'ObjectIdentifier'
+1 | protocol Identifiable {
+2 | var id: Self.ID { get }}
+  |     `- note: protocol requires property 'id' with type 'ObjectIdentifier'
+3 | 
+Failed frontend command:
+/usr/lib/swift/usr/bin/swift-frontend -frontend -emit-module -experimental-skip-non-inlinable-function-bodies-without-types /home/user/Developer/Bad2/Sources/Bad2/App.swift -target arm64-apple-ios17.0 -disable-cross-import-overlay-search -load-resolved-plugin /home/user/.config/swiftpm/swift-sd …
+error: Build failed
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

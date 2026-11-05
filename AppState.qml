@@ -80,10 +80,14 @@ Item {
   }
 
   // confirm({ title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel })
+  // Returns a handle for closeConfirm(). A second dialog waits until the first is answered.
   function confirm(opts) {
-    if (root.confirmHost) root.confirmHost.show(opts)
-    else if (opts && opts.onConfirm) console.warn("confirm host missing; refusing to auto-confirm:", opts.title)
+    if (root.confirmHost) return root.confirmHost.show(opts)
+    if (opts && opts.onConfirm) console.warn("confirm host missing; refusing to auto-confirm:", opts.title)
+    return null
   }
+  // Close a dialog from confirm() unanswered (no callback runs), or drop it from the queue.
+  function closeConfirm(handle) { if (root.confirmHost) root.confirmHost.close(handle) }
 
   // Desktop notification, only when the window isn't focused (and the user
   // hasn't turned them off). glyph: a Model.Glyph value.

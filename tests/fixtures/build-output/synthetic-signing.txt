@@ -1,0 +1,7 @@
+[Logging in] ...
+Error: apiError(code: 9401, reason: Optional("Your maximum App ID limit has been reached. You may create up to 10 App IDs every 7 days."))
+Error: The maximum number of apps for free development profiles has been reached.
+Error: Please log in with `xtool auth` before running this command.
+Error: apiError(code: 7460, reason: Optional("You already have a current iOS Development certificate or a pending certificate request."))
+Error: ApplicationVerificationFailed: Failed to verify code signature of /private/var/installd/Library/Caches/com.apple.mobile.installd.staging/temp.x/extracted/HabitTracker.app : 0xe8008015 (A valid provisioning profile for this executable was not found.)
+Error: No signers found

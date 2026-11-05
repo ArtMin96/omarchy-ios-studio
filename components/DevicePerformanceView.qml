@@ -231,7 +231,7 @@ ColumnLayout {
         root.revision++
       } else if (name === "metrics.event") {
         if (!root.sess || data.sessionId !== root.sess.sessionId) return
-        root.events = root.events.concat([data])
+        root.events = root.events.concat([data]).slice(-2000)
         if (data.kind === "jetsam" || data.kind === "crash" || data.kind === "watchdog")
           root.app.notify(data.kind === "crash" ? "App crashed" : "App was killed", data.text, Model.Glyph.warn)
       } else if (name === "metrics.state") {
@@ -402,7 +402,7 @@ ColumnLayout {
         columns: 4
         columnSpacing: Style.spacing.xxl
         rowSpacing: Style.spacing.sm
-        readonly property var rows: [
+        readonly property var allRows: [
           { key: "cpu", label: "CPU", unit: "%" }, { key: "mem", label: "Memory", unit: "MB" },
           { key: "threads", label: "Threads", unit: "" }, { key: "energy", label: "Energy impact", unit: "" },
           { key: "fps", label: "Display FPS", unit: "" }, { key: "gpu", label: "GPU", unit: "%" },
@@ -411,7 +411,7 @@ ColumnLayout {
         ]
         readonly property var shown: {
           var s = root.stats && root.stats.series ? root.stats.series : {}
-          return rows.filter(function(r) { return !!s[r.key] })
+          return allRows.filter(function(r) { return !!s[r.key] })
         }
         Repeater {
           model: ["", "Avg", "P95", "Max"]
@@ -594,7 +594,7 @@ ColumnLayout {
           text: modelData.key === "hitch" ? (root.hitching ? "Tracking… " + Math.max(0, Math.round(root.sess.hitchTracking.until - root.nowMs / 1000)) + " s" : "Track hitches")
               : modelData.key === "launch" ? "Profile launch" : "Check for leaks"
           busy: modelData.key === "launch" ? root.profiling : modelData.key === "leaks" ? root.leaking : false
-          enabled: root.svc.connected && !!root.pickedApp && (modelData.key !== "hitch" || (root.running && !root.hitching && !!root.sess.pid))
+          disabled: !(root.svc.connected && !!root.pickedApp && (modelData.key !== "hitch" || (root.running && !root.hitching && !!root.sess.pid)))
           tooltip: modelData.key === "hitch" && !root.running ? "Start measuring first" : ""
           onClicked: modelData.key === "hitch" ? root.trackHitches() : modelData.key === "launch" ? root.profileLaunch() : root.checkLeaks()
         }

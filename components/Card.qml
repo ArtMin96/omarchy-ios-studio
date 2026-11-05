@@ -61,25 +61,32 @@ BorderSurface {
       visible: root.title !== "" || actionsRow.children.length > 0
       spacing: Style.spacing.lg
 
-      Icon {
-        visible: root.glyph !== ""
-        glyph: root.glyph
-        color: root.glyphColor
-        size: Style.font.icon
-        Layout.alignment: Qt.AlignVCenter
-      }
+      // The glyph shares the title's line (centred on it, not on title + subtitle);
+      // the subtitle hangs under the title text.
       ColumnLayout {
         Layout.fillWidth: true
         spacing: 0
-        AppText {
+        RowLayout {
           Layout.fillWidth: true
-          text: root.title
-          size: "title"
-          strong: true
-          elide: Text.ElideRight
+          spacing: Style.spacing.lg
+          Icon {
+            id: glyphIcon
+            visible: root.glyph !== ""
+            glyph: root.glyph
+            color: root.glyphColor
+            size: Style.font.icon
+          }
+          AppText {
+            Layout.fillWidth: true
+            text: root.title
+            size: "title"
+            strong: true
+            elide: Text.ElideRight
+          }
         }
         AppText {
           Layout.fillWidth: true
+          Layout.leftMargin: root.glyph !== "" ? glyphIcon.implicitWidth + Style.spacing.lg : 0
           visible: root.subtitle !== ""
           text: root.subtitle
           size: "small"

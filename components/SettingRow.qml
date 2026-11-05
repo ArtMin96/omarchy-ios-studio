@@ -21,6 +21,15 @@ Item {
 
   Layout.fillWidth: true
   implicitHeight: row.implicitHeight + Style.spacing.xl * 2
+
+  readonly property real _ringInset: {
+    var c = slot.children
+    for (var i = c.length - 1; i >= 0; i--) {
+      if (!c[i].visible) continue
+      return c[i].cursorRing === true && c[i].cursorPad > 0 ? c[i].cursorPad : 0
+    }
+    return 0
+  }
   implicitWidth: Style.space(520)
 
   Rectangle {
@@ -46,6 +55,8 @@ Item {
       AppText { Layout.fillWidth: true; visible: root.description !== ""; text: root.description; size: "small"; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
       AppText { Layout.fillWidth: true; visible: root.note !== ""; text: root.note; size: "small"; tone: root.noteLevel === "info" ? "accent" : root.noteLevel; wrapMode: Text.WordWrap }
     }
-    Row { id: slot; spacing: Style.spacing.md; Layout.alignment: Qt.AlignVCenter }
+    // A switch keeps clear space around its track for the keyboard-cursor ring; pull it out
+    // so the track lines up with the fields and buttons in the rows around it.
+    Row { id: slot; spacing: Style.spacing.md; Layout.alignment: Qt.AlignVCenter; Layout.rightMargin: -root._ringInset }
   }
 }

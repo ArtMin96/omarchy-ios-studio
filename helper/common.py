@@ -17,8 +17,6 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-sys.dont_write_bytecode = True
-
 HOME = Path.home()
 REPO = Path(__file__).resolve().parent.parent
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "ios-studio"
@@ -294,6 +292,51 @@ def dir_size(path: Path) -> int:
     except OSError:
         pass
     return total
+
+
+def prune(paths: Iterable[Path], keep: int, max_bytes: int | None = None, min_keep: int = 3,
+          protect: Iterable[Path] = (), also: Iterable[str] = ()) -> int:
+    """Delete the oldest of `paths` (files or folders, by mtime) beyond the newest `keep`, and beyond
+    `max_bytes` in total. The newest `min_keep` always stay (a path an MCP tool just returned is still
+    there when the agent reads it), and so does anything in `protect` (in use). `also`: suffixes of
+    companion files deleted with a file (".jpg" for a recording's thumbnail). Best effort; returns the
+    number of entries deleted."""
+    entries = []
+    for path in paths:
+        try:
+            entries.append((path.lstat().st_mtime, path))
+        except OSError:
+            pass
+    entries.sort(key=lambda e: e[0], reverse=True)
+    keep_set = {os.path.abspath(p) for p in protect}
+    total, removed = 0, 0
+    for i, (_, path) in enumerate(entries):
+        is_dir = path.is_dir() and not path.is_symlink()
+        size = dir_size(path) if is_dir else _size(path)
+        total += size
+        if i < max(1, min_keep) or os.path.abspath(path) in keep_set:
+            continue
+        if i < keep and (max_bytes is None or total <= max_bytes):
+            continue
+        try:
+            if is_dir:
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+                for suffix in also:
+                    path.with_suffix(suffix).unlink(missing_ok=True)
+            total -= size
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.lstat().st_size
+    except OSError:
+        return 0
 
 
 def parse_flags(args: Iterable[str]) -> dict[str, Any]:

@@ -11,36 +11,36 @@ Item {
   id: root
   required property var app
   readonly property var svc: app.logs
-  readonly property alias view: view
-  readonly property alias search: search
+  readonly property alias view: logView
+  readonly property alias search: searchField
 
   readonly property bool ready: svc.deviceApi && !svc.deviceNeedsSetup && svc.deviceConnected
 
   // ---- actions (also used by the page's keys)
   function copySelected() {
-    var t = view.selectedText()
+    var t = logView.selectedText()
     if (t === "") { copyVisible(); return }
     svc.copyText(t, function(ok) { root.app.toast(ok ? "Copied the line" : "Couldn't copy", ok ? "ok" : "error") })
   }
   function copyVisible() {
-    var n = view.shownCount
+    var n = logView.shownCount
     if (n === 0) { root.app.toast("Nothing to copy yet"); return }
-    svc.copyText(view.visibleText(), function(ok) { root.app.toast(ok ? "Copied " + n + " lines" : "Couldn't copy", ok ? "ok" : "error") })
+    svc.copyText(logView.visibleText(), function(ok) { root.app.toast(ok ? "Copied " + n + " lines" : "Couldn't copy", ok ? "ok" : "error") })
   }
   function exportVisible() {
-    var n = view.shownCount
+    var n = logView.shownCount
     if (n === 0) { root.app.toast("Nothing to export yet"); return }
     var path = svc.downloadsDir + "/iphone-log-" + svc.stamp() + ".txt"
-    svc.writeFile(path, view.visibleText() + "\n", function(ok) {
+    svc.writeFile(path, logView.visibleText() + "\n", function(ok) {
       root.app.toast(ok ? "Saved " + n + " lines to " + svc.prettyPath(path) : "Couldn't save the log", ok ? "ok" : "error", { timeout: 6000 })
     })
   }
-  function togglePause() { view.paused = !view.paused; if (!view.paused) view.jumpToLatest() }
+  function togglePause() { logView.paused = !logView.paused; if (!logView.paused) logView.jumpToLatest() }
 
   Connections {
     target: root.svc
-    function onEntries(batch) { view.push(batch) }
-    function onCleared() { view.clear() }
+    function onEntries(batch) { logView.push(batch) }
+    function onCleared() { logView.clear() }
   }
 
   readonly property var processOptions: {
@@ -99,7 +99,7 @@ Item {
         onChanged: function(v) { root.svc.setLevel(v) }
       }
       FilterField {
-        id: search
+        id: searchField
         Layout.fillWidth: true
         Layout.columnSpan: bar.narrow ? 2 : 1
         Layout.minimumWidth: Style.space(140)
@@ -108,12 +108,12 @@ Item {
       RowLayout {
       spacing: Style.spacing.lg
       IconButton {
-        glyph: view.paused ? Model.Glyph.play : Model.Glyph.pause
-        tooltip: view.paused ? "Resume (Space)" : "Pause the view (Space)"
-        foreground: view.paused ? Commons.Color.accent : Theme.dim
+        glyph: logView.paused ? Model.Glyph.play : Model.Glyph.pause
+        tooltip: logView.paused ? "Resume (Space)" : "Pause the view (Space)"
+        foreground: logView.paused ? Commons.Color.accent : Theme.dim
         onClicked: root.togglePause()
       }
-      IconButton { glyph: Model.Glyph.copy; tooltip: view.selectedSeq >= 0 ? "Copy the selected line (c)" : "Copy visible lines (c)"; onClicked: root.copySelected() }
+      IconButton { glyph: Model.Glyph.copy; tooltip: logView.selectedSeq >= 0 ? "Copy the selected line (c)" : "Copy visible lines (c)"; onClicked: root.copySelected() }
       IconButton { glyph: Model.Glyph.export; tooltip: "Export visible lines to Downloads"; onClicked: root.exportVisible() }
       IconButton { glyph: Model.Glyph.broom; tooltip: "Clear"; onClicked: root.svc.clear() }
       }
@@ -121,10 +121,10 @@ Item {
 
     // ---- live list
     LogSyslogView {
-      id: view
+      id: logView
       Layout.fillWidth: true
       Layout.fillHeight: true
-      query: search.text.trim()
+      query: searchField.text.trim()
       minLevel: root.svc.levelFilter
       processes: root.svc.processList
       emptyTitle: root.svc.streaming ? "Waiting for log lines…" : (root.svc.syslogError ? "The log stopped" : "The log is stopped")
@@ -140,15 +140,15 @@ Item {
       spacing: Style.spacing.xl
       StatusPill {
         quiet: true
-        level: root.svc.reconnecting ? "warn" : root.svc.streaming ? (view.paused ? "info" : "busy") : (root.svc.syslogError ? "error" : "info")
-        glyph: root.svc.streaming && !view.paused && !root.svc.reconnecting ? Model.Glyph.dot : ""
+        level: root.svc.reconnecting ? "warn" : root.svc.streaming ? (logView.paused ? "info" : "busy") : (root.svc.syslogError ? "error" : "info")
+        glyph: root.svc.streaming && !logView.paused && !root.svc.reconnecting ? Model.Glyph.dot : ""
         text: root.svc.reconnecting ? "Reconnecting to " + root.svc.deviceName + "…"
-            : root.svc.streaming ? (view.paused ? "Paused · " + view.pendingCount + " new lines waiting" : "Live from " + root.svc.deviceName)
+            : root.svc.streaming ? (logView.paused ? "Paused · " + logView.pendingCount + " new lines waiting" : "Live from " + root.svc.deviceName)
             : root.svc.starting ? "Starting…" : "Stopped"
       }
       AppText {
         visible: !bar.narrow
-        text: view.shownCount === view.count ? Model.plural(view.count, "line") : view.shownCount + " of " + view.count + " lines"
+        text: logView.shownCount === logView.count ? Model.plural(logView.count, "line") : logView.shownCount + " of " + logView.count + " lines"
         size: "small"; tone: "faint"
       }
       AppText {

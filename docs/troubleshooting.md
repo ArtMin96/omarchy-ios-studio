@@ -85,6 +85,14 @@ Unlock it and try again. Installing and launching apps need an unlocked phone.
 
 Some features, like screenshots and location, need Apple's developer disk image loaded on the phone. Press Try again. Keep the phone unlocked and connected while it loads.
 
+### "The iPhone service keeps stopping as it starts"
+
+The background process that talks to the phone failed four times in a row before it was ready, so iOS Studio stopped restarting it. The message names its log (`deviced.log` in `$XDG_RUNTIME_DIR/ios-studio/`); the last lines there say why. Fix that (often the iPhone connection tools need repair, see below), then press Retry on the iPhone page.
+
+### "The iPhone service can't start: its socket path is N bytes long"
+
+The runtime folder is so deep that the service's socket path doesn't fit the 107-byte limit for Unix sockets. This only happens with a custom `IOSSTUDIO_RUNTIME_DIR` or `XDG_RUNTIME_DIR`; point it at a shorter folder.
+
 ## Screen, files, network and debugging
 
 ### "Screen streaming isn't available while the camera or microphone is in use"
@@ -128,6 +136,8 @@ The download is about 7 GB per iOS version, and only a few hundred MB stay once 
 ### "Your code has N errors"
 
 The Problems tab in the build panel lists each error with its file and line. Click one to open it in your editor.
+
+Problems that aren't in your code (linker, Swift packages, signing, the iPhone, the toolchain or project settings) have no file. They show their category, a few lines of detail and a hint saying what to do.
 
 ### "The iOS SDK isn't installed"
 

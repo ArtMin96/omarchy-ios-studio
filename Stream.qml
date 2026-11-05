@@ -20,6 +20,8 @@ import Quickshell.Io
 // the process exits on its own (never after stop()).
 Item {
   id: root
+  // Non-visual: hidden so a Layout it sits in doesn't give it a slot and a gap.
+  visible: false
 
   property var program: [decodeURIComponent(String(Qt.resolvedUrl("bin/iosstudio-helper")).replace(/^file:\/\//, ""))]
   property var args: []

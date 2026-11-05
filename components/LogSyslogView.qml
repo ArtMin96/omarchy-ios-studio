@@ -26,7 +26,7 @@ Rectangle {
   property string emptyText: ""
 
   readonly property int count: _all.length
-  readonly property int shownCount: model.count
+  readonly property int shownCount: rowModel.count
   readonly property int pendingCount: _pendingCount
   readonly property int selectedRow: _rowOf(selectedSeq)
   property int selectedSeq: -1
@@ -71,7 +71,7 @@ Rectangle {
   function clear() {
     root._all = []; root._pending = []; root._pendingCount = 0
     root.selectedSeq = -1
-    model.clear()
+    rowModel.clear()
   }
 
   function _passes(n) {
@@ -95,21 +95,21 @@ Rectangle {
       all = all.slice(drop)
       // drop rows that left the buffer from the front of the display model
       var n = 0
-      while (n < model.count && model.get(n).seq <= cut) n++
-      if (n > 0) model.remove(0, n)
+      while (n < rowModel.count && rowModel.get(n).seq <= cut) n++
+      if (n > 0) rowModel.remove(0, n)
     }
     root._all = all
     var add = []
     for (var i = 0; i < batch.length; i++) if (_passes(batch[i])) add.push(batch[i])
-    if (add.length) model.append(add)
+    if (add.length) rowModel.append(add)
     if (root.follow) list.positionViewAtEnd()
   }
 
   function _rebuild() {
-    model.clear()
+    rowModel.clear()
     var out = []
     for (var i = 0; i < root._all.length; i++) if (_passes(root._all[i])) out.push(root._all[i])
-    if (out.length) model.append(out)
+    if (out.length) rowModel.append(out)
     if (root.follow) Qt.callLater(list.positionViewAtEnd)
     else if (root.selectedRow >= 0) Qt.callLater(function() { list.positionViewAtIndex(root.selectedRow, ListView.Contain) })
   }
@@ -121,15 +121,15 @@ Rectangle {
 
   Timer { id: flushTimer; interval: 80; onTriggered: root._flush() }
   Timer { id: rebuildTimer; interval: 120; onTriggered: root._rebuild() }
-  ListModel { id: model }
+  ListModel { id: rowModel }
 
   // ---------------------------------------------------------------- selection / copy
   function _rowOf(seq) {
-    if (seq < 0 || model.count === 0) return -1
+    if (seq < 0 || rowModel.count === 0) return -1
     // seq is monotonic → binary search
-    var lo = 0, hi = model.count - 1
+    var lo = 0, hi = rowModel.count - 1
     while (lo <= hi) {
-      var mid = (lo + hi) >> 1, s = model.get(mid).seq
+      var mid = (lo + hi) >> 1, s = rowModel.get(mid).seq
       if (s === seq) return mid
       if (s < seq) lo = mid + 1; else hi = mid - 1
     }
@@ -137,20 +137,20 @@ Rectangle {
   }
 
   function select(row) {
-    if (row < 0 || row >= model.count) return
-    root.selectedSeq = model.get(row).seq
+    if (row < 0 || row >= rowModel.count) return
+    root.selectedSeq = rowModel.get(row).seq
     root.follow = false
     list.positionViewAtIndex(row, ListView.Contain)
   }
   function selectNext(d) {
-    if (model.count === 0) return
+    if (rowModel.count === 0) return
     var r = root.selectedRow
     if (r < 0) {
       // start from the bottom-most line on screen (where the eye is while tailing)
       var bottom = list.indexAt(Style.spacing.lg, list.contentY + list.height - list.bottomMargin - 2)
-      r = bottom < 0 ? model.count - 1 : bottom
+      r = bottom < 0 ? rowModel.count - 1 : bottom
     }
-    else r = Math.max(0, Math.min(model.count - 1, r + d))
+    else r = Math.max(0, Math.min(rowModel.count - 1, r + d))
     select(r)
   }
   function deselect() { root.selectedSeq = -1 }
@@ -160,11 +160,11 @@ Rectangle {
   }
   function selectedText() {
     var r = root.selectedRow
-    return r < 0 ? "" : formatLine(model.get(r))
+    return r < 0 ? "" : formatLine(rowModel.get(r))
   }
   function visibleText() {
     var out = []
-    for (var i = 0; i < model.count; i++) out.push(formatLine(model.get(i)))
+    for (var i = 0; i < rowModel.count; i++) out.push(formatLine(rowModel.get(i)))
     return out.join("\n")
   }
 
@@ -216,7 +216,7 @@ Rectangle {
     anchors.fill: parent
     anchors.margins: Style.spacing.hairline
     clip: true
-    model: model
+    model: rowModel
     boundsBehavior: Flickable.StopAtBounds
     reuseItems: true
     topMargin: Style.spacing.sm
@@ -319,7 +319,7 @@ Rectangle {
 
   // jump-to-latest pill
   Rectangle {
-    visible: !root.follow && model.count > 0
+    visible: !root.follow && rowModel.count > 0
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.bottom: parent.bottom
     anchors.bottomMargin: Style.spacing.xl
@@ -341,7 +341,7 @@ Rectangle {
   ColumnLayout {
     anchors.centerIn: parent
     width: Math.min(parent.width - Style.spacing.huge * 2, Style.space(420))
-    visible: model.count === 0
+    visible: rowModel.count === 0
     spacing: Style.spacing.md
     AppText {
       Layout.fillWidth: true

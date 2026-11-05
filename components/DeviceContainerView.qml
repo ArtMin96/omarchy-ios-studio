@@ -257,7 +257,7 @@ ColumnLayout {
       text: root.selCount ? "Save " + root.selCount + " to…" : "Save to…"
       glyph: Model.Glyph.download
       kind: root.selCount ? "primary" : "secondary"
-      enabled: root.selCount > 0
+      disabled: root.selCount === 0
       tooltip: root.selCount ? "" : "Select files or folders first"
       onClicked: root.saveTo(Object.keys(root.selected))
     }

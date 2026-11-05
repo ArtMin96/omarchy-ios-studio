@@ -1,0 +1,5 @@
+Fetching https://github.com/pointfreeco/swift-composable-architecture.git
+error: Failed to clone repository https://github.com/pointfreeco/swift-composable-architecture.git:
+    Cloning into bare repository '/home/user/Developer/App/.build/repositories/swift-composable-architecture-1a2b3c4d'...
+    fatal: unable to access 'https://github.com/pointfreeco/swift-composable-architecture.git/': Could not resolve host: github.com
+Error: exited(1)

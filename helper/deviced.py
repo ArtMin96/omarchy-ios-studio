@@ -25,7 +25,6 @@ import time
 import traceback
 from pathlib import Path
 
-sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import deviced_core as core  # noqa: E402
@@ -161,6 +160,7 @@ class Session:
                     self.d.on_connected(self)
                     await self._hold()
             except asyncio.CancelledError:
+                self._after_drop()   # close() cancels us here: still close the DVT stack and services
                 raise
             except BaseException as exc:  # noqa: BLE001
                 e = classify(exc)
@@ -201,7 +201,9 @@ class Session:
         for svc in services.values():
             asyncio.create_task(self._close_service(svc))
         self.tunnel_data = {}
-        if was:
+        # A closing session (device switch, shutdown) had its resources and hooks run already, and
+        # a tunnel-drop now would release the next session's tunnel resources.
+        if was and not self.closing:
             self.d.on_disconnected(self)
 
     @staticmethod

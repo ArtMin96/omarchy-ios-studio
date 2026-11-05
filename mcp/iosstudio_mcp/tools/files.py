@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-import json
 import logging
 import posixpath
 import time
@@ -28,7 +27,7 @@ from .. import budget as B
 from .. import helper
 from ..models import ActionResult, CrashDetail, Out
 from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ_REMOTE, ann, dry_run, page_of, tool
+from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
 from .device import Udid, _hub, client, dcall, device_tool_error, resolve_app
 
 log = logging.getLogger("iosstudio.files")
@@ -459,10 +458,11 @@ def register(mcp: MCPServer) -> None:
             nxt.append("The camera roll is empty (or only in iCloud).")
         else:
             nxt.append("ios_media_pull(ids=[...]) copies items to this computer (HEIC can be converted to JPEG).")
-        return MediaList(total=total, photos=int(r.get("photos") or 0), videos=int(r.get("videos") or 0),
-                         source=str(r.get("source") or "dcim"), count=len(page), offset=offset,
-                         has_more=nxt_off is not None, next_offset=nxt_off, items=page, next_steps=nxt,
-                         note=f"Showing {len(page)} of {total}; call again with offset={nxt_off}." if nxt_off else None)
+        return fit_page(MediaList(total=total, photos=int(r.get("photos") or 0), videos=int(r.get("videos") or 0),
+                                  source=str(r.get("source") or "dcim"), count=len(page), offset=offset,
+                                  has_more=nxt_off is not None, next_offset=nxt_off, items=page, next_steps=nxt,
+                                  note=f"Showing {len(page)} of {total}; call again with offset={nxt_off}."
+                                  if nxt_off else None), "items", offset)
 
     @tool(mcp, annotations=ann("Import from camera roll", read_only=False, idempotent=True, open_world=True))
     async def ios_media_pull(
@@ -561,12 +561,16 @@ def register(mcp: MCPServer) -> None:
             notes.append(f"Showing {len(page)} of {len(entries)}; call again with offset={nxt_off}.")
         if capped:
             notes.append(f"Opened only {LIST_DIRS} folders; list a narrower path for the rest.")
-        return FilesList(bundle_id=bid, app=first.get("name"), mode=str(first.get("mode") or "container"), path=top,
-                         depth=depth, total=len(entries), count=len(page), offset=offset,
-                         has_more=nxt_off is not None, next_offset=nxt_off, files=counts["file"], dirs=counts["dir"],
-                         bytes=size, unreadable=counts["unknown"], entries=page,
-                         next_steps=["ios_files_pull copies files or folders to this computer; ios_files_push adds files."],
-                         note=" ".join(notes) or None, truncated=bool(notes), omitted=len(entries) - len(page))
+        more = f" Opened only {LIST_DIRS} folders; list a narrower path for the rest." if capped else ""
+        return fit_page(FilesList(bundle_id=bid, app=first.get("name"), mode=str(first.get("mode") or "container"),
+                                  path=top, depth=depth, total=len(entries), count=len(page), offset=offset,
+                                  has_more=nxt_off is not None, next_offset=nxt_off, files=counts["file"],
+                                  dirs=counts["dir"], bytes=size, unreadable=counts["unknown"], entries=page,
+                                  next_steps=["ios_files_pull copies files or folders to this computer; "
+                                              "ios_files_push adds files."],
+                                  note=" ".join(notes) or None, truncated=bool(notes),
+                                  omitted=len(entries) - len(page)), "entries", offset,
+                        lambda k, end: f"Showing {k} of {len(entries)}; call again with offset={end}.{more}")
 
     @tool(mcp, annotations=ann("Copy app files to this computer", read_only=False, idempotent=True, open_world=True))
     async def ios_files_pull(
@@ -577,7 +581,9 @@ def register(mcp: MCPServer) -> None:
         dest: Annotated[str, Field(description="Folder on this computer (inside your home folder)")] = "~/Downloads",
         transfer_id: Annotated[str | None, Field(description="Poll (or cancel) a copy started earlier")] = None,
         cancel: Annotated[bool, Field(description="With transfer_id: stop it")] = False,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT)] = 20,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
+                                                                           "returning state='running' with the "
+                                                                           "transfer_id")] = 20,
         udid: Udid = None,
     ) -> TransferStatus:
         """Copy files or folders from an app's container on the iPhone to this computer. Existing local
@@ -612,7 +618,9 @@ def register(mcp: MCPServer) -> None:
                                                    "nothing")] = False,
         transfer_id: Annotated[str | None, Field(description="Poll (or cancel) a push started earlier")] = None,
         cancel: Annotated[bool, Field(description="With transfer_id: stop it")] = False,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT)] = 20,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
+                                                                           "returning state='running' with the "
+                                                                           "transfer_id")] = 20,
         udid: Udid = None,
     ) -> TransferStatus:
         """Copy files from this computer into an app's container on the iPhone (your own builds, or App
@@ -691,8 +699,10 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, annotations=ann("Run camera test", read_only=False, destructive=False, idempotent=False, open_world=True))
     async def ios_camera_test(
         ctx: Context,
-        app: Annotated[str | None, Field(description="Your app: bundle id, or a project name/path (its bundle id is "
-                                                     "used). Not needed when polling")] = None,
+        bundle_id: Annotated[str | None, Field(description="Your app's bundle id, e.g. 'com.example.myapp'. Not needed "
+                                                           "when polling")] = None,
+        project_path: Annotated[str | None, Field(description="Instead of bundle_id: a project name or path; its "
+                                                              "bundle id is used")] = None,
         inputs: Annotated[list[str] | None, Field(description="Test images/videos on this computer (inside your home "
                                                               "folder)")] = None,
         args: Annotated[list[str] | None, Field(description="Launch arguments; default ['-cameraTestMode', '1']")] = None,
@@ -700,7 +710,9 @@ def register(mcp: MCPServer) -> None:
         timeout_s: Annotated[int, Field(ge=5, le=600, description="How long the app gets to write done.json")] = 60,
         test_id: Annotated[str | None, Field(description="Poll (or cancel) a test started earlier")] = None,
         cancel: Annotated[bool, Field(description="With test_id: stop it")] = False,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT)] = 20,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
+                                                                           "returning state='running' with the "
+                                                                           "test_id")] = 20,
         max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                                   "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
@@ -719,10 +731,11 @@ def register(mcp: MCPServer) -> None:
             else:
                 await _wait(job, wait_seconds, ctx)
             return await _camera_status(state, job, max_bytes)
+        app = project_path or bundle_id
         if not app or not inputs:
-            raise ToolError("Pass app (bundle id or project) and inputs (image/video files).")
+            raise ToolError("Pass bundle_id (or project_path) and inputs (image/video files).")
         bid = app
-        if "/" in app or app.startswith("~") or " " in app or "." not in app:
+        if project_path or "/" in app or app.startswith("~") or " " in app or "." not in app:
             proj = await resolve_project(state, app)
             bid = proj.get("bundleId") or ""
             if not bid:

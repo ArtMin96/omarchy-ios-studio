@@ -20,7 +20,7 @@ from pymobiledevice3.services.pcapd import PcapdService
 
 import common
 import device_network as net
-from deviced_core import classify, dlog, emit, err
+from deviced_core import classify, dlog, emit, err, installed_apps
 
 KEY = "pcap"
 CAPTURE_DIR = common.CACHE_DIR / "captures"
@@ -158,7 +158,7 @@ class Capture:
 
 async def resolve_process(s, bundle_id: str) -> tuple[str, str]:
     """bundle id (plain or XTL-<TEAM>. form) -> (executable, installed bundle id)."""
-    apps = await s.pmd3.InstallationProxyService(lockdown=s.rsd).get_apps(application_type="Any")
+    apps = await installed_apps(s.pmd3, s.rsd, application_type="Any")
     for k, v in apps.items():
         if k == bundle_id or k.endswith("." + bundle_id):
             exe = v.get("CFBundleExecutable")

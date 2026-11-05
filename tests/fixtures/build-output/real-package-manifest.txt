@@ -1,0 +1,26 @@
+error: 'manifest': Invalid manifest (compiled with: ["/usr/lib/swift/usr/bin/swiftc", "-vfsoverlay", "/tmp/TemporaryDirectory.XWR5qU/vfs.yaml", "-L", "/usr/lib/swift/usr/lib/swift/pm/ManifestAPI", "-lPackageDescription", "-Xlinker", "-rpath", "-Xlinker", "/usr/lib/swift/usr/lib/swift/pm/ManifestAPI", "-swift-version", "6", "-I", "/usr/lib/swift/usr/lib/swift/pm/ManifestAPI", "-package-description-version", "6.0.0", "/home/user/Developer/Manifest/Package.swift", "-o", "/tmp/TemporaryDirectory.FqvD9v/manifest-manifest"])
+/home/user/Developer/Manifest/Package.swift:10:14: error: expected initial value after '='
+ 8 |     targets: [.target(name: "Manifest")]
+ 9 | )
+10 | let broken = = 3
+   |              `- error: expected initial value after '='
+11 | 
+
+/home/user/Developer/Manifest/Package.swift:10:13: error: consecutive statements on a line must be separated by ';'
+ 8 |     targets: [.target(name: "Manifest")]
+ 9 | )
+10 | let broken = = 3
+   |             `- error: consecutive statements on a line must be separated by ';'
+11 | 
+
+/home/user/Developer/Manifest/Package.swift:10:14: error: expected expression
+ 8 |     targets: [.target(name: "Manifest")]
+ 9 | )
+10 | let broken = = 3
+   |              `- error: expected expression
+11 |
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

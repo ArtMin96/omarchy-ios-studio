@@ -7,7 +7,7 @@ How iOS Studio is put together, for people who want to change it.
 iOS Studio is a standalone [Quickshell](https://quickshell.org/) config with a Python backend.
 
 - UI: QML, started with `qs -n -p <repo>`. `shell.qml` declares `//@ pragma AppId ios-studio` (that's also the Hyprland window class), a `ShellRoot` and one `FloatingWindow`. Closing the window quits the app.
-- Helper (`bin/iosstudio-helper`): stdlib-only Python under `/usr/bin/python3 -I -B`. One call per action, or a stream of JSON lines for long jobs.
+- Helper (`bin/iosstudio-helper`): stdlib-only Python under `/usr/bin/python3 -I` (compiled modules cached in `~/.cache/ios-studio/pycache`). One call per action, or a stream of JSON lines for long jobs.
 - Device broker (`bin/iosstudio-deviced`, `helper/device_broker.py`): one long-running Python process per user in the pymobiledevice3 venv. It owns the only connection to the iPhone and listens on a Unix socket, so the app, the MCP server and background jobs share it. It exits two minutes after its last client disconnects.
 - MCP server (`bin/iosstudio-mcp`, `mcp/`): a stdio server for AI coding agents. It calls the same helper as the app and reaches the iPhone through the broker with `helper/device_client.py`. See [mcp.md](mcp.md).
 - Tools it drives: xtool (build, sign, install, Apple account), the Swift toolchain, omarchy-apple-dev (SDK preparation), pymobiledevice3 (device access), rcodesign and ipsw.
@@ -27,6 +27,7 @@ helper/
   main.py            helper router: group name -> module
   common.py          shared helper code: ok()/fail()/event(), paths, fix links
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
+  diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
   xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
   debugger.py        iPhone › Debug: backtraces and breakpoint sessions (group `debug`)
@@ -53,6 +54,7 @@ mcp/
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
+tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, MCP jobs and budget
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 ```
@@ -193,7 +195,14 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. There are no automated tests: check that QML loads without warnings in `qs log` and that the helper commands you touched return valid JSON.
+`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, and the helper's state files and the MCP server's jobs, output budget and log reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
+
+```bash
+python3 -m unittest discover -s tests
+~/.local/share/ios-studio/mcp-venv/bin/python -m unittest discover -s tests
+```
+
+Everything else has no automated tests: check that QML loads without warnings in `qs log` and that the helper commands you touched return valid JSON.
 
 ## Where things live
 
@@ -202,7 +211,8 @@ Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app
 | Settings | `~/.config/ios-studio/settings.json` |
 | State (build history, renewals, device, setup progress) | `~/.local/state/ios-studio/` |
 | Cache (screenshots, crash files, account lists) | `~/.cache/ios-studio/` |
-| Screen recordings, packet captures (newest 20), metrics CSVs, camera test results | `~/.cache/ios-studio/recordings/`, `captures/`, `metrics/`, `cameratest/` |
+| Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `common.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
+| Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
 | Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |
 | Imported photos and videos (default) | `~/Pictures/iPhone` |
 | pymobiledevice3 venv | `~/.local/share/ios-studio/venv` |

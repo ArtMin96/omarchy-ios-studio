@@ -26,7 +26,7 @@ from ..budget import Budgeted
 from ..models import Out
 from ..state import AppState, get_state
 from . import MAX_WAIT, READ_REMOTE, ann, tool
-from .device import BundleId, Udid, dcall, resolve_app
+from .device import Udid, dcall, resolve_app
 
 Set = Literal["process", "energy", "graphics", "network", "battery", "events", "hitches"]
 Metric = Literal["cpu", "mem", "rss", "threads", "wakeups", "faults", "diskR", "diskW", "energy", "eCpu", "eGpu", "eNet",
@@ -358,24 +358,35 @@ def register(mcp: MCPServer) -> None:
         limit: Annotated[int, Field(ge=1, le=100, description="Max events")] = 40,
         kinds: Annotated[list[Literal["hang", "jetsam", "thermal", "crash", "watchdog", "hitch", "exit", "launch",
                                       "note"]] | None, Field(description="Only these kinds")] = None,
+        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
+                                                                                  "structuredContent together (default 12000 bytes)")] = None,
     ) -> MetricsEvents:
         """Events of a metrics session by cursor: hang, jetsam (killed for memory), crash, watchdog, thermal,
-        hitch (with duration), exit/launch of the app. Hang rows need Hang Detection on (iPhone Settings ›
-        Developer › Hang Detection)."""
+        hitch (with duration), exit/launch of the app. A page holds at most `limit` events and stays under
+        12 KB (max_bytes raises it); next_cursor always points right after the last event returned, so
+        reading on with it never skips one. Hang rows need Hang Detection on (iPhone Settings › Developer ›
+        Hang Detection)."""
         state = get_state(ctx)
         page = await dcall(state, "metrics.read", {"sessionId": session_id, "kind": "events",
                                                    "cursor": cursor if cursor is not None else 0, "limit": 500},
                            timeout=30, not_found="ios_metrics_start starts a new session.")
         first = int(page.get("cursor") or 0)
-        lines: list[str] = []
+        rows: list[tuple[int, str]] = []       # (cursor after this event, rendered line)
         nxt = first
         for i, e in enumerate(page.get("entries") or []):
             nxt = first + i + 1
             if kinds and e.get("kind") not in kinds:
                 continue
-            lines.append(_fmt_event(first + i, e))
-            if len(lines) >= limit:
+            rows.append((nxt, _fmt_event(first + i, e)))
+            if len(rows) >= limit:
                 break
+        fit = B.take([ln for _, ln in rows], len(rows), B.room(max_bytes))
+        lines = fit.items
+        note = None
+        if fit.omitted:                         # cut by size: read on right after the last event shown
+            nxt = rows[len(lines) - 1][0] if lines else first
+            note = (f"{fit.omitted} more events didn't fit the size cap; read on with cursor={nxt} "
+                    "(or pass max_bytes).")
         has_more = nxt < int(page.get("total") or 0)
         sess = page.get("session") or {}
         steps = []
@@ -383,7 +394,7 @@ def register(mcp: MCPServer) -> None:
             steps.append(f"More: ios_metrics_events(session_id='{session_id}', cursor={nxt}).")
         return MetricsEvents(session_id=session_id, running=bool(sess.get("running")), count=len(lines),
                              next_cursor=nxt, has_more=has_more, missed=int(page.get("missed") or 0), events=lines,
-                             next_steps=steps)
+                             note=note, truncated=bool(fit.omitted), next_steps=steps).with_budget(max_bytes)
 
     @tool(mcp, annotations=ann("Profile an app's launch", read_only=False, destructive=True, idempotent=False,
                               open_world=True))

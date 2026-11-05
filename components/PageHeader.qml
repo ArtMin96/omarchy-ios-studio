@@ -56,7 +56,8 @@ Item {
         elide: Text.ElideRight
       }
     }
-    Row {
+    // A RowLayout (not a Row) so mixed actions (text, icon and labelled buttons) share one centre line.
+    RowLayout {
       id: actionsRow
       spacing: Style.spacing.md
       Layout.alignment: Qt.AlignTop | Qt.AlignRight

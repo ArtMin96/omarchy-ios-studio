@@ -198,6 +198,8 @@ ColumnLayout {
         visible: !root.transfer
         spacing: Style.spacing.md
         ToggleSwitch {
+          // track lines up with the text above it (the cursor-ring margin sits outside)
+          Layout.leftMargin: cursorRing ? -cursorPad : 0
           checked: root.convertHeic
           onToggled: root.app.setSetting("mediaConvertHeic", !checked)
         }
@@ -333,9 +335,11 @@ ColumnLayout {
           }
         }
         HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
-        TapHandler {
-          acceptedModifiers: Qt.KeyboardModifierMask
-          onTapped: function(ev) { root.toggle(tile.index, (ev.modifiers & Qt.ShiftModifier) !== 0) }
+        // MouseArea, not TapHandler: tapped() hands over a QEventPoint, which has no modifiers.
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: function(mouse) { root.toggle(tile.index, (mouse.modifiers & Qt.ShiftModifier) !== 0) }
         }
         PanelToolTip { visible: hover.hovered; text: tile.modelData.name + (tile.modelData.date ? "  ·  " + Qt.formatDateTime(new Date(tile.modelData.date), "d MMM yyyy, HH:mm") : "") + (tile.modelData.size ? "  ·  " + Model.formatBytes(tile.modelData.size) : "") }
       }

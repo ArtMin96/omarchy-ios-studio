@@ -23,10 +23,11 @@ from pydantic import Field
 
 from .. import budget as B
 from .. import helper
-from ..models import ActionResult, AppInstallResult, LogRead, LogSession, RunCapture
+from ..models import ActionResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state, resolve_project
 from . import MAX_WAIT, READ_REMOTE, ann, tool
-from .device import Udid, dcall, device_tool_error, install_ipa, new_client, package_for, resolve_app
+from .device import (AppInstallStatus, Udid, dcall, device_tool_error, get_install, install_status, new_client,
+                     package_for, resolve_app, start_install, wait_install)
 
 log = logging.getLogger("iosstudio.logs")
 
@@ -38,6 +39,13 @@ LEVELS = ["debug", "info", "default", "error", "fault"]
 RANK = {lv: i for i, lv in enumerate(LEVELS)}
 
 Level = Literal["debug", "info", "default", "error", "fault"]
+
+
+class RunCaptureResult(RunCapture):
+    """RunCapture, or (state='installing') an install that is still running; nothing was launched yet."""
+    state: Literal["done", "installing"] = Field("done", description="installing: the install is still running and "
+                                                 "nothing was launched; call again with install_id")
+    installed: AppInstallStatus | None = None
 
 
 @dataclass
@@ -367,6 +375,8 @@ def register(mcp: MCPServer) -> None:
         install: Annotated[bool, Field(description="First install the project's last signed build (or ipa_path). "
                                                    "Does not build: use ios_run to rebuild")] = False,
         ipa_path: Annotated[str | None, Field(description="A signed .ipa/.app to install first")] = None,
+        install_id: Annotated[str | None, Field(description="Continue a call that returned state='installing': wait "
+                                                            "for that install, then launch and capture")] = None,
         seconds: Annotated[int, Field(ge=1, le=MAX_WAIT, description="How long to capture after launch")] = 8,
         min_level: Annotated[Level, Field(description="Lowest log level to capture")] = "default",
         relaunch: Annotated[bool, Field(description="Stop the app first if it's running, so you see a fresh "
@@ -377,13 +387,15 @@ def register(mcp: MCPServer) -> None:
         max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                                   "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
-    ) -> RunCapture:
+    ) -> RunCaptureResult:
         """"Launch it and tell me what happened" in one call: (optionally installs a signed build,) starts
         a log capture filtered to the app, launches it, records for `seconds`, checks whether it is still
         running and whether a NEW crash report appeared, then stops and summarizes: launched?, pid,
         log counts per level, key lines (faults and errors first, then the latest), the new crash's
         exception, reason and top frames, and next steps. The key lines come as plain text after the JSON
         (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
+        An install that outlasts the call returns state='installing' with installed.install_id and nothing
+        launched: call again with install_id (and the other arguments) to wait for it and then capture.
         Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read."""
         state = get_state(ctx)
         installed = None
@@ -393,8 +405,8 @@ def register(mcp: MCPServer) -> None:
             bundle_id = proj.get("bundleId")
             if not bundle_id:
                 raise ToolError(f"{proj.get('name')} has no bundle id yet. Check ios_project_info.")
-        if not bundle_id:
-            raise ToolError("Pass bundle_id or project_path.")
+        if not bundle_id and not install_id and not ipa_path:
+            raise ToolError("Pass bundle_id or project_path (or ipa_path to install and run).")
         total = seconds + 6.0
         step = [0.0]
 
@@ -403,15 +415,30 @@ def register(mcp: MCPServer) -> None:
                 step[0] = done
                 await ctx.report_progress(round(done, 1), total, message=msg)
 
-        if install or ipa_path:
-            pkg, _ = await package_for(state, ipa_path, None if ipa_path else (project_path or None))
+        if install_id or install or ipa_path:
+            if install_id:
+                job = get_install(state, install_id)
+            else:
+                pkg, _ = await package_for(state, ipa_path, None if ipa_path else (project_path or None))
+                job = start_install(state, udid, pkg)
             await progress(0.1, "Installing")
-            res = await install_ipa(state, udid, pkg)
-            installed = AppInstallResult(installed=True, bundle_id=res.get("bundleId"),
-                                         package_bundle_id=res.get("packageBundleId"), path=helper.tilde(pkg),
-                                         seconds=res.get("seconds"))
-            if res.get("bundleId"):
-                bundle_id = res["bundleId"]
+            # Whatever the install leaves of MAX_WAIT goes to the capture; a long install returns early instead
+            await wait_install(job, max(3.0, MAX_WAIT - seconds - 7),
+                               lambda pct, st: progress(0.1 + 0.3 * pct / 100, f"Installing {pct:.0f}%"))
+            if not job.finished:
+                again = (f"ios_app_run_and_capture(install_id='{job.id}'"
+                         + (f", bundle_id='{bundle_id}'" if bundle_id else "")
+                         + f", seconds={seconds})")
+                installed = install_status(job, f"Still installing; nothing was launched yet. Call {again} to wait "
+                                                "for it, then launch and capture (pass your other arguments too).")
+                return RunCaptureResult(state="installing", bundle_id=bundle_id or "", launched=False,
+                                        installed=installed, seconds=0,
+                                        summary=f"Installing ({installed.progress_detail}); not launched yet.",
+                                        next_steps=installed.next_steps)
+            installed = install_status(job)
+            installed.next_steps = []
+            if installed.bundle_id:
+                bundle_id = installed.bundle_id
         app = await resolve_app(state, bundle_id, udid)
         bid, exe = app["bundleId"], app.get("executable") or app.get("name")
         await progress(0.5, "Checking crash reports")
@@ -520,11 +547,11 @@ def register(mcp: MCPServer) -> None:
                 if omitted > 0 and full_path else None)
         if new_crash is not None:
             new_crash.next_steps = []
-        return RunCapture(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
-                          launch_error=B.clip(launch_error, B.ERROR_CUT) if launch_error else None,
-                          installed=installed, seconds=elapsed,
-                          log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
-                          lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
-                          other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
-                          truncated=omitted > 0, omitted=max(0, omitted), note=note,
-                          full_output_path=full_path).with_budget(max_bytes, links)
+        return RunCaptureResult(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
+                                launch_error=B.clip(launch_error, B.ERROR_CUT) if launch_error else None,
+                                installed=installed, seconds=elapsed,
+                                log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
+                                lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
+                                other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
+                                truncated=omitted > 0, omitted=max(0, omitted), note=note,
+                                full_output_path=full_path).with_budget(max_bytes, links)

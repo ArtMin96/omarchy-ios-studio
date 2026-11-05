@@ -157,8 +157,31 @@ Item {
       if (root.capturing) root.capture = Object.assign({}, root.capture, { running: false })
       if (code === 3) {         // no pymobiledevice3 python (bin/iosstudio-deviced)
         root._needsSetup()
+        return
       }
+      // Restarts back off (1 s, 2 s, 4 s…). A daemon that keeps dying before it's ready won't
+      // come up by itself: stop, say so and offer Retry.
+      if (!root._readySinceStart) root._failedStarts++
+      root._readySinceStart = false
+      if (root._failedStarts >= root.maxFailedStarts) root._crashed(code)
     }
+  }
+
+  // Unix runtime dir as bin/iosstudio-deviced picks it (IOSSTUDIO_RUNTIME_DIR, else XDG_RUNTIME_DIR).
+  readonly property string logPath: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") || "/tmp")
+                                    + (root.app.demo !== "" ? "/ios-studio-demo" : "/ios-studio") + "/deviced.log"
+  readonly property int maxFailedStarts: 4
+  property int _failedStarts: 0
+  property bool _readySinceStart: false
+
+  function _crashed(code) {
+    daemon.autoRestart = false
+    daemon.stop()
+    root.status = "error"
+    root.error = { code: "daemon-crashed",
+                   message: "The iPhone service keeps stopping as it starts (exit code " + code + "). What went wrong is in " + root.logPath.replace(root.app.home, "~") + ".",
+                   detail: root.logPath }
+    root.connection = { state: "idle", message: "The iPhone service stopped" }
   }
 
   function _needsSetup(detail) {
@@ -173,6 +196,8 @@ Item {
   function start() {
     root.status = "loading"
     root.error = null
+    root._failedStarts = 0
+    root._readySinceStart = false
     daemon.autoRestart = true
     daemon.start([])
   }
@@ -188,6 +213,8 @@ Item {
     case "ready":
       if (data && data.error) { _needsSetup(data.error.detail || data.error.message); break }
       root.daemonReady = true
+      root._readySinceStart = true
+      root._failedStarts = 0
       root.pmd3Version = data && data.pymobiledevice3 ? data.pymobiledevice3 : ""
       root.status = "ready"
       root.error = null
@@ -335,6 +362,8 @@ Item {
   function _summary() {
     if (root.status === "needs-setup")
       return { title: "iPhone", detail: "iPhone tools need installing", level: "warn", badge: "" }
+    if (root.status === "error")
+      return { title: "iPhone", detail: "The iPhone service keeps stopping", level: "error", badge: "!" }
     if (root.status === "loading" && !root.current)
       return { title: "iPhone", detail: "Starting…", level: "info", badge: "" }
     if (!root.current)
@@ -462,6 +491,7 @@ Item {
   }
 
   function startMirror(fps) {
+    root._mirrorPaused = false
     root.mirrorError = null
     request("mirror.start", _mirrorArgs(fps), function(ok, d) {
       if (ok) { root.mirroring = true; if (d.mode && d.mode !== "starting") root.mirrorActive = d.mode }
@@ -509,7 +539,27 @@ Item {
 
   function dismissRecording() { if (!root.recordingActive) root.recording = null }
 
+  // Live view nobody can see (the iPhone page is hidden): stop it after a short grace period and
+  // start it again when a DevicePhoneFrame with mirrorService shows up. Recordings don't depend on it.
+  property int mirrorViewers: 0
+  property bool _mirrorPaused: false
+  onMirrorViewersChanged: {
+    if (root.mirrorViewers > 0) {
+      mirrorPauseTimer.stop()
+      if (root._mirrorPaused) { root._mirrorPaused = false; if (root.connected) startMirror() }
+    } else if (root.mirroring) {
+      mirrorPauseTimer.restart()
+    }
+  }
+  onMirroringChanged: if (root.mirroring && root.mirrorViewers === 0) mirrorPauseTimer.restart()
+  Timer {
+    id: mirrorPauseTimer
+    interval: 5000
+    onTriggered: if (root.mirrorViewers === 0 && root.mirroring) { root.stopMirror(); root._mirrorPaused = true }
+  }
+
   function stopMirror() {
+    root._mirrorPaused = false
     // keep the last frame visible as a still
     // (no more frames are written after mirror.stop, so the rotating file is stable)
     if (root.framePath !== "") root.lastShot = root.framePath

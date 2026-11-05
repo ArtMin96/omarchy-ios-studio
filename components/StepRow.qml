@@ -10,11 +10,12 @@ import "../Model.js" as Model
 // expandable live log.
 //   StepRow {
 //     number: 2; title: "Swift toolchain"; description: "Compiles your app."
-//     state: "missing"            // done | missing | running | failed | pending | optional | skipped
+//     stepState: "missing"        // done | missing | running | failed | pending | optional | skipped
 //     meta: "≈ 900 MB · 3 min"
 //     actionText: "Install"; actionGlyph: Model.Glyph.download; onAction: svc.install("swift")
 //     progress: 0.42; progressText: "Downloading 380 / 900 MB"; progressTrailing: "1 min left"   (-1 = hidden)
-//     logLines: svc.logs["swift"] || []        // array of strings (last ~200 shown)
+//     Component.onCompleted: setLog(svc.logLines("swift"))   // then appendLog(text) per new line,
+//                                                         // clearLog() when the step starts again
 //     errorText: "The download was interrupted."  // shown under the title when failed
 //     hasCursor: page.cursor === index; onHovered: …
 //   }
@@ -23,18 +24,31 @@ BorderSurface {
   property int number: 0
   property string title: ""
   property string description: ""
-  property string state: "pending"
+  property string stepState: "pending"
   property string meta: ""
   property string actionText: ""
   property string actionGlyph: ""
-  property string actionKind: state === "failed" ? "primary" : (state === "missing" ? "primary" : "secondary")
+  property string actionKind: stepState === "failed" || stepState === "missing" ? "primary" : "secondary"
   property bool actionEnabled: true
-  property bool actionBusy: state === "running"
+  property bool actionBusy: stepState === "running"
   property real progress: -1
   property bool progressIndeterminate: false
   property string progressText: ""
   property string progressTrailing: ""
-  property var logLines: []
+  property int logCount: 0
+  readonly property int maxLogLines: 400
+
+  function setLog(lines) {
+    stepLog.clear()
+    var l = lines || []
+    stepLog.appendMany(l.slice(-root.maxLogLines))
+    root.logCount = Math.min(l.length, root.maxLogLines)
+  }
+  function appendLog(text) {
+    stepLog.append(text)
+    root.logCount = Math.min(root.logCount + 1, root.maxLogLines)
+  }
+  function clearLog() { stepLog.clear(); root.logCount = 0 }
   property string errorText: ""
   property bool expanded: false
   property bool hasCursor: false
@@ -47,9 +61,9 @@ BorderSurface {
   // Narrow (tiled) windows: the action button and meta drop under the text
   // instead of squeezing it, so nothing gets clipped.
   readonly property bool narrow: width > 0 && width < Style.space(560)
-  readonly property bool _done: state === "done"
-  readonly property bool _running: state === "running"
-  readonly property bool _failed: state === "failed"
+  readonly property bool _done: stepState === "done"
+  readonly property bool _running: stepState === "running"
+  readonly property bool _failed: stepState === "failed"
   readonly property color _tint: _done ? Theme.success : (_failed ? Commons.Color.urgent : (_running ? Commons.Color.accent : Theme.dim))
 
   radius: Style.cornerRadius
@@ -98,10 +112,10 @@ BorderSurface {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.lg
-          AppText { text: root.title; size: "title"; strong: true; tone: root.state === "skipped" ? "dim" : "primary"; elide: Text.ElideRight; Layout.maximumWidth: col.width * 0.6 }
+          AppText { text: root.title; size: "title"; strong: true; tone: root.stepState === "skipped" ? "dim" : "primary"; elide: Text.ElideRight; Layout.maximumWidth: col.width * 0.6 }
           StatusPill {
-            visible: root.state === "optional" || root.state === "skipped"
-            level: "info"; showGlyph: false; text: root.state === "optional" ? "optional" : "skipped"
+            visible: root.stepState === "optional" || root.stepState === "skipped"
+            level: "info"; showGlyph: false; text: root.stepState === "optional" ? "optional" : "skipped"
           }
           Item { Layout.fillWidth: true }
           AppText { visible: root.meta !== "" && !root.narrow; text: root.meta; size: "small"; tone: "faint" }
@@ -147,19 +161,20 @@ BorderSurface {
     // log expander
     RowLayout {
       Layout.leftMargin: Style.font.heading * 1.9 + Style.spacing.xxl
-      visible: root.logLines && root.logLines.length > 0
+      visible: root.logCount > 0
       spacing: Style.spacing.sm
       Icon { glyph: root.expanded ? Model.Glyph.chevronDown : Model.Glyph.chevronRight; size: Style.font.bodySmall; color: Theme.dim }
-      AppText { text: root.expanded ? "Hide log" : "Show log (" + (root.logLines ? root.logLines.length : 0) + " lines)"; size: "small"; tone: logHover.hovered ? "primary" : "dim" }
+      AppText { text: root.expanded ? "Hide log" : "Show log (" + root.logCount + " lines)"; size: "small"; tone: logHover.hovered ? "primary" : "dim" }
       HoverHandler { id: logHover; cursorShape: Qt.PointingHandCursor }
       TapHandler { onTapped: { root.expanded = !root.expanded; root.toggled(root.expanded) } }
     }
     LogView {
+      id: stepLog
       Layout.fillWidth: true
       Layout.leftMargin: Style.font.heading * 1.9 + Style.spacing.xxl
       Layout.preferredHeight: Style.space(180)
-      visible: root.expanded && root.logLines && root.logLines.length > 0
-      lines: root.expanded ? root.logLines : []
+      visible: root.expanded && root.logCount > 0
+      maxLines: root.maxLogLines
       showToolbar: false
     }
   }

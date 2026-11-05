@@ -14,10 +14,13 @@ Item {
 
   signal applied()
 
+  // These are Omarchy internals (Commons.Color's FileViews, Style.scheduleRefresh), not an API:
+  // check each one, so an Omarchy update that renames them can't break theme reloads.
+  function _reload(file) { if (file && typeof file.reload === "function") file.reload() }
   function apply() {
-    Commons.Color.colorsFile.reload()
-    Commons.Color.shellFile.reload()
-    Style.scheduleRefresh()
+    root._reload(Commons.Color.colorsFile)
+    root._reload(Commons.Color.shellFile)
+    if (typeof Style.scheduleRefresh === "function") Style.scheduleRefresh()
     root.applied()
   }
 

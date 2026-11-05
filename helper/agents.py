@@ -1092,8 +1092,8 @@ def prepare(flags: dict) -> int:
     common.step("check", "Checking the server starts", "running")
     common.progress(None, "Starting the server once…")
     venv = Path(server_status()["venv"])
-    env = {"PYTHONPATH": str(common.REPO / "mcp"), "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1",
-           "IOSSTUDIO_REPO": str(common.REPO)}
+    env = {"PYTHONPATH": str(common.REPO / "mcp"), "PYTHONSAFEPATH": "1", "IOSSTUDIO_REPO": str(common.REPO),
+           "PYTHONPYCACHEPREFIX": str(common.CACHE_DIR / "pycache")}
     try:
         r = common.run_cmd([str(venv / "bin/python"), "-c", "import iosstudio_mcp.server"], timeout=60, env=env)
     except HelperError as exc:

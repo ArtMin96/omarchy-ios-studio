@@ -483,19 +483,25 @@ class CursorRing:
             return page
         if cursor is None:
             cursor = page["cursor"]
-        deadline = asyncio.get_running_loop().time() + timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         while True:
-            ev = asyncio.Event()
+            left = deadline - loop.time()
+            if left <= 0:
+                return self.read(cursor, limit)
+            waiter = (loop, asyncio.Event())
             with self._lock:
                 ready = self.seq > page["nextCursor"]
                 if not ready:
-                    self._waiters.append((asyncio.get_running_loop(), ev))
+                    self._waiters.append(waiter)
             if not ready:
-                left = deadline - asyncio.get_running_loop().time()
-                if left <= 0:
-                    return self.read(cursor, limit)
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(ev.wait(), left)
+                try:
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(waiter[1].wait(), left)
+                finally:
+                    # timed out or cancelled: don't leave the waiter behind on a ring nobody appends to
+                    with self._lock, contextlib.suppress(ValueError):
+                        self._waiters.remove(waiter)
             page = self.read(cursor, limit)
-            if page["entries"] or asyncio.get_running_loop().time() >= deadline:
+            if page["entries"] or loop.time() >= deadline:
                 return page

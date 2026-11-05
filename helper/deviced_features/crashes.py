@@ -21,7 +21,7 @@ def register(reg):
             paths = await c.ls("/", depth=2)
         out = []
         for p in paths:
-            item = device_crash.classify(p)
+            item = device_crash.classify(p, (s.info or {}).get("timeZone"))
             if not item:
                 continue
             if want and item["process"] != want:

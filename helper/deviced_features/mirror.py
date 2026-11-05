@@ -43,27 +43,44 @@ import common
 from common import fix
 from deviced_core import SCREENS_DIR, classify, dlog, emit, err, png_size, safe_name, write_bytes
 
-try:
-    from PIL import Image, ImageChops
-except Exception:  # noqa: BLE001 - JPEG conversion is optional: PNG frames still work
-    Image = ImageChops = None
-try:
-    import av
-    import av.error  # noqa: F401
-except Exception:  # noqa: BLE001
-    av = None
-try:
-    from packaging.version import Version
-    from pymobiledevice3.exceptions import DeviceVersionNotSupportedError
-    from pymobiledevice3.remote.core_device.display_service import (
-        VIDEO_STREAM_MIN_VERSION, DisplayService, is_media_in_use_error)
-    from pymobiledevice3.remote.core_device.screen_stream import depacketize_hevc
-    STREAM_IMPORT_ERROR = None
-except Exception as _exc:  # noqa: BLE001 - only the stream mode is lost
-    DisplayService = None
-    STREAM_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
+# Pillow, PyAV and the stream classes are imported by load_media() when the screen view or a recording
+# first needs them: together they take about a third of a second, which the daemon shouldn't pay at
+# start for a screen view that may never open. None means missing (that mode is then unavailable).
+Image = ImageChops = av = DisplayService = None
+STREAM_IMPORT_ERROR: str | None = None
+_media_loaded = False
+
+
+def load_media() -> None:
+    global Image, ImageChops, av, Version, DeviceVersionNotSupportedError, VIDEO_STREAM_MIN_VERSION
+    global DisplayService, is_media_in_use_error, depacketize_hevc, STREAM_IMPORT_ERROR, _media_loaded
+    if _media_loaded:
+        return
+    _media_loaded = True
+    try:
+        from PIL import Image, ImageChops
+    except Exception:  # noqa: BLE001 - JPEG conversion is optional: PNG frames still work
+        Image = ImageChops = None
+    try:
+        import av
+        import av.error  # noqa: F401
+    except Exception:  # noqa: BLE001
+        av = None
+    try:
+        from packaging.version import Version
+        from pymobiledevice3.exceptions import DeviceVersionNotSupportedError
+        from pymobiledevice3.remote.core_device.display_service import (
+            VIDEO_STREAM_MIN_VERSION, DisplayService, is_media_in_use_error)
+        from pymobiledevice3.remote.core_device.screen_stream import depacketize_hevc
+    except Exception as exc:  # noqa: BLE001 - only the stream mode is lost
+        DisplayService = None
+        STREAM_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
 
 REC_DIR = common.CACHE_DIR / "recordings"
+REC_KEEP = 20                   # recordings kept (newest first), with their .jpg thumbnails
+REC_MAX_BYTES = 2 << 30
+REC_STALE_S = 900               # .rec-* work files untouched this long are from a daemon that died
 FRAME_FILES = 4                 # rotating frame files; the UI holds at most ACK_WINDOW of them
 ACK_WINDOW = 3                  # frames in flight to an acknowledging UI (+1 shown = FRAME_FILES)
 ACK_STALE_S = 1.0               # no ack for this long: send anyway (the UI missed one or went away)
@@ -141,6 +158,7 @@ class PngConverter:
     screenshot engine runs one conversion at a time."""
 
     def __init__(self):
+        load_media()
         self.codec = None
         self.use_av = av is not None and Image is not None
         self.backend = "pyav" if self.use_av else ("pillow" if Image is not None else "none")
@@ -437,6 +455,7 @@ class Decoder:
         self.latest = None               # newest decoded av.VideoFrame (thumbnails)
         self.decoded = 0
         self.errors = 0
+        self.encode_errors = 0
         self._stop = threading.Event()
         self.codec = av.CodecContext.create("hevc", "r")
         with contextlib.suppress(Exception):
@@ -501,7 +520,9 @@ class Decoder:
                 img.save(buf, "JPEG", quality=int(m.quality))
                 m.sink.publish(buf.getvalue(), "jpg", tw, th, "stream")
             except Exception as exc:  # noqa: BLE001
-                dlog(f"mirror (stream): frame encode failed {exc!r}")
+                self.encode_errors += 1
+                if self.encode_errors <= 3 or self.encode_errors % 100 == 0:
+                    dlog(f"mirror (stream): frame encode failed {exc!r} ({self.encode_errors} so far)")
 
     def thumbnail(self, max_dim: int = 320):
         fr = self.latest
@@ -535,6 +556,7 @@ class StreamEngine:
     @staticmethod
     def unavailable_reason(s) -> str | None:
         """Why stream mode can't run on this session (None: it may; the phone has the last word)."""
+        load_media()
         if DisplayService is None:
             return "no-decoder"
         if av is None or Image is None:
@@ -805,6 +827,7 @@ class Recorder:
     """One recording. Thread-safe adds; finish() writes the MP4 and returns the result dict."""
 
     def __init__(self, mode: str, max_seconds: float, client):
+        load_media()
         self.mode = mode
         self.max_seconds = max_seconds
         self.client = client
@@ -942,6 +965,26 @@ class Recorder:
 
     def cleanup(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def sweep_stale_parts() -> None:
+    """Work files a recording leaves behind when the daemon dies mid-recording (.rec-*.parts folders,
+    half-written .rec-*.tmp.mp4). Only old ones: another daemon (a parallel checkout) may be recording."""
+    now = time.time()
+    for p in REC_DIR.glob(".rec-*"):
+        try:
+            times = [p.lstat().st_mtime]
+            if p.is_dir():
+                times += [q.lstat().st_mtime for q in p.iterdir()]
+            if now - max(times) < REC_STALE_S:
+                continue
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
+            dlog(f"record: removed leftover {p.name}")
+        except OSError:
+            pass
 
 
 def write_concat(listfile: Path, files: list[str], times: list[float]) -> None:
@@ -1083,7 +1126,10 @@ class Mirror:
             await asyncio.shield(t)
 
     def _defer_stop(self, s):
-        if getattr(s, "_mirror_stop_pending", False) or s.closing:
+        if s.closing:
+            self._owed.discard(s)          # its tunnel is gone for good; don't keep the session alive
+            return
+        if getattr(s, "_mirror_stop_pending", False):
             return
         s._mirror_stop_pending = True
 
@@ -1091,6 +1137,7 @@ class Mirror:
             try:
                 for _ in range(40):            # up to ~20 min of reconnect attempts
                     if s.closing or s not in self._owed:
+                        self._owed.discard(s)
                         return
                     if self.running() and self.session is s and isinstance(self.engine, StreamEngine):
                         return               # the stream engine clears it itself before restarting
@@ -1108,6 +1155,7 @@ class Mirror:
                     except BaseException as exc:  # noqa: BLE001
                         dlog(f"mirror (stream): deferred stop_all_streams failed {exc!r}")
                         await asyncio.sleep(5)
+                self._owed.discard(s)          # gave up: don't pin the session forever
             finally:
                 s._mirror_stop_pending = False
         t = asyncio.ensure_future(later())
@@ -1234,6 +1282,8 @@ class Mirror:
                       "bytes": 0, "reason": rec.stop_reason}
         finally:
             await asyncio.to_thread(rec.cleanup)
+            await asyncio.to_thread(common.prune, REC_DIR.glob("rec-*.mp4"), REC_KEEP, REC_MAX_BYTES,
+                                    also=(".jpg",))
         rec.result = result
         rec.state = result["state"]
         self.last_record = rec.snapshot()
@@ -1250,6 +1300,7 @@ class Mirror:
         return self.last_record
 
     def availability(self, s) -> dict:
+        load_media()
         stream_reason = StreamEngine.unavailable_reason(s) if s is not None else "no-device"
         if stream_reason is None and self.notice_code == "media-in-use":
             stream_reason = "media-in-use"
@@ -1263,6 +1314,7 @@ class Mirror:
 
 def register(reg):
     m = Mirror()
+    threading.Thread(target=sweep_stale_parts, name="record-sweep", daemon=True).start()
 
     def apply_args(a) -> bool:
         """Settings from mirror.start; True when the engine has to restart (mode changed)."""

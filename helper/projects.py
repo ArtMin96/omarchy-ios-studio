@@ -9,7 +9,8 @@ State (all under ~/.local/state/ios-studio/):
   projects.json   {"added": [path], "hidden": [path], "meta": {path: {"autoRenew": bool}}}
   builds.json     [{"project", "path", "name", "kind", "config", "result", "duration", "time",
                     "ipa", "errors", "warnings", "logFile", "udid", "bundleId",
-                    "diagnostics": [{severity, file, line, col, message, …}] (≤ 200, errors first)}]   newest last
+                    "diagnostics": [{severity, message, category, file?, line?, col?, hint?, details?}]
+                                   (≤ 200, errors first; see diagnostics.py)}]   newest last
   renewals.json   {path: {"udid", "bundleId", "signedAt", "expires", "via", "estimated"}}
   build-logs/     one full raw log per build (<time>-<name>-<kind>.log)
 """
@@ -31,10 +32,13 @@ import subprocess
 import sys
 import time
 import zipfile
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import common
+import diagnostics
 from common import HelperError, fix
 
 PROJECTS_FILE = common.STATE_DIR / "projects.json"
@@ -50,13 +54,12 @@ SKIP_DIRS = {"node_modules", ".build", ".git", "xtool", "DerivedData", "Pods", "
              "dist", "vendor", ".cache", "venv", ".venv", "__pycache__", "target", ".bsp", ".idea",
              ".vscode", "Carthage", ".gradle"}
 MAX_HISTORY = 300
+LOG_GRACE = 6 * 3600   # an unreferenced build log younger than this may belong to a running build
 MAX_STORED_DIAGS = 200   # per builds.json entry (errors first), so Logs can show problems without re-parsing
 FREE_PROFILE_DAYS = 7
 EXIT_TEMP, EXIT_USER = 75, 78
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
-DIAG = re.compile(r"^(?P<file>/[^:\n]+?):(?P<line>\d+):(?:(?P<col>\d+):)?\s*"
-                  r"(?P<sev>error|warning|note|fatal error):\s*(?P<msg>.+)$")
 TASK = re.compile(r"^\[(\d+)\s*/\s*(\d+)\]\s*(.*)$")
 STAGE = re.compile(r"^\[(?P<stage>[A-Za-z][A-Za-z ]+)\]\s*(?:(?P<pct>\d+)%)?")
 WROTE = re.compile(r"^Wrote to (?P<path>/.+)$")
@@ -90,6 +93,25 @@ def _state() -> dict:
 
 def _save_state(data: dict) -> None:
     common.save_json(PROJECTS_FILE, data)
+
+
+@contextmanager
+def _file_lock(name: str):
+    """Exclusive flock on STATE_DIR/.<name>.lock for a read-modify-write of one state file (the app,
+    the MCP server and the renew timer each run their own helper processes)."""
+    common.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(common.STATE_DIR / f".{name}.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        yield
+
+
+@contextmanager
+def _edit_state():
+    """Read projects.json under its lock and save it when the block ends without an exception."""
+    with _file_lock("projects"):
+        state = _state()
+        yield state
+        _save_state(state)
 
 
 def _norm(path: str | Path) -> str:
@@ -388,13 +410,12 @@ def cmd_add(flags: dict) -> int:
                               {"label": "Make it an app", "page": "projects", "action": "convert", "path": str(p)})
         raise HelperError("not-a-project", "That folder doesn't contain an iPhone app project (Package.swift and xtool.yml).",
                           fix("Create a new app", "projects", action="new"))
-    state = _state()
     sp = str(p)
-    if sp not in state["added"]:
-        state["added"].append(sp)
-    if sp in state["hidden"]:
-        state["hidden"].remove(sp)
-    _save_state(state)
+    with _edit_state() as state:
+        if sp not in state["added"]:
+            state["added"].append(sp)
+        if sp in state["hidden"]:
+            state["hidden"].remove(sp)
     return common.ok(_project_info(p, state=state))
 
 
@@ -403,34 +424,31 @@ def cmd_remove(flags: dict) -> int:
     if not raw or raw is True:
         raise HelperError("usage", "Missing --path.")
     sp = _norm(raw)
-    state = _state()
-    if sp in state["added"]:
-        state["added"].remove(sp)
-    if sp not in state["hidden"] and Path(sp).is_dir():
-        state["hidden"].append(sp)
-    state["meta"].pop(sp, None)
-    _save_state(state)
+    with _edit_state() as state:
+        if sp in state["added"]:
+            state["added"].remove(sp)
+        if sp not in state["hidden"] and Path(sp).is_dir():
+            state["hidden"].append(sp)
+        state["meta"].pop(sp, None)
     return common.ok({"path": sp, "removed": True, "filesDeleted": False})
 
 
 def cmd_unhide(flags: dict) -> int:
     sp = _norm(flags.get("path") or "")
-    state = _state()
-    if sp in state["hidden"]:
-        state["hidden"].remove(sp)
-        _save_state(state)
+    with _edit_state() as state:
+        if sp in state["hidden"]:
+            state["hidden"].remove(sp)
     return common.ok({"path": sp})
 
 
 def cmd_set(flags: dict) -> int:
     p = _require_path(flags)
-    state = _state()
-    meta = state["meta"].setdefault(str(p), {})
-    if "auto_renew" in flags:
-        meta["autoRenew"] = str(flags["auto_renew"]).lower() in ("1", "true", "yes", "on")
-    if flags.get("udid") and flags["udid"] is not True:
-        meta["udid"] = flags["udid"]
-    _save_state(state)
+    with _edit_state() as state:
+        meta = state["meta"].setdefault(str(p), {})
+        if "auto_renew" in flags:
+            meta["autoRenew"] = str(flags["auto_renew"]).lower() in ("1", "true", "yes", "on")
+        if flags.get("udid") and flags["udid"] is not True:
+            meta["udid"] = flags["udid"]
     return common.ok(_project_info(p, state=state))
 
 
@@ -440,14 +458,25 @@ def _templates() -> list[dict]:
         for d in sorted(TEMPLATES.iterdir()):
             meta = common.load_json(d / "template.json")
             if isinstance(meta, dict) and (d / "Sources").is_dir():
+                meta.setdefault("id", d.name)
                 meta["files"] = sorted(f.name for f in (d / "Sources").iterdir() if f.is_file())
+                meta["_dir"] = d
                 out.append(meta)
     out.sort(key=lambda m: (not m.get("default"), m.get("title", "")))
     return out
 
 
+def _template_dir(tmpl_id: Any) -> Path:
+    """The folder of a listed template. Only ids from _templates() are accepted, never a path."""
+    for meta in _templates():
+        if meta.get("id") == tmpl_id:
+            return meta["_dir"]
+    ids = ", ".join(str(m.get("id")) for m in _templates())
+    raise HelperError("bad-template", f"That template isn't available. Choose one of: {ids}.")
+
+
 def cmd_templates(flags: dict) -> int:
-    return common.ok({"templates": _templates(),
+    return common.ok({"templates": [{k: v for k, v in m.items() if k != "_dir"} for m in _templates()],
                       "bundlePrefix": common.settings().get("bundlePrefix") or "com.example",
                       "defaultDir": str(common.new_app_dir())})
 
@@ -492,9 +521,7 @@ def cmd_new(flags: dict) -> int:
     if not NAME_RE.match(name):
         raise HelperError("bad-name", "App names start with a letter and use only letters, numbers and _ (no spaces).")
     tmpl_id = flags.get("template") or "swiftui-app"
-    tmpl = TEMPLATES / str(tmpl_id)
-    if not (tmpl / "Sources").is_dir():
-        raise HelperError("bad-template", "That template isn't available.")
+    tmpl = _template_dir(tmpl_id)
     parent = Path(os.path.expanduser(str(flags.get("dir") or common.new_app_dir())))
     parent.mkdir(parents=True, exist_ok=True)
     dest = parent / name
@@ -540,10 +567,9 @@ def cmd_new(flags: dict) -> int:
             common.run_cmd([git, "commit", "-q", "-m", f"New app {name} (iOS Studio template {tmpl_id})"],
                            cwd=str(dest), timeout=20)
 
-    state = _state()
-    if str(dest.resolve()) not in state["added"]:
-        state["added"].append(str(dest.resolve()))
-    _save_state(state)
+    with _edit_state() as state:
+        if str(dest.resolve()) not in state["added"]:
+            state["added"].append(str(dest.resolve()))
     return common.ok({**_project_info(dest.resolve(), state=state), "template": tmpl_id, "usedXtool": used_xtool})
 
 
@@ -666,12 +692,39 @@ def _stored_diags(diags: list[dict]) -> list[dict]:
 
 
 def _append_history(entry: dict) -> None:
-    common.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(common.STATE_DIR / ".builds.lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+    with _file_lock("builds"):
         h = _history()
         h.append(entry)
-        common.save_json(BUILDS_FILE, h[-MAX_HISTORY:])
+        h = h[-MAX_HISTORY:]
+        common.save_json(BUILDS_FILE, h)
+        _prune_logs(h)
+
+
+def _prune_logs(history: list, min_age: float = LOG_GRACE) -> list[str]:
+    """Delete build logs no history entry points to any more (history keeps MAX_HISTORY builds).
+
+    A build writes its log before its history entry exists, so a log only goes once it is older than
+    `min_age` seconds: a build running right now (here or in another process) keeps its log."""
+    keep = set()
+    for e in history:
+        f = e.get("logFile") if isinstance(e, dict) else None
+        if isinstance(f, str):
+            keep.add(os.path.realpath(f))
+    removed = []
+    cutoff = _now() - min_age
+    try:
+        files = list(BUILD_LOGS.glob("*.log"))
+    except OSError:
+        return removed
+    for f in files:
+        try:
+            if os.path.realpath(f) in keep or not f.is_file() or f.stat().st_mtime > cutoff:
+                continue
+            f.unlink()
+            removed.append(str(f))
+        except OSError:
+            continue
+    return removed
 
 
 def cmd_history(flags: dict) -> int:
@@ -694,6 +747,13 @@ def _estimate(path: str, kind: str) -> float | None:
 
 # ================================================================ provisioning profile
 
+def _plist_ts(value: Any) -> float | None:
+    """plistlib returns naive datetimes in UTC; .timestamp() on those would read them as local time."""
+    if not isinstance(value, datetime):
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp()
+
+
 def _profile_from_bytes(data: bytes) -> dict | None:
     start = data.find(b"<?xml")
     end = data.find(b"</plist>")
@@ -707,8 +767,8 @@ def _profile_from_bytes(data: bytes) -> dict | None:
     created = pl.get("CreationDate")
     ents = pl.get("Entitlements") or {}
     return {
-        "expires": exp.timestamp() if exp else None,
-        "created": created.timestamp() if created else None,
+        "expires": _plist_ts(exp),
+        "created": _plist_ts(created),
         "name": pl.get("Name"),
         "uuid": pl.get("UUID"),
         "team": (pl.get("TeamIdentifier") or [None])[0],
@@ -745,8 +805,7 @@ def _record_signing(path: str, udid: str | None, bundle: str | None, via: str, p
     }
     if profile:
         rec["profile"] = {k: profile.get(k) for k in ("uuid", "team", "appId", "name")}
-    with open(common.STATE_DIR / ".renewals.lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+    with _file_lock("renewals"):
         data = common.load_json(RENEWALS_FILE, {}) or {}
         data[path] = rec
         common.save_json(RENEWALS_FILE, data)
@@ -862,7 +921,7 @@ class BuildRunner:
         self.current: str | None = None
         self.sub = 0.0
         self.diags: list[dict] = []
-        self._diag_keys: set = set()
+        self.parser = diagnostics.Parser()
         self.wrote: str | None = None
         self.build_secs: float | None = None
         self.revoke_certs: list[str] = []
@@ -906,12 +965,21 @@ class BuildRunner:
         common.step(sid, self.TITLES[sid], "running", detail=detail)
         self.emit_progress(detail)
 
+    STEP_OF = {"compiler": "compile", "linker": "link", "package": "resolve"}
+
     def finish_all(self, ok: bool) -> None:
-        if not ok and "compile" in self.state and any(d["severity"] == "error" for d in self.diags):
-            # Compiler errors: Compiling is the step that failed; later steps never really ran.
-            idx = self.plan.index("compile")
-            self.state["compile"] = "failed"
-            common.step("compile", self.TITLES["compile"], "failed")
+        # Compiler, linker or package errors name the step that failed; later steps never really ran.
+        failed = None if ok else next((self.STEP_OF[c] for d in self.diags if d["severity"] == "error"
+                                       for c in [d.get("category") or "compiler"]
+                                       if self.STEP_OF.get(c) in self.state), None)
+        if failed:
+            idx = self.plan.index(failed)
+            for earlier in self.plan[:idx]:
+                if self.state[earlier] == "running":
+                    self.state[earlier] = "done"
+                    common.step(earlier, self.TITLES[earlier], "done")
+            self.state[failed] = "failed"
+            common.step(failed, self.TITLES[failed], "failed")
             for later in self.plan[idx + 1:]:
                 if self.state[later] != "pending":
                     self.state[later] = "skipped"
@@ -971,10 +1039,11 @@ class BuildRunner:
 
     def classify(self, line: str) -> None:
         s = line.strip()
-        m = DIAG.match(s)
-        if m:
-            self.add_diag(m)
-            if self.current is None or self.current == "resolve":
+        found = self.parser.feed(line)
+        for d in found:
+            self.add_diag(d)
+        if diagnostics.DIAG.match(s):
+            if (self.current is None or self.current == "resolve") and found and found[-1]["category"] == "compiler":
                 self.enter("compile")
             return
         if self._collect_revoke:
@@ -1060,21 +1129,16 @@ class BuildRunner:
             self.wrote = w.group("path")
             return
 
-    def add_diag(self, m: re.Match) -> None:
-        sev = m.group("sev")
-        sev = "error" if sev == "fatal error" else sev
-        d = {"file": m.group("file"), "line": int(m.group("line")), "col": int(m.group("col") or 0),
-             "severity": sev, "message": m.group("msg").strip()}
-        g = re.search(r"\s*\[#(\w+)\]$", d["message"])
-        if g:
-            d["message"] = d["message"][:g.start()]
-            d["group"] = g.group(1)
-        key = (d["file"], d["line"], d["col"], d["severity"], d["message"])
-        if key in self._diag_keys:
-            return
-        self._diag_keys.add(key)
+    def add_diag(self, d: dict) -> None:
+        """One parsed diagnostic (already de-duplicated by the parser) -> the list and a `diagnostic` event."""
         self.diags.append(d)
         common.event("diagnostic", **d)
+
+    def flush_diags(self, failed: bool) -> None:
+        """End of output: an open linker/package/crash block becomes a diagnostic, and a failed build with
+        no error at all gets one last-resort diagnostic from the tool's final words."""
+        for d in self.parser.finish(failed):
+            self.add_diag(d)
 
     # ---- prompts
     def on_partial(self, text: str) -> bool:
@@ -1242,7 +1306,9 @@ class BuildRunner:
 def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
     text = "\n".join(runner.tail[-120:])
     low = text.lower()
-    errors = [d for d in runner.diags if d["severity"] == "error"]
+    errors = [d for d in runner.diags if d["severity"] == "error" and d.get("file")
+              and (d.get("category") or "compiler") == "compiler"]
+    other = next((d for d in runner.diags if d["severity"] == "error" and d not in errors), None)
     if runner.revoke_answer == "no" or re.search(r"revok|continue\?", low) and runner.revoke_answer is None:
         return HelperError("needs-certificate",
                            "Signing stopped because a new certificate is needed and it wasn't replaced. "
@@ -1255,6 +1321,22 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
                            f"Your code has {n} error{'s' if n != 1 else ''}. The first is in "
                            f"{Path(first['file']).name}, line {first['line']}: {first['message']}",
                            {"label": "Open in editor", "page": "projects", "action": "open-diagnostic"}, detail=text)
+    # Linker, package, config and compiler-crash problems are named by their diagnostic; signing and device
+    # ones go through the checks below, which have the right fix buttons.
+    lead = {"linker": "Linking failed", "package": "Swift packages couldn't be resolved",
+            "config": "The project settings are invalid"}
+    manifest = next((d for d in runner.diags if d["severity"] == "error" and d.get("category") == "package"
+                     and str(d.get("file") or "").endswith("Package.swift")), None)
+    if manifest:
+        return HelperError("build-failed", f"Package.swift has errors. The first is on line {manifest['line']}: "
+                           f"{manifest['message']}",
+                           {"label": "Open in editor", "page": "projects", "action": "open-diagnostic"}, detail=text)
+    if other and other.get("category") in lead:
+        return HelperError("build-failed", f"{lead[other['category']]}: {other['message']}",
+                           {"label": "Show log", "page": "projects", "action": "log"}, detail=text)
+    if other and other["message"].startswith("The Swift compiler crashed"):
+        return HelperError("build-failed", other["message"] + ".",
+                           {"label": "Show log", "page": "projects", "action": "log"}, detail=text)
     if re.search(r"requires logging in|unauthori[sz]ed|not logged in|log ?in again|invalid.*token|session.*expired|"
                  r"(http|status|code)[ :]*401", low):
         return HelperError("not-signed-in", "Apple didn't accept your sign-in. Sign in again, then build.",
@@ -1265,7 +1347,13 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
                            "Apple's signing service (or the helper server xtool uses) didn't answer. This is usually "
                            "temporary; try again in a minute.", {"label": "Try again", "page": "projects", "action": "retry"},
                            detail=text)
-    if re.search(r"maximum number of|max(imum)? app ids|too many app ids|no more app ids", low):
+    if re.search(r"maximum number of (installed )?apps|free develop\w* (provisioning )?profiles? (limit|has been)",
+                 low):
+        return HelperError("app-limit",
+                           "A free Apple account can have 3 of your apps on an iPhone at once. Delete one of them from "
+                           "the iPhone, then try again.", fix("Open iPhone", "device"), detail=text)
+    if re.search(r"maximum number of app ids|max(imum)? app ids|app id limit|up to 10 app ids|too many app ids|"
+                 r"no more app ids", low):
         return HelperError("app-id-limit",
                            "A free Apple account can register at most 10 app IDs per week. Reuse an existing bundle "
                            "ID, or wait a few days.", fix("See app IDs", "account", action="identifiers"), detail=text)
@@ -1282,7 +1370,8 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
         return HelperError("signing-failed",
                            "Signing failed. If this is a new iPhone, connect it with a cable and choose Run once so it "
                            "gets registered with your account.", fix("Open iPhone", "device"), detail=text)
-    last = next((ln for ln in reversed(runner.tail) if ln.strip().lower().startswith(("error", "fatal"))), None)
+    last = other["message"] if other else \
+        next((ln for ln in reversed(runner.tail) if ln.strip().lower().startswith(("error", "fatal"))), None)
     return HelperError("build-failed", "The build failed." + (f" {last.strip()[:300]}" if last else ""),
                        {"label": "Show log", "page": "projects", "action": "log"}, detail=text)
 
@@ -1421,6 +1510,7 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
         err = exc
     finally:
         lock.close()
+    runner.flush_diags(failed=err is None and rc != 0)
     duration = round(_now() - started, 1)
     errors = sum(1 for d in runner.diags if d["severity"] == "error")
     warnings = sum(1 for d in runner.diags if d["severity"] == "warning")
@@ -1590,9 +1680,9 @@ def cmd_renew_due(flags: dict) -> int:
     for it in due:
         name = Path(it["path"]).name
         try:
-            rc, data, err = _do_build({"path": it["path"], "udid": it["udid"]}, "renew", interactive=False)
+            _rc, data, err = _do_build({"path": it["path"], "udid": it["udid"]}, "renew", interactive=False)
         except HelperError as exc:
-            rc, data, err = 1, None, exc
+            data, err = None, exc
         if err is None and data and data.get("needsInstall"):
             reply = _deviced_once("app.install", {"udid": it["udid"], "path": data["ipa"]})
             if reply and reply.get("ok"):

@@ -16,7 +16,7 @@ Item {
 
   RowLayout {
     anchors.fill: parent
-    spacing: Style.spacing.md
+    spacing: 0
     AppText {
       id: label
       text: root.text.toUpperCase()
@@ -27,6 +27,7 @@ Item {
     }
     AppText {
       visible: root.detail !== ""
+      Layout.leftMargin: Style.spacing.md
       text: root.detail
       size: "caption"
       tone: "faint"
@@ -34,9 +35,11 @@ Item {
     Rectangle {
       Layout.fillWidth: true
       Layout.alignment: Qt.AlignVCenter
+      Layout.leftMargin: Style.spacing.md
       height: Style.spacing.hairline
       color: Theme.hairline
     }
-    Row { id: trail; spacing: Style.spacing.xs; Layout.alignment: Qt.AlignVCenter }
+    // No gap while nothing trails, so the rule runs to the right edge like the content below it.
+    Row { id: trail; spacing: Style.spacing.xs; Layout.alignment: Qt.AlignVCenter; Layout.leftMargin: implicitWidth > 0 ? Style.spacing.md : 0 }
   }
 }

@@ -50,6 +50,7 @@ CONSOLE_KEEP = 400
 CONSOLE_SHOW = 8
 MAX_SESSIONS = 2
 IDLE_END = 600
+KEEP_ENDED = 300        # seconds an ended session stays readable before it is dropped
 
 
 # ------------------------------------------------------------------ models
@@ -298,7 +299,9 @@ class Session:
     console_seen: int = 0
     console_total: int = 0
     notices: list = field(default_factory=list)
-    results: dict = field(default_factory=dict)     # requestId -> event
+    results: dict = field(default_factory=dict)     # requestId -> event, only for requests a tool still awaits
+    waiting: set = field(default_factory=set)       # requestIds a tool call is waiting for
+    ended_at: float | None = None                   # when _prune first saw it ended
     acks: deque = field(default_factory=lambda: deque(maxlen=20))
     error: dict | None = None
     final: dict | None = None
@@ -330,10 +333,11 @@ class Session:
             self.state = "stopped"
             self.stop = ev
         elif name in ("variables", "evaluated", "backtrace") and ev.get("requestId"):
-            self.results[str(ev["requestId"])] = ev
+            if str(ev["requestId"]) in self.waiting:    # a late answer to a call that gave up is dropped
+                self.results[str(ev["requestId"])] = ev
         elif name == "ack":
             self.acks.append(ev)
-            if ev.get("requestId"):
+            if ev.get("requestId") and str(ev["requestId"]) in self.waiting:
                 self.results[str(ev["requestId"])] = ev
         elif name == "exited":
             self.notices.append(f"The app exited (status {ev.get('status')}).")
@@ -353,6 +357,19 @@ class Session:
         except (BrokenPipeError, ConnectionResetError):
             raise ToolError(f"Debug session {self.id} stopped before the command arrived.")
 
+    async def request(self, msg: dict, until, seconds: float) -> dict | None:
+        """Send a command with a requestId and wait up to `seconds` for until(); returns the answer (or ack) for
+        it, if one came. Answers that arrive after this returns are not kept."""
+        rid = str(msg["requestId"])
+        self.waiting.add(rid)
+        try:
+            await self.send(msg)
+            await self.wait(until, seconds)
+            return self.results.pop(rid, None)
+        finally:
+            self.waiting.discard(rid)
+            self.results.pop(rid, None)
+
     async def wait(self, pred, seconds: float) -> bool:
         deadline = time.monotonic() + max(0.0, seconds)
         while not pred():
@@ -370,6 +387,22 @@ _ids = itertools.count(1)
 
 def _sessions(state: AppState) -> dict[str, Session]:
     return state.extras.setdefault("debug.sessions", {})
+
+
+def _prune(state: AppState) -> None:
+    """Forget sessions that ended (idle detach, a crash, the debugger exiting) more than KEEP_ENDED seconds ago;
+    until then ios_debug_session_wait/end can still report how they ended."""
+    now = time.time()
+    sessions = _sessions(state)
+    for sid, s in list(sessions.items()):
+        if not s.ended:
+            continue
+        if s.ended_at is None:
+            s.ended_at = now
+        elif now - s.ended_at > KEEP_ENDED:
+            if s.reaper:
+                s.reaper.cancel()
+            sessions.pop(sid, None)
 
 
 async def _pump(s: Session) -> None:
@@ -411,10 +444,19 @@ async def _end(s: Session, how: str = "detach", wait: float = 15) -> None:
     if not await s.wait(lambda: s.ended, wait):
         with contextlib.suppress(ProcessLookupError):
             s.proc.terminate()
-        await s.wait(lambda: s.ended, 10)
+        if not await s.wait(lambda: s.ended, 10):
+            # lldb and its helpers run in the session's own process group (spawn_stream starts a new session)
+            helper.kill_group(s.proc.pid)
+            with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
+                await asyncio.wait_for(s.proc.wait(), 5)
+            if not s.ended:
+                s.state = "failed"
+                s.error = s.error or {"code": "killed", "message": "The debugger didn't detach in time and was killed."}
+                s.changed.set()
 
 
 def _get(state: AppState, session_id: str) -> Session:
+    _prune(state)
     s = _sessions(state).get(session_id.strip())
     if s is None:
         known = ", ".join(_sessions(state)) or "none"
@@ -491,7 +533,8 @@ def register(mcp: MCPServer) -> None:
         udid: Udid = None,
     ) -> DebugBacktrace:
         """Attach LLDB to one of your own running apps, read every thread's stack, and detach (the app
-        pauses for a few seconds, then carries on). Returns the crashed (else main) thread's top 20
+        pauses for a few seconds, then carries on). Call with confirm=false first: it only explains; ask
+        the user, then repeat with confirm=true to capture. Returns the crashed (else main) thread's top 20
         frames with file:line for your code, the other threads grouped by identical stacks, and the
         path of a file with every frame. Runs as a job: if state is running, call again with job_id.
         Use it when the app hangs or misbehaves; for crashes that already happened use ios_crash_get."""
@@ -532,9 +575,9 @@ def register(mcp: MCPServer) -> None:
     async def ios_debug_session_start(
         ctx: Context,
         bundle_id: BundleId,
-        breakpoints: Annotated[list[str], Field(max_length=20, description="'File.swift:42' (a file in the app's "
+        breakpoints: Annotated[list[str] | None, Field(max_length=20, description="'File.swift:42' (a file in the app's "
                                                                           "Sources) or a function name such as "
-                                                                          "'ForecastModel.refresh'")] = [],
+                                                                          "'ForecastModel.refresh'")] = None,
         launch: Annotated[Literal["auto", "attach", "suspended"],
                           Field(description="attach: the running app. suspended: (re)launch it paused so startup "
                                             "breakpoints hit (stops a running copy). auto: attach if running, else "
@@ -548,6 +591,7 @@ def register(mcp: MCPServer) -> None:
         (the app is detached and keeps running). At most 2 sessions; a session nobody polls for 10
         minutes detaches by itself."""
         state = get_state(ctx)
+        _prune(state)
         live = [s for s in _sessions(state).values() if not s.ended]
         if len(live) >= MAX_SESSIONS:
             raise ToolError(f"{len(live)} debug sessions are open ({', '.join(s.id for s in live)}). End one with "
@@ -558,7 +602,7 @@ def register(mcp: MCPServer) -> None:
                             "those. Pick one from ios_app_list(scope='own').")
         if any(s.bundle_id == app["bundleId"] for s in live):
             raise ToolError(f"A session for {app['bundleId']} is already open; use it or end it first.")
-        bps = [B.clip(b.strip(), 300) for b in breakpoints if b and b.strip()][:20]
+        bps = [B.clip(b.strip(), 300) for b in (breakpoints or []) if b and b.strip()][:20]
         flags: dict[str, Any] = {"bundle_id": app["bundleId"], "launch": launch, "breakpoints": json.dumps(bps)}
         if udid:
             flags["udid"] = udid
@@ -615,19 +659,15 @@ def register(mcp: MCPServer) -> None:
                 msg["expr"] = expr.strip()[:EXPR_CUT]
             elif frame is not None:
                 msg["frame"] = frame
-            await s.send(msg)
-            await s.wait(lambda: rid in s.results or s.ended, min(wait_seconds or 15, MAX_WAIT))
-            ev = s.results.pop(rid, None)
+            ev = await s.request(msg, lambda: rid in s.results or s.ended, min(wait_seconds or 15, MAX_WAIT))
             if ev is None:
                 raise ToolError("The debugger didn't answer in time (memory reads are slow over Wi-Fi). Try again.")
             return session_view(s, _clip_result(ev))
         seen = int((s.stop or {}).get("stopId") or 0)
-        await s.send({"cmd": command, "requestId": rid})
         def refused() -> bool:
             return rid in s.results and not s.results[rid].get("ok")
-        await s.wait(lambda: refused() or s.ended or (s.state == "stopped" and int((s.stop or {}).get("stopId") or 0) > seen),
-                     wait_seconds)
-        ack = s.results.pop(rid, None)
+        ack = await s.request({"cmd": command, "requestId": rid}, lambda: refused() or s.ended or (
+            s.state == "stopped" and int((s.stop or {}).get("stopId") or 0) > seen), wait_seconds)
         if ack and not ack.get("ok"):
             raise ToolError(B.clip_error(str(ack.get("message") or "The debugger refused that command.")))
         return session_view(s)

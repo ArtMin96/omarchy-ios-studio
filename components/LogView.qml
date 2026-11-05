@@ -38,7 +38,7 @@ Rectangle {
   property string levelFilter: ""
   property string emptyText: "Nothing logged yet."
   readonly property int count: _all.length
-  readonly property int shownCount: model.count
+  readonly property int shownCount: lineModel.count
   property alias toolbarExtra: extraSlot.data
 
   signal lineCopied(string text)
@@ -68,18 +68,24 @@ Rectangle {
   function append(text, level, meta) {
     var n = _norm({ text: text, level: level, meta: meta })
     root._pending.push(n)
-    if (!flush.running) flush.start()
+    _schedule()
   }
 
   function appendMany(arr) {
     for (var i = 0; i < arr.length; i++) { var n = _norm(arr[i]); if (n) root._pending.push(n) }
+    _schedule()
+  }
+
+  // While paused, lines wait in _pending; only the newest maxLines could ever be shown.
+  function _schedule() {
+    if (root._pending.length > root.maxLines * 1.25) root._pending.splice(0, root._pending.length - root.maxLines)
     if (!flush.running) flush.start()
   }
 
   function clear() {
     root._all = []
     root._pending = []
-    model.clear()
+    lineModel.clear()
   }
 
   function text() {
@@ -90,7 +96,7 @@ Rectangle {
 
   function copyAll() {
     var visible = []
-    for (var i = 0; i < model.count; i++) visible.push(model.get(i).text)
+    for (var i = 0; i < lineModel.count; i++) visible.push(lineModel.get(i).text)
     _copy(visible.join("\n"))
     root.copiedAll(visible.length)
   }
@@ -123,10 +129,11 @@ Rectangle {
   }
 
   function _rebuild() {
-    model.clear()
+    filterDebounce.stop()
+    lineModel.clear()
     var out = []
     for (var i = 0; i < root._all.length; i++) if (_passes(root._all[i])) out.push(root._all[i])
-    if (out.length) model.append(out)
+    if (out.length) lineModel.append(out)
     if (root.follow) Qt.callLater(list.positionViewAtEnd)
   }
 
@@ -140,18 +147,19 @@ Rectangle {
     root._all = all
     // trim the display model from the front, then append what passes
     if (drop > 0) {
-      var extra = model.count + batch.length - root.maxLines
-      if (extra > 0) model.remove(0, Math.min(extra, model.count))
+      var extra = lineModel.count + batch.length - root.maxLines
+      if (extra > 0) lineModel.remove(0, Math.min(extra, lineModel.count))
     }
     var add = []
     for (var i = 0; i < batch.length; i++) if (_passes(batch[i])) add.push(batch[i])
-    if (add.length) model.append(add)
+    if (add.length) lineModel.append(add)
     if (root.follow) list.positionViewAtEnd()
   }
 
-  onLinesChanged: { root._all = []; root._pending = []; model.clear(); appendMany(root.lines || []); _flushNow() }
+  onLinesChanged: { root._all = []; root._pending = []; lineModel.clear(); appendMany(root.lines || []); _flushNow() }
   function _flushNow() { flush.stop(); _flush() }
-  onFilterChanged: _rebuild()
+  // Typing in the filter re-filters up to maxLines lines: once typing pauses, not per key.
+  onFilterChanged: filterDebounce.restart()
   onLevelFilterChanged: _rebuild()
   onPausedChanged: if (!paused) _flushNow()
 
@@ -162,7 +170,8 @@ Rectangle {
   clip: true
 
   Timer { id: flush; interval: 80; onTriggered: root._flush() }
-  ListModel { id: model }
+  Timer { id: filterDebounce; interval: 120; onTriggered: root._rebuild() }
+  ListModel { id: lineModel }
 
   ColumnLayout {
     anchors.fill: parent
@@ -176,7 +185,10 @@ Rectangle {
       readonly property bool narrow: root.width < Style.space(640)
       visible: root.showToolbar
       Layout.fillWidth: true
-      Layout.margins: Style.spacing.md
+      // lg on the left, like the log lines below (x: lg), so field, buttons and text share an edge
+      Layout.margins: Style.spacing.lg
+      Layout.topMargin: Style.spacing.md
+      Layout.bottomMargin: Style.spacing.md
       columns: narrow ? 2 : 3
       columnSpacing: Style.spacing.md
       rowSpacing: Style.spacing.md
@@ -215,7 +227,7 @@ Rectangle {
       Layout.fillWidth: true
       Layout.fillHeight: true
       clip: true
-      model: model
+      model: lineModel
       boundsBehavior: Flickable.StopAtBounds
       reuseItems: true
       topMargin: Style.spacing.md
@@ -275,7 +287,7 @@ Rectangle {
 
   AppText {
     anchors.centerIn: parent
-    visible: model.count === 0
+    visible: lineModel.count === 0
     text: root.count > 0 ? "No lines match the filter." : root.emptyText
     tone: "faint"
   }

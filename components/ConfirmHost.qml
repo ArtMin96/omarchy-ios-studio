@@ -6,8 +6,11 @@ import qs.Ui
 import "../Model.js" as Model
 
 // The app's confirm dialog. shell.qml hosts one; pages call
-//   app.confirm({ title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel })
-// Cancel is the default (Enter on open cancels). ←/→/Tab switch, Esc cancels.
+//   var handle = app.confirm({ title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel })
+//   app.closeConfirm(handle)     // drop it unanswered (no callback), e.g. the job that asked has ended
+// Cancel is the default (Enter on open cancels). ←/→/Tab switch, Esc or n cancels. y confirms,
+// except in a destructive dialog: there the confirm button has to be chosen first.
+// A dialog asked for while another is open waits its turn, so no question is lost.
 Item {
   id: root
   property bool opened: false
@@ -18,29 +21,45 @@ Item {
   property string glyph: ""
   property bool destructive: false
   property int selectedIndex: 0
-  property var _onConfirm: null
-  property var _onCancel: null
+  property var _current: null     // the opts object being shown (also the caller's handle)
+  property var _queue: []
 
   function show(opts) {
     var o = opts || {}
+    if (root.opened) { root._queue = root._queue.concat([o]); return o }
     root.title = o.title || "Are you sure?"
     root.message = o.message || ""
     root.confirmText = o.confirmText || (o.destructive ? "Remove" : "Confirm")
     root.cancelText = o.cancelText || "Cancel"
     root.destructive = !!o.destructive
     root.glyph = o.glyph || (o.destructive ? Model.Glyph.warn : Model.Glyph.help)
-    root._onConfirm = o.onConfirm || null
-    root._onCancel = o.onCancel || null
+    root._current = o
     root.selectedIndex = 0
     root.opened = true
+    return o
+  }
+
+  // Close (or unqueue) one dialog without calling either callback.
+  function close(handle) {
+    if (!handle) return
+    if (root.opened && root._current === handle) { root._current = null; root.opened = false; Qt.callLater(root._next); return }
+    root._queue = root._queue.filter(function(o) { return o !== handle })
+  }
+
+  function _next() {
+    if (root.opened || root._queue.length === 0) return
+    var o = root._queue[0]
+    root._queue = root._queue.slice(1)
+    root.show(o)
   }
 
   function _finish(ok) {
-    var cb = ok ? root._onConfirm : root._onCancel
-    root._onConfirm = null
-    root._onCancel = null
+    var o = root._current
+    var cb = o ? (ok ? o.onConfirm : o.onCancel) : null
+    root._current = null
     root.opened = false
-    if (cb) Qt.callLater(cb)
+    // The callback may ask another question; it goes before the queued ones.
+    Qt.callLater(function() { if (cb) cb(); root._next() })
   }
   function dismiss() { _finish(false) }
 
@@ -50,7 +69,7 @@ Item {
     if (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab
         || event.text === "h" || event.text === "l") { root.selectedIndex = 1 - root.selectedIndex; return true }
     if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) { _finish(root.selectedIndex === 1); return true }
-    if (event.text === "y") { _finish(true); return true }
+    if (event.text === "y" && !root.destructive) { _finish(true); return true }
     if (event.text === "n") { _finish(false); return true }
     return true   // swallow everything else while open
   }

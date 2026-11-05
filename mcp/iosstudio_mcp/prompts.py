@@ -18,8 +18,8 @@ def register(mcp: MCPServer) -> None:
 
 1. ios_project_info(project_path="{project}") to find the project folder and its Sources/ directory.
 2. ios_build_start(project_path="{project}", action="compile"), then poll ios_build_status(build_id, wait_seconds=20) until it finishes.
-3. If it failed: ios_build_diagnostics(build_id) for file:line errors (errors first). Read each file around the line, fix the root cause (not just the symptom), and keep fixes minimal and idiomatic SwiftUI/Swift.
-   If there are no diagnostics, read ios_build_log(build_id, grep="error|fail") for package-resolution, link or signing problems.
+3. If it failed: ios_build_diagnostics(build_id), errors first. Each entry has a category. For compiler errors, read each file around its file:line, fix the root cause (not just the symptom), and keep fixes minimal and idiomatic SwiftUI/Swift. Linker, package, signing, device, toolchain and config entries come with a one-line hint (often naming the tool that fixes it) and details such as the undefined symbols: follow the hint.
+   Only if nothing was recognised, read ios_build_log(build_id, level="error").
 4. Rebuild and repeat until state is "succeeded" with 0 errors. Then fix warnings you introduced.
 5. Summarize what was wrong and what you changed. Offer ios_run to try it on the iPhone."""
 

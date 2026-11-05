@@ -1,0 +1,4 @@
+Error: No Darwin SDK configured. Please run `xtool setup`.
+Error: Info.plist has invalid format: expected a dictionary.
+Error: xtool.yml: Must specify either orgID or bundleID
+error: something unusual happened in the build system

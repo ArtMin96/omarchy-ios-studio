@@ -13,12 +13,13 @@ import "../Model.js" as Model
 //   status, summary, error, refresh()
 //   items: [Project]             (helper `projects list` objects)
 //   convertible, templates, history, recent (top 4 projects, for Home)
-//   build: {active, kind, path, name, steps[], fraction, detail, eta, diagnostics[], result, started}
-//   building (bool), canRun (a device is selected)
+//   build: {active, kind, path, name, steps[], fraction, detail, eta, result, started}
+//   diagnostics: ListModel of {n} rows, errors first; diagnostic(n) is the object · errorCount, warningCount
+//   building (bool), canRun (an iPhone is connected)
 //   run(p) · buildIpa(p) · compile(p) · renew(p) · reinstall(p) · cancel()
 //   create(opts, onDone, onFail) · addFolder(path, …) · remove(p) · openInEditor(p, file, line, col)
 //   reveal(p) · setAutoRenew(p, on) · convert(path)
-//   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok)
+//   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
   required property var app
@@ -50,7 +51,22 @@ Item {
     if (d && d.udid) return d.udid
     return app.setting("defaultDevice", "") || ""
   }
-  readonly property bool canRun: deviceUdid !== ""
+  // Run, reinstall and renew install on the phone: without a connection they'd build for
+  // minutes and then fail. (Build and .ipa need no phone.)
+  readonly property bool canRun: !!(app.device && app.device.connected && app.device.current && app.device.current.udid)
+
+  // Diagnostics of the current/last build. The objects live in _diags (they never change once
+  // added); the ListModel holds their index, errors before warnings before notes, so a new one
+  // is one insert instead of a re-sorted copy of the whole list.
+  ListModel { id: diagModel }
+  readonly property alias diagnostics: diagModel
+  property var _diags: []
+  property var _rankCounts: [0, 0, 0, 0]
+  property int errorCount: 0
+  property int warningCount: 0
+  readonly property var _severityRank: ({ error: 0, warning: 1, note: 2 })
+  function diagnostic(n) { return root._diags[n] || null }
+  function diagnosticList() { return root._diags.slice() }
 
   signal buildLog(string text, string level)
   signal buildStarted()
@@ -156,9 +172,11 @@ Item {
     if (kind !== "install" && cfg === "release") argv.push("--config", "release")
 
     root.logBuffer = []
+    root._cancelling = false
+    _clearDiagnostics()
     root.build = {
       active: true, kind: kind, path: p.path, name: p.name || "", bundleId: p.bundleId || "",
-      steps: [], current: "", fraction: 0, detail: "Starting…", eta: null, diagnostics: [],
+      steps: [], current: "", fraction: 0, detail: "Starting…", eta: null,
       result: null, started: Date.now(), logFile: "", udid: _needsDevice(kind) ? root.deviceUdid : ""
     }
     root.buildStarted()
@@ -166,8 +184,11 @@ Item {
     stream.start(argv)
   }
 
+  property bool _cancelling: false
   function cancel() {
     if (!root.building) return
+    root._cancelling = true
+    _closeRevoke()
     root.pendingPrompt = null
     stream.write({ cancel: true })
     cancelKill.restart()        // the helper kills the process group; force it if it doesn't exit
@@ -218,6 +239,27 @@ Item {
     _patch(patch)
   }
 
+  function _clearDiagnostics() {
+    diagModel.clear()
+    root._diags = []
+    root._rankCounts = [0, 0, 0, 0]
+    root.errorCount = 0
+    root.warningCount = 0
+  }
+
+  function _addDiagnostic(d) {
+    var rank = root._severityRank[d.severity]
+    if (rank === undefined) rank = 3
+    var n = root._diags.length
+    root._diags.push(d)
+    var at = 0
+    for (var r = 0; r <= rank; r++) at += root._rankCounts[r]
+    root._rankCounts[rank]++
+    diagModel.insert(at, { n: n })
+    if (d.severity === "error") root.errorCount++
+    else if (d.severity === "warning") root.warningCount++
+  }
+
   function _log(text, level) {
     var buf = root.logBuffer
     buf.push({ text: text, level: level || "" })
@@ -247,8 +289,7 @@ Item {
         root._log(ev.text, ev.stream === "stderr" ? "" : "")
         break
       case "diagnostic":
-        var ds = root.build.diagnostics.slice(); ds.push(ev)
-        root._patch({ diagnostics: ds })
+        root._addDiagnostic(ev)
         root.diagnosticAdded(ev)
         break
       case "prompt":
@@ -258,25 +299,42 @@ Item {
       }
     }
     onFinished: function(ok, data, error) { root._helperDone(ok, data, error) }
+    // Cancelled (stop() never reports `done`), or the helper ended without saying how: don't
+    // leave the build "running" forever. Later, so a `done` or exit error from Stream goes first.
+    onExited: function(code) {
+      Qt.callLater(function() {
+        if (!root.building || stream.running || stream.lastDone) return
+        if (root._cancelling) root._helperDone(false, {}, { code: "cancelled", message: "Cancelled." })
+        else root._helperDone(false, {}, { code: "exited", message: "The build stopped without reporting a result (exit code " + code + ")." })
+      })
+    }
   }
 
   // xtool wants to revoke the signing certificate. Destructive: Cancel ("Don't revoke") is the default.
+  // The dialog closes by itself when the build ends first (cancelled, or the helper gave up).
+  property var _revokeDialog: null
   function _askRevoke(ev) {
     app.notify("iOS Studio needs your decision", "Signing " + root.build.name + " needs a new certificate.", Model.Glyph.cert)
-    app.confirm({
+    _closeRevoke()
+    root._revokeDialog = app.confirm({
       title: ev.title || "Replace your signing certificate?",
       message: ev.message,
       confirmText: "Revoke and continue",
       cancelText: "Don't revoke",
       destructive: true,
       glyph: Model.Glyph.cert,
-      onConfirm: function() { root.answerPrompt("yes") },
-      onCancel: function() { root.answerPrompt("no") }
+      onConfirm: function() { root._revokeDialog = null; root.answerPrompt("yes") },
+      onCancel: function() { root._revokeDialog = null; root.answerPrompt("no") }
     })
+  }
+  function _closeRevoke() {
+    if (root._revokeDialog) app.closeConfirm(root._revokeDialog)
+    root._revokeDialog = null
   }
 
   function _helperDone(ok, data, error) {
     cancelKill.stop()
+    _closeRevoke()
     root.pendingPrompt = null
     if (!ok) { _finish(false, (error && error.build) || data || {}, error); return }
     // Wi-Fi: the helper built and signed the .ipa; the device daemon installs it.
@@ -358,7 +416,11 @@ Item {
     b.fraction = ok ? 1 : b.fraction
     b.detail = ok ? "Done" : (error ? error.message : "Stopped")
     b.result = { ok: ok, data: data || {}, error: error, duration: data && data.duration ? data.duration : (Date.now() - b.started) / 1000 }
-    if (data && data.diagnostics && data.diagnostics.length > (b.diagnostics || []).length) b.diagnostics = data.diagnostics
+    if (data && data.diagnostics && data.diagnostics.length > root._diags.length) {
+      _clearDiagnostics()
+      for (var i = 0; i < data.diagnostics.length; i++) _addDiagnostic(data.diagnostics[i])
+    }
+    root._cancelling = false
     root.build = b
     root.buildFinished(ok)
 

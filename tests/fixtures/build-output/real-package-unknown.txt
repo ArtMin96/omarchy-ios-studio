@@ -1,0 +1,6 @@
+error: 'missingprod': unknown package 'bar' in dependencies of target 'MissingProd'; valid packages are: 
+Error: exited(1)
+Planning...
+[LSP] Created .bsp/xtool.json for enhanced IDE support. You may
+      need to restart your editor for the change to take effect.
+      You can disable this with `skipLSP: true` in xtool.yml.

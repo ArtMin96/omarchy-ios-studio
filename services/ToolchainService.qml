@@ -28,7 +28,6 @@ Item {
   property string busyItem: ""    // disk item id, or "remove-all"
   property real busyFraction: -1
   property string busyDetail: ""
-  property var busyLog: []
   property var prompt: null
   readonly property bool busy: job.running
 
@@ -85,7 +84,7 @@ Item {
     job.start(["toolchain", "remove-all", "--yes"].concat(removeAuth ? ["--remove-auth"] : []))
   }
 
-  function _begin() { root.busyFraction = -1; root.busyDetail = "Starting…"; root.busyLog = [] }
+  function _begin() { root.busyFraction = -1; root.busyDetail = "Starting…" }
 
   function answer(value) { if (root.prompt) { job.write({ prompt: root.prompt.id, value: String(value) }); root.prompt = null } }
 
@@ -96,25 +95,32 @@ Item {
       if (ev.event === "progress") {
         root.busyFraction = ev.fraction === null || ev.fraction === undefined ? -1 : ev.fraction
         root.busyDetail = ev.detail || ""
-      } else if (ev.event === "log") {
-        var l = root.busyLog.slice(-299); l.push(ev.text || ""); root.busyLog = l
       } else if (ev.event === "prompt") {
         root.prompt = ev
       }
     }
-    onFinished: function(ok, data, error) {
-      var what = root.busyItem
-      root.busyItem = ""
-      root.prompt = null
-      if (ok) {
-        if (what === "remove-all") root.app.toast("The iOS toolchain was removed", "ok")
-        else root.app.toast("Freed " + Model.formatBytes(data.freed || 0), "ok")
-      } else if (error && error.code !== "cancelled") {
-        root.app.toast(Model.errorMessage(error), "error")
-      }
-      root.refresh()
-      if (root.app.setup) root.app.setup.refresh()
+    onFinished: function(ok, data, error) { root._done(ok, data, error) }
+    // A helper that exits 0 without a `done` line: clear busyItem anyway (exit errors come through onFinished).
+    onExited: function(code) {
+      Qt.callLater(function() {
+        if (root.busyItem !== "" && !job.running && !job.lastDone)
+          root._done(false, {}, { code: "exited", message: "The cleanup stopped without reporting a result." })
+      })
     }
+  }
+
+  function _done(ok, data, error) {
+    var what = root.busyItem
+    root.busyItem = ""
+    root.prompt = null
+    if (ok) {
+      if (what === "remove-all") root.app.toast("The iOS toolchain was removed", "ok")
+      else root.app.toast("Freed " + Model.formatBytes(data.freed || 0), "ok")
+    } else if (error && error.code !== "cancelled") {
+      root.app.toast(Model.errorMessage(error), "error")
+    }
+    root.refresh()
+    if (root.app.setup) root.app.setup.refresh()
   }
 
   Component.onCompleted: root.refresh()

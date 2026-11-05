@@ -1,0 +1,4 @@
+/home/user/Developer/App/xtool/.xtool-tmp/Package.swift: App-App-product: ld64.lld: error: library not found for -lsqlite4
+/home/user/Developer/App/xtool/.xtool-tmp/Package.swift: App-App-product: ld64.lld: error: framework not found for -framework AppKit
+/home/user/Developer/App/xtool/.xtool-tmp/Package.swift: App-App-product: clang: error: linker command failed with exit code 1 (use -v to see invocation)
+Error: exited(1)

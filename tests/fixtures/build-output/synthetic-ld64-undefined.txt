@@ -1,0 +1,14 @@
+[12/14] Linking HabitTracker-App
+Undefined symbols for architecture arm64:
+  "_sqlite3_open", referenced from:
+      _$s12HabitTracker5StoreC4openyyKF in Store.o
+  "_$s7Charts9ChartViewVMa", referenced from:
+      _$s12HabitTracker9StatsViewV4bodyQrvg in StatsView.o
+      _$s12HabitTracker9StatsViewV7previewQrvg in StatsView.o
+ld: symbol(s) not found for architecture arm64
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+duplicate symbol '_helper' in:
+    /home/user/Developer/HabitTracker/.build/A.o
+    /home/user/Developer/HabitTracker/.build/B.o
+ld: 1 duplicate symbol for architecture arm64
+error: Build failed

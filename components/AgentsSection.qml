@@ -37,6 +37,7 @@ Card {
   readonly property int installedCount: clients.filter(function(c) { return c.installed }).length
   readonly property int connectedCount: clients.filter(function(c) { return c.registered }).length
   readonly property bool demoMode: !!root.app.settings.agentsDemo
+  readonly property real actionSlotWidth: Math.max(probeConnect.implicitWidth, probeDisconnect.implicitWidth, probeUpdate.implicitWidth)
 
   readonly property var glyphs: ({
     claude: Model.Glyph.asterisk, codex: Model.Glyph.hexagon, opencode: Model.Glyph.consoleLine,
@@ -228,6 +229,11 @@ Card {
     gap: Style.spacing.sm
   }
 
+  // Width probes for the rows' button slot (hidden, so the layout skips them).
+  ActionButton { id: probeConnect; visible: false; compact: true; text: "Connect"; glyph: Model.Glyph.link }
+  ActionButton { id: probeDisconnect; visible: false; compact: true; text: "Disconnect" }
+  ActionButton { id: probeUpdate; visible: false; compact: true; text: "Update"; glyph: Model.Glyph.sync }
+
   Repeater {
     model: root.clients
     delegate: Item {
@@ -235,7 +241,7 @@ Card {
       required property var modelData
       required property int index
       readonly property var c: modelData
-      readonly property string state: root.busy[c.id] || ""
+      readonly property string busyState: root.busy[c.id] || ""
       readonly property bool narrow: width > 0 && width < Style.space(600)
       readonly property string pillLevel: c.stale ? "warn" : c.registered ? "ok" : "info"
       readonly property string pillText: c.stale ? "Needs update" : c.registered ? (c.demo ? "Connected · demo" : "Connected") : "Not connected"
@@ -313,24 +319,34 @@ Card {
             onClicked: root.copySnippet(row.c)
           }
           IconButton {
+            // Hidden by opacity, not visible: it keeps its place so the copy icons line up.
+            readonly property bool shown: row.c.registered && !row.c.stale
             glyph: Model.Glyph.testTube
             tooltip: "Test the connection"
-            visible: row.c.registered && !row.c.stale
-            busy: row.state === "test"
-            enabled: row.state === ""
+            opacity: shown ? 1 : 0
+            busy: row.busyState === "test"
+            enabled: shown && row.busyState === ""
             anchors.verticalCenter: parent.verticalCenter
             onClicked: root.test(row.c)
           }
-          ActionButton {
-            visible: row.c.installed || row.c.registered
+          // Fixed-width slot (the widest label), so the icons to its left line up on every row,
+          // with or without a button and whatever it says.
+          Item {
+            width: root.actionSlotWidth
+            height: rowAction.implicitHeight
             anchors.verticalCenter: parent.verticalCenter
-            compact: true
-            text: row.c.stale ? "Update" : row.c.registered ? "Disconnect" : "Connect"
-            glyph: row.c.stale ? Model.Glyph.sync : row.c.registered ? "" : Model.Glyph.link
-            kind: row.c.registered && !row.c.stale ? "ghost" : "secondary"
-            busy: row.state === "connect" || row.state === "disconnect"
-            enabled: row.state === "" && !row.c.error
-            onClicked: row.c.registered && !row.c.stale ? root.askDisconnect(row.c) : root.connect(row.c)
+            ActionButton {
+              id: rowAction
+              visible: row.c.installed || row.c.registered
+              anchors.fill: parent
+              compact: true
+              text: row.c.stale ? "Update" : row.c.registered ? "Disconnect" : "Connect"
+              glyph: row.c.stale ? Model.Glyph.sync : row.c.registered ? "" : Model.Glyph.link
+              kind: row.c.registered && !row.c.stale ? "ghost" : "secondary"
+              busy: row.busyState === "connect" || row.busyState === "disconnect"
+              enabled: row.busyState === "" && !row.c.error
+              onClicked: row.c.registered && !row.c.stale ? root.askDisconnect(row.c) : root.connect(row.c)
+            }
           }
         }
       }

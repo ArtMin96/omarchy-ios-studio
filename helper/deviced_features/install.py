@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import device_link as link
-from deviced_core import classify, emit, err, icon_path
+from deviced_core import classify, emit, err, icon_path, installed_apps
 
 
 def register(reg):
@@ -38,14 +38,15 @@ def register(reg):
 
         t0 = time.monotonic()
         try:
-            await d.pmd3.InstallationProxyService(lockdown=rsd).install_from_local(path, "Install", None, progress)
+            async with d.pmd3.InstallationProxyService(lockdown=rsd) as ip:
+                await ip.install_from_local(path, "Install", None, progress)
         except BaseException as exc:  # noqa: BLE001
             if isinstance(exc, asyncio.CancelledError):
                 raise
             raise link.install_error(exc, classify)
         installed = None
         with contextlib.suppress(BaseException):
-            apps = await d.pmd3.InstallationProxyService(lockdown=rsd).get_apps(application_type="User")
+            apps = await installed_apps(d.pmd3, rsd, application_type="User")
             for k in sorted(apps):
                 if bid and (k == bid or k.endswith("." + bid)):
                     installed = k
@@ -63,7 +64,8 @@ def register(reg):
         if not bid:
             raise err("bad-args", "Which app? (bundleId missing)")
         s, rsd = await d.rsd(a)
-        await d.pmd3.InstallationProxyService(lockdown=rsd).uninstall(bid)
+        async with d.pmd3.InstallationProxyService(lockdown=rsd) as ip:
+            await ip.uninstall(bid)
         with contextlib.suppress(OSError):
             icon_path(s.udid, bid).unlink()
         return {"bundleId": bid}
