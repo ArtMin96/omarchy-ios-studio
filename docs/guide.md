@@ -127,7 +127,7 @@ Your apps. iOS Studio looks for xtool projects (a folder with `Package.swift` an
 Three tabs:
 
 - Device log is your iPhone's live log. Filter by app or process and by level, search, pause with `Space`, and export the visible lines to Downloads. It keeps streaming while you're on other pages.
-- Crashes lists crash reports from the phone, with new ones marked. Each report opens with a summary (the reason, the app and version, the crashed thread and the first frames of where it crashed) and the full report below. You can copy or save it.
+- Crashes lists crash reports from the phone, with new ones marked. Each report opens with a summary (the reason, the app and version, the crashed thread and the first frames of where it crashed) and the full report below. Your app's frames show the file and line, and a click opens them in your editor. You can copy or save the report.
 - Build logs has every build you ran, with its problems and full log. Rebuild runs it again.
 
 ### Toolchain
@@ -226,6 +226,7 @@ Below the charts are three deeper checks, and each one asks before it starts:
 1. Open Logs › Crashes with the iPhone connected.
 2. "My apps" shows only your apps' crashes. Pick one.
 3. Read the summary at the top. The reason and "Where it crashed" usually point at the problem. Save or copy the full report if you need to share it.
+4. Your app's frames show the function and the file and line it crashed on. Click one to open that line in your editor. This works for crashes from builds you ran from iOS Studio on this computer; if a crash came from an older build, the note under the frames says so, and rebuilding that version and reproducing the crash gives you the lines.
 
 ### Test camera code with files
 

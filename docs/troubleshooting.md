@@ -139,6 +139,10 @@ The console only shows apps that iOS Studio launched: Run on a project, or Launc
 
 The phone gives the app a terminal for its output, so `print()` should show up line by line. If lines come in big chunks, something in the app switched stdout to full buffering, or writes without a newline (`print(x, terminator: "")` is shown after a second of quiet). Put `setvbuf(stdout, nil, _IOLBF, 0)` at the start of the app (or call `fflush(stdout)` after writing), and end lines with a newline. On the iPhone stdout and stderr share that terminal, so the stderr filter only appears in demo mode.
 
+### A crash report shows `MyApp + 0x…` instead of file and line
+
+The note under "Where it crashed" says why. "No build on this computer matches" means the crash came from a build iOS Studio didn't keep: one made before iOS Studio started keeping builds, one made on another computer, or one you rebuilt over. "Pruned" means it was kept but is older than the last 10 builds of the project. Rebuild that exact version (same code and settings), install it with Run, reproduce the crash and open the new report. "No debug info" means a release build: it shows function names only; use the debug configuration for lines. See [features/crash-symbolication.md](features/crash-symbolication.md).
+
 ## Building
 
 ### "Your code has N errors"

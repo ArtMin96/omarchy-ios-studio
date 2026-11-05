@@ -12,7 +12,7 @@ from pydantic import Field
 
 from .. import budget as B
 from .. import helper
-from ..models import CrashBrief, CrashDetail, CrashList
+from ..models import CrashBrief, CrashDetail, CrashFrame, CrashList
 from ..state import AppState, get_state
 from . import READ_REMOTE, page_of, tool
 from .device import Udid, apps, dcall, match_app
@@ -52,9 +52,31 @@ def _frame(f: dict, images: list) -> str:
     return f"{img} + 0x{int(f.get('imageOffset') or 0):x}"
 
 
-def render_section(raw: str, section: str, frames_per_thread: int = 25) -> list[str]:
-    """Readable lines for one part of a .ips report: every thread's frames, or the binary images. Falls back
-    to the raw lines when the body isn't the iOS 15+ JSON format."""
+def _resolved(n: int, f: dict, images: list, info: dict | None) -> str:
+    """A frame line, with the function and file:line from crash symbolication when it resolved."""
+    if not info or not (info.get("function") or info.get("file")):
+        return f"{n} {_frame(f, images)}"
+    where = ""
+    if info.get("file"):
+        where = f" ({info['file']}:{info.get('line')}" + (f":{info['column']}" if info.get("column") else "") + ")"
+    return f"{n} {info.get('image') or ''} {info.get('function') or ''}".rstrip() + where
+
+
+def load_symbols(path: str) -> dict:
+    """Crash symbolication's saved result for a pulled report (<report>.symbols.json, written by the device
+    daemon's crash.pull): {"<thread>:<frame>": {function, file, line, ...}}."""
+    try:
+        data = json.loads(Path(path + ".symbols.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    frames = data.get("frames") if isinstance(data, dict) else None
+    return frames if isinstance(frames, dict) else {}
+
+
+def render_section(raw: str, section: str, frames_per_thread: int = 25, symbols: dict | None = None) -> list[str]:
+    """Readable lines for one part of a .ips report: every thread's frames (app frames with file:line when
+    `symbols` resolved them), or the binary images. Falls back to the raw lines when the body isn't the
+    iOS 15+ JSON format."""
     _, _, body = raw.partition("\n")
     try:
         b = json.loads(body)
@@ -72,7 +94,8 @@ def render_section(raw: str, section: str, frames_per_thread: int = 25) -> list[
             name = " ".join(x for x in (t.get("name"), t.get("queue")) if x)
             out.append(f"Thread {i}{' CRASHED' if t.get('triggered') else ''}{(': ' + name) if name else ''}")
             frames = t.get("frames") or []
-            out += [f"  {n} {_frame(f, images)}" for n, f in enumerate(frames[:frames_per_thread])]
+            out += [f"  {_resolved(n, f, images, (symbols or {}).get(f'{i}:{n}'))}"
+                    for n, f in enumerate(frames[:frames_per_thread])]
             if len(frames) > frames_per_thread:
                 out.append(f"  … {len(frames) - frames_per_thread} more frames")
     elif section == "images":
@@ -102,7 +125,17 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
     nxt = []
     frames = [B.clip(f, 300) for f in (s.get("frames") or [])][:FRAMES]
     proc = s.get("process")
-    if frames and proc:
+    sym = s.get("symbolication") if isinstance(s.get("symbolication"), dict) else {}
+    app_frames = [CrashFrame(index=n, function=B.clip(i.get("function"), 300) if i.get("function") else None,
+                             file=i.get("file"), line=i.get("line"), column=i.get("column"))
+                  for n, i in enumerate(sym.get("frames") or []) if isinstance(i, dict)][:FRAMES]
+    status = sym.get("status") if sym.get("status") in ("full", "partial", "none", "not-needed") else None
+    sym_note = " ".join(x for x in (sym.get("message"), sym.get("hint")) if x) or None
+    top = next((f for f in app_frames if f.file), None)
+    if top:
+        nxt.append(f"The crash is in {top.function or 'your code'} at {top.file}:{top.line} (frame {top.index}"
+                   + (f", project {helper.tilde(sym['project'])}" if sym.get("project") else "") + "); open that line.")
+    elif frames and proc:
         own = [f for f in frames if f" {proc} " in f" {f} "]
         if own:
             nxt.append(f"Frames in {proc} point at your code (e.g. '{own[0]}'); find those functions in the project's "
@@ -122,9 +155,11 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
                       signal=s.get("signal"),
                       termination_reason=B.clip(s.get("terminationReason"), 600) if s.get("terminationReason") else None,
                       crashed_thread=s.get("crashedThread"), frames=frames, size=size, section=section,
-                      next_steps=nxt, full_output_path=helper.tilde(path) or None).with_budget(max_bytes, links)
+                      symbolicated=status, symbolication_note=B.clip(sym_note, 600) if sym_note else None,
+                      project_path=helper.tilde(sym["project"]) if sym.get("project") else None,
+                      app_frames=app_frames, next_steps=nxt, full_output_path=helper.tilde(path) or None).with_budget(max_bytes, links)
     if section != "summary" and raw:
-        lines = raw.splitlines() if section == "raw" else render_section(raw, section)
+        lines = raw.splitlines() if section == "raw" else render_section(raw, section, symbols=load_symbols(path))
         window = [B.clip(ln, 1000) for ln in lines[start_line:start_line + max_lines]]
 
         def page_note(end: int) -> str | None:
@@ -137,6 +172,7 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
         # Size the window by what the other fields (frames, reason, the note itself) leave of the budget, so
         # the result never needs cutting: a cut would leave end_line past lines the caller never saw.
         out.frames = []                     # the summary's; a section page is about its own lines
+        out.app_frames = []
         if out.termination_reason:
             out.termination_reason = B.clip(out.termination_reason, 200)
         out.start_line, out.end_line, out.total_lines = start_line, len(lines), len(lines)
@@ -241,9 +277,10 @@ def register(mcp: MCPServer) -> None:
     ) -> CrashDetail:
         """One crash report, parsed: process, bundle id, app and iOS version, exception type, signal,
         termination reason (e.g. the Swift fatal error message), and the top 15 frames of the crashed
-        thread, plus the local .ips path (and a resource link). App frames without symbols read
-        '<image> + 0xOFFSET'. Use the frames in the app's own module to find the failing function in the
-        project. For more, pick a section (threads, images, raw); its lines come as plain text after the
+        thread, plus the local .ips path (and a resource link). The app's own frames are resolved against
+        the build that crashed (kept on every build): app_frames has function, file (relative to
+        project_path) and line, and symbolicated says full/partial/none with symbolication_note saying why
+        and what to do (usually: rebuild that exact version). Unresolved frames read '<image> + 0xOFFSET'. For more, pick a section (threads, images, raw); its lines come as plain text after the
         JSON, paged with start_line, under 12 KB unless max_bytes raises it."""
         state = get_state(ctx)
         return await crash_detail(state, name, udid, "raw" if full_text and section == "summary" else section,

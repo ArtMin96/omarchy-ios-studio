@@ -15,7 +15,7 @@ iOS Studio is a desktop app for [Omarchy](https://omarchy.org/). It installs the
 | Apple ID | Sign in and see your team, certificates, profiles and the free-account limits. |
 | iPhone | Pair your phone and work with it: see the list below. |
 | Projects | Create an app from a template, build it, run it on your iPhone and re-sign it. |
-| Logs | Read your iPhone's live log, see what your app prints (`print()`), open crash reports and look back at build logs. |
+| Logs | Read your iPhone's live log, see what your app prints (`print()`), open crash reports with the file and line your app crashed on, and look back at build logs. |
 | Toolchain | Check versions and disk usage, free space, repair or remove everything. |
 | Settings | Project folders, editor, notifications, automatic re-signing, AI agents, a launcher shortcut, tiled or floating, opaque window. |
 

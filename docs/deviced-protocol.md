@@ -715,6 +715,24 @@ pulled) and parses the `.ips` header + body:
 Any field may be `null` (resource reports have no exception). `frames` = the first 15 frames of
 the crashed thread, unsymbolicated app frames are `"<image> + 0xOFFSET"`.
 
+The summary also has `symbolication` (helper/crash_symbols.py, see
+[features/crash-symbolication.md](features/crash-symbolication.md)): the app's frames resolved against
+the kept build with the same UUID. Resolved entries of `frames` are rewritten as
+`"<n> <image> <function> (<file>:<line>:<col>)"`, and `symbolication.frames` is aligned with them
+(`null` for system or unresolved frames):
+
+```json
+{"status": "full", "reason": "ok", "message": "Resolved the app's frames to file:line.", "hint": null,
+ "project": "/home/me/Developer/MyApp",
+ "frames": [null, {"image": "MyApp", "function": "Forecast.first()", "file": "Sources/MyApp/Forecast.swift",
+                   "path": "/home/me/Developer/MyApp/Sources/MyApp/Forecast.swift", "line": 6, "column": 17}]}
+```
+
+`status` ∈ `full`, `partial`, `none`, `not-needed`; `reason` ∈ `ok`, `partial`, `no-debug-info`,
+`no-build`, `pruned`, `no-symbolizer`, `unsupported`, `no-app-frames`; `hint` says what to do. Every
+thread's resolved frames are saved next to the copy as `<file>.symbols.json`
+(`{"frames": {"<thread>:<frame>": {…}}, …}`), which `ios_crash_get(section='threads')` reads.
+
 ### Performance metrics, used by the Performance tab and the MCP metrics tools
 
 A metrics session follows one app and keeps one compact row per interval (about an hour at 1 Hz) plus

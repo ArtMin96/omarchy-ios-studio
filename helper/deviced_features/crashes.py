@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import posixpath
 
+import crash_symbols
 import device_crash
 from deviced_core import CRASH_DIR, classify, err, safe_name, write_bytes
 
@@ -48,4 +49,7 @@ def register(reg):
                     raise e
             await asyncio.to_thread(write_bytes, local, data)
         text = await asyncio.to_thread(local.read_text, "utf-8", "replace")
-        return {"path": str(local), "summary": device_crash.parse_ips(text)}
+        summary = device_crash.parse_ips(text)
+        with contextlib.suppress(Exception):  # file:line for the app's frames; the report still opens without
+            crash_symbols.apply(summary, await asyncio.to_thread(crash_symbols.symbolicate_file, local))
+        return {"path": str(local), "summary": summary}

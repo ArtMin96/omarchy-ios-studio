@@ -1539,6 +1539,9 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
     _append_history({**entry, "diagnostics": _stored_diags(runner.diags)})
     runner.log_fh.write(f"\n# {entry['result']} in {duration}s\n")
     runner.close()
+    if ok_ and kind in ("ipa", "run", "renew"):
+        import crash_symbols  # keep this build's binary + dSYM so its crash reports resolve to file:line
+        crash_symbols.remember_build(p, product, config)
     if ok_:
         data = {
             **entry,
