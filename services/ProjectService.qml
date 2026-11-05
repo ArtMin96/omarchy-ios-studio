@@ -501,6 +501,26 @@ Item {
     }, function(e) { app.toast(Model.errorMessage(e), "error") })
   }
 
+  // Build settings (prebuild command, env, open-file limit, allow generated): see helper/build_settings.py.
+  // A project whose xtool.yml is generated builds only once its settings allow it.
+  function blocked(p) { return !!(p && p.generated && !(p.buildSettings && p.buildSettings.allowGenerated)) }
+  // loadBuildSettings -> { settings, suggested: { settings, reasons } | null, openFilesError }
+  function loadBuildSettings(p, onDone, onFail) {
+    app.cli.call(["projects", "build-settings", "--path", p.path], "", function(d) { if (onDone) onDone(d) },
+                 function(e) { if (onFail) onFail(e) })
+  }
+
+  // patch: { prebuild, env (whole map, replaces), openFiles, allowGenerated }
+  function saveBuildSettings(p, patch, onDone, onFail) {
+    var full = Object.assign({}, patch)
+    if (full.env !== undefined) full.envReplace = true
+    app.cli.call(["projects", "build-settings", "--path", p.path, "--set", JSON.stringify(full)], "", function(d) {
+      refresh()
+      app.toast(d.changes && d.changes.length ? "Build settings saved for " + p.name : "Nothing changed", d.changes && d.changes.length ? "ok" : "info")
+      if (onDone) onDone(d)
+    }, function(e) { if (onFail) onFail(e) })
+  }
+
   function openBuildLog(file) {
     app.cli.call(["projects", "open", "--path", app.stateDir, "--file", file], "", function() {}, function(e) { app.toast(Model.errorMessage(e), "error") })
   }

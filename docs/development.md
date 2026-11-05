@@ -27,6 +27,7 @@ helper/
   main.py            helper router: group name -> module
   common.py          shared helper code: ok()/fail()/event(), paths, fix links
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
+  build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
   diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
   xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
@@ -52,7 +53,7 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (75 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (76 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
@@ -82,7 +83,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 

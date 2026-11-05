@@ -435,6 +435,10 @@ def run(group: str, action: str, flags: dict) -> int:
         return ok({"lastBuild": h[-1] if h else None, "recentBuilds": list(reversed(h))[:8], "expiring": []})
     if key == "projects templates":
         return ok(_real("projects", "projects", "templates", flags) or {"templates": []})
+    if key == "projects build-settings":   # nothing is saved in demo mode
+        empty = {"prebuild": None, "env": {}, "openFiles": None, "allowGenerated": False}
+        return ok({"demo": True, "path": flags.get("path"), "settings": empty, "before": empty, "changes": [],
+                   "saved": False, "dryRun": True, "suggested": None, "openFilesError": None})
     if key == "projects autorenew":
         return ok({"installed": False, "unit": "ios-studio-renew.timer", "enabled": False, "next": None, "last": None, "projects": []})
     if key == "build history":

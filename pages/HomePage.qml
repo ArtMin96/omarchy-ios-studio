@@ -50,7 +50,7 @@ PageFrame {
   // The first recent app that can actually be run from here.
   readonly property var runnable: {
     var r = proj.recent || []
-    for (var i = 0; i < r.length; i++) if (!r[i].generated) return r[i]
+    for (var i = 0; i < r.length; i++) if (!proj.blocked(r[i])) return r[i]
     return null
   }
 
@@ -141,7 +141,7 @@ PageFrame {
     if (n === 0) return false
     if (a === "down") { page.cursor = Math.min(n - 1, page.cursor + 1); return true }
     if (a === "up") { page.cursor = Math.max(0, page.cursor - 1); return true }
-    if (a === "activate" && page.cursor >= 0) { var p = proj.recent[page.cursor]; if (p && !p.generated) page.runProject(p); return true }
+    if (a === "activate" && page.cursor >= 0) { var p = proj.recent[page.cursor]; if (p && !proj.blocked(p)) page.runProject(p); return true }
     return false
   }
   function goBack() { page.cursor = -1 }
@@ -552,8 +552,8 @@ PageFrame {
             text: "Run"; glyph: Model.Glyph.play; compact: true
             kind: index === 0 ? "primary" : "secondary"
             busy: prow.mine
-            disabled: prow.modelData.generated || page.proj.building
-            tooltip: prow.modelData.generated ? "This project is built by its own scripts" : (page.proj.canRun ? "Build, install and open on your iPhone" : "Connect your iPhone first")
+            disabled: page.proj.blocked(prow.modelData) || page.proj.building
+            tooltip: page.proj.blocked(prow.modelData) ? "Built by its own scripts; allow it in its Build settings (Projects)" : (page.proj.canRun ? "Build, install and open on your iPhone" : "Connect your iPhone first")
             onClicked: page.runProject(prow.modelData)
           }
         ]
