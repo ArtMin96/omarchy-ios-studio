@@ -701,7 +701,10 @@ class Hub:
         cat = str(e.get("category") or "")
         low = msg.lower()
         pl = proc.lower()
-        thermal = sub.startswith("com.apple.cltm") or "thermalmonitor" in pl
+        # thermalmonitord's own errors (level error/fault, or "<Error> could not find …" in the text) are
+        # not thermal changes: counting them made every summary report one.
+        thermal = (sub.startswith("com.apple.cltm") or "thermalmonitor" in pl) \
+            and str(e.get("level") or "") not in ("error", "fault") and not low.lstrip().startswith("<error>")
         jets = ((sub == "com.apple.xnu" and "memorystatus" in cat.lower()) or (pl == "kernel" and "memorystatus" in low)) \
             and ("kill" in low or "jetsam" in low)
         watchdog = sub.startswith("com.apple.watchdogd") or pl == "watchdogd" or \

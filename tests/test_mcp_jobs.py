@@ -161,6 +161,29 @@ class MalformedEvents(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait({job._task}, timeout=10)
         self.assertEqual((job.state, job.error["code"]), ("failed", "x"))
 
+    async def test_refused_build_becomes_a_diagnostic(self):
+        mgr = JobManager()
+        job = await run_job(mgr, await spawn({"event": "done", "ok": False, "error": {
+            "code": "generated-project", "message": "This project generates its xtool.yml."}}))
+        await asyncio.wait({job._task}, timeout=10)
+        self.assertEqual(job.state, "failed")
+        self.assertEqual(len(job.diagnostics), 1)
+        d = job.diagnostics[0]
+        self.assertEqual((d["severity"], d["category"], d["code"]), ("error", "config", "generated-project"))
+        self.assertIn("build script", d["hint"])
+
+    async def test_build_failure_from_output_adds_no_refusal(self):
+        mgr = JobManager()
+        job = await run_job(mgr, await spawn(
+            {"event": "diagnostic", "severity": "error", "category": "linker", "message": "undefined symbol"},
+            {"event": "done", "ok": False, "error": {"code": "not-signed-in", "message": "m"}}))
+        await asyncio.wait({job._task}, timeout=10)
+        self.assertEqual([d["category"] for d in job.diagnostics], ["linker"])
+        job2 = await run_job(mgr, await spawn({"event": "done", "ok": False,
+                                               "error": {"code": "build-failed", "message": "m"}}))
+        await asyncio.wait({job2._task}, timeout=10)
+        self.assertEqual(job2.diagnostics, [])
+
     async def test_over_long_line_is_skipped(self):
         mgr = JobManager()
         job = await run_job(mgr, await spawn({"event": "log", "text": "after"}, {"event": "done", "ok": True},

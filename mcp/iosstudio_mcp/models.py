@@ -3,6 +3,7 @@ structuredContent and a JSON text block. Keep fields short and agent-meaningful 
 file:line), and convert the helper's camelCase payloads with the `from_*` constructors."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, ClassVar, Literal
 
@@ -129,6 +130,13 @@ class ProjectBrief(Out):
                    signing=SigningBrief.from_helper(p.get("signing")))
 
 
+def _sources_dir(path: Any, product: Any) -> str | None:
+    """Sources/<Product> when it exists; a package that puts its target elsewhere (path: in Package.swift,
+    e.g. a generated adapter) gets None rather than a folder that isn't there."""
+    d = f"{path}/Sources/{product}"
+    return d if product and os.path.isdir(d) else None
+
+
 class ProjectDetail(ProjectBrief):
     package: str | None = None
     product: str | None = None
@@ -145,7 +153,7 @@ class ProjectDetail(ProjectBrief):
         product = p.get("product")
         return cls(**base, package=p.get("package"), product=product, generated=bool(p.get("generated")),
                    note=p.get("note"), ipa=p.get("ipa"), icon=p.get("icon"),
-                   sources=f"{p.get('path')}/Sources/{product}" if product else None,
+                   sources=_sources_dir(p.get("path"), product),
                    next_steps=next_steps or [])
 
 

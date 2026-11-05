@@ -33,13 +33,15 @@ def _is_demo_stub(data) -> bool:
 
 
 def _detail_next(p: dict) -> list[str]:
+    if p.get("generated"):
+        return ["This project generates its own xtool.yml, so iOS Studio won't build, run or renew it: use the "
+                "project's own build script. The iPhone tools (ios_app_run_and_capture, ios_logs_start, "
+                "ios_crash_list, ios_metrics_start, …) still work on the installed app by bundle id."]
     out = [f"Edit the Swift sources in {p.get('path')}/Sources/{p.get('product') or p.get('name')}/.",
            "Build with ios_build_start(project_path, action='compile'); run on the iPhone with ios_run(project_path)."]
     lb = p.get("lastBuild") or {}
     if lb.get("result") == "failed":
         out.insert(0, f"The last build failed: ios_build_diagnostics(project_path='{p.get('path')}').")
-    if p.get("generated"):
-        out.insert(0, "This project generates its own xtool.yml; iOS Studio won't build it directly.")
     return out
 
 
