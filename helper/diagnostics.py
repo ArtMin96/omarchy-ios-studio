@@ -104,6 +104,8 @@ HINTS = {
              "then rebuild.",
     "xtool-yml": "xtool.yml doesn't match the package: check its version, bundleID and product against "
                  "Package.swift (ios_project_info shows them).",
+    "local-package": "A .package(path:) dependency points to a folder that doesn't exist (or has no "
+                     "Package.swift): fix the path in Package.swift's dependencies.",
     "info-plist": "The Info.plist is invalid: fix the file named in the message (it must be a dictionary).",
 }
 
@@ -129,6 +131,7 @@ RULES: list[tuple[re.Pattern, str, str | None]] = [(re.compile(p, re.I), c, h) f
     (r"xtool\.yml|decodingerror|schema|orgid|bundleid|library products?|product name", "config", "xtool-yml"),
     (r"info\.plist", "config", "info-plist"),
     (r"dependencies could not be resolved|could not resolve package|depends on .* \d", "package", "resolve"),
+    (r"the package at .* cannot be accessed|doesn.t exist in file system", "package", "local-package"),
     (r"invalid manifest|manifest parse|package\.swift", "package", "manifest"),
     (r"unknown (package|dependency)|product '[^']+' .*not found|no such product|unknown product", "package",
      "unknown-dep"),
