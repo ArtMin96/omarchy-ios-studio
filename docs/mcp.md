@@ -117,7 +117,7 @@ Then ask the agent something like *"Check that iOS development is ready"* or *"B
 
 ## Tools
 
-The server has 74 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
+The server has 75 tools, all prefixed `ios_`. Start with `ios_status`. It reports what's ready and, for each problem, which tool fixes it.
 
 | Area | Tools |
 |---|---|
@@ -129,7 +129,7 @@ The server has 74 tools, all prefixed `ios_`. Start with `ios_status`. It report
 | iPhone | `ios_device_list`, `ios_device_info`, `ios_device_select`, `ios_device_reconnect`, `ios_device_prepare` (Developer Mode and the developer disk image) |
 | Apps on the iPhone | `ios_app_list`, `ios_app_install`, `ios_app_launch`, `ios_app_kill`, `ios_app_uninstall`, `ios_process_list`, `ios_location_set`, `ios_location_clear` |
 | Screen | `ios_screenshot`, `ios_screen_record`, `ios_mirror_status` |
-| Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get` |
+| Logs and crashes | `ios_app_run_and_capture`, `ios_logs_start`, `ios_logs_read`, `ios_logs_stop`, `ios_crash_list`, `ios_crash_get`, `ios_app_console_read` |
 | Network | `ios_network_conditions`, `ios_network_condition_set`, `ios_network_condition_clear`, `ios_pcap_capture` |
 | Performance | `ios_metrics_start`, `ios_metrics_summary`, `ios_metrics_series`, `ios_metrics_events`, `ios_metrics_stop`, `ios_launch_profile`, `ios_memory_leaks` |
 | Files and camera tests | `ios_media_list`, `ios_media_pull`, `ios_files_list`, `ios_files_pull`, `ios_files_push`, `ios_files_delete`, `ios_camera_test` |
@@ -158,6 +158,7 @@ A few tools need more explanation:
 - Copies and camera tests can take longer than one call. They keep running in the server and return `state: "running"` with a `transfer_id` or `test_id`; calling the same tool again with that id waits for the result, and `cancel=true` stops it.
 - The debugger tools attach LLDB to one of your own apps, which pauses it. `ios_debug_backtrace` needs `confirm=true` and runs as a job: if it's still running after `wait_seconds`, the agent calls it again with the `job_id`. It returns the top 20 frames of the crashed thread (or the main one), the other threads grouped by identical stacks, and a file with every frame.
 - `ios_debug_session_start` sets breakpoints (`File.swift:42` or a function name) and returns a `session_id`. `ios_debug_session_wait` waits for the next stop, and `ios_debug_session_command` steps (`next`, `step`, `finish`, `continue`, `pause`) or inspects (`frame_variables`, and `evaluate` with an expression of at most 500 characters). A stop shows its file:line, the top 20 frames and frame 0's variables one level deep. `ios_debug_session_end` detaches, so the app keeps running, or quits it with `kill=true`. A session nobody polls for 10 minutes detaches by itself, and so does every session when the server stops.
+- What an app prints (Swift `print()`, stdout and stderr) never reaches the iPhone's log, so the server captures it when it launches the app: `ios_run`, `ios_app_run_and_capture` (on by default, `console=false` turns it off) and `ios_app_launch(console=true)`. `ios_app_run_and_capture` adds a `console` summary (lines printed, how many to stderr, the session id) and the stderr lines plus the latest ones after the log lines, sharing the size limit with them. `ios_app_console_read(bundle_id or session_id)` pages through the rest by cursor, like `ios_logs_read`: `grep`, `stream='stderr'`, `newest`, `wait_seconds` up to 25, `max_bytes`, and `truncated` with a `note` when a page is cut. The device service keeps 10,000 lines per launch, keeps the first 8 KB of a line, and drops (and counts) more than 2,000 lines a second. On a real iPhone stdout and stderr arrive together. An app that was already running has no captured output. See [features/app-console.md](features/app-console.md).
 - `ios_debug_symbols_status` says whether lldb is installed and the state of this iPhone's debug symbols: `state` (missing, downloading, extracting, ready, outdated, incomplete or failed), `update_reason` when they need an update, `last_error`, and `how_to_fix`, which names the button the user presses in iPhone › Debug (Download, Update, Unpack again or Try again). An outdated set still works, but attaching takes minutes over Wi-Fi. The download (about 7 GB, once per iOS version) only starts from that tab; there is no tool for it.
 
 The server also offers a few read-only resources: the live log of a job (`iosstudio://builds/{build_id}/log`), crash reports (`iosstudio://crashes/{file}`), large outputs a tool saved to a file (`iosstudio://cache/{kind}/{name}`), the last known iPhone state, the troubleshooting guide and this page. Each one returns at most 100 KB and says which tool reads the rest.

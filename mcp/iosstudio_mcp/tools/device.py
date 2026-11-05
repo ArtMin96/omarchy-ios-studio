@@ -362,9 +362,11 @@ def install_status(job: InstallJob, next_step: str | None = None) -> AppInstallS
 
 
 async def launch(state: AppState, udid: str | None, bundle_id: str, args: list[str] | None = None,
-                 env: dict[str, str] | None = None) -> dict:
+                 env: dict[str, str] | None = None, console: bool = False) -> dict:
     app = await resolve_app(state, bundle_id, udid)
     a: dict = {"bundleId": app["bundleId"]}
+    if console:
+        a["console"] = True    # capture stdout/stderr for ios_app_console_read (tools/console.py)
     if args:
         a["args"] = args
     if env:
@@ -404,7 +406,7 @@ async def _device_status(state: AppState) -> dict | None:
 
 async def on_startup(state: AppState) -> None:
     state.install_app = lambda udid, ipa, job: _install_for_job(state, udid, ipa, job)
-    state.launch_app = lambda udid, bundle_id: launch(state, udid, bundle_id)
+    state.launch_app = lambda udid, bundle_id: launch(state, udid, bundle_id, console=True)
     state.device_udid = lambda: _device_udid(state)
     state.device_status = lambda: _device_status(state)
 
@@ -689,17 +691,28 @@ def register(mcp: MCPServer) -> None:
         bundle_id: BundleId,
         args: Annotated[list[str] | None, Field(description="Launch arguments, e.g. ['-UITestMode', 'YES']")] = None,
         env: Annotated[dict[str, str] | None, Field(description="Environment variables for the process")] = None,
+        console: Annotated[bool, Field(description="Also capture what the app prints (stdout/stderr, Swift "
+                                                   "print()) for ios_app_console_read. Restarts it if running")] = False,
         udid: Udid = None,
     ) -> AppLaunchResult:
         """Open an installed app on the iPhone and return its pid. Brings it to the front if it's
         already running (kill it first with ios_app_kill for a fresh start). The phone must be unlocked.
-        To also capture its logs and catch a crash, prefer ios_app_run_and_capture."""
+        console=true also captures its print() output (read it with ios_app_console_read). To also capture
+        its logs and catch a crash, prefer ios_app_run_and_capture."""
         state = get_state(ctx)
-        res = await launch(state, udid, bundle_id, args, env)
+        res = await launch(state, udid, bundle_id, args, env, console=console)
         bid = res.get("bundleId") or bundle_id
-        return AppLaunchResult(bundle_id=bid, pid=res.get("pid"),
-                               next_steps=["ios_logs_start(bundle_id=...) to follow its log; ios_crash_list(bundle_id=...) "
-                                           "if it closes by itself; ios_screenshot to see the screen."])
+        con = (res.get("console") or {}) if console else {}
+        con_err = None
+        if console and not con.get("sessionId"):
+            e = con.get("error") or {}
+            con_err = B.clip(e.get("message") if isinstance(e, dict) else str(e or "Not captured."), B.ERROR_CUT)
+        steps = ["ios_logs_start(bundle_id=...) to follow its log; ios_crash_list(bundle_id=...) "
+                 "if it closes by itself; ios_screenshot to see the screen."]
+        if con.get("sessionId"):
+            steps.insert(0, f"ios_app_console_read(session_id='{con['sessionId']}', wait_seconds=5) for what it prints.")
+        return AppLaunchResult(bundle_id=bid, pid=res.get("pid"), console_session_id=con.get("sessionId"),
+                               console_error=con_err, next_steps=steps)
 
     @tool(mcp, annotations=ann("Stop app", read_only=False, destructive=False, idempotent=True, open_world=True))
     async def ios_app_kill(ctx: Context, bundle_id: BundleId, udid: Udid = None) -> ActionResult:

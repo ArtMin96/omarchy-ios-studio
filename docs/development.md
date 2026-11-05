@@ -37,20 +37,21 @@ helper/
   deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
   deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
   deviced_features/  one module per feature group of the real daemon: apps, cameratest, conditions,
-                     crashes, ddi, debug, files, install, location, metrics, mirror, pairing, pcap,
-                     profiles, screen, syslog
+                     console, crashes, ddi, debug, files, install, location, metrics, mirror, pairing,
+                     pcap, profiles, screen, syslog
   device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
   device_client.py   asyncio client for the broker (used by the MCP server)
   device_link.py, device_crash.py, device_models.py   device helpers
   device_network.py  Network tab helpers shared by both daemons: condition rules, capture summary, pcapng
   device_files.py    Files feature helpers shared by both daemons (transfers, paths, conversions, Photos.sqlite)
   metrics_core.py    Performance sessions shared by both daemons: commands, sample rings, events, CSV
+  app_console.py     App console shared by both daemons: an app's stdout/stderr split into lines, buffered, console.*
   metrics_stats.py   the Performance report: averages, percentiles, leaks, spikes, hitches, anomalies
   demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (74 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (75 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp

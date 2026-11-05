@@ -559,6 +559,9 @@ class AppInstallResult(Out):
 class AppLaunchResult(Out):
     bundle_id: str
     pid: int | None = None
+    console_session_id: str | None = Field(None, description="console=true: read its print() output with "
+                                                             "ios_app_console_read")
+    console_error: str | None = Field(None, description="console=true: why the output isn't captured")
     next_steps: list[str] = Field(default_factory=list)
 
 

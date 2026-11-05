@@ -15,7 +15,7 @@ import logging
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -26,6 +26,7 @@ from .. import helper
 from ..models import ActionResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state, resolve_project
 from . import MAX_WAIT, READ_REMOTE, ann, tool
+from .console import ConsoleSummary, capture_summary, fmt_line
 from .device import (AppInstallStatus, Udid, dcall, device_tool_error, get_install, install_status, new_client,
                      package_for, resolve_app, start_install, wait_install)
 
@@ -43,9 +44,14 @@ Level = Literal["debug", "info", "default", "error", "fault"]
 
 class RunCaptureResult(RunCapture):
     """RunCapture, or (state='installing') an install that is still running; nothing was launched yet."""
+    BULK: ClassVar[tuple[str, ...]] = ("key_lines", "console_lines")
     state: Literal["done", "installing"] = Field("done", description="installing: the install is still running and "
                                                  "nothing was launched; call again with install_id")
     installed: AppInstallStatus | None = None
+    console: ConsoleSummary | None = Field(None, description="What the app printed (stdout/stderr): counts, and "
+                                                             "the session for ios_app_console_read")
+    console_lines: list[str] = Field(default_factory=list, description="The app's print() output, after the log "
+                                     "lines: stderr lines and the latest ones, '<time> [stderr] <text>'")
 
 
 @dataclass
@@ -384,6 +390,8 @@ def register(mcp: MCPServer) -> None:
         args: Annotated[list[str] | None, Field(description="Launch arguments")] = None,
         env: Annotated[dict[str, str] | None, Field(description="Launch environment variables")] = None,
         max_lines: Annotated[int, Field(ge=5, le=200, description="Max log lines in the summary")] = 40,
+        console: Annotated[bool, Field(description="Also capture what the app prints (stdout/stderr, Swift "
+                                                   "print())")] = True,
         max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                                   "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
@@ -392,7 +400,8 @@ def register(mcp: MCPServer) -> None:
         a log capture filtered to the app, launches it, records for `seconds`, checks whether it is still
         running and whether a NEW crash report appeared, then stops and summarizes: launched?, pid,
         log counts per level, key lines (faults and errors first, then the latest), the new crash's
-        exception, reason and top frames, and next steps. The key lines come as plain text after the JSON
+        exception, reason and top frames, what the app printed (console: stderr lines and the latest
+        print() output, after the log lines), and next steps. The key lines come as plain text after the JSON
         (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
         An install that outlasts the call returns state='installing' with installed.install_id and nothing
         launched: call again with install_id (and the other arguments) to wait for it and then capture.
@@ -449,6 +458,7 @@ def register(mcp: MCPServer) -> None:
             before = None
         sess = await open_session(state, {"bundleId": bid, "minLevel": min_level}, udid, internal=True)
         launch_error, pid, running_end = None, None, None
+        launch_res: dict = {}
         started_wall = time.time()
         t0 = time.monotonic()
         try:
@@ -463,7 +473,10 @@ def register(mcp: MCPServer) -> None:
                     a["args"] = args
                 if env:
                     a["env"] = env
+                if console:
+                    a["console"] = True
                 res = await dcall(state, "app.launch", a, udid=udid, timeout=60) or {}
+                launch_res = res
                 pid = res.get("pid")
             except ToolError as exc:
                 launch_error = str(exc)
@@ -509,13 +522,24 @@ def register(mcp: MCPServer) -> None:
         rest = B.fold_repeats([e for e in entries if RANK.get(e.get("level"), 2) < RANK["error"]], key=fkey)
         key += rest[-(max_lines - len(key)):] if max_lines > len(key) else []
         rendered = [fmt(None, e) + (f" ×{n}" if n > 1 else "") for e, n in key]
-        page = B.take(rendered, len(rendered), B.room(max_bytes, B.RESERVE * 2), from_end=False)
+        room = B.room(max_bytes, B.RESERVE * 2)
+        con_sum, con_lines, con_entries = None, [], []
+        if console and launch_error is None:
+            # the console shares the bulk room with the log lines (about 45 %, more if the log is short)
+            log_need = sum(B.nbytes(r) + 1 for r in rendered)
+            con_room = max(room * 45 // 100, room - log_need)
+            con_sum, con_lines, con_entries = await capture_summary(state, launch_res, udid, max_lines, con_room)
+            room = max(1_000, room - sum(B.nbytes(x) + 1 for x in con_lines))
+        page = B.take(rendered, len(rendered), room, from_end=False)
         lines = page.items
         omitted = len(entries) - sum(n for _, n in key[:len(lines)])
         full_path, links = None, []
-        if entries:
-            path, _, link = B.spill("\n".join(fmt(None, e, 4000) for e in entries), "captures",
-                                    f"{bid}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+        if entries or con_entries:
+            text = "\n".join(fmt(None, e, 4000) for e in entries)
+            if con_entries:
+                text += "\n\n--- console (what the app printed) ---\n" + "\n".join(
+                    fmt_line(None, e, 4000) for e in con_entries)
+            path, _, link = B.spill(text, "captures", f"{bid}-{time.strftime('%Y%m%d-%H%M%S')}.log")
             full_path, links = helper.tilde(path), [link]
 
         name = app.get("name") or bid
@@ -529,6 +553,9 @@ def register(mcp: MCPServer) -> None:
         else:
             summary = f"{name} launched (pid {pid}) and was still running after {elapsed} s."
         summary += f" Captured {len(entries)} log lines ({counts.get('fault', 0)} faults, {counts.get('error', 0)} errors)."
+        if con_sum is not None and con_sum.session_id:
+            summary += (f" It printed {con_sum.captured} lines" +
+                        (f" ({con_sum.stderr} to stderr)." if con_sum.stderr else "."))
 
         nxt = []
         if launch_error:
@@ -541,10 +568,17 @@ def register(mcp: MCPServer) -> None:
             nxt.append("No log lines matched. Retry with min_level='info' or 'debug', or a longer seconds.")
         if launch_error is None and not new_crash:
             nxt.append("ios_screenshot shows the screen now; ios_logs_start(bundle_id) follows the log longer.")
+        if con_sum is not None and con_sum.session_id:
+            nxt.append(f"ios_app_console_read(session_id='{con_sum.session_id}', wait_seconds=10) follows what it "
+                       "prints.")
         if proj or project_path:
             nxt.append("After fixing code, rebuild and reinstall with ios_run(project_path), then run this again.")
         note = (f"Showing {len(lines)} key lines of {len(entries)} captured; the full capture is {full_path}."
                 if omitted > 0 and full_path else None)
+        con_cut = con_sum.lines_omitted if con_sum is not None else 0
+        if con_cut and full_path:
+            note = (note + " " if note else "") + (f"{con_cut} printed lines aren't shown; they're in {full_path} "
+                                                   "and ios_app_console_read.")
         if new_crash is not None:
             new_crash.next_steps = []
         return RunCaptureResult(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
@@ -553,5 +587,6 @@ def register(mcp: MCPServer) -> None:
                                 log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
                                 lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
                                 other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
-                                truncated=omitted > 0, omitted=max(0, omitted), note=note,
-                                full_output_path=full_path).with_budget(max_bytes, links)
+                                truncated=omitted > 0 or con_cut > 0, omitted=max(0, omitted) + con_cut,
+                                note=note, full_output_path=full_path, console=con_sum,
+                                console_lines=con_lines).with_budget(max_bytes, links)
