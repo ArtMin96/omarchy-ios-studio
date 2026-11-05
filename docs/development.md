@@ -56,7 +56,7 @@ mcp/
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, MCP jobs and budget
+tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, MCP jobs, budget and console reads
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 ```
@@ -197,7 +197,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), and the helper's state files and the MCP server's jobs, output budget and log reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
+`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), and the helper's state files, crash report dates, the app console's line splitting and buffers, and the MCP server's jobs, output budget, diagnostics and console reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
 
 ```bash
 python3 -m unittest discover -s tests
@@ -212,9 +212,11 @@ Everything else has no automated tests: check that QML loads without warnings in
 |---|---|
 | Settings | `~/.config/ios-studio/settings.json` |
 | State (build history, renewals, device, setup progress) | `~/.local/state/ios-studio/` |
+| Build logs (the newest 300 builds' logs are kept) | `~/.local/state/ios-studio/build-logs/` |
 | Cache (screenshots, crash files, account lists) | `~/.cache/ios-studio/` |
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `common.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
+| App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
 | Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
 | Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |
 | Imported photos and videos (default) | `~/Pictures/iPhone` |
