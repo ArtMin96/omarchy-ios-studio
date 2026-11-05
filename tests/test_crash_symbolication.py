@@ -265,5 +265,51 @@ class Demo(unittest.TestCase):
         self.assertEqual(ht["symbolication"]["reason"], "no-build")
 
 
+class DaemonPull(TempCache):
+    """crash.pull (helper/deviced_features/crashes.py) on a report that is already on this computer."""
+
+    def pull(self, local: Path) -> dict:
+        import asyncio
+        import importlib
+        try:
+            mod = importlib.import_module("deviced_features.crashes")
+        except Exception as exc:  # noqa: BLE001
+            self.skipTest(f"daemon modules not importable here ({exc})")
+        commands = {}
+
+        class Reg:
+            def command(self, name):
+                return lambda fn: commands.setdefault(name, fn)
+
+        class Dev:
+            async def rsd(self, a):
+                return mock.Mock(udid=local.parent.name), None
+
+        mod.register(Reg())
+        with mock.patch.object(mod, "CRASH_DIR", local.parent.parent):
+            return asyncio.run(commands["crash.pull"](Dev(), {"name": "/" + local.name}))["summary"]
+
+    def local_report(self, text: str) -> Path:
+        local = self.tmp / "crashes" / "PHONE" / "Crashy-2026-11-05-100000.ips"
+        local.parent.mkdir(parents=True)
+        local.write_text(text)
+        return local
+
+    def test_status_always_present(self):
+        s = self.pull(self.local_report(ips()))
+        self.assertEqual(s["symbolication"]["status"], "none")
+        self.assertEqual(s["symbolication"]["reason"], "no-build")
+        self.assertTrue(s["symbolication"]["message"])
+
+    def test_symbolicator_error_is_a_status(self):
+        local = self.local_report(ips())
+        with mock.patch.object(S, "symbolicate_file", side_effect=RuntimeError("boom")):
+            s = self.pull(local)
+        self.assertEqual(s["symbolication"]["status"], "none")
+        self.assertEqual(s["symbolication"]["reason"], "error")
+        self.assertIn("boom", s["symbolication"]["message"])
+        self.assertTrue(s["frames"])
+
+
 if __name__ == "__main__":
     unittest.main()

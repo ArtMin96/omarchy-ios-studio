@@ -50,6 +50,12 @@ def register(reg):
             await asyncio.to_thread(write_bytes, local, data)
         text = await asyncio.to_thread(local.read_text, "utf-8", "replace")
         summary = device_crash.parse_ips(text)
-        with contextlib.suppress(Exception):  # file:line for the app's frames; the report still opens without
-            crash_symbols.apply(summary, await asyncio.to_thread(crash_symbols.symbolicate_file, local))
+        # file:line for the app's frames. The report still opens if this fails, and says why there are none.
+        try:
+            res = await asyncio.to_thread(crash_symbols.symbolicate_file, local)
+        except Exception as exc:  # noqa: BLE001
+            res = crash_symbols.make_result("none", "error", f"Couldn't work out file and line numbers "
+                                            f"({type(exc).__name__}: {exc}).")
+        with contextlib.suppress(Exception):
+            crash_symbols.apply(summary, res)
         return {"path": str(local), "summary": summary}
