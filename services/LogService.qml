@@ -246,22 +246,39 @@ Item {
     _saveState()
   }
 
-  // Pull summaries in the background (one at a time) for the user's crashes and the newest few.
+  // Pull summaries in the background (one at a time) for the user's crashes and the newest few. Also
+  // re-pulls summaries saved by a version without crash symbolication (no `symbolication` key). Each
+  // report is tried at most once per session, so a failing pull can't loop.
+  property var _queued: ({})                // name -> true: pulled in the background this session
   function _pullQueue() {
     for (var k in root.pulling) if (root.pulling[k]) return
-    var budget = 0
     for (var i = 0; i < root.crashes.length; i++) {
       var c = root.crashes[i]
-      if (root.summaries[c.name]) continue
+      var s = root.summaries[c.name]
+      if ((s && s.symbolication) || root._queued[c.name]) continue
       if (!(isOwn(c) || (i < 20 && (c.kind === "crash" || c.kind === "fault")))) continue
+      var q = Object.assign({}, root._queued); q[c.name] = true; root._queued = q
       pullCrash(c, function() { root._pullQueue() }, true)
       return
     }
   }
 
+  // A saved summary is final once its app frames are resolved (or there are none). Anything else is
+  // pulled again when the report is opened: rebuilding the version that crashed can resolve it now, and
+  // a summary saved before crash symbolication has no status at all.
+  function _summaryFinal(s) {
+    var st = s && s.symbolication ? s.symbolication.status : ""
+    return st === "full" || st === "not-needed"
+  }
+
   function pullCrash(c, cb, background) {
-    if (!c || !deviceApi) { if (cb) cb(false, null); return }
-    if (root.summaries[c.name] && root.localPaths[c.name]) { if (cb) cb(true, { path: root.localPaths[c.name], summary: root.summaries[c.name] }); return }
+    if (!c) { if (cb) cb(false, null); return }
+    var cached = root.summaries[c.name], path = root.localPaths[c.name]
+    var have = !!cached && !!path
+    if (have && (!deviceApi || _summaryFinal(cached) || (background && cached.symbolication))) {
+      if (cb) cb(true, { path: path, summary: cached }); return
+    }
+    if (!deviceApi) { if (cb) cb(false, null); return }
     var p = Object.assign({}, root.pulling); p[c.name] = true; root.pulling = p
     dev.request("crash.pull", { name: c.name }, function(ok, d) {
       var q = Object.assign({}, root.pulling); delete q[c.name]; root.pulling = q
@@ -269,6 +286,9 @@ Item {
         var s = Object.assign({}, root.summaries); s[c.name] = d.summary || {}; root.summaries = s
         var l = Object.assign({}, root.localPaths); l[c.name] = d.path; root.localPaths = l
         root._saveStateSoon()
+      } else if (have) {
+        // offline or the report is gone from the phone: keep showing the saved summary
+        if (cb) cb(true, { path: path, summary: cached }); return
       } else if (!background) {
         root.app.toast(Model.errorMessage(d), "warn")
       }

@@ -729,7 +729,8 @@ the kept build with the same UUID. Resolved entries of `frames` are rewritten as
 ```
 
 `status` ∈ `full`, `partial`, `none`, `not-needed`; `reason` ∈ `ok`, `partial`, `no-debug-info`,
-`no-build`, `pruned`, `no-symbolizer`, `unsupported`, `no-app-frames`; `hint` says what to do. Every
+`no-build`, `pruned`, `no-symbolizer`, `unsupported`, `no-app-frames`, `error` (the symbolizer failed;
+`message` names the error); `hint` says what to do. The summary always has `symbolication`. Every
 thread's resolved frames are saved next to the copy as `<file>.symbols.json`
 (`{"frames": {"<thread>:<frame>": {…}}, …}`), which `ios_crash_get(section='threads')` reads.
 

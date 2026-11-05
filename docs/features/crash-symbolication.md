@@ -43,13 +43,18 @@ Reading a report (`crash.pull`), `helper/crash_symbols.py`:
 The result is saved next to the pulled report as `<report>.ips.symbols.json`. A full result is reused;
 anything less is worked out again on the next read, so rebuilding the right version fixes it.
 
+The app keeps each report's summary in `~/.local/state/ios-studio/logs.json` so the Crashes list opens
+offline. Opening a report whose saved summary is not final (`partial`, `none`, or saved by a version
+without symbolication) asks the daemon again and keeps showing the saved one until the answer arrives,
+or if the iPhone is offline. The background pull fills in a missing status once per session.
+
 ## Statuses
 
 | `symbolicated` | Meaning |
 |---|---|
 | `full` | Every app frame of the crashed thread resolved (compiler-generated ones, like the synthesized `main`, to a name only). |
 | `partial` | Some frames resolved: another image of the app had no matching build, or the build has no debug info (`reason: no-debug-info`, names only; release builds). |
-| `none` | `reason`: `no-build` (built before iOS Studio kept symbols, on another computer, or rebuilt since), `pruned` (kept once, then pruned), `no-symbolizer` (llvm-symbolizer missing) or `unsupported` (an old plain-text report). |
+| `none` | `reason`: `no-build` (built before iOS Studio kept symbols, on another computer, or rebuilt since), `pruned` (kept once, then pruned), `no-symbolizer` (llvm-symbolizer missing), `unsupported` (an old plain-text report) or `error` (the symbolizer itself failed; the message names the error). |
 | `not-needed` | No frames in your app's own code (for example a jetsam report). |
 
 ## The cache
