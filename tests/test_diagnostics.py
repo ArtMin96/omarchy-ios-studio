@@ -92,6 +92,12 @@ class RealOutput(unittest.TestCase):
         self.assertTrue(d["message"].startswith("Dependencies could not be resolved because"))
         self.assertIn("version requirement", d["hint"])
 
+    def test_local_package_path_missing(self):
+        (d,) = parse("real-package-local-path.txt")
+        self.assertEqual(d["category"], "package")
+        self.assertIn("cannot be accessed", d["message"])
+        self.assertIn(".package(path:)", d["hint"])
+
     def test_manifest_errors(self):
         ds = parse("real-package-manifest.txt")
         self.assertEqual({d["category"] for d in ds}, {"package"})

@@ -327,6 +327,9 @@ class JobManager:
                     for d in diags if isinstance(diags, list) else []:
                         if isinstance(d, dict) and d not in job.diagnostics and len(job.diagnostics) < MAX_DIAGNOSTICS:
                             job.diagnostics.append(d)
+                refusal = _refusal_diag(job, err)
+                if refusal:
+                    job.diagnostics.append(refusal)
                 self._finish(job, "cancelled" if err.get("code") == "cancelled" else "failed")
             return True
         return False
@@ -472,6 +475,39 @@ class JobManager:
                 j._task.cancel()
             if j.proc:
                 helper.kill_group(j.proc.pid)
+
+
+# ---------------------------------------------------------------- refusals as diagnostics
+
+# Codes of a failed build whose cause is already in the output (parsed into diagnostics), or no cause at all.
+_OUTPUT_CODES = {"build-failed", "compile-errors", "cancelled", "failed", "internal", "timeout"}
+_SIGNING_CODES = {"not-signed-in", "key-mode", "needs-certificate", "signing-failed"}
+_DEVICE_CODES = {"no-device", "device-not-found", "device-not-on-usb", "device-unreachable"}
+
+
+def _refusal_diag(job: Job, err: dict) -> dict | None:
+    """A build the helper refused before running anything (generated project, no iPhone, not signed in, …)
+    has no output to parse: its error becomes the one diagnostic, so ios_build_diagnostics explains the
+    failure instead of reporting that nothing was recognised."""
+    code = str(err.get("code") or "")
+    if job.kind != "build" or not code or code in _OUTPUT_CODES:
+        return None
+    if any(d.get("severity") == "error" for d in job.diagnostics):
+        return None
+    if code in _SIGNING_CODES:
+        cat = "signing"
+    elif code in _DEVICE_CODES:
+        cat = "device"
+    elif code.startswith(("missing-", "needs-")) or code in ("disk-full", "pacman-locked"):
+        cat = "toolchain"
+    else:
+        cat = "config"
+    out = {"severity": "error", "category": cat, "code": code,
+           "message": _text(err.get("message")) or code}
+    hint = helper.next_step_for(err)
+    if hint:
+        out["hint"] = hint
+    return out
 
 
 # ---------------------------------------------------------------- tolerant parsing
