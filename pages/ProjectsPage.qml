@@ -8,7 +8,9 @@ import "../Model.js" as Model
 
 // Projects (projects slice): your xtool apps, Run on iPhone, .ipa builds, 7-day renewal,
 // new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:
-// in each card's Run menu, `w` for the highlighted one) and the build drawer.
+// in each card's Run menu, `w` for the highlighted one), format and lint (More › Format project… / Lint
+// project, `F` / `L` for the highlighted one: ProjectFormatSheet, style warnings in the drawer's
+// Problems) and the build drawer.
 Item {
   id: page
   required property var app
@@ -83,6 +85,8 @@ Item {
     if (event.text === "m" && cur) { var it = cards.itemAt(page.cursor); if (it) it.expanded = !it.expanded; return true }
     if (event.text === "a") { page.addExisting(); return true }
     if (event.text === "w" && cur) { page.toggleWatch(cur); return true }
+    if (event.text === "F" && cur) { formatSheet.openFor(cur); return true }
+    if (event.text === "L" && cur) { page.lintProject(cur); return true }
     return false
   }
 
@@ -103,6 +107,13 @@ Item {
   function showWatchProblems(p) {
     var w = app.watch.forProject(p)
     if (w && w.last && !svc.building && !(svc.build.watch && svc.build.path === p.path)) app.watch.showLast()
+    panel.tab = "problems"
+    page.panelOpen = true
+  }
+
+  // Lint: style warnings in the drawer's Problems (svc.showLint picks whose).
+  function lintProject(p) {
+    svc.showLint(p)
     panel.tab = "problems"
     page.panelOpen = true
   }
@@ -296,7 +307,9 @@ Item {
         onToggleAutoRenew: page.svc.setAutoRenew(modelData, !modelData.autoRenew)
         onOpenBuildSettings: buildSettingsSheet.openFor(modelData)
         onEditPresets: runPresetsSheet.openFor(modelData)
-        onShowBuild: page.panelOpen = true
+        onShowBuild: { page.svc.lintFocus = ""; page.panelOpen = true }
+        onFormatProject: formatSheet.openFor(modelData)
+        onLintProject: page.lintProject(modelData)
         onShowProblems: page.showWatchProblems(modelData)
       }
     }
@@ -370,10 +383,17 @@ Item {
     svc: page.svc
     opened: page.panelOpen
     onCloseRequested: page.panelOpen = false
+    onFormatRequested: function(path) { var fp = page.svc.projectByPath(path); if (fp) formatSheet.openFor(fp) }
   }
 
   ProjectBuildSettingsSheet {
     id: buildSettingsSheet
+    app: page.app
+    svc: page.svc
+  }
+
+  ProjectFormatSheet {
+    id: formatSheet
     app: page.app
     svc: page.svc
   }

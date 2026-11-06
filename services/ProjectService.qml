@@ -34,6 +34,12 @@ import "../Model.js" as Model
 //   watch mode (app.watch, WatchService): showWatchBuild({path, name, ok, errors, warnings, duration, logFile,
 //     buildId, diagnostics, errorMessage, errorCode}) shows a finished compile-on-save build in the build panel (build.watch = true) and
 //     its Problems; skipped while a manual build runs (that one owns the panel). Emits watchBuildShown(ok).
+//   format and lint (`format`, `format-lint`, helper/format.py): formatPreview(p, onDone, onFail) (dry run: a bounded
+//     unified diff) · formatApply(p, onDone, onFail) (writes the files, toasts, lints again when that project has a
+//     lint result) · lints: { path: {state, result, error, at} } · lintFor(p) · lint(p, onDone, onFail) (now) ·
+//     lintLastSoon(p) (the saved result, `format-lint --last`, once per path) · lintFocus: a project whose style
+//     warnings the build panel shows instead of the last build ("" = the build's own project); showLint(p) sets it.
+//     Style warnings never count as build problems (errorCount/warningCount leave them out).
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -198,6 +204,7 @@ Item {
 
     root.logBuffer = []
     root._cancelling = false
+    root.lintFocus = ""
     _clearDiagnostics()
     root.build = {
       active: true, kind: kind, path: p.path, name: p.name || "", bundleId: p.bundleId || "",
@@ -502,6 +509,7 @@ Item {
                                        fix: { label: "Open the first error", action: "open-diagnostic" } }
                                     : { code: w.errorCode || "build-failed", message: w.errorMessage || "The compile on save failed. The log says why.", fix: { label: "Show log", action: "log" } })
     var pr = projectByPath(w.path)
+    root.lintFocus = ""
     root.logBuffer = []
     root.build = {
       active: false, kind: "compile", watch: true, path: w.path, name: w.name || (pr ? pr.name : ""), bundleId: pr ? pr.bundleId || "" : "",
@@ -557,7 +565,7 @@ Item {
     if (file) argv.push("--file", file)
     if (line) argv.push("--line", String(line))
     if (col) argv.push("--col", String(col))
-    app.cli.call(argv, "", function(d) { app.toast("Opening in " + d.editor, "ok") }, function(e) { app.toast(Model.errorMessage(e), "error") })
+    app.cli.call(argv, "", function(d) { app.toast(d && d.editor ? "Opening in " + d.editor : "Opening in your editor", "ok") }, function(e) { app.toast(Model.errorMessage(e), "error") })
   }
 
   function reveal(p) {
@@ -800,6 +808,91 @@ Item {
     root._editorBusy = true
     var next = function() { root._editorBusy = false; Qt.callLater(root._nextEditor) }
     editorStatus({ path: path }, next, next)
+  }
+
+  // ------------------------------------------------------------ format and lint (helper/format.py)
+  // swift-format (and SwiftLint when it's installed) on a project's Swift files. Formatting is a dry run
+  // first (a bounded unified diff), then --apply. Lint results are style warnings ({category: "style",
+  // file (absolute), line, col, rule, source}) kept per project path, like `checks`; the helper also saves
+  // the latest one per project, so `--last` brings it back after a restart without running anything.
+  property var lints: ({})              // path -> { state: "loading"|"ready"|"error", result, error, at }
+  property string lintFocus: ""         // project the build panel shows style warnings for, instead of the build
+  property var _lintAsked: ({})         // paths whose saved result was asked for (`--last`)
+  function lintFor(p) {
+    var path = p && p.path ? p.path : p
+    return path ? (root.lints[path] || null) : null
+  }
+  function _setLint(path, fields) {
+    var all = Object.assign({}, root.lints)
+    all[path] = Object.assign({}, all[path] || {}, fields)
+    root.lints = all
+  }
+  // The helper answers {ok: false, error, hint} when swift-format is missing; make that an error object.
+  function _formatError(d, fallback) {
+    var e = d && d.error && typeof d.error === "object" ? Object.assign({}, d.error) : { code: (d && d.code) || "format-failed", message: (d && d.error) || fallback }
+    if (d && d.hint && !e.hint) e.hint = d.hint
+    return e
+  }
+  function _lintTime(d) {
+    var t = d && (d.checked_at || d.time || d.at)
+    var ms = typeof t === "number" ? (t < 1e12 ? t * 1000 : t) : Date.parse(String(t || ""))
+    return isFinite(ms) ? ms : Date.now()
+  }
+  // Runs now. Keeps the previous result while it runs, so the list doesn't blink.
+  function lint(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    root._setLint(path, { state: "loading", error: null })
+    app.cli.call(["format-lint", "--project", path], "", function(d) {
+      if (d && d.ok === false) {
+        var e = root._formatError(d, "Couldn't check the code style.")
+        root._setLint(path, { state: "error", error: e, at: Date.now() })
+        if (onFail) onFail(e)
+        return
+      }
+      root._setLint(path, { state: "ready", result: d, error: null, at: root._lintTime(d) })
+      if (onDone) onDone(d)
+    }, function(e) {
+      root._setLint(path, { state: "error", error: e, at: Date.now() })
+      if (onFail) onFail(e)
+    }, { timeout: 120000 })
+  }
+  // The saved result of the last lint (no new run), once per project and app session.
+  function lintLastSoon(p) {
+    var path = p && p.path ? p.path : p
+    if (!path || root.lints[path] || root._lintAsked[path]) return
+    var asked = Object.assign({}, root._lintAsked); asked[path] = true; root._lintAsked = asked
+    app.cli.call(["format-lint", "--project", path, "--last"], "", function(d) {
+      if (!d || d.ok === false || !d.diagnostics || d.at === null || d.at === undefined || root.lints[path]) return
+      root._setLint(path, { state: "ready", result: d, error: null, at: root._lintTime(d) })
+    }, function(e) {}, { timeout: 20000 })
+  }
+  // Lint from a card: the build panel shows this project's style warnings (with its build's problems when
+  // the panel already shows that project's build).
+  function showLint(p) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    root.lintFocus = root.build.kind && root.build.path === path ? "" : path
+    lint(p)
+  }
+  function formatPreview(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    app.cli.call(["format", "--project", path], "", function(d) {
+      if (d && d.ok === false) { if (onFail) onFail(root._formatError(d, "swift-format couldn't run.")); return }
+      if (onDone) onDone(d)
+    }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
+  }
+  function formatApply(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    app.cli.call(["format", "--project", path, "--apply"], "", function(d) {
+      if (d && d.ok === false) { if (onFail) onFail(root._formatError(d, "swift-format couldn't write the files.")); return }
+      var n = d && d.files_changed_total !== undefined ? d.files_changed_total : (d && d.files_changed ? d.files_changed.length : 0)
+      if (d && d.demo && n > 0) app.toast("Demo mode: " + Model.plural(n, "file") + " would be formatted, nothing was written", "info")
+      else app.toast(n > 0 ? "Formatted " + Model.plural(n, "file") + " in " + (p.name || "the project") : "Nothing to format", n > 0 ? "ok" : "info")
+      // Style warnings on screen would be stale now: check again, quietly.
+      if (root.lints[path]) root.lint(p)
+      if (onDone) onDone(d)
+    }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
   }
 
   function openBuildLog(file) {

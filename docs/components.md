@@ -176,6 +176,9 @@ clicks), `enabled`, `disabled`, `compact`, `tooltip`, `hasCursor`; read-only `in
 `enabled: false` dims the button and blocks clicks **and** hover, so its tooltip never shows. `disabled: true`
 dims it and blocks clicks but keeps hover and the tooltip: use it whenever the tooltip explains why the button
 can't be used yet.
+
+A button without a `glyph` is as tall as one with a glyph, so a text-only Cancel beside an icon button in a
+Row (a Sheet footer) lines up on the same text baseline.
 ```qml
 ActionButton { text: "Run on iPhone"; glyph: Model.Glyph.play; kind: "primary"; busy: svc.building; onClicked: svc.run(p) }
 ActionButton { text: "Install"; disabled: !app.device.connected; tooltip: disabled ? "Connect your iPhone first" : "" }
@@ -400,7 +403,8 @@ Hosted by `shell.qml`. Pages use them only through `app.confirm(...)`, `app.toas
 the keyboard. `Host.covers(item, Host.top)` is true while an overlay is open and `item` isn't inside it;
 `ActionButton`, `IconButton` and `RunSplitButton` use it to hide their tooltips under a confirm dialog or sheet
 (the pointer hasn't moved, so their hover would otherwise keep the tooltip up over the dim layer). Do the same for a
-hand-made `PanelToolTip`.
+hand-made `PanelToolTip`. A toast's level glyph sits on its first text line, so a two-line toast keeps it beside
+the first line rather than centred on the block.
 
 ## Also available from qs.Ui
 
@@ -553,7 +557,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `watchState` (`watchSvc.forProject(project)`) and `watchInfo` (`watchSvc.label(…)`); signal `showProblems()`. While
   the project is watched, a WatchStateLabel takes the place of the title row's last-build pill (the "Building…" pill
   still wins during a manual build) and the project name keeps up to 140 px before it elides. The toggle itself
-  lives in Run's menu, so nothing is added to the right cluster.
+  lives in Run's menu, so nothing is added to the right cluster. Format and lint: More has Format project… and Lint
+  project (ghost compact, after Check build); signals `formatProject()` (the page opens ProjectFormatSheet) and
+  `lintProject()` (the page calls `svc.showLint` and opens the drawer on Problems). Read-only `lintEntry`
+  (`svc.lintFor(project)`): Lint project spins while it runs, and `lintTip` adds the last count and when.
+  `F` / `L` on the page do the same for the highlighted card.
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
@@ -607,10 +615,48 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   [features/project-build-settings.md](features/project-build-settings.md).
 - **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
   slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
-  `log` (the LogView); signal `closeRequested()`. A run with a run preset names it in the subtitle ("Run
+  `log` (the LogView); signal `closeRequested()`. It takes hover and unused wheel over its whole area, so a card's
+  tooltip behind it can't show through and scrolling past the end of Problems or Log doesn't move the page. A run with a run preset names it in the subtitle ("Run
   (German)"), the launch step and the result banner. A compile on save (`build.watch`) shows like a finished
   Build: subtitle "Compiled on save" (plus "· compiling again…" while the next one runs), the result banner, the
   Problems tab (it switches there when the compile failed with errors) and its saved log (`build log --file`) in Log.
+  Style warnings: a StyleWarningsSection is the Problems list's footer, for `stylePath` (`svc.lintFocus`, else the
+  build's project; it asks `svc.lintLastSoon(path)` when that changes). With no build problems the list's header is a
+  QuietNote "No build problems". The tab's count adds the shown style warnings (`styleCount`); its colour, the
+  headline and the banner only follow the build's own `errorCount` / `warningCount`. While `lintView`
+  (`svc.lintFocus` is set) the drawer shows only that project's style warnings: headline "5 style warnings"
+  ("No style warnings", "Checking the style") with the lint glyph (spinner while running), subtitle
+  "<name> · Code style · <path>", without the path when the whole line doesn't fit (the name lives there so it
+  never elides the count), no steps, banners, tabs or
+  Log, and a ghost Show build (when there is a build; it clears `lintFocus`), centred on the close button. Signal
+  `formatRequested(path)` (the section's Format project…).
+- **StyleWarningsSection**: the style warnings of one project (`app`, `svc`, `path`), from `svc.lintFor(path)`.
+  A SectionHeader "Style" with the count ("5", "5 hidden", "checking…") and ghost compact Hide/Show (the
+  `showStyleWarnings` setting) and Check again (`svc.lint`; busy while it runs); a faint line with the tools, the
+  style (`config_path` or "default style") and when it ran; "Formatting fixes N of these." with Format project…
+  (signal `formatRequested()`) when some findings carry the helper's "Format project …" hint (that hint is left out
+  of their rows); then one BuildDiagnosticRow per warning (a click opens the file at the line). Loading, error, "No
+  style warnings" (with the tools line) and hidden states are status lines on the rows' glyph column and text edge.
+  Read-only `total`, `shown`, `visibleCount`. A truncated or timed-out result says so under the rows.
+- **ProjectFormatSheet**: "Format project…" (`app`, `svc`; `openFor(project)` opens and runs the dry run through
+  `svc.formatPreview`). `phase`: `loading` (LoadingState; Esc still closes), `ready`, `error` (ErrorState with the
+  helper's hint; its fix button closes the sheet) or `applying` (the Sheet's busy strip). Ready: "N files would
+  change" with files checked, style and swift-format version (glyph column and gap as the Sheet header, so the
+  text starts at the title's edge), an amber box for files swift-format couldn't read (first five), the DiffView,
+  and for a cut diff "Showing the start of a long diff." with the full diff's path and Open. Nothing to change:
+  EmptyState "Already formatted". Footer: Cancel (Close when already formatted) and primary Apply to N files,
+  `disabled` with `applyBlocker` as its tooltip while loading, after an error or with nothing to change. Apply
+  calls `svc.formatApply` and closes on success; a failed apply shows a banner above the diff. Answers for an
+  earlier open are dropped (`_ticket`).
+- **DiffView**: a read-only unified diff (`text`, `maxHeight`, `maxLines`; read-only `rows`, `fileCount`). While it
+  scrolls, a wheel past its top or bottom stops there instead of scrolling the page behind the sheet.
+  `parse(text)` turns `---`/`+++` pairs into one file row (file glyph + path, bold, `surfaceRaised`), `@@` lines into
+  hunk bands (accent text, the function context faint, accent tint) and the rest into add/del/context rows with old
+  and new line numbers. Added lines use `Theme.success`, removed ones `Theme.error`, each on a 14 % tint with a 2 px
+  bar in that colour; context is dim. Trailing spaces on changed lines show as dots. Tabs become 4 spaces. Lines
+  don't wrap: the list scrolls both ways once taller than `maxHeight` or wider than the box, and the line numbers,
+  +/- marks and file paths stay in place while it scrolls sideways (the font is monospace, so widths come from one
+  character's advance).
 - **BuildDiagnosticRow**: one build diagnostic. Props: `diag` (`{severity, message, category?, file?, line?, col?,
   hint?, details?}`, see `helper/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
   the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
@@ -619,7 +665,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   A `config` diagnostic with a `check` id comes from the pre-build project check: instead of the category label it
   gets a "Pre-build check" chip beside the message, or at the start of the location line on narrow rows.
   `showChip` (default true) turns the chip off, as in ProjectCheckView where every row is such an issue. A
-  relative `file` is shown as it is (project check results are relative to the project).
+  relative `file` is shown as it is (project check results are relative to the project). A `style` diagnostic
+  (`format-lint`) reads "Style · <rule> · file:line" and its glyph is `Theme.dim` (`Theme.warn` for a rule set to
+  error), never the error colour. Short of room, the location line first middle-elides the folder, hiding it once
+  fewer than about 6 of its characters would show, then elides the lead ("Style · line_leng… · "); the file
+  name:line:col stays whole unless it alone is wider than the row.
 - **ProjectService watch builds** (`app.projects`): `showWatchBuild({path, name, ok, errors, warnings, duration,
   logFile, buildId, diagnostics, errorMessage, errorCode})` puts a finished compile on save into `build` (`kind:
   "compile"`, `watch: true`, not active) and `diagnostics`, then emits `watchBuildShown(ok)`. It does nothing while a
@@ -632,6 +682,14 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   runs, and `configCount` counts the pre-build check warnings among them (BuildPanel's banner says "N in project
   settings"); `diagnosticAdded(d)` fires per new one. Bind a Repeater/ListView to `diagnostics` and read
   `svc.diagnostic(model.n)` in the delegate.
+- **ProjectService format and lint** (`app.projects`, `format` / `format-lint`, helper/format.py):
+  `formatPreview(p, onDone, onFail)` (dry run) and `formatApply(p, onDone, onFail)` (writes, toasts "Formatted N
+  files in <name>", lints again when that project has a lint result). `lints` maps a project path to `{state,
+  result, error, at}` (`at` in ms, from the result's `at`); `lintFor(p)`, `lint(p, onDone?, onFail?)` (keeps the
+  old result while it runs), `lintLastSoon(p)` (`--last`, once per path and session; an empty stored result is
+  ignored). `lintFocus` is the project the drawer shows style warnings for instead of the build; `showLint(p)` sets
+  it (or clears it when the drawer already shows that project's build) and lints; a build starting or a compile on
+  save shown clears it. Errors arrive as the helper's error object, with `hint`.
 - **ProjectService project checks** (`app.projects`): `checks` maps a project path to `{state: "loading" | "ready"
   | "error", result, error, at}`; `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
   `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`

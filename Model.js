@@ -148,7 +148,10 @@ var Glyph = {
   imagePlus: g(0xF087C),
   // editor setup (Settings › Code editor)
   editorSetup: g(0xF107B),
-  fileCode: g(0xF022E)
+  fileCode: g(0xF022E),
+  // format and lint (ProjectFormatSheet, StyleWarningsSection)
+  format: g(0xF0068),       // auto-fix: Format project…
+  lint: g(0xF0694)          // code-tags-check: Lint project, style warnings
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`
