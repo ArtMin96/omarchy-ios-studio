@@ -14,7 +14,8 @@ import "../Model.js" as Model
 //            processFilter, levelFilter, start(), stop(), signal entries(batch), signal cleared()
 //   Crashes: crashes, crashStatus, crashError, newCrashCount, summaryFor(item), pullCrash(item, cb),
 //            refreshCrashes(), beginCrashVisit(), isNew(item), isOwn(item)
-//   Builds:  builds, refreshBuilds(), loadBuildLog(entry, cb), parseDiagnostics(text), rebuild(entry)
+//   Builds:  builds, refreshBuilds(), loadBuildLog(entry, cb), parseDiagnostics(text), rebuild(entry),
+//            buildKindLabel(kind, entry?) ("Compile on save" / "Run on save" for watch-mode entries)
 //   Files:   copyText(text), copyFile(path), writeFile(path, text, cb), downloadsDir
 Item {
   id: root
@@ -372,7 +373,12 @@ Item {
     app.cli.call(["build", "history", "--limit", "60"], "", function(d) { root._ownHistory = d.builds || [] }, function(e) {})
   }
 
-  function buildKindLabel(kind) {
+  // entry (optional): the history entry, so watch mode's builds read "Compile on save" / "Run on save".
+  function buildKindLabel(kind, entry) {
+    if (entry && Model.isWatchBuild(entry)) {
+      if (kind === "compile") return "Compile on save"
+      if (kind === "run") return "Run on save"
+    }
     switch (kind) {
     case "run": return "Run on iPhone"
     case "ipa": return "Build .ipa"

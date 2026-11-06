@@ -7,7 +7,8 @@ import qs.components
 import "../Model.js" as Model
 
 // Projects (projects slice): your xtool apps, Run on iPhone, .ipa builds, 7-day renewal,
-// new-app templates, project settings checks (on each card), and the build drawer.
+// new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:
+// in each card's Run menu, `w` for the highlighted one) and the build drawer.
 Item {
   id: page
   required property var app
@@ -81,6 +82,7 @@ Item {
     if (event.text === "o" && cur) { svc.reveal(cur); return true }
     if (event.text === "m" && cur) { var it = cards.itemAt(page.cursor); if (it) it.expanded = !it.expanded; return true }
     if (event.text === "a") { page.addExisting(); return true }
+    if (event.text === "w" && cur) { page.toggleWatch(cur); return true }
     return false
   }
 
@@ -91,6 +93,18 @@ Item {
     else if (kind === "compile") svc.compile(p)
     else if (kind === "renew") svc.renew(p)
     if (svc.building) page.panelOpen = true
+  }
+
+  // Watch mode: the card's state line opens the last compile-on-save build's problems.
+  function toggleWatch(p) {
+    if (!app.watch.isWatching(p) && svc.blocked(p)) { app.toast("Allow its generated xtool.yml in Build settings first.", "warn"); return }
+    app.watch.toggle(p)
+  }
+  function showWatchProblems(p) {
+    var w = app.watch.forProject(p)
+    if (w && w.last && !svc.building && !(svc.build.watch && svc.build.path === p.path)) app.watch.showLast()
+    panel.tab = "problems"
+    page.panelOpen = true
   }
 
   function addExisting() {
@@ -269,6 +283,7 @@ Item {
         Layout.fillWidth: true
         project: modelData
         svc: page.svc
+        watchSvc: page.app.watch
         hasCursor: page.cursor === index
         onHovered: function(h) { if (h) page.cursor = index }
         onRun: page.runProject(modelData)
@@ -282,6 +297,7 @@ Item {
         onOpenBuildSettings: buildSettingsSheet.openFor(modelData)
         onEditPresets: runPresetsSheet.openFor(modelData)
         onShowBuild: page.panelOpen = true
+        onShowProblems: page.showWatchProblems(modelData)
       }
     }
 
@@ -329,7 +345,9 @@ Item {
         readonly property string lv: modelData.result === "ok" ? "ok" : modelData.result === "cancelled" ? "info" : "error"
         glyph: modelData.result === "ok" ? Model.Glyph.checkCircle : modelData.result === "cancelled" ? Model.Glyph.stop : Model.Glyph.error
         glyphColor: Theme.levelColor(lv)
-        title: modelData.name + " · " + ({ run: "Run", ipa: ".ipa", renew: "Re-sign", install: "Reinstall", compile: "Build" }[modelData.kind] || modelData.kind)
+        title: modelData.name + " · " + (Model.isWatchBuild(modelData) && modelData.kind === "compile" ? "Compile on save"
+                                         : Model.isWatchBuild(modelData) && modelData.kind === "run" ? "Run on save"
+                                         : ({ run: "Run", ipa: ".ipa", renew: "Re-sign", install: "Reinstall", compile: "Build" }[modelData.kind] || modelData.kind))
         subtitle: modelData.result === "ok"
                   ? "Finished in " + Model.formatDuration(modelData.duration) + (modelData.warnings ? " · " + Model.plural(modelData.warnings, "warning") : "")
                   : (modelData.errorMessage || "Failed")

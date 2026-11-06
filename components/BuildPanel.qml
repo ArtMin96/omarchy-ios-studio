@@ -10,7 +10,8 @@ import "../Model.js" as Model
 // banner. Problems lists errors first; within a severity, pre-build project settings issues
 // (chip "Pre-build check") come before xtool's own output. Slides in from the right edge of the
 // Projects page; not modal, so the list stays usable. A run with a run preset names it in the
-// subtitle, the launch step and the result banner.
+// subtitle, the launch step and the result banner. A compile-on-save build (watch mode, build.watch)
+// shows up here when it finishes, like a finished Build: its problems, and its saved log in Log.
 //   BuildPanel { app: page.app; svc: page.app.projects; opened: page.panelOpen; onCloseRequested: … }
 Item {
   id: root
@@ -47,6 +48,7 @@ Item {
   clip: true
 
   function kindLabel(k) {
+    if (root.b.watch) return "Compiled on save"
     return { run: "Run on iPhone", ipa: "Build .ipa", renew: "Re-sign & reinstall", install: "Reinstall", compile: "Build" }[k] || "Build"
   }
 
@@ -59,7 +61,7 @@ Item {
       if (b.kind === "renew") return b.name + " is good for another week"
       if (b.kind === "ipa") return b.name + ".ipa is ready"
       if (b.kind === "install") return b.name + " was reinstalled"
-      return b.name + " built"
+      return b.name + (b.watch ? " compiles" : " built")
     }
     if (result.error && result.error.code === "cancelled") return "Build cancelled"
     if (result.error && result.error.code === "compile-errors") return Model.plural(root.errorCount || 1, "error") + " in " + b.name
@@ -79,6 +81,18 @@ Item {
     function onBuildStarted() { logView.clear(); root.tab = "log" }
     function onBuildLog(text, level) { logView.append(text, level || undefined) }
     function onBuildFinished(ok) { if (!ok && root.errorCount > 0) root.tab = "problems" }
+    function onWatchBuildShown(ok) {
+      logView.clear()
+      if (!ok && root.errorCount > 0) root.tab = "problems"
+      var f = root.b.logFile
+      if (!f || !root.app) return
+      root.app.cli.call(["build", "log", "--file", f], "", function(d) {
+        if (root.b.logFile !== f) return
+        var lines = String(d.text || "").split("\n")
+        if (lines.length && lines[lines.length - 1] === "") lines.pop()
+        logView.appendMany(lines.slice(-4000))
+      }, function(e) {})
+    }
   }
   Component.onCompleted: {
     if (svc && svc.logBuffer.length) logView.appendMany(svc.logBuffer.map(function(l) { return l.text }))
@@ -139,6 +153,9 @@ Item {
             text: {
               if (!root.b.kind) return ""
               var parts = [root.kindLabel(root.b.kind) + (root.b.kind === "run" && root.b.preset ? " (" + root.b.preset + ")" : "")]
+              // watch mode: the next compile on save already runs (its result replaces this one)
+              var w = root.b.watch && root.app && root.app.watch ? root.app.watch.forProject(root.b.path) : null
+              if (w && (w.state === "compiling" || w.state === "changed")) parts[0] += " · compiling again…"
               if (root.result && root.result.duration) parts.push(Model.formatDuration(root.result.duration))
               else if (root.b.active && root.b.eta) parts.push("about " + Model.formatDuration(root.b.eta) + " left")
               if (root.b.bundleId) parts.push(root.b.bundleId)
@@ -186,6 +203,7 @@ Item {
               if (root.b.kind === "renew") return "Re-signed and reinstalled. It keeps opening for another 7 days."
               if (root.b.kind === "ipa") return "Saved to " + String(d.ipa || "").replace(app ? app.home : "", "~")
               if (root.b.kind === "compile") return "Your code compiles for iPhone." + (root.warningCount ? " " + root.warningsText() + "." : "")
+                                                    + (root.b.watch ? " It compiles again when you save." : "")
               return "Done."
             }
           }

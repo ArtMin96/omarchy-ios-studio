@@ -81,6 +81,7 @@ import inspect
 import itertools
 import json
 import os
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -129,11 +130,28 @@ def _demo_flag(demo) -> str | None:
     return demo if isinstance(demo, str) and demo else "ready"
 
 
+def xdg_runtime_dir() -> str | None:
+    """$XDG_RUNTIME_DIR, else /run/user/<uid> when it exists, is ours and is writable (clients started with
+    a trimmed environment, e.g. the MCP SDK's stdio_client, lose XDG_RUNTIME_DIR but must still find the
+    app's daemon and watcher there), else None."""
+    env = os.environ.get("XDG_RUNTIME_DIR")
+    if env:
+        return env
+    run = f"/run/user/{os.getuid()}"
+    try:
+        st = os.stat(run)
+    except OSError:
+        return None
+    if stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and os.access(run, os.W_OK | os.X_OK):
+        return run
+    return None
+
+
 def runtime_base() -> Path:
-    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else
-    $XDG_RUNTIME_DIR."""
-    base = os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("XDG_RUNTIME_DIR") \
-        or f"/tmp/ios-studio-{os.getuid()}"
+    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else $XDG_RUNTIME_DIR
+    (or /run/user/<uid>, see xdg_runtime_dir), else /tmp/ios-studio-<uid>. Shared by the device daemon,
+    its clients (app bridge, MCP), and watch mode."""
+    base = os.environ.get("IOSSTUDIO_RUNTIME_DIR") or xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}"
     return Path(base)
 
 

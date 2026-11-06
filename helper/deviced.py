@@ -915,9 +915,8 @@ def _other_real_daemon() -> str | None:
     second tunnel and knock out the phone link of the user's own daemon. Refuse while that one is up."""
     if not os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("IOSSTUDIO_ALLOW_SECOND_TUNNEL") == "1":
         return None
-    env = dict(os.environ)
-    env.pop("IOSSTUDIO_RUNTIME_DIR")
-    base = env.get("XDG_RUNTIME_DIR") or f"/tmp/ios-studio-{os.getuid()}"
+    import device_client   # the default base, as if IOSSTUDIO_RUNTIME_DIR weren't set
+    base = device_client.xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}"
     default = Path(base) / "ios-studio" / "deviced.sock"
     if default != device_broker.paths(None)["sock"] and device_broker.socket_alive(default):
         return str(default)

@@ -171,6 +171,26 @@ Problems that aren't in your code (linker, Swift packages, signing, the iPhone, 
 
 Run and Re-sign & reinstall install the app on your iPhone, so they need a connected phone. Plug it in or wake it on Wi-Fi, then press Run again. Check build and Build .ipa work without a phone.
 
+### Watch mode says "checking files every second"
+
+Watch mode uses inotify, one watch per folder under `Sources/`. When the system's limit is used up (other watchers such as editors, Syncthing or `node_modules` trees count too), it falls back to comparing file times once a second: it still works, a little later and with a little more disk activity. To raise the limit:
+
+```bash
+cat /proc/sys/fs/inotify/max_user_watches          # often 8192 or 65536
+echo fs.inotify.max_user_watches=524288 | sudo tee /etc/sysctl.d/90-inotify.conf
+sudo sysctl --system
+```
+
+Then stop and start watch mode again. `IOSSTUDIO_WATCH_POLL=1` forces polling, for file systems without inotify (some network mounts).
+
+### Saving doesn't start a build in watch mode
+
+Only `Sources/`, `Package.swift`, `xtool.yml` and `.plist`/`.entitlements` files in the project folder count; `Package.resolved`, `Tests/`, `.build/` and hidden folders don't. A save that doesn't change the file's content is ignored too. Editors that save through a temporary file and a rename (Vim, Neovim, Zed, JetBrains IDEs) are supported. If the project is being built from the Build button at the same time, the watch build waits for it.
+
+### Watch mode stopped by itself
+
+It stops when nothing uses it any more: the app (or the AI agent's session) that started it has closed. It also stops when another project is watched (one at a time), when the project folder goes away, and if the watcher process was killed. The message on the project card, or `stop_reason` in `ios_watch_status`, says which. Its log is `$XDG_RUNTIME_DIR/ios-studio/watch.log`.
+
 ### No completion or errors in my editor
 
 Completion comes from SourceKit-LSP, and for an xtool project it needs `.bsp/xtool.json` in the project folder. iOS Studio writes it after a successful build and when you create or convert a project, so a project you added and never built doesn't have it yet: the project card says "Build once to enable completion". Build it once (Check build is enough), then reopen the folder in your editor. Also check:

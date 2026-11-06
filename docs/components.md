@@ -65,7 +65,7 @@ PageFrame {
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
-| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
+| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch` | Services (`app.watch`: watch mode, see WatchService below) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths |
@@ -123,7 +123,7 @@ header tab list element linkVariant (element roles) and contrast textSize clippe
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`plural(n, word)`; `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
+`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 Run presets (mirroring `helper/run_presets.py`, so the editor can preview and validate as you type; the helper
@@ -426,6 +426,10 @@ hand-made `PanelToolTip`.
 - **LogView**: the toolbar wraps onto two rows below ~640 px (the line count hides). `copyAll()` and the
   double-click copy pipe text to `wl-copy` over stdin (no 128 KB argv limit).
 - **Sidebar**: `compact` (icons only, tooltips, status dots). shell.qml turns it on below 920 px of window width.
+  While `app.watch` watches a project, the Projects entry also shows a small eye (`Style.font.bodySmall`, after the
+  label; in compact mode a caption-sized one in the icon's bottom corner): `Theme.faint` while it waits, accent while
+  it starts or compiles, `urgent` after a failed compile. Its tooltip names the project and the state. While it
+  shows, the entry's "Last build failed" dot or badge is left out (the red eye already says so).
 - **Deep links**: `app.navLink(link, tab?)` accepts `"logs"`, `"logs:crashes"`, `"logs/crashes"` or an alias
   that implies a tab (`"crashes"`). IPC: `nav <page[:tab]>` and `navTab <page> <tab>`; the launcher passes its
   argument through, so `ios-studio crashes` opens Logs → Crashes. Pages read the tab from `params.tab`.
@@ -545,13 +549,42 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `editorHint` is the helper's `hint` while the project isn't ready for completion ("Build once to enable
   completion"), shown faint with a file glyph at the end of the folder line (on its own line under it on a narrow
   card). Nothing shows when it's ready. Editor setup itself is machine-wide (Settings › Code editor), so the card has
-  no editor button and its right cluster stays as it is.
+  no editor button and its right cluster stays as it is. Watch mode: prop `watchSvc` (`app.watch`), read-only
+  `watchState` (`watchSvc.forProject(project)`) and `watchInfo` (`watchSvc.label(…)`); signal `showProblems()`. While
+  the project is watched, a WatchStateLabel takes the place of the title row's last-build pill (the "Building…" pill
+  still wins during a manual build) and the project name keeps up to 140 px before it elides. The toggle itself
+  lives in Run's menu, so nothing is added to the right cluster.
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
   button: Default (no preset), each preset (a check on the selected one, its language or `Model.presetSummary`
   beside it) and Edit presets… (New preset… when there are none). Picking a preset calls `svc.selectPreset`.
-  `j`/`k` or the arrow keys move, Enter picks, Esc closes.
+  `j`/`k` or the arrow keys move, Enter picks, Esc closes. With `watchSvc` (`app.watch`) the menu ends, under a
+  hairline, with Watch for changes (a check while on; detail "compile on save", or "instead of <project>" when
+  another one is watched) and Run after a clean compile (detail `watchSvc.autoRunBlockerShort` when it can't).
+  `watchBlocker` (a short reason, "" = allowed) greys out Watch for changes; greyed rows stay in the menu, faint,
+  with their reason in the detail column, and don't react to a click. Rows take clicks with a MouseArea, and the
+  menu's background swallows the rest, so a click never also reaches what lies under the (non-modal) menu: a
+  TapHandler only grabs passively. ToastHost dismisses toasts the same way. These two rows close the menu and call
+  `watchSvc.toggle(project)` / `watchSvc.setAutoRun(project, on)`; the cursor opens on the preset rows, never on them.
+- **WatchStateLabel**: watch mode's state on a project card: a glyph and small text in the quiet StatusPill style
+  (level colour, `Theme.dim` for info, spinner glyph for busy) that elides and is clickable (underlined on hover,
+  `PanelToolTip` with the detail). Props: `info` (`{level, glyph, text, tip}` from `app.watch.label(w)`); signal
+  `clicked()`.
+- **WatchService** (`app.watch`, `services/WatchService.qml`): watch mode (compile on save, `helper/watch.py`). One
+  watcher per user. The service follows `<runtime dir>/watch.json` with a FileView (re-read every 2 s while the
+  window is focused; `watch status` every 15 s only to catch a crashed watcher), so a watch an agent started shows
+  too, and runs `watch run --project P [--auto-run]` as a Stream for a watch it starts (the stream keeps the watcher
+  alive; `{"cmd": "stop"}` on its stdin stops it). `current` is `null` or `{path, name, state, autoRun, owned, pid,
+  seq, message, reason, changed, progress, last: {id, ok, errors, warnings, duration, time, logFile, diagnostics,
+  errorMessage}, run, mode, modeReason}`; `active`, `state` ("off" when nothing is watched), `busy` (`starting` /
+  `stopping`), `now` (ticks every 5 s while active and focused). `forProject(p)` (also while starting),
+  `isWatching(p)`, `start(p, autoRun)`, `stop()` (an agent's watch through `watch stop`), `toggle(p)`,
+  `setAutoRun(p, on)` (changes the running watcher through `watch run --detach`, no restart), `showLast()`,
+  `autoRunBlocker` / `autoRunBlockerShort` (no iPhone, no Apple ID), `label(w)` → `{level, glyph, text, tip}`. Each
+  new `lastBuild` goes to `app.projects.showWatchBuild(…)` with the full diagnostics from the build history (matched
+  by `buildId`, else the log file; the snapshot's first five when not found). See
+  [features/watch-mode.md](features/watch-mode.md).
 - **RunPresetsSheet**: a project's Run presets sheet. Props: `app`, `svc`; `openFor(project)` opens the list,
   `openFor(project, name)` goes straight to that preset's editor. The list has Default (no preset) and one row per
   preset with Use for Run (or a "Used by Run" pill), edit and delete (asks first); the editor has name, language
@@ -575,7 +608,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
   slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
   `log` (the LogView); signal `closeRequested()`. A run with a run preset names it in the subtitle ("Run
-  (German)"), the launch step and the result banner.
+  (German)"), the launch step and the result banner. A compile on save (`build.watch`) shows like a finished
+  Build: subtitle "Compiled on save" (plus "· compiling again…" while the next one runs), the result banner, the
+  Problems tab (it switches there when the compile failed with errors) and its saved log (`build log --file`) in Log.
 - **BuildDiagnosticRow**: one build diagnostic. Props: `diag` (`{severity, message, category?, file?, line?, col?,
   hint?, details?}`, see `helper/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
   the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
@@ -585,6 +620,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   gets a "Pre-build check" chip beside the message, or at the start of the location line on narrow rows.
   `showChip` (default true) turns the chip off, as in ProjectCheckView where every row is such an issue. A
   relative `file` is shown as it is (project check results are relative to the project).
+- **ProjectService watch builds** (`app.projects`): `showWatchBuild({path, name, ok, errors, warnings, duration,
+  logFile, buildId, diagnostics, errorMessage, errorCode})` puts a finished compile on save into `build` (`kind:
+  "compile"`, `watch: true`, not active) and `diagnostics`, then emits `watchBuildShown(ok)`. It does nothing while a
+  manual build runs (that one owns the panel). `_start` refuses a manual build of a project the watch is compiling
+  right now (a toast), and a `busy` error from the helper is reworded when the watch was the other build.
 - **ProjectService build diagnostics** (`app.projects`): `diagnostics` is a `ListModel` of `{n}` rows, errors
   before warnings before notes (within a severity, pre-build check rows (those with a `check` field) before the build's own output), kept outside
   `build`; `diagnostic(n)` returns the object (it never changes once

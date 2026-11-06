@@ -257,6 +257,13 @@ function _toMs(t) {
   return ms
 }
 
+// A build history entry made by watch mode (compile on save, or its auto-run): `trigger: "watch"`
+// (older entries: a buildId "w-<n>").
+function isWatchBuild(e) {
+  if (!e) return false
+  return e.trigger === "watch" || (!e.trigger && /^w-/.test(String(e.buildId || "")))
+}
+
 function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
 
 // "just now", "5 minutes ago", "in 3 days", "yesterday"

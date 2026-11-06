@@ -31,6 +31,9 @@ import "../Model.js" as Model
 //     editorInfoLoading, loadEditors(onDone, onFail), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
 //     (dry run unless confirm). Per project: editors: { path: {state, result: {bsp, ready, hint}, error, at} }
 //     editorFor(p) · editorStatus(p, …) (now) · editorStatusSoon(p) (queued, skipped when fresh)
+//   watch mode (app.watch, WatchService): showWatchBuild({path, name, ok, errors, warnings, duration, logFile,
+//     buildId, diagnostics, errorMessage, errorCode}) shows a finished compile-on-save build in the build panel (build.watch = true) and
+//     its Problems; skipped while a manual build runs (that one owns the panel). Emits watchBuildShown(ok).
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -86,6 +89,7 @@ Item {
   signal buildStarted()
   signal buildFinished(bool ok)
   signal diagnosticAdded(var d)
+  signal watchBuildShown(bool ok)
 
   function refresh() {
     if (!root.loadedOnce) root.status = "loading"
@@ -175,6 +179,9 @@ Item {
   function _start(p, kind) {
     if (!p || !p.path) return
     if (root.building) { app.toast("Another build is running. Wait for it or cancel it first.", "warn"); return }
+    // Watch mode is compiling this project right now: its build holds the project's lock.
+    var w = app.watch ? app.watch.forProject(p) : null
+    if (w && w.state === "compiling") { app.toast("Watch mode is compiling " + (p.name || "this project") + " right now. Try again in a few seconds.", "warn"); return }
     if (_needsDevice(kind) && !root.canRun) {
       app.toast("Connect your iPhone first.", "warn")
       app.nav("device")
@@ -460,6 +467,8 @@ Item {
       for (var j = 0; j < keep.length; j++) _addDiagnostic(keep[j])
       for (var i = 0; i < data.diagnostics.length; i++) _addDiagnostic(data.diagnostics[i])
     }
+    if (error && error.code === "busy" && app.watch && app.watch.forProject({ path: b.path }))
+      b.result.error = Object.assign({}, error, { message: "Watch mode was compiling this project at the same moment. Try again in a few seconds." })
     root._cancelling = false
     root.build = b
     root.buildFinished(ok)
@@ -479,6 +488,30 @@ Item {
       }
     }
     refresh()
+  }
+
+  // ------------------------------------------------------------ watch mode (services/WatchService.qml)
+  // A compile-on-save build finished in the watcher's own process: show it like a finished Build.
+  function showWatchBuild(w) {
+    if (!w || !w.path || root.building) return
+    _clearDiagnostics()
+    var diags = w.diagnostics || []
+    for (var i = 0; i < diags.length; i++) if (diags[i]) _addDiagnostic(diags[i])
+    var n = w.errors || root.errorCount
+    var err = w.ok ? null : (n > 0 ? { code: "compile-errors", message: Model.plural(n, "error") + " in your code. Fix " + (n === 1 ? "it" : "them") + " and save; it compiles again.",
+                                       fix: { label: "Open the first error", action: "open-diagnostic" } }
+                                    : { code: w.errorCode || "build-failed", message: w.errorMessage || "The compile on save failed. The log says why.", fix: { label: "Show log", action: "log" } })
+    var pr = projectByPath(w.path)
+    root.logBuffer = []
+    root.build = {
+      active: false, kind: "compile", watch: true, path: w.path, name: w.name || (pr ? pr.name : ""), bundleId: pr ? pr.bundleId || "" : "",
+      steps: [], current: "", fraction: w.ok ? 1 : 0, detail: w.ok ? "Done" : (err ? err.message : ""), eta: null,
+      started: Date.now() - (w.duration || 0) * 1000, logFile: w.logFile || "", udid: "", preset: "",
+      result: { ok: !!w.ok, data: {}, error: err, duration: w.duration || 0 }
+    }
+    root.watchBuildShown(!!w.ok)
+    loadHistory()
+    if (w.ok) editorStatus({ path: w.path })
   }
 
   // ------------------------------------------------------------ project actions

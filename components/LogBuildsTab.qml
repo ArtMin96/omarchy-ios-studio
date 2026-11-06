@@ -110,7 +110,7 @@ Item {
         glyph: Model.levelGlyph(root.resultLevel(modelData))
         glyphColor: Theme.levelColor(root.resultLevel(modelData))
         title: modelData.name || modelData.project || "Build"
-        subtitle: [root.svc.buildKindLabel(modelData.kind), root.resultText(modelData), Model.formatDuration(modelData.duration), root.countsText(modelData)].filter(function(s) { return s !== "" }).join(" · ")
+        subtitle: [root.svc.buildKindLabel(modelData.kind, modelData), root.resultText(modelData), Model.formatDuration(modelData.duration), root.countsText(modelData)].filter(function(s) { return s !== "" }).join(" · ")
         meta: Model.relativeTime(modelData.time)
         hasCursor: root.cursor === index
         current: root.keyOf(root.selected) === root.keyOf(modelData)
@@ -139,7 +139,7 @@ Item {
           }
           AppText {
             Layout.fillWidth: true
-            text: root.selected ? [root.svc.buildKindLabel(root.selected.kind), root.selected.config === "release" ? "Release" : "Debug",
+            text: root.selected ? [root.svc.buildKindLabel(root.selected.kind, root.selected), root.selected.config === "release" ? "Release" : "Debug",
                                     "took " + Model.formatDuration(root.selected.duration),
                                     new Date(root.selected.time * 1000).toLocaleString(Qt.locale(), "d MMM, HH:mm")].join(" · ") : ""
             size: "small"; tone: "dim"; elide: Text.ElideRight
