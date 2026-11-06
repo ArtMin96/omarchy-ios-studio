@@ -65,6 +65,7 @@ bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, i
 tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, project check (fixture projects in fixtures/project-check/), run presets, UI inspection (iPhone captures in fixtures/ui-inspect/), screenshot compare (fixture PNGs in fixtures/screenshots/), editor setup (JSON/JSONC samples in fixtures/editor-setup/), MCP jobs, budget and console reads
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
+.github/             CI and release workflows, ruff-ci.toml, release-note categories, scripts/check-version.sh (see CI and Releases below)
 ```
 
 `shell.qml` creates one `AppState` (`app`) and every service on it: `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`. Each page gets `required property var app`. Every service exposes `status` (`unknown`, `loading`, `ready`, `needs-setup`, `error`), a `summary` for the Home page and sidebar badges, and `refresh()`.
@@ -211,6 +212,46 @@ python3 -m unittest discover -s tests
 ```
 
 Everything else has no automated tests: check that QML loads without warnings in `qs log` and that the helper commands you touched return valid JSON.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `main` and by hand (Actions › CI › Run workflow). A newer push to the same branch cancels the older run. It has three jobs:
+
+- Python, on 3.11 (the oldest the helper runs on, because of `tomllib`), 3.14 (what Omarchy ships) and 3.15. It compiles every file in `helper/`, `mcp/` and `tests/`, runs the tests without the MCP server's dependencies (the `test_mcp_*` files skip), creates the MCP venv with `bin/iosstudio-mcp --prepare` (the same uv path users get) and runs the whole suite in it. No test needs xtool, Swift, pymobiledevice3, an iPhone or your home folder: they use fake tools, fixtures and temp folders.
+- Lint: ruff 0.17.4 with `.github/ruff-ci.toml`, which only checks pyflakes and pycodestyle's real errors (unused imports and variables, undefined names, syntax), not style. `E731` (a lambda assigned to a name) and `E741` (names like `l`) are off. Then shellcheck at warning level on `install.sh`, the shell scripts in `bin/`, `helper/root/`, `.github/scripts/` and the dSYM fixture's `build.sh`.
+- QML: qmllint on every `.qml` file in an `archlinux:latest` container with `qt6-declarative` and `quickshell` from Arch's repos. `qs.Commons` and `qs.Ui` are symlinks into Omarchy's shell that only `install.sh` makes, so their imports don't resolve there. qmllint's default levels only fail on syntax errors; the thousands of unresolved-import, unqualified and missing-property warnings that follow from that are counted in the log but don't fail the job.
+
+To run the same checks locally:
+
+```bash
+python3 -m compileall -q helper mcp tests        # writes __pycache__ folders (gitignored)
+python3 -m unittest discover -s tests
+IOSSTUDIO_MCP_VENV=/tmp/ios-ci-venv bin/iosstudio-mcp --prepare && /tmp/ios-ci-venv/bin/python -m unittest discover -s tests
+uvx ruff@0.17.4 check --config .github/ruff-ci.toml helper mcp tests
+shellcheck --severity=warning install.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp helper/root/*.sh tests/fixtures/crash-symbolication/build.sh .github/scripts/*.sh
+/usr/lib/qt6/bin/qmllint $(git ls-files '*.qml') >/dev/null; echo $?   # 0 unless there's a syntax error
+actionlint                                         # the workflow files themselves
+```
+
+## Releases
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. It checks that the tag matches the version files (`.github/scripts/check-version.sh`), runs the CI jobs above, then creates a GitHub Release with notes generated from the merged pull requests, grouped by label as set in `.github/release.yml` (enhancement, bug, mcp, ui/accessibility, documentation, ci, then everything else). It attaches `ios-studio-X.Y.Z.tar.gz` (a `git archive` of the tag) and `ios-studio-X.Y.Z.tar.gz.sha256`. A tag with a suffix, like `v0.2.0-rc1`, is published as a pre-release and checked against its base version (0.2.0). Only the last job can write to the repo (`contents: write`).
+
+To make a release:
+
+1. Bump the version in both files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it) and `version` in `mcp/pyproject.toml`. Changing `pyproject.toml` makes each user's MCP venv rebuild once on its next start.
+2. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
+
+   ```bash
+   git switch main && git pull
+   .github/scripts/check-version.sh v0.2.0    # prints 0.2.0, or says which file is still behind
+   git tag -a v0.2.0 -m "iOS Studio 0.2.0"
+   git push origin v0.2.0
+   ```
+
+3. Watch Actions › Release. If the version check fails, the job names the file that differs: delete the tag (`git push origin :v0.2.0 && git tag -d v0.2.0`), fix it and tag again.
+
+Users install a release by cloning its tag or from the tarball, see the README's Install section.
 
 ## Where things live
 

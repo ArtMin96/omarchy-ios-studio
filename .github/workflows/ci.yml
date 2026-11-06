@@ -1,0 +1,102 @@
+# Tests, lint and a QML parse check. Also called by release.yml before a release is made.
+# How to run the same checks locally: docs/development.md#ci
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the oldest the helper runs on (it imports tomllib). 3.14 is what Omarchy (Arch) ships
+        # today, 3.15 the newest release.
+        python: ["3.11", "3.14", "3.15"]
+    env:
+      UV_PYTHON_DOWNLOADS: never   # the venv must use this matrix entry's Python, not a download
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: mcp/pyproject.toml
+
+      - name: Compile every Python file
+        run: python -m compileall -q helper mcp tests
+
+      - name: Tests without the MCP server's dependencies (MCP tests skip)
+        run: python -m unittest discover -s tests
+
+      # The same script users run: it creates the venv with uv and installs mcp/pyproject.toml's dependencies.
+      - name: Create the MCP venv with bin/iosstudio-mcp --prepare
+        run: |
+          IOSSTUDIO_MCP_VENV="$RUNNER_TEMP/mcp-venv" bin/iosstudio-mcp --prepare
+          "$RUNNER_TEMP/mcp-venv/bin/python" -c 'import sys; v = "%d.%d" % sys.version_info[:2]; print("venv python", v); assert v == "${{ matrix.python }}", v'
+
+      - name: All tests, MCP included
+        run: '"$RUNNER_TEMP/mcp-venv/bin/python" -m unittest discover -s tests'
+
+  lint:
+    name: Lint (ruff, shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Pinned so a new ruff release can't turn the build red on its own. The CI rule set is in
+      # .github/ruff-ci.toml (real errors only, no style rules).
+      - name: ruff
+        run: uvx ruff@0.17.4 check --config .github/ruff-ci.toml --output-format github helper mcp tests
+      - name: shellcheck
+        run: |
+          shellcheck --version | sed -n 2p
+          shellcheck --severity=warning --format=gcc \
+            install.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp \
+            helper/root/*.sh tests/fixtures/crash-symbolication/build.sh .github/scripts/*.sh
+
+  qml:
+    name: QML (qmllint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Arch, like Omarchy: Ubuntu's Qt 6 is older than the QML here, and quickshell is in Arch's extra repo.
+    container: archlinux:latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Qt Declarative and Quickshell
+        run: pacman -Syu --noconfirm --needed qt6-declarative quickshell findutils grep
+      - uses: actions/checkout@v7
+      # qs.Commons and qs.Ui are symlinks into Omarchy's shell (made by install.sh), so their imports don't
+      # resolve here. qmllint's default levels only fail on syntax errors; unresolved imports, unqualified
+      # access and the like stay warnings, which this job counts but doesn't fail on.
+      - name: qmllint
+        run: |
+          mapfile -t files < <(find . -name '*.qml' -not -path './.git/*' | sort)
+          echo "qmllint $(/usr/lib/qt6/bin/qmllint --version) on ${#files[@]} files"
+          status=0
+          /usr/lib/qt6/bin/qmllint "${files[@]}" > "$RUNNER_TEMP/qmllint.log" 2>&1 || status=$?
+          echo "$(grep -c '^Warning:' "$RUNNER_TEMP/qmllint.log" || true) warnings (not gated)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::qmllint found errors"
+            grep -A2 -E '\[syntax\]|^Error:|^Critical:' "$RUNNER_TEMP/qmllint.log" || cat "$RUNNER_TEMP/qmllint.log"
+            exit "$status"
+          fi

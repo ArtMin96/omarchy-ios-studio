@@ -1,0 +1,53 @@
+# Pushing a tag like v0.2.0 runs the CI checks, then publishes a GitHub Release with notes generated from
+# the merged pull requests (grouped by .github/release.yml) and a source tarball with its sha256.
+# Release steps: docs/development.md#releases
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Tag matches the version files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: echo "version=$(.github/scripts/check-version.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Publish the release
+    needs: [version, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Source tarball and checksum
+        run: |
+          name="ios-studio-${TAG#v}"
+          git archive --format=tar.gz --prefix="$name/" -o "$name.tar.gz" HEAD   # HEAD is the tagged commit
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+          echo "ASSETS=$name.tar.gz $name.tar.gz.sha256" >> "$GITHUB_ENV"
+      - name: Create the GitHub Release
+        run: |
+          flags=(--verify-tag --generate-notes --title "iOS Studio $TAG")
+          [[ $TAG == *-* ]] && flags+=(--prerelease)
+          # shellcheck disable=SC2086  # ASSETS is a space-separated list of file names
+          gh release create "$TAG" "${flags[@]}" $ASSETS

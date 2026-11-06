@@ -1,5 +1,7 @@
 # iOS Studio
 
+[![CI](https://github.com/ArtMin96/omarchy-ios-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/ArtMin96/omarchy-ios-studio/actions/workflows/ci.yml)
+
 Build iPhone apps on Omarchy Linux and run them on your own iPhone, without a Mac.
 
 ![iOS Studio home page](docs/screenshots/home.png)
@@ -49,6 +51,14 @@ git clone https://github.com/ArtMin96/omarchy-ios-studio ~/.local/share/omarchy-
 ```
 
 Then open iOS Studio from the app launcher. The Setup page takes it from there.
+
+That installs the newest code on `main`. To install a [release](https://github.com/ArtMin96/omarchy-ios-studio/releases) instead, clone its tag (here v0.2.0):
+
+```bash
+git clone --branch v0.2.0 --depth 1 https://github.com/ArtMin96/omarchy-ios-studio ~/.local/share/omarchy-ios-studio && ~/.local/share/omarchy-ios-studio/install.sh
+```
+
+Each release also has a source tarball, `ios-studio-<version>.tar.gz`, with its `.sha256`. Check it with `sha256sum -c ios-studio-<version>.tar.gz.sha256`, unpack it, move the folder to `~/.local/share/omarchy-ios-studio` and run `install.sh` in it. Settings › About then shows no commit, because a tarball has no git history.
 
 `install.sh` only changes files in your home folder. It adds a launcher entry, an icon, the `ios-studio` command, an Omarchy theme hook and a Hyprland rule that keeps the window opaque (you can turn that off in Settings). It doesn't install the iOS tools. Setup does that, and asks for your password once for the system packages.
 

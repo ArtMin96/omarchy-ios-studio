@@ -557,7 +557,7 @@ def _check_bundle(root: Path, yml: dict) -> list[dict]:
            else "needs at least two parts separated by dots" if "." not in bid.strip(".")
            else "has an empty part" if ".." in bid or bid.startswith(".") or bid.endswith(".")
            else "has characters that aren't allowed")
-    src = "" if key == "bundleID" else f" (orgID + product name)"
+    src = "" if key == "bundleID" else " (orgID + product name)"
     return [_issue("bundle-id", f"The bundle id {bid}{src} {why}.", HINTS["bundle-id"], "xtool.yml", lines.get(key))]
 
 

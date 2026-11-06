@@ -1,0 +1,19 @@
+# Sections of the generated release notes, by pull request label.
+changelog:
+  exclude:
+    labels: [duplicate, invalid, wontfix]
+  categories:
+    - title: New features
+      labels: [enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: MCP server
+      labels: [mcp]
+    - title: Interface and accessibility
+      labels: [ui, accessibility]
+    - title: Documentation
+      labels: [documentation]
+    - title: CI and releases
+      labels: [ci]
+    - title: Other changes
+      labels: ["*"]

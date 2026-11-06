@@ -25,7 +25,6 @@ import asyncio
 import contextlib
 import re
 import time
-from pathlib import Path
 
 from pymobiledevice3.services.diagnostics import DiagnosticsService
 from pymobiledevice3.services.dvt.instruments.activity_trace_tap import ActivityTraceTap
