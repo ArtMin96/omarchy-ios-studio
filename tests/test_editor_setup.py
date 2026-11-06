@@ -542,7 +542,10 @@ class Cli(unittest.TestCase):
             xtool = tmp / "xtool"
             xtool.write_text('#!/usr/bin/env python3\nprint("Build complete! (0.1 secs)")\n')
             xtool.chmod(0o755)
-            env = {"HOME": os.environ.get("HOME", str(tmp)), "IOS_STUDIO_XTOOL": str(xtool)}
+            # A fake home, and the fake xtool on PATH: editor status calls .bsp/xtool.json stale when no xtool
+            # is on PATH, which is the case on a machine without the toolchain (CI).
+            env = {"HOME": str(tmp), "IOS_STUDIO_XTOOL": str(xtool),
+                   "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}"}
             for var in ("XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
                 env[var] = str(tmp / var.lower())
             (tmp / "xdg_config_home/swiftpm/swift-sdks/darwin.artifactbundle").mkdir(parents=True)

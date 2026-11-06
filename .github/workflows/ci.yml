@@ -39,6 +39,13 @@ jobs:
           enable-cache: true
           cache-dependency-glob: mcp/pyproject.toml
 
+      # The image ships LLVM without an unversioned llvm-symbolizer on PATH; without one the crash
+      # symbolication tests skip.
+      - name: Put llvm-symbolizer on PATH
+        run: |
+          d="$(find /usr/lib -maxdepth 3 -path '/usr/lib/llvm-*/bin/llvm-symbolizer' 2>/dev/null | sort -V | tail -n1 | xargs -r dirname)"
+          if [ -n "$d" ]; then echo "$d" >> "$GITHUB_PATH"; echo "using $d/llvm-symbolizer"; else echo "no llvm-symbolizer: those tests skip"; fi
+
       - name: Compile every Python file
         run: python -m compileall -q helper mcp tests
 
