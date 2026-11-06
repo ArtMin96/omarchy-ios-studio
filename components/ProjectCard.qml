@@ -8,6 +8,9 @@ import "../Model.js" as Model
 // One app project on the Projects page (projects slice).
 //   ProjectCard { project: modelData; svc: app.projects; hasCursor: …; onRun: … }
 // Run is the card's primary action; the rest live behind "More", which expands in place.
+// Below the details, ProjectCheckView shows the project settings check (`projects check`): a
+// warnings summary that expands to the issues; a clean result shows only while "More" is open.
+// The card asks for a check when it appears and when it gets the cursor (skipped while fresh).
 BorderSurface {
   id: root
 
@@ -46,6 +49,9 @@ BorderSurface {
   Behavior on color { ColorAnimation { duration: 140 } }
 
   HoverHandler { id: hover; onHoveredChanged: root.hovered(hovered) }
+  Component.onCompleted: if (svc && project.path) svc.checkSoon(project)
+  onHasCursorChanged: if (hasCursor && svc && project.path) svc.checkSoon(project)
+  onExpandedChanged: if (expanded && svc && project.path) svc.checkSoon(project)
 
   function lastBuildPill() {
     if (!last) return null
@@ -212,6 +218,13 @@ BorderSurface {
       tone: "warn"
       size: "small"
       wrapMode: Text.WordWrap
+    }
+
+    ProjectCheckView {
+      Layout.fillWidth: true
+      project: root.project
+      svc: root.svc
+      showClean: root.expanded
     }
 
     // More actions, expanded in place

@@ -1,0 +1,9 @@
+version: 1
+bundleId: com.example.Typo
+iconFile: Resources/AppIcon.png
+foo: bar
+infoPath: Missing.plist
+extensions:
+  - product: Widget
+    infoPath: Widget.plist
+    bundelID: com.example.Typo.Widget
