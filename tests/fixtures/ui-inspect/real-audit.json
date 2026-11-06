@@ -1,0 +1,192 @@
+{
+ "issues": [
+  {
+   "type": "hit-region",
+   "rawType": "testTypeHitRegion",
+   "message": "The touch target is smaller than recommended (44×44 points). Current size is 10 x 11.",
+   "element": {
+    "label": "Counterclockwise Curved Arrow",
+    "frame": {
+     "x": 196.4,
+     "y": 463.1,
+     "w": 9.5,
+     "h": 11.3
+    }
+   },
+   "details": {
+    "code": 100,
+    "extra": "Current size is 10 x 11",
+    "elementId": "e9",
+    "identifier": "arrow.counterclockwise"
+   }
+  },
+  {
+   "type": "dynamic-type",
+   "rawType": "testTypeDynamicText",
+   "message": "The text doesn't grow with the Dynamic Type text size setting.",
+   "element": {
+    "label": "This sentence is far too long to fit in its tiny fixed box",
+    "frame": {
+     "x": 138.8,
+     "y": 482.7,
+     "w": 115.3,
+     "h": 18
+    }
+   },
+   "details": {
+    "code": 3001,
+    "elementId": "e10"
+   }
+  },
+  {
+   "type": "clipped-text",
+   "rawType": "testTypeTextClipped",
+   "message": "The text is cut off (clipped) at larger text sizes.",
+   "element": {
+    "label": "This sentence is far too long to fit in its tiny fixed box",
+    "frame": {
+     "x": 138.8,
+     "y": 482.7,
+     "w": 115.3,
+     "h": 18
+    }
+   },
+   "details": {
+    "code": 3003,
+    "elementId": "e10"
+   }
+  },
+  {
+   "type": "contrast",
+   "rawType": "testTypeContrast",
+   "message": "The text or icon contrast against its background is too low. The text contrast ratio is 3.23. This is based on color #0091FF compared with color #FFFFFF.",
+   "element": {
+    "label": "Increment",
+    "frame": {
+     "x": 206.3,
+     "y": 180,
+     "w": 100.7,
+     "h": 34.3
+    }
+   },
+   "details": {
+    "code": 12,
+    "fontSize": 17,
+    "foreground": "#0091FF",
+    "background": "#FFFFFF",
+    "extra": "The text contrast ratio is 3.23. This is based on color #0091FF compared with color #FFFFFF. Current font size is 17 points.",
+    "elementId": "e3",
+    "identifier": "incrementButton"
+   }
+  }
+ ],
+ "supported": [
+  "missing-label",
+  "contrast",
+  "hit-region",
+  "element-detection",
+  "clipped-text",
+  "traits",
+  "dynamic-type"
+ ],
+ "unsupported": [],
+ "elapsedMs": 3965,
+ "raw": {
+  "supported": [
+   "testTypeSufficientElementDescription",
+   "testTypeContrast",
+   "testTypeHitRegion",
+   "testTypeElementDetection",
+   "testTypeTextClipped",
+   "testTypeTrait",
+   "testTypeDynamicText"
+  ],
+  "issues": [
+   {
+    "_type": "AXAuditIssue_v1",
+    "ElementDescriptionValue_v1": "SwiftUI.AccessibilityNode",
+    "auditTestTypeValue_v1": "testTypeHitRegion",
+    "FontSizeValue_v1": 0.0,
+    "IssueClassificationValue_v1": 100,
+    "ElementLongDescExtraInfo_v1": [
+     "Current size is 10 x 11"
+    ],
+    "AuditElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c0000c0031014010000000c00000000000000"
+     },
+     "AccessibilityIdentifier_v1": "arrow.counterclockwise"
+    },
+    "ElementRectValue_v1": "{{196.3969465648855, 463.08476786645792}, {9.5470737913485948, 11.253912363067286}}",
+    "IsDuplicateValue_v1": false,
+    "MLGeneratedDescriptionValue_v1": null,
+    "BackgroundColorValue_v1": null,
+    "ForegroundColorValue_v1": null
+   },
+   {
+    "_type": "AXAuditIssue_v1",
+    "ElementTextValue_v1": "This sentence is far too long to fit in its tiny fixed box",
+    "ElementRectValue_v1": "{{138.83333333333334, 482.66666666666663}, {115.33333333333334, 18}}",
+    "auditTestTypeValue_v1": "testTypeDynamicText",
+    "FontSizeValue_v1": 0.0,
+    "IssueClassificationValue_v1": 3001,
+    "AuditElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000060041014010000000d00000000000000"
+     }
+    },
+    "ElementDescriptionValue_v1": "SwiftUI.AccessibilityNode",
+    "IsDuplicateValue_v1": false,
+    "MLGeneratedDescriptionValue_v1": null,
+    "ElementLongDescExtraInfo_v1": null,
+    "BackgroundColorValue_v1": null,
+    "ForegroundColorValue_v1": null
+   },
+   {
+    "_type": "AXAuditIssue_v1",
+    "ElementTextValue_v1": "This sentence is far too long to fit in its tiny fixed box",
+    "ElementRectValue_v1": "{{138.83333333333334, 482.66666666666663}, {115.33333333333334, 18}}",
+    "auditTestTypeValue_v1": "testTypeTextClipped",
+    "FontSizeValue_v1": 0.0,
+    "IssueClassificationValue_v1": 3003,
+    "AuditElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000060041014010000000d00000000000000"
+     }
+    },
+    "ElementDescriptionValue_v1": "SwiftUI.AccessibilityNode",
+    "IsDuplicateValue_v1": false,
+    "MLGeneratedDescriptionValue_v1": null,
+    "ElementLongDescExtraInfo_v1": null,
+    "BackgroundColorValue_v1": null,
+    "ForegroundColorValue_v1": null
+   },
+   {
+    "_type": "AXAuditIssue_v1",
+    "ElementDescriptionValue_v1": "SwiftUI.AccessibilityNode",
+    "auditTestTypeValue_v1": "testTypeContrast",
+    "ElementRectValue_v1": "{{206.33333333333331, 180}, {100.66666666666669, 34.333333333333314}}",
+    "IssueClassificationValue_v1": 12,
+    "ElementLongDescExtraInfo_v1": [
+     "The text contrast ratio is 3.23. This is based on color #0091FF compared with color #FFFFFF. Current font size is 17 points."
+    ],
+    "AuditElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c00000014e509010000000700000000000000"
+     },
+     "AccessibilityIdentifier_v1": "incrementButton"
+    },
+    "ForegroundColorValue_v1": "#0091FF",
+    "BackgroundColorValue_v1": "#FFFFFF",
+    "FontSizeValue_v1": 17.0,
+    "IsDuplicateValue_v1": false,
+    "MLGeneratedDescriptionValue_v1": null
+   }
+  ]
+ },
+ "_note": "Real capture: iPhone 17 Pro, iOS 27.3 (24C5037i), UIProbe test app, ui.audit raw=true right after real-tree-after-add.json. No personal text."
+}

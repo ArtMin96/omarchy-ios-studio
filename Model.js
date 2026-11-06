@@ -124,7 +124,25 @@ var Glyph = {
   speedometer: g(0xF04C5),
   chart: g(0xF012A),
   translate: g(0xF05CA),
-  tune: g(0xF062E)
+  tune: g(0xF062E),
+  // UI inspector (DeviceInspectView): element roles and audit issue types
+  inspect: g(0xF1276),
+  accessibility: g(0xF02E6),
+  tap: g(0xF0741),
+  text: g(0xF0284),
+  textbox: g(0xF060E),
+  toggle: g(0xF0521),
+  slider: g(0xF1542),
+  header: g(0xF0274),
+  tab: g(0xF04E9),
+  list: g(0xF0572),
+  element: g(0xF0763),
+  linkVariant: g(0xF0339),
+  contrast: g(0xF0197),
+  textSize: g(0xF027F),
+  clipped: g(0xF019F),
+  hitArea: g(0xF0CFD),
+  label: g(0xF0316)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

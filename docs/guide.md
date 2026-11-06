@@ -59,7 +59,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Tab | What it does |
 |---|---|
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
-| Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. See [Screen](#screen) below. |
+| Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. Elements lists the buttons and texts of the app on screen and presses them; Audit runs Apple's accessibility audit. See [Screen](#screen) below. |
 | Files | Import photos and videos from the camera roll, browse and change an app's files, and test camera code with files. See [Files](#files) below. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
@@ -83,6 +83,8 @@ Press Start live view to watch the phone. The badge next to the title says how i
 Record saves a short video of the screen, up to 30 seconds, 1 minute or 5 minutes. The phone shows REC and a timer while it records, and Stop recording ends it early. The video is an MP4 in `~/.cache/ios-studio/recordings/`. Show in folder and Copy path help you attach it to a bug report, and the finished video plays inline when Qt Multimedia is installed. Recordings in Screenshots mode need ffmpeg; if it's missing, the error has a button that installs it from Setup.
 
 Take screenshot saves a full-resolution still. Save to Pictures and Copy image use the latest frame or screenshot.
+
+The tabs beside the phone switch between this Live view and Elements and Audit, which read the app on the screen. See [Read the screen and check accessibility](#read-the-screen-and-check-accessibility).
 
 #### Files
 
@@ -177,7 +179,7 @@ Press `?` in the app to see these.
 | `c` | Copy the highlighted value |
 | `?` | Show or hide the shortcut sheet |
 
-Projects also has `n` (new app), `a` (add a project) and `b` (build panel). On the Device log and the Console, `Space` pauses.
+Projects also has `n` (new app), `a` (add a project) and `b` (build panel). On the Device log and the Console, `Space` pauses. On iPhone › Screen › Elements, `Enter` presses the highlighted element on your iPhone, and on Audit it shows the issue's element; `s` takes a screenshot.
 
 ## Common tasks
 
@@ -349,6 +351,27 @@ Good to know:
 - Presets are kept in iOS Studio, not in the project folder. They aren't the environment variables in Build settings, which go to the build and not to the app.
 
 See [features/run-presets.md](features/run-presets.md) for every field, the limits and how AI agents use presets.
+
+### Read the screen and check accessibility
+
+iPhone › Screen can read the app that's open on your iPhone as a list: its buttons, texts, switches and other elements, in the order VoiceOver reads them. It can press them on the phone and run Apple's accessibility audit. It needs Developer Mode, and nothing is installed on the phone.
+
+1. Open the app on your iPhone and leave it in front, with the phone unlocked.
+2. On iPhone › Screen, pick Elements and press Read the screen. On a small screen this takes about 5 seconds; a busy one takes longer.
+3. Each row shows the element's label, its value, its role and its identifier (the `accessibilityIdentifier` from your code). "No label" means VoiceOver has nothing to read for it. Type in the filter (`/`) to find one.
+4. Move to a row with `j`/`k` or the mouse and press Press (or `Enter`). This taps the element on your real iPhone, in the app that's open. iOS Studio then reads the screen again and says what changed, for example "Changed: countLabel Count: 1 → Count: 0". A press takes about 8 seconds.
+5. Pick Audit and press Run audit. It looks for low contrast, text that doesn't grow with the text size setting (Dynamic Type), clipped text, touch targets smaller than 44×44 points, missing labels and a few more. Issues are grouped by type. Click one to see its element in Elements.
+
+The highlighted row is outlined on the phone picture when its position is known. On iOS 27.3 the phone doesn't report where elements are, so only audit issues get an outline; the Elements list says so.
+
+Good to know:
+
+- Only the screen showing now is read. Open another screen in your app (or press a button that opens it) and read it again.
+- A press is a tap. Typing text and swiping aren't supported.
+- Pressing works on what VoiceOver can reach. If a press does nothing, read the screen again: the screen may have changed since.
+- If an alert or the keyboard is up, the list stops early and says so.
+
+AI agents use the same thing to check their own changes: they launch the app, read the screen, press a button and read it again. See [features/ui-inspect.md](features/ui-inspect.md) for how it works and its limits, and [troubleshooting](troubleshooting.md#elements-shows-nothing) if the list stays empty.
 
 ### Connect an AI agent
 

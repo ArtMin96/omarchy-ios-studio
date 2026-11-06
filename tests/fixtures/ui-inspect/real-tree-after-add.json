@@ -1,0 +1,2085 @@
+{
+ "elements": [
+  {
+   "id": "e1",
+   "role": "staticText",
+   "label": "Count: 1",
+   "value": null,
+   "hint": null,
+   "identifier": "countLabel",
+   "traits": [
+    "staticText"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e2",
+   "role": "button",
+   "label": "Decrement",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "button"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e3",
+   "role": "button",
+   "label": "Increment",
+   "value": null,
+   "hint": "Adds one to the count",
+   "identifier": "incrementButton",
+   "traits": [
+    "button"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e4",
+   "role": "button",
+   "label": "Add item",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "button"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e5",
+   "role": "staticText",
+   "label": "Water plants",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "staticText"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e6",
+   "role": "staticText",
+   "label": "Item 2",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "staticText"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e7",
+   "role": "toggle",
+   "label": "Notes",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "button",
+    "toggle"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e8",
+   "role": "staticText",
+   "label": "Faint text that is hard to read",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "staticText"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e9",
+   "role": "button",
+   "label": "Counterclockwise Curved Arrow",
+   "value": null,
+   "hint": null,
+   "identifier": "arrow.counterclockwise",
+   "traits": [
+    "button"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e10",
+   "role": "staticText",
+   "label": "This sentence is far too long to fit in its tiny fixed box",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "staticText"
+   ],
+   "frame": null,
+   "enabled": true
+  },
+  {
+   "id": "e11",
+   "role": "header",
+   "label": "UI Probe",
+   "value": null,
+   "hint": null,
+   "identifier": null,
+   "traits": [
+    "staticText",
+    "header"
+   ],
+   "frame": null,
+   "enabled": true
+  }
+ ],
+ "count": 11,
+ "complete": true,
+ "stoppedBy": "loop",
+ "elapsedMs": 3967,
+ "raw": [
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Count: 1",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c0000405ff709010000000500000000000000"
+     },
+     "AccessibilityIdentifier_v1": "countLabel"
+    },
+    "CaptionTextValue_v1": "Count: 1"
+   },
+   "attrs": {
+    "Label": "Count: 1",
+    "Value": null,
+    "Hint": null,
+    "Identifier": "countLabel",
+    "Traits": 8589934656,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Decrement, Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c00002012e509010000000600000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Decrement, Button"
+   },
+   "attrs": {
+    "Label": "Decrement",
+    "Value": null,
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934593,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Increment, Button, Adds one to the count",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c00000014e509010000000700000000000000"
+     },
+     "AccessibilityIdentifier_v1": "incrementButton"
+    },
+    "CaptionTextValue_v1": "Increment, Button, Adds one to the count"
+   },
+   "attrs": {
+    "Label": "Increment",
+    "Value": null,
+    "Hint": "Adds one to the count",
+    "Identifier": "incrementButton",
+    "Traits": 8589934593,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Add item, Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c0000a00fe309010000000800000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Add item, Button"
+   },
+   "attrs": {
+    "Label": "Add item",
+    "Value": null,
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934593,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Water plants",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000000001014010000000900000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Water plants"
+   },
+   "attrs": {
+    "Label": "Water plants",
+    "Value": null,
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934656,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Item 2",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000040061014010000000e00000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Item 2"
+   },
+   "attrs": {
+    "Label": "Item 2",
+    "Value": null,
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934656,
+    "Frame": null
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Notes, 1, Button, Toggle",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000080021014010000000a00000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Notes, 1, Button, Toggle"
+   },
+   "attrs": {
+    "Label": "Notes",
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 9007207844675585
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Faint text that is hard to read",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000020031014010000000b00000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "Faint text that is hard to read"
+   },
+   "attrs": {
+    "Label": "Faint text that is hard to read",
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934656
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "Counterclockwise Curved Arrow, Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c0000c0031014010000000c00000000000000"
+     },
+     "AccessibilityIdentifier_v1": "arrow.counterclockwise"
+    },
+    "CaptionTextValue_v1": "Counterclockwise Curved Arrow, Button"
+   },
+   "attrs": {
+    "Label": "Counterclockwise Curved Arrow",
+    "Hint": null,
+    "Identifier": "arrow.counterclockwise",
+    "Traits": 8589934593
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "This sentence is far too long to fit in its tiny fixed box",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c000060041014010000000d00000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "This sentence is far too long to fit in its tiny fixed box"
+   },
+   "attrs": {
+    "Label": "This sentence is far too long to fit in its tiny fixed box",
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8589934656
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "InspectorSectionsValue_v1": [
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Basic_v1",
+      "TitleValue_v1": "Basic",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Label",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Label",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Value",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Value",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Traits",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": true,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "TraitsHumanReadable",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Identifier",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Identifier",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hint",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "Hint",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "User Input Labels",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "UserInputLabels",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Actions_v1",
+      "TitleValue_v1": "Actions",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Activate",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 1,
+        "AttributeNameValue_v1": "AXAction-2010",
+        "PerformsActionValue_v1": true
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Element_v1",
+      "TitleValue_v1": "Element",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Class",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementClassName",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Address",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementMemoryAddress",
+        "PerformsActionValue_v1": false
+       },
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Controller",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": false,
+        "ValueTypeValue_v1": 256,
+        "AttributeNameValue_v1": "ElementViewControllerClassName",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     },
+     {
+      "_type": "AXAuditInspectorSection_v1",
+      "IdentifierValue_v1": "Hierarchy_v1",
+      "TitleValue_v1": "Hierarchy",
+      "ElementAttributesValue_v1": [
+       {
+        "_type": "AXAuditElementAttribute_v1",
+        "HumanReadableNameValue_v1": "Hierarchy",
+        "IsInternal_v1": false,
+        "SettableValue_v1": false,
+        "DisplayInlineValue_v1": false,
+        "DisplayAsTree_v1": true,
+        "ValueTypeValue_v1": 2,
+        "AttributeNameValue_v1": "_AXHierarchyElementsAttribute",
+        "PerformsActionValue_v1": false
+       }
+      ],
+      "AllowsFilter_v1": false
+     }
+    ],
+    "SpokenDescriptionValue_v1": "UI Probe, Header",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "230c0000203f0314010000000400000000000000"
+     }
+    },
+    "CaptionTextValue_v1": "UI Probe, Header"
+   },
+   "attrs": {
+    "Label": "UI Probe",
+    "Hint": null,
+    "Identifier": null,
+    "Traits": 8590000192
+   }
+  }
+ ],
+ "_note": "Real capture: iPhone 17 Pro, iOS 27.3 (24C5037i), UIProbe test app, ui.tree raw=true after Add item; walk starts at element 2 (pre-fix ordering). No personal text."
+}

@@ -14,6 +14,7 @@ import "../Model.js" as Model
 // Mirror frames are double-buffered: the next one decodes in a hidden Image and the two swap
 // once it's Ready, so a frame is never shown half-loaded. A frame that arrives while one is
 // still decoding replaces the queued one (latest wins). frameShown(url) fires for each frame shown.
+// `highlight` outlines part of the screen (DeviceInspectView: the hovered element), see below.
 Item {
   id: root
 
@@ -27,6 +28,11 @@ Item {
   property real screenAspect: 1206 / 2622   // iPhone 17 Pro
   property bool clickable: false
   property var mirrorService: null
+  // Outline over part of the screen: `highlight` is {x, y, w, h} and `highlightSpace` {w, h} the
+  // whole screen, both in the iPhone's points. It's mapped onto the shown image (cropped to fill
+  // the glass) and turns with it; nothing is drawn without an image, a highlight or a space.
+  property var highlight: null
+  property var highlightSpace: null
   signal clicked()
   signal frameShown(string url)
 
@@ -162,6 +168,36 @@ Item {
           sourceSize.height: Math.round(parent.height * 2)
           visible: !root._aFront
           onStatusChanged: if (status === Image.Ready || status === Image.Error) root._settled(imgB)
+        }
+      }
+
+      // element outline (see `highlight`)
+      Item {
+        id: marks
+        anchors.fill: parent
+        clip: true
+        readonly property var hl: root.highlight
+        readonly property var space: root.highlightSpace
+        visible: root.hasImage && !!hl && !!space && space.w > 0 && space.h > 0 && hl.w > 0 && hl.h > 0
+        // The image's displayed rectangle (PreserveAspectCrop: scaled to cover, centred).
+        readonly property real _iw: Math.max(1, root._front.implicitWidth)
+        readonly property real _ih: Math.max(1, root._front.implicitHeight)
+        readonly property real _s: Math.max(width / _iw, height / _ih)
+        readonly property real _pw: _iw * _s
+        readonly property real _ph: _ih * _s
+        readonly property real _ox: (width - _pw) / 2
+        readonly property real _oy: (height - _ph) / 2
+        Rectangle {
+          readonly property real kx: marks._pw / (marks.space ? marks.space.w : 1)
+          readonly property real ky: marks._ph / (marks.space ? marks.space.h : 1)
+          x: marks.hl ? marks._ox + marks.hl.x * kx : 0
+          y: marks.hl ? marks._oy + marks.hl.y * ky : 0
+          width: marks.hl ? marks.hl.w * kx : 0
+          height: marks.hl ? marks.hl.h * ky : 0
+          radius: Style.space(2)
+          color: Util.alpha(Commons.Color.accent, 0.16)
+          border.width: Style.space(2)
+          border.color: Commons.Color.accent
         }
       }
 

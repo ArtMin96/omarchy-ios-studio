@@ -73,7 +73,11 @@ PageFrame {
   }
 
   function refresh() { svc.refresh() }
-  function focusSearch() { if (page.showDevice) { page.tab = "apps"; appsView.search.focusField() } }
+  function focusSearch() {
+    if (!page.showDevice) return
+    if (page.tab === "screen" && screenView.pane === "elements") { screenView.focusFilter(); return }
+    page.tab = "apps"; appsView.search.focusField()
+  }
 
   function handleKey(event) {
     if (!page.showDevice) return false
@@ -87,6 +91,7 @@ PageFrame {
     }
     if (page.tab !== "apps") {
       if (page.tab === "screen" && event.text === "s") { svc.screenshot(); return true }
+      if (page.tab === "screen") return screenView.handleKey(a)   // Elements/Audit: j/k, Enter presses
       return false
     }
     var n = appsView.shown.length
@@ -177,9 +182,11 @@ PageFrame {
     onCursorMoved: function(i) { page.cursor = i }
   }
   DeviceScreenView {
+    id: screenView
     Layout.fillWidth: true
     visible: page.showDevice && page.tab === "screen" && page.svc.connected
     app: page.app
+    onDevModeHelp: devModeSheet.open()
   }
   DeviceFilesView {
     id: filesView
