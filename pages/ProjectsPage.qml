@@ -280,6 +280,7 @@ Item {
         onRemoveFromList: page.svc.remove(modelData)
         onToggleAutoRenew: page.svc.setAutoRenew(modelData, !modelData.autoRenew)
         onOpenBuildSettings: buildSettingsSheet.openFor(modelData)
+        onEditPresets: runPresetsSheet.openFor(modelData)
         onShowBuild: page.panelOpen = true
       }
     }
@@ -355,6 +356,12 @@ Item {
 
   ProjectBuildSettingsSheet {
     id: buildSettingsSheet
+    app: page.app
+    svc: page.svc
+  }
+
+  RunPresetsSheet {
+    id: runPresetsSheet
     app: page.app
     svc: page.svc
   }

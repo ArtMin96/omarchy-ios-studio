@@ -7,7 +7,9 @@ xtool, swift-build and swift-frontend.
 
 State (all under ~/.local/state/ios-studio/):
   projects.json   {"added": [path], "hidden": [path], "meta": {path: {"autoRenew": bool, "udid": str,
-                    "build": {prebuild, env, openFiles, allowGenerated}}}}   (build: see build_settings.py)
+                    "build": {prebuild, env, openFiles, allowGenerated},     (build: see build_settings.py)
+                    "runPresets": [{name, args, env, language, region, uiTestMode}], "runPreset": name}}}
+                                                                              (see run_presets.py)
   builds.json     [{"project", "path", "name", "kind", "config", "result", "duration", "time",
                     "ipa", "errors", "warnings", "logFile", "udid", "bundleId",
                     "diagnostics": [{severity, message, category, file?, line?, col?, hint?, details?}]
@@ -40,6 +42,7 @@ from typing import Any
 import build_settings
 import common
 import diagnostics
+import run_presets
 from common import HelperError, fix
 
 PROJECTS_FILE = common.STATE_DIR / "projects.json"
@@ -273,6 +276,7 @@ def _project_info(path: Path, history: list | None = None, renewals: dict | None
         "added": sp in state["added"],
         "autoRenew": bool(state["meta"].get(sp, {}).get("autoRenew")),
         "buildSettings": build_settings.current(state["meta"].get(sp)),
+        **_presets_info(state["meta"].get(sp)),
         "lastBuild": last,
         "signing": _signing_status(ren),
         "modified": mtime,
@@ -471,6 +475,43 @@ def cmd_build_settings(flags: dict) -> int:
                       "changes": changes, "saved": saved, "dryRun": dry,
                       "suggested": build_settings.suggest(p, after if saved or dry else before),
                       "openFilesError": build_settings.check_nofile(after.get("openFiles"))})
+
+
+def _presets_info(meta: dict | None) -> dict:
+    """runPresets (each with its resolved args/env) and runPreset (the selected name or None) for project info."""
+    presets = run_presets.stored(meta)
+    return {"runPresets": [run_presets.with_resolved(p) for p in presets],
+            "runPreset": run_presets.selected(meta, presets)}
+
+
+def cmd_presets(flags: dict) -> int:
+    """projects presets --path P [--save '<preset json>' [--rename-from OLD] | --delete NAME [--dry-run] |
+    --select NAME|'' | --resolve NAME]: list or change a project's run presets (see run_presets.py).
+    Returns {path, presets: [preset + resolved], selected} (+ saved / deleted, dryRun), or {name, args, env}
+    for --resolve."""
+    p = _require_path(flags)
+    if not _is_project(p):
+        raise HelperError("not-a-project", "That folder isn't an xtool app (it needs Package.swift and xtool.yml).")
+    sp = str(p)
+    with _edit_state() as state:
+        meta = state["meta"].get(sp) or {}
+        presets = run_presets.stored(meta)
+        sel = run_presets.selected(meta, presets)
+        presets, sel, extra, changed = run_presets.act(presets, sel, flags)
+        if changed:
+            run_presets.store(state["meta"].setdefault(sp, {}), presets, sel)
+            if not state["meta"][sp]:
+                state["meta"].pop(sp)
+    return common.ok(run_presets.result(sp, presets, sel, extra))
+
+
+def _launch_preset(p: Path, flags: dict) -> dict | None:
+    """The --preset of a `build run`, resolved before anything builds (raises unknown-preset)."""
+    name = flags.get("preset")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    preset = run_presets.find(run_presets.stored(_state()["meta"].get(str(p))), name)
+    return {"name": preset["name"], **run_presets.resolve(preset)}
 
 
 def cmd_add(flags: dict) -> int:
@@ -1508,6 +1549,7 @@ def _streaming(fn):
 def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, dict | None, HelperError | None]:
     """kind: compile | ipa | run | renew | install. Streams events; returns (rc, data, error) without a done event."""
     p = _require_path(flags)
+    preset = _launch_preset(p, flags) if kind == "run" else None   # an unknown preset fails before any build
     bs = build_settings.current(_state()["meta"].get(str(p)))
     prebuild = bs["prebuild"] if kind != "install" else None
     # A prebuild command may write xtool.yml itself, so a fresh checkout without one can still build.
@@ -1644,6 +1686,7 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
         "duration": duration, "time": started, "ipa": ipa, "app": artifact if artifact and artifact.endswith(".app") else None,
         "errors": errors, "warnings": warnings, "logFile": str(log_file), "udid": udid, "via": via,
         "bundleId": bundle, "errorCode": err.code if err else None, "errorMessage": err.message if err else None,
+        "preset": preset["name"] if preset else None,
     }
     _append_history({**entry, "diagnostics": _stored_diags(runner.diags)})
     runner.log_fh.write(f"\n# {entry['result']} in {duration}s\n")
@@ -1658,7 +1701,9 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
             "buildSeconds": runner.build_secs,
             "installed": installed,
             "needsInstall": bool(kind in ("run", "renew") and via == "wifi"),
-            "launch": {"bundleId": bundle, "udid": udid} if kind == "run" else None,
+            "launch": {"bundleId": bundle, "udid": udid, "args": preset["args"] if preset else [],
+                       "env": preset["env"] if preset else {}, "preset": preset["name"] if preset else None}
+                      if kind == "run" else None,
             "profile": profile,
             "signing": signing,
         }
@@ -1988,6 +2033,7 @@ GROUPS = {
         "info": cmd_info,
         "check": cmd_check,
         "build-settings": cmd_build_settings,
+        "presets": cmd_presets,
         "add": cmd_add,
         "remove": cmd_remove,
         "unhide": cmd_unhide,

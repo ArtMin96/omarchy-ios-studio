@@ -122,7 +122,9 @@ var Glyph = {
   chip: g(0xF061A),
   record: g(0xF044A),
   speedometer: g(0xF04C5),
-  chart: g(0xF012A)
+  chart: g(0xF012A),
+  translate: g(0xF05CA),
+  tune: g(0xF062E)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`
@@ -347,4 +349,78 @@ function keyAction(event) {
   if (k === 0x01000016) return "pageUp"
   if (k === 0x01000017) return "pageDown"
   return ""
+}
+
+// ---------------------------------------------------------------- run presets (helper/run_presets.py)
+// Saved launch arguments, environment and language per project. These mirror the helper's rules so
+// the editor can preview and validate as you type; the helper still checks everything on save.
+var PRESET_LANGUAGES = [
+  { value: "en", label: "English", region: "en_US" },
+  { value: "de", label: "German", region: "de_DE" },
+  { value: "fr", label: "French", region: "fr_FR" },
+  { value: "es", label: "Spanish", region: "es_ES" },
+  { value: "it", label: "Italian", region: "it_IT" },
+  { value: "pt-BR", label: "Portuguese (Brazil)", region: "pt_BR" },
+  { value: "nl", label: "Dutch", region: "nl_NL" },
+  { value: "ru", label: "Russian", region: "ru_RU" },
+  { value: "ja", label: "Japanese", region: "ja_JP" },
+  { value: "ko", label: "Korean", region: "ko_KR" },
+  { value: "zh-Hans", label: "Chinese (Simplified)", region: "zh_CN" },
+  { value: "ar", label: "Arabic (right to left)", region: "ar_SA" },
+  { value: "he", label: "Hebrew (right to left)", region: "he_IL" }
+]
+var PRESET_MAX_NAME = 40
+var PRESET_LANGUAGE_RE = /^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$/
+var PRESET_REGION_RE = /^[a-z]{2,3}(_[A-Z][a-z]{3})?(_([A-Z]{2}|[0-9]{3}))?$/
+var ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+// "German" for "de", the code itself for anything not in the short list.
+function languageLabel(code) {
+  for (var i = 0; i < PRESET_LANGUAGES.length; i++) if (PRESET_LANGUAGES[i].value === code) return PRESET_LANGUAGES[i].label.replace(/ \(right to left\)$/, "")
+  return String(code || "")
+}
+
+// The helper's spelling fix-ups: "de-de" -> "de-DE" (sep "-") or "de_DE" (sep "_"); "" when empty.
+function presetTag(value, sep) {
+  var s = String(value || "").trim()
+  if (s === "") return ""
+  var parts = s.split(/[-_]/)
+  var out = [parts[0].toLowerCase()]
+  for (var i = 1; i < parts.length; i++) {
+    var p = parts[i]
+    if (p.length === 4 && /^[A-Za-z]+$/.test(p)) out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    else if (/^[A-Za-z]+$/.test(p)) out.push(p.toUpperCase())
+    else out.push(p)
+  }
+  return out.join(sep)
+}
+
+// A preset -> { args, env } as app.launch gets it: its own args, then the generated ones.
+function presetResolve(p) {
+  p = p || {}
+  var args = (p.args || []).slice()
+  var lang = presetTag(p.language, "-"), region = presetTag(p.region, "_")
+  if (lang) args.push("-AppleLanguages", "(" + lang + ")")
+  if (region) args.push("-AppleLocale", region)
+  if (p.uiTestMode) args.push("-UITestMode", "YES")
+  return { args: args, env: Object.assign({}, p.env || {}) }
+}
+
+// Short description for menus and rows: "German · de_DE · 2 arguments · UI test mode".
+function presetSummary(p) {
+  if (!p) return ""
+  var parts = []
+  if (p.language) parts.push(languageLabel(p.language))
+  if (p.region) parts.push(p.region)
+  var n = (p.args || []).length, e = Object.keys(p.env || {}).length
+  if (n) parts.push(plural(n, "argument"))
+  if (e) parts.push(plural(e, "variable"))
+  if (p.uiTestMode) parts.push("UI test mode")
+  return parts.length ? parts.join(" · ") : "No changes from a plain launch"
+}
+
+// A project's preset names (projects list items carry runPresets as names or objects).
+function presetNames(project) {
+  var list = (project && project.runPresets) || []
+  return list.map(function(x) { return typeof x === "string" ? x : String((x && x.name) || "") }).filter(function(n) { return n !== "" })
 }

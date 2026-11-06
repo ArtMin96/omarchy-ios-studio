@@ -94,6 +94,53 @@ PROJECTS = [
 ]
 
 
+# Run presets per demo project (saves, deletes and selections answer as if done but change nothing).
+DEMO_PRESETS = {
+    "HabitTracker": [
+        {"name": "German", "language": "de", "region": "de_DE"},
+        {"name": "Debug flags", "args": ["-ShowDebugMenu", "YES"], "env": {"LOG_LEVEL": "debug"}},
+    ],
+    "WeatherGlance": [
+        {"name": "Japanese", "language": "ja", "region": "ja_JP"},
+        {"name": "UI tests", "args": ["-ResetData"], "env": {"WEATHER_STUB": "sunny"}, "uiTestMode": True},
+    ],
+}
+DEMO_SELECTED = {"HabitTracker": "German"}
+
+
+def _demo_presets(name: str) -> tuple[list, str | None]:
+    import run_presets
+    if FRESH:
+        return [], None
+    presets = [run_presets.validate(run_presets.normalize(p)) for p in DEMO_PRESETS.get(name, [])]
+    return presets, DEMO_SELECTED.get(name)
+
+
+def _presets_cmd(flags: dict) -> int:
+    import run_presets
+    path = str(flags.get("path") or "")
+    name = path.rstrip("/").split("/")[-1]
+    if not any(p["name"] == name for p in PROJECTS):
+        return common.fail("not-a-project", "That folder isn't an xtool app (it needs Package.swift and xtool.yml).")
+    presets, sel = _demo_presets(name)
+    try:
+        presets, sel, extra, _changed = run_presets.act(presets, sel, flags)
+    except common.HelperError as exc:
+        return common.fail(exc.code, exc.message, exc.fix, exc.detail)
+    out = run_presets.result(path, presets, sel, extra)
+    return ok({**out, "demo": True} if "presets" in out else out)
+
+
+def _demo_launch_preset(path: str, flags: dict) -> dict | None:
+    import run_presets
+    want = flags.get("preset")
+    if not isinstance(want, str) or not want.strip():
+        return None
+    presets, _sel = _demo_presets(path.rstrip("/").split("/")[-1])
+    p = run_presets.find(presets, want)
+    return {"name": p["name"], **run_presets.resolve(p)}
+
+
 def _history() -> list:
     if FRESH:
         return []
@@ -135,8 +182,14 @@ def _project(p: dict) -> dict:
         "name": p["name"], "package": p["name"], "path": path, "displayPath": "~/Developer/" + p["name"],
         "bundleId": p["bundleId"], "product": p["name"], "icon": _icon(p["name"], p["hue"], p["shape"]),
         "iosMin": "17", "branch": p["branch"], "generated": False, "added": False, "autoRenew": p["name"] == "WeatherGlance",
-        "lastBuild": last, "signing": signing, "modified": NOW - 3600 * (2 + PROJECTS.index(p) * 20), "ipa": None,
+        **_demo_presets_info(p["name"]), "lastBuild": last, "signing": signing, "modified": NOW - 3600 * (2 + PROJECTS.index(p) * 20), "ipa": None,
     }
+
+
+def _demo_presets_info(name: str) -> dict:
+    import run_presets
+    presets, sel = _demo_presets(name)
+    return {"runPresets": [run_presets.with_resolved(x) for x in presets], "runPreset": sel}
 
 
 # ================================================================ account
@@ -244,6 +297,10 @@ def _build_stream(kind: str, flags: dict) -> int:
     path = str(flags.get("path") or "")
     name = path.rstrip("/").split("/")[-1] or "App"
     bundle = next((p["bundleId"] for p in PROJECTS if p["name"] == name), "com.example.app")
+    try:   # like the real build: an unknown preset fails before anything builds
+        preset = _demo_launch_preset(path, flags) if kind == "run" else None
+    except common.HelperError as exc:
+        return common.done(False, error=exc)
     common.event("build", project=name, bundleId=bundle, logFile=str(demo_art.demo_dir() / "build-logs" / "demo.log"), estimate=12)
     steps = [("resolve", "Resolving packages"), ("compile", "Compiling"), ("link", "Linking"), ("sign", "Signing"), ("package", "Packaging")]
     lines = ["Fetching https://github.com/example/swift-collections", "Compiling " + name + " ContentView.swift",
@@ -266,7 +323,10 @@ def _build_stream(kind: str, flags: dict) -> int:
             "ipa": path + "/xtool/" + name + ".ipa", "diagnostics": pre, "installed": False}
     if kind in ("run", "renew", "install"):
         data["needsInstall"] = True
-        data["launch"] = {"bundleId": bundle, "udid": flags.get("udid")} if kind == "run" else None
+        data["launch"] = {"bundleId": bundle, "udid": flags.get("udid"), "args": preset["args"] if preset else [],
+                          "env": preset["env"] if preset else {},
+                          "preset": preset["name"] if preset else None} if kind == "run" else None
+    data["preset"] = preset["name"] if preset else None
     return common.done(True, data)
 
 
@@ -482,6 +542,8 @@ def run(group: str, action: str, flags: dict) -> int:
         empty = {"prebuild": None, "env": {}, "openFiles": None, "allowGenerated": False}
         return ok({"demo": True, "path": flags.get("path"), "settings": empty, "before": empty, "changes": [],
                    "saved": False, "dryRun": True, "suggested": None, "openFilesError": None})
+    if key == "projects presets":   # answers as if saved, but nothing changes in demo mode
+        return _presets_cmd(flags)
     if key == "projects autorenew":
         return ok({"installed": False, "unit": "ios-studio-renew.timer", "enabled": False, "next": None, "last": None, "projects": []})
     if key == "build history":

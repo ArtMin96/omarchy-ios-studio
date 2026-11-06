@@ -199,6 +199,20 @@ The project's entitlements file asks for something a free Apple ID can't get. xt
 
 A blank icon means `xtool.yml` has no `iconPath`. A black background means the icon has transparency, which iOS fills with black. The icon must be a 1024×1024 PNG without transparency; the project card's settings warnings say which of these is wrong.
 
+### The German preset still shows English
+
+A run preset's language only changes text the app has translated. `-AppleLanguages (de)` asks for German; if the app has no German localization (no `de.lproj` folder or German entries in its string catalog), iOS falls back to the app's own language, usually English. Dates, numbers and currency still follow the preset's region. Add the translations and run again.
+
+If the app does have German, check that it was started by iOS Studio with the preset: the card says "Runs with German" and the build panel's launch step names it. Launch arguments only reach a fresh start of the app. iOS Studio closes a running copy before it launches, but opening the app from the home screen, or switching back to one you opened there, runs it without the preset. Press Run again, or Launch on Logs › Console. Your iPhone's own language never changes. See [features/run-presets.md](features/run-presets.md#things-to-know).
+
+### "No run preset named '…'"
+
+Run or an agent asked for a preset the project doesn't have (it was renamed or deleted, or the name is misspelled). The message lists the presets the project has; names don't depend on upper or lower case. The build doesn't start. In the app, pick one in Run's menu or choose Default (no preset). An agent calls `ios_project_presets(project_path)` for the names. With `ios_app_launch` or `ios_app_run_and_capture`, "No listed project builds …" or "Several projects build …" means the agent needs to pass `project_path` so the server knows whose presets to use.
+
+### A run preset can't be saved
+
+The error says which rule it breaks: a name longer than 40 characters or already used, more than 64 launch arguments or environment variables, an environment variable name with characters other than letters, digits and `_` (or starting with a digit), or a language or region that isn't a code like `de`, `pt-BR`, `zh-Hans` or `de_DE`, `en_GB`. A project can have 50 presets.
+
 ## Setup and updates
 
 ### Swift broke after a system update

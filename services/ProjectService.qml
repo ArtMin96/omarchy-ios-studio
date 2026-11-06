@@ -23,6 +23,10 @@ import "../Model.js" as Model
 //   reveal(p) · setAutoRenew(p, on) · convert(path)
 //   checks: { path: {state: "loading"|"ready"|"error", result, error, at} } · checkFor(p)
 //   check(p) (now) · checkSoon(p) (queued, skipped when fresh) · checkAll()   (`projects check`)
+//   run presets (`projects presets`, helper/run_presets.py): selectedPreset(p) · presetsOf(p)
+//     loadPresets(p, onDone, onFail) · savePreset(p, preset, renameFrom, onDone, onFail)
+//     deletePreset(p, name, onDone, onFail) (asks first) · selectPreset(p, name|"", onDone, onFail)
+//     Run passes the selected one (--preset); build.preset is its name, for the run step and toast.
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -81,7 +85,9 @@ Item {
 
   function refresh() {
     if (!root.loadedOnce) root.status = "loading"
+    var asked = Date.now()
     app.cli.call(["projects", "list"], "", function(data) {
+      root._dropPresetStateBefore(asked)
       root.items = data.projects || []
       root.convertible = data.convertible || []
       root.missing = data.missing || []
@@ -174,6 +180,8 @@ Item {
     if (kind === "renew") argv = ["projects", "renew", "--path", p.path]
     else argv = ["build", kind, "--path", p.path]
     if (_needsDevice(kind)) argv.push("--udid", root.deviceUdid)
+    var preset = kind === "run" ? root.selectedPreset(p) : ""
+    if (preset) argv.push("--preset", preset)
     var cfg = app.setting("buildConfig", "debug")
     if (kind !== "install" && cfg === "release") argv.push("--config", "release")
 
@@ -183,7 +191,8 @@ Item {
     root.build = {
       active: true, kind: kind, path: p.path, name: p.name || "", bundleId: p.bundleId || "",
       steps: [], current: "", fraction: 0, detail: "Starting…", eta: null,
-      result: null, started: Date.now(), logFile: "", udid: _needsDevice(kind) ? root.deviceUdid : ""
+      result: null, started: Date.now(), logFile: "", udid: _needsDevice(kind) ? root.deviceUdid : "",
+      preset: preset
     }
     root.buildStarted()
     _updateSummary()
@@ -381,10 +390,18 @@ Item {
     })
   }
 
+  // "Opening the app on your iPhone · German" when a run preset is used.
+  function _launchText(data) {
+    var name = (data.launch && data.launch.preset) || root.build.preset || ""
+    return "Opening the app on your iPhone" + (name ? " · " + name : "")
+  }
+
   // Free teams install apps as XTL-<TEAM>.<bundleID>; find the real id on the phone first.
   function _launch(data) {
-    _setStep("launch", "running", "Opening the app on your iPhone")
-    _patch({ detail: "Opening the app on your iPhone" })
+    var launchText = _launchText(data)
+    if (data.launch.preset) _patch({ preset: data.launch.preset })
+    _setStep("launch", "running", launchText)
+    _patch({ detail: launchText })
     if (!_daemonAvailable()) {
       _setStep("launch", "done")
       _finish(true, Object.assign({}, data, { launchNote: "Installed. Open it on your iPhone." }), null)
@@ -399,8 +416,13 @@ Item {
           if (a === want || a.slice(-(want.length + 1)) === "." + want) { bid = a; break }
         }
       }
-      // console: its print() output shows on Logs › Console (falls back to a plain launch if unavailable)
-      app.device.request("app.launch", { bundleId: bid, udid: data.udid, console: true }, function(ok2, res) {
+      // console: its print() output shows on Logs › Console (falls back to a plain launch if unavailable).
+      // args/env come from the run preset, already resolved by the helper (language, region, UI test mode).
+      var req = { bundleId: bid, udid: data.udid, console: true }
+      var l = data.launch
+      if (l.args && l.args.length) req.args = l.args
+      if (l.env && Object.keys(l.env).length) req.env = l.env
+      app.device.request("app.launch", req, function(ok2, res) {
         if (!root.building) return
         if (ok2) {
           _setStep("launch", "done")
@@ -445,7 +467,7 @@ Item {
                : b.kind === "ipa" ? ".ipa is ready" : b.kind === "install" ? "was reinstalled" : "built successfully"
       if (ok) {
         if (data && data.launchError) app.toast(b.name + " is installed, but didn't open: " + Model.errorMessage(data.launchError), "warn")
-        else app.toast(b.name + " " + what, "ok")
+        else app.toast(b.name + " " + what + (b.kind === "run" && b.preset ? " with “" + b.preset + "”" : ""), "ok")
         app.notify(b.name + " " + what, "Finished in " + Model.formatDuration(b.result.duration), Model.Glyph.checkCircle)
       } else {
         app.notify("Build failed: " + b.name, error ? error.message : "", Model.Glyph.error)
@@ -533,6 +555,89 @@ Item {
       app.toast(d.changes && d.changes.length ? "Build settings saved for " + p.name : "Nothing changed", d.changes && d.changes.length ? "ok" : "info")
       if (onDone) onDone(d)
     }, function(e) { if (onFail) onFail(e) })
+  }
+
+  // ------------------------------------------------------------ run presets (helper/run_presets.py)
+  // Saved launch arguments, environment and language per project. `projects list` items carry
+  // runPresets (each with `resolved`) and runPreset (the selected name or null); the selection is
+  // stored by the helper, so it survives restarts.
+  // Newer answers of `projects presets` win over `items` until a list refresh started after them
+  // lands, so the picker updates at once without re-reading every project (and re-creating the cards).
+  property var _presetState: ({})       // path -> { presets, selected, at }
+  function _presetEntry(p) {
+    var path = p && p.path ? p.path : p
+    return path ? (root._presetState[path] || null) : null
+  }
+  function presetsOf(p) {
+    var o = _presetEntry(p)
+    if (o) return o.presets
+    var cur = p && p.path ? (projectByPath(p.path) || p) : p
+    return (cur && cur.runPresets) || []
+  }
+  function selectedPreset(p) {
+    var o = _presetEntry(p)
+    if (o) return o.selected || ""
+    var cur = p && p.path ? (projectByPath(p.path) || p) : p
+    return (cur && cur.runPreset) || ""
+  }
+  function _setPresetState(path, presets, selected) {
+    var all = Object.assign({}, root._presetState)
+    all[path] = { presets: presets || [], selected: selected || null, at: Date.now() }
+    root._presetState = all
+  }
+  function _dropPresetStateBefore(t) {
+    var all = {}, changed = false
+    for (var k in root._presetState) {
+      if (root._presetState[k].at >= t) all[k] = root._presetState[k]
+      else changed = true
+    }
+    if (changed) root._presetState = all
+  }
+  function _presetsCall(p, extra, onDone, onFail) {
+    app.cli.call(["projects", "presets", "--path", p.path].concat(extra || []), "", function(d) {
+      root._setPresetState(p.path, d.presets, d.selected)
+      if (onDone) onDone(d)
+    }, function(e) { if (onFail) onFail(e) })
+  }
+  // onDone({ path, presets: [preset + resolved], selected })
+  function loadPresets(p, onDone, onFail) { _presetsCall(p, [], onDone, onFail) }
+  // preset: { name, args, env, language, region, uiTestMode }; renameFrom: the old name when editing one.
+  function savePreset(p, preset, renameFrom, onDone, onFail) {
+    var extra = ["--save", JSON.stringify(preset)]
+    if (renameFrom) extra.push("--rename-from", renameFrom)
+    _presetsCall(p, extra, function(d) {
+      app.toast("Saved the run preset “" + (d.saved || preset.name) + "”", "ok")
+      if (onDone) onDone(d)
+    }, onFail)
+  }
+  function deletePreset(p, name, onDone, onFail) {
+    var using = selectedPreset(p) === name
+    app.confirm({
+      title: "Delete the run preset “" + name + "”?",
+      message: "Its launch arguments, environment variables and language settings are removed from " + (p.name || "this project") + "."
+               + (using ? " Run goes back to a plain launch, without a preset." : "") + " The app and its data on your iPhone stay as they are.",
+      confirmText: "Delete preset",
+      destructive: true,
+      glyph: Model.Glyph.trash,
+      onConfirm: function() {
+        root._presetsCall(p, ["--delete", name], function(d) {
+          app.toast("Deleted the run preset “" + (d.deleted || name) + "”", "ok")
+          if (onDone) onDone(d)
+        }, function(e) { app.toast(Model.errorMessage(e), "error"); if (onFail) onFail(e) })
+      }
+    })
+  }
+  // name "" clears the selection (Run launches without a preset).
+  function selectPreset(p, name, onDone, onFail) {
+    var had = _presetEntry(p)
+    root._setPresetState(p.path, presetsOf(p), name || null)
+    _presetsCall(p, ["--select", name || ""], onDone, function(e) {
+      var all = Object.assign({}, root._presetState)
+      if (had) all[p.path] = had; else delete all[p.path]
+      root._presetState = all
+      app.toast(Model.errorMessage(e), "error")
+      if (onFail) onFail(e)
+    })
   }
 
   // ------------------------------------------------------------ project check (helper/project_check.py)
