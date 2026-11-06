@@ -229,6 +229,10 @@ Run or an agent asked for a preset the project doesn't have (it was renamed or d
 
 The error says which rule it breaks: a name longer than 40 characters or already used, more than 64 launch arguments or environment variables, an environment variable name with characters other than letters, digits and `_` (or starting with a digit), or a language or region that isn't a code like `de`, `pt-BR`, `zh-Hans` or `de_DE`, `en_GB`. A project can have 50 presets.
 
+### A screenshot compare says "changed" but nothing seems different
+
+Look at the diff image: the pink pixels are what changed. Usual causes are an animation or a spinner caught mid-move, a blinking cursor, a date or time inside the app (only the status bar is ignored), or content that loads late. Wait for the screen to settle before comparing, raise the threshold a little, or ignore a busy area (`--mask` for the helper). `size-mismatch` means the screenshot comes from another iPhone model or orientation than the baseline: save a baseline for that phone. Without Pillow a full-size compare takes a second or two; see [features/screenshot-compare.md](features/screenshot-compare.md#speed-and-pillow).
+
 ## Setup and updates
 
 ### Swift broke after a system update

@@ -8,9 +8,9 @@ import "../Model.js" as Model
 
 // Live screen: a big drawn phone with the mirror, the way it's shown (smooth stream, screenshots or
 // AirPlay), short recordings for bug reports, and stills. Narrow windows stack the phone above.
-// Beside the phone, tabs switch between that Live view and the Elements and Audit panes
-// (DeviceInspectView), whose cursor row is outlined on the phone. handleKey/focusFilter are the
-// page's hooks for those panes.
+// Beside the phone, tabs switch between that Live view, the Elements and Audit panes
+// (DeviceInspectView), whose cursor row is outlined on the phone, and Compare (screenshots against
+// saved baselines, ScreenshotCompareView). handleKey/focusFilter are the page's hooks for those panes.
 GridLayout {
   id: root
   readonly property bool narrow: width > 0 && width < Style.space(680)
@@ -21,8 +21,8 @@ GridLayout {
   readonly property var svc: app.device
   property int rotationSteps: 0
   readonly property string currentFile: svc.framePath !== "" ? svc.framePath : svc.lastShot
-  property string pane: "view"            // "view" | "elements" | "audit"
-  readonly property bool inspecting: pane !== "view"
+  property string pane: "view"            // "view" | "elements" | "audit" | "compare"
+  readonly property bool inspecting: pane === "elements" || pane === "audit"
   signal devModeHelp()
 
   // Elements/Audit keys from DevicePage.handleKey; false = not handled.
@@ -126,6 +126,7 @@ GridLayout {
     glyph: Model.Glyph.camera
     placeholder: !root.svc.connected ? "Connect your iPhone to see its screen"
                : root.inspecting ? "The screen shows here when it's read"
+               : root.pane === "compare" ? "The screenshot shows here when you compare"
                : (root.airplayView ? "AirPlay opens its own window" : "Press Start to watch your iPhone's screen here")
     highlight: root.inspecting ? inspector.highlight : null
     highlightSpace: inspector.space
@@ -146,7 +147,8 @@ GridLayout {
         { key: "view", label: "Live view", glyph: Model.Glyph.camera },
         { key: "elements", label: "Elements", glyph: Model.Glyph.inspect, count: inspector.elements.length || undefined },
         { key: "audit", label: "Audit", glyph: Model.Glyph.accessibility, count: inspector.auditRows.length || undefined,
-          level: inspector.auditRows.length ? "warn" : "" }
+          level: inspector.auditRows.length ? "warn" : "" },
+        { key: "compare", label: "Compare", glyph: Model.Glyph.compare }
       ]
       current: root.pane
       onSelected: function(k) { root.pane = k }
@@ -155,13 +157,20 @@ GridLayout {
     DeviceInspectView {
       id: inspector
       Layout.fillWidth: true
-      visible: root.pane !== "view"
+      visible: root.inspecting
       section: root.pane === "audit" ? "audit" : "elements"
       app: root.app
       // Beside the phone, the lists end where it does; stacked under it they get a fixed height.
       availableHeight: root.narrow ? Style.space(480) : phone.height - y
       onDevModeHelp: root.devModeHelp()
       onShowElements: root.pane = "elements"
+    }
+
+    ScreenshotCompareView {
+      id: comparer
+      Layout.fillWidth: true
+      visible: root.pane === "compare"
+      app: root.app
     }
 
     ColumnLayout {

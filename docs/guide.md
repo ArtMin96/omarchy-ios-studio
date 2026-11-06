@@ -59,7 +59,7 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 | Tab | What it does |
 |---|---|
 | Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
-| Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. Elements lists the buttons and texts of the app on screen and presses them; Audit runs Apple's accessibility audit. See [Screen](#screen) below. |
+| Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. Elements lists the buttons and texts of the app on screen and presses them; Audit runs Apple's accessibility audit; Compare checks a screen against a saved screenshot of it. See [Screen](#screen) below. |
 | Files | Import photos and videos from the camera roll, browse and change an app's files, and test camera code with files. See [Files](#files) below. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
@@ -84,7 +84,7 @@ Record saves a short video of the screen, up to 30 seconds, 1 minute or 5 minute
 
 Take screenshot saves a full-resolution still. Save to Pictures and Copy image use the latest frame or screenshot.
 
-The tabs beside the phone switch between this Live view and Elements and Audit, which read the app on the screen. See [Read the screen and check accessibility](#read-the-screen-and-check-accessibility).
+The tabs beside the phone switch between this Live view, Elements and Audit, which read the app on the screen (see [Read the screen and check accessibility](#read-the-screen-and-check-accessibility)), and Compare, which checks the screen against a saved baseline (see [Check a screen against a baseline](#check-a-screen-against-a-baseline)).
 
 #### Files
 
@@ -372,6 +372,30 @@ Good to know:
 - If an alert or the keyboard is up, the list stops early and says so.
 
 AI agents use the same thing to check their own changes: they launch the app, read the screen, press a button and read it again. See [features/ui-inspect.md](features/ui-inspect.md) for how it works and its limits, and [troubleshooting](troubleshooting.md#elements-shows-nothing) if the list stays empty.
+
+### Check a screen against a baseline
+
+![iPhone › Screen › Compare with a changed screen](screenshots/screen-compare.png)
+
+A baseline is a screenshot of one screen of your app that you keep, such as its home screen or its settings. After a change, compare the screen with it: iOS Studio shows how much changed and draws boxes around it, so a moved label or a missing badge is easy to spot.
+
+1. Open the screen on your iPhone.
+2. On iPhone › Screen, pick Compare. The project is the one you picked here last, else the last one you built; change it with the Project menu.
+3. Type a name for the screen in Screen name, for example `home`, and press Save as baseline. The baselines of the project are listed below; click one to use its name.
+4. After a change in your app, open the same screen and press Compare (or `Enter` in the name field).
+
+The result shows the baseline, the new screenshot and the diff image side by side, all the same size. The badge says what came out:
+
+- Same: the screens match, or differ by less than the threshold (0.1 % of the pixels).
+- Changed: more than that differs. The changed areas are outlined on the new screenshot; in the diff image changed pixels are pink and boxed in yellow.
+- Size mismatch: the screenshots have different sizes, for example from another iPhone model or a turned phone. There's no diff then.
+- No baseline: nothing is saved under that name yet. Save as baseline keeps this screenshot.
+
+The status bar (clock, battery, signal) is ignored, so the time never counts as a change; it's shaded on the images. Click an image to open it in your image viewer.
+
+When the change is what you wanted, press Accept as new baseline: the screenshot you just compared becomes the baseline, after you confirm. Replace baseline in the top row takes a new screenshot instead. Delete baseline (or the bin icon in the list) removes a baseline after asking. Comparing needs a connected iPhone; the buttons say why when they can't be used.
+
+Baselines are kept in iOS Studio's data folder, not in your project, and old comparisons are cleaned up by themselves. AI agents use the same baselines. See [features/screenshot-compare.md](features/screenshot-compare.md) for what counts as a change and where the files go.
 
 ### Connect an AI agent
 

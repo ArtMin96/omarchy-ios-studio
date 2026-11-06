@@ -23,18 +23,25 @@ Item {
     anchors.leftMargin: Style.spacing.rowPaddingX
     anchors.rightMargin: Style.spacing.md
     spacing: Style.spacing.xxl
-    Icon {
+    // the glyph centred on the title's first line
+    FontMetrics { id: titleMetrics; font: titleText.font }
+    Item {
       visible: root.glyph !== ""
-      glyph: root.glyph
-      size: Style.font.iconLarge
-      color: root.level !== "" ? Theme.levelColor(root.level) : Theme.faint
       Layout.preferredWidth: Style.font.iconLarge * 1.4
+      Layout.preferredHeight: titleMetrics.height
       Layout.alignment: Qt.AlignTop
+      Icon {
+        anchors.centerIn: parent
+        glyph: root.glyph
+        size: Style.font.iconLarge
+        color: root.level !== "" ? Theme.levelColor(root.level) : Theme.faint
+      }
     }
     ColumnLayout {
       Layout.fillWidth: true
+      Layout.alignment: Qt.AlignTop
       spacing: Style.spacing.xxs
-      AppText { Layout.fillWidth: true; text: root.title; tone: "dim"; wrapMode: Text.WordWrap }
+      AppText { id: titleText; Layout.fillWidth: true; text: root.title; tone: "dim"; wrapMode: Text.WordWrap }
       AppText { Layout.fillWidth: true; visible: root.text !== ""; text: root.text; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
     }
   }

@@ -14,7 +14,7 @@ Button {
 
   iconText: busy ? String.fromCodePoint(0xF04E6) : glyph
   iconSpinning: busy
-  tooltipText: tooltip
+  tooltipText: Host.covers(root, Host.top) ? "" : tooltip   // none under a confirm or sheet
   foreground: danger && hot ? Commons.Color.urgent : Theme.dim
   iconSize: Style.font.icon
   horizontalPadding: Style.spacing.md

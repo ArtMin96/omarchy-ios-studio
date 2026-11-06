@@ -265,7 +265,9 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         would = [f"Hide {p.get('name')} ({p.get('path')}) from the project list",
-                 "Forget its auto-renew flag, default iPhone and build settings", "Keep every file on disk"]
+                 "Forget its auto-renew flag, default iPhone and build settings",
+                 "Delete its saved screenshot baselines and diffs (iOS Studio's data, not the project's)",
+                 "Keep every file in the project folder"]
         if not confirm:
             return dry_run(f"This would remove {p.get('name')} from iOS Studio.", would)
         data = await helper.call("projects", "remove", {"path": p["path"]})

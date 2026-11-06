@@ -26,6 +26,16 @@ QtObject {
     if (i >= 0) { s.splice(i, 1); root.stack = s }
   }
 
+  // True when an overlay is open and `item` isn't inside it: the item is under the dim layer, so
+  // its tooltip shouldn't show (the pointer hasn't moved, so its hover never ends). Pass `top` too
+  // so a binding re-evaluates when the stack changes: Host.covers(root, Host.top).
+  function covers(item, top) {
+    var t = top === undefined ? root.top : top
+    if (!t || !item) return false
+    for (var p = item; p; p = p.parent) if (p === t) return false
+    return true
+  }
+
   // Close the top overlay. Returns true when something was closed.
   function closeTop() {
     var t = root.top

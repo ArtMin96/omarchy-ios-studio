@@ -82,8 +82,11 @@ def icon(path: Path, hue: float, shape: str = "circle", size: int = 120) -> Path
     return path
 
 
-def phone_screen(path: Path, seq: int = 0, w: int = 390, h: int = 844) -> Path:
-    """A plausible weather-app screen for the mirror / screenshot views."""
+def phone_screen(path: Path, seq: int = 0, w: int = 390, h: int = 844, variant: str = "") -> Path:
+    """A plausible weather-app screen for the mirror / screenshot views.
+
+    variant (demo screenshot baselines, helper/screenshots.py): "older" has different text lines, a badge in the
+    first card and another clock width; "clock" differs from the default only in the status bar."""
     top, bottom = _rgb(0.58, 0.55, 0.85), _rgb(0.70, 0.60, 0.45)
     # cards: (x0, y0, x1, y1, alpha)
     cards = [(24, 300, 366, 470, 0.20), (24, 490, 366, 640, 0.16), (24, 660, 366, 790, 0.16)]
@@ -91,6 +94,13 @@ def phone_screen(path: Path, seq: int = 0, w: int = 390, h: int = 844) -> Path:
              (48, 520, 180, 532), (48, 548, 330, 558), (48, 690, 200, 702), (48, 718, 310, 728)]
     temp_r = 70
     sun_x = 195 + int(20 * ((seq % 10) / 10.0))
+    clock = (30, 70)
+    if variant == "older":
+        lines[1], lines[3] = (48, 360, 232, 370), (48, 520, 252, 532)
+        lines.append((292, 322, 342, 342))      # a "NEW" badge the current screen no longer has
+        clock = (30, 62)
+    elif variant == "clock":
+        clock = (30, 58)
     rows = []
     for y in range(h):
         t = y / h
@@ -99,7 +109,7 @@ def phone_screen(path: Path, seq: int = 0, w: int = 390, h: int = 844) -> Path:
         for x in range(w):
             px = list(base)
             # status bar pill + "time" dots
-            if 14 <= y <= 26 and (30 <= x <= 70 or 300 <= x <= 360):
+            if 14 <= y <= 26 and (clock[0] <= x <= clock[1] or 300 <= x <= 360):
                 px = [245, 245, 250]
             # sun disc
             dx, dy = x - sun_x, y - 170
