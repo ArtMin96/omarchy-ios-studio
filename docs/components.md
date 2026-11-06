@@ -64,7 +64,7 @@ PageFrame {
 | `app.closeConfirm(handle)` | Close that dialog (or drop it from the queue) unanswered: neither callback runs. Use it when whatever asked has gone away (e.g. the job that wanted an answer ended). |
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
-| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
+| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
@@ -118,7 +118,7 @@ cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
 robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune, and for the UI inspector inspect accessibility tap text textbox toggle slider
 header tab list element linkVariant (element roles) and contrast textSize clipped hitArea label (audit issue types), and compare imagePlus
-(screenshot compare).
+(screenshot compare), and editorSetup fileCode (Settings › Code editor).
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
@@ -541,7 +541,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   selected preset's name, from `svc.selectedPreset(project)`). Run is a RunSplitButton; a selected preset shows as
   a faint "Runs with <name>" after the bundle ID, which elides before the bundle ID does. It asks
   `svc.checkSoon(project)` for a project check when it appears, gets the cursor or expands, and shows a
-  ProjectCheckView below the details.
+  ProjectCheckView below the details. It also asks `svc.editorStatusSoon(project)` once when it appears; read-only
+  `editorHint` is the helper's `hint` while the project isn't ready for completion ("Build once to enable
+  completion"), shown faint with a file glyph at the end of the folder line (on its own line under it on a narrow
+  card). Nothing shows when it's ready. Editor setup itself is machine-wide (Settings › Code editor), so the card has
+  no editor button and its right cluster stays as it is.
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
@@ -633,6 +637,25 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
   copyable), Profiles tab (read-only, expired ones behind `showExpired`) and Location tab (a simulated GPS
   location from presets or latitude/longitude). Props: `app`.
+- **EditorSection**: Settings › Code editor (a Card). Props: `app` (uses `app.projects`: `editorInfo`,
+  `loadEditors()`, `editorSetup(id, confirm, …)`). "Your editor" is a Dropdown (Omarchy default, each installed
+  editor, Other command… with a field) that writes `editorSetup` (the helper's `preferred`) and `editorCommand`
+  together through `choose(id, keepCustom)`. "Swift completion" lists one EditorSetupRow per installed editor and one
+  quiet "Not installed: …" line (or "No supported editor found"), with a Skeleton while loading and an ErrorState on
+  failure. Set up… dry-runs into the row; Apply runs `--confirm` and makes that editor Your editor (a custom command
+  is kept). Helpers: `tidy(text)` (home → `~`), `kindLabel(kind, done)` (write/merge/skip/backup → Create/Update/Keep/Back up, or Created/…),
+  `editorConfig(action)` (`scope: "user"` but not iOS Studio's settings.json, which is also user scope), `stateText`,
+  `stateLevel`, `commandOf(editor)`, `openDocs()`. Deep link `nav("settings", {section: "editor"})`. See
+  [features/editor-setup.md](features/editor-setup.md).
+- **EditorSetupRow**: one installed editor in EditorSection, laid out like the AI tools rows (32 px tile, name and a
+  quiet pill: Ready, Not set up, One step left, Set up by hand; the note below; a fixed-width button slot). Props:
+  `section`, `editor` (an `editor status` entry), `plan` (`{state: loading|ready|error|running|done, result,
+  error}`), `first`, `slotWidth`; signals `setupRequested()`, `applyRequested()`, `cancelRequested()`. A
+  `partial` editor lists its `notes` (steps only you can do) in warn. The dry run shows under the text as a kind
+  column, the file path once (mono), its `detail` and any `kept` values below it, then one warn line ("Changes your
+  Neovim config for every project.", plus the backup when there is one), then Apply (Change <editor> config when it touches that config) and Cancel. Once done,
+  it lists what it did and the next step. Neovim without LazyVim (`editor.lazyvim === false`) gets no Set up, only
+  Snippet (opens the docs).
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
 - **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView

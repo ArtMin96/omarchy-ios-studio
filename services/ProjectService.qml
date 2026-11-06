@@ -27,6 +27,10 @@ import "../Model.js" as Model
 //     loadPresets(p, onDone, onFail) · savePreset(p, preset, renameFrom, onDone, onFail)
 //     deletePreset(p, name, onDone, onFail) (asks first) · selectPreset(p, name|"", onDone, onFail)
 //     Run passes the selected one (--preset); build.preset is its name, for the run step and toast.
+//   editor setup (`editor status|setup`, helper/editor_setup.py), machine-wide: editorInfo, editorInfoError,
+//     editorInfoLoading, loadEditors(onDone, onFail), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
+//     (dry run unless confirm). Per project: editors: { path: {state, result: {bsp, ready, hint}, error, at} }
+//     editorFor(p) · editorStatus(p, …) (now) · editorStatusSoon(p) (queued, skipped when fresh)
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -460,6 +464,7 @@ Item {
     root.build = b
     root.buildFinished(ok)
     if (b.path) check({ path: b.path })      // the build may have been the user fixing a setting
+    if (b.path) editorStatus({ path: b.path })   // a build writes .bsp/xtool.json: the card's editor hint may be gone
 
     var cancelled = error && error.code === "cancelled"
     if (!cancelled) {
@@ -688,6 +693,80 @@ Item {
     root._checkBusy = true
     var next = function() { root._checkBusy = false; Qt.callLater(root._nextCheck) }
     check({ path: path }, next, next)
+  }
+
+  // ------------------------------------------------------------ editor setup (helper/editor_setup.py)
+  // Machine-wide: which editors (VS Code, Zed, Neovim) are installed and set up for Swift through
+  // SourceKit-LSP (Settings › Code editor). Per project: whether completion works there yet (the build
+  // server file), shown as a quiet hint on the card. Per-project answers are kept by path, like `checks`.
+  property var editorInfo: null         // `editor status` answer (machine-wide)
+  property var editorInfoError: null
+  property bool editorInfoLoading: false
+  function loadEditors(onDone, onFail) {
+    root.editorInfoLoading = true
+    app.cli.call(["editor", "status"], "", function(d) {
+      root.editorInfo = d
+      root.editorInfoError = null
+      root.editorInfoLoading = false
+      if (onDone) onDone(d)
+    }, function(e) {
+      root.editorInfoError = e
+      root.editorInfoLoading = false
+      if (onFail) onFail(e)
+    }, { timeout: 20000 })
+  }
+  // Dry run unless confirm; onDone({ editor, dryRun, actions: [{kind, path, scope, detail}], applied, state, next, notes }).
+  // A confirmed setup reloads the machine-wide status afterwards.
+  function editorSetup(editorId, confirm, onDone, onFail) {
+    var argv = ["editor", "setup", "--editor", editorId]
+    if (confirm) argv.push("--confirm")
+    app.cli.call(argv, "", function(d) {
+      if (confirm) root.loadEditors()
+      if (onDone) onDone(d)
+    }, function(e) { if (onFail) onFail(e) }, { timeout: confirm ? 300000 : 30000 })
+  }
+
+  property var editors: ({})            // path -> { state: "loading"|"ready"|"error", result: {bsp, ready, hint}, error, at }
+  property var _editorQueue: []
+  property bool _editorBusy: false
+  function editorFor(p) {
+    var path = p && p.path ? p.path : p
+    return path ? (root.editors[path] || null) : null
+  }
+  function _setEditor(path, fields) {
+    var all = Object.assign({}, root.editors)
+    all[path] = Object.assign({}, all[path] || {}, fields)
+    root.editors = all
+  }
+  function editorStatus(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    root._setEditor(path, { state: "loading", error: null })
+    app.cli.call(["editor", "status", "--project", path], "", function(d) {
+      root._setEditor(path, { state: "ready", result: d, error: null, at: Date.now() })
+      if (onDone) onDone(d)
+    }, function(e) {
+      root._setEditor(path, { state: "error", error: e, at: Date.now() })
+      if (onFail) onFail(e)
+    }, { timeout: 20000 })
+  }
+  // Queued, one at a time, skipped when asked in the last minute.
+  function editorStatusSoon(p) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    var c = root.editors[path]
+    if (c && (c.state === "loading" || (c.at && Date.now() - c.at < root._checkFreshMs))) return
+    if (root._editorQueue.indexOf(path) >= 0) return
+    root._editorQueue = root._editorQueue.concat([path])
+    root._nextEditor()
+  }
+  function _nextEditor() {
+    if (root._editorBusy || root._editorQueue.length === 0) return
+    var path = root._editorQueue[0]
+    root._editorQueue = root._editorQueue.slice(1)
+    root._editorBusy = true
+    var next = function() { root._editorBusy = false; Qt.callLater(root._nextEditor) }
+    editorStatus({ path: path }, next, next)
   }
 
   function openBuildLog(file) {

@@ -1,0 +1,10 @@
+{
+    // Team settings: keep these
+    "editor.tabSize": 4, // Swift style
+    /* block
+       comment */
+    "files.watcherExclude": {
+        "**/node_modules/**": true,
+    },
+    "url": "https://example.com/a//b", // not a comment inside the string
+}

@@ -14,6 +14,9 @@ import "../Model.js" as Model
 // Below the details, ProjectCheckView shows the project settings check (`projects check`): a
 // warnings summary that expands to the issues; a clean result shows only while "More" is open.
 // The card asks for a check when it appears and when it gets the cursor (skipped while fresh).
+// Editor setup is machine-wide (Settings › Code editor). The card only ends its path line with a quiet
+// hint when completion can't work in this project yet (e.g. "Build once to enable completion");
+// nothing shows when it's ready.
 BorderSurface {
   id: root
 
@@ -54,7 +57,7 @@ BorderSurface {
   Behavior on color { ColorAnimation { duration: 140 } }
 
   HoverHandler { id: hover; onHoveredChanged: root.hovered(hovered) }
-  Component.onCompleted: if (svc && project.path) svc.checkSoon(project)
+  Component.onCompleted: if (svc && project.path) { svc.checkSoon(project); svc.editorStatusSoon(project) }
   onHasCursorChanged: if (hasCursor && svc && project.path) svc.checkSoon(project)
   onExpandedChanged: if (expanded && svc && project.path) svc.checkSoon(project)
 
@@ -65,6 +68,13 @@ BorderSurface {
     if (last.result === "cancelled") return { level: "info", text: "Cancelled " + Model.relativeTime(last.time) }
     var e = last.errors > 0 ? " · " + Model.plural(last.errors, "error") : ""
     return { level: "error", text: "Failed " + Model.relativeTime(last.time) + e }
+  }
+
+  // The path line's editor hint (`editor status --project`): text when completion isn't ready yet, else "".
+  readonly property string editorHint: {
+    var e = svc ? svc.editorFor(project) : null
+    var r = e && e.state === "ready" ? e.result : null
+    return r && r.ready === false && r.hint ? String(r.hint) : ""
   }
 
   function signingPill() {
@@ -187,7 +197,31 @@ BorderSurface {
           AppText { text: root.project.displayPath || ""; tone: "faint"; size: "small"; elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.maximumWidth: implicitWidth + 1; Layout.minimumWidth: Style.space(60) }
           Icon { visible: !!root.project.branch; glyph: Model.Glyph.link; size: Style.font.bodySmall; color: Theme.faint; Layout.leftMargin: Style.spacing.md }
           AppText { visible: !!root.project.branch; text: root.project.branch || ""; tone: "faint"; size: "small"; elide: Text.ElideRight; Layout.maximumWidth: Style.space(160) }
+          // Editor hint: only when completion isn't ready here yet (quiet; gives way first)
+          Icon {
+            visible: root.editorHint !== "" && !root.narrow
+            glyph: Model.Glyph.fileCode
+            size: Style.font.bodySmall
+            color: Theme.faint
+            Layout.leftMargin: Style.spacing.md
+          }
+          AppText {
+            visible: root.editorHint !== "" && !root.narrow
+            text: root.editorHint
+            tone: "faint"; size: "small"; elide: Text.ElideRight
+            Layout.fillWidth: true
+            Layout.maximumWidth: Math.min(implicitWidth + 1, Style.space(260))
+            Layout.minimumWidth: 0
+          }
           Item { Layout.fillWidth: true }
+        }
+        // Narrow cards: the editor hint gets its own line, so it doesn't squeeze the path
+        RowLayout {
+          Layout.fillWidth: true
+          visible: root.editorHint !== "" && root.narrow
+          spacing: Style.spacing.lg
+          Icon { glyph: Model.Glyph.fileCode; size: Style.font.bodySmall; color: Theme.faint }
+          AppText { Layout.fillWidth: true; text: root.editorHint; tone: "faint"; size: "small"; elide: Text.ElideRight }
         }
       }
 

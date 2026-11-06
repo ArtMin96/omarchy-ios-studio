@@ -7,7 +7,7 @@ where the crash happened. iOS Studio resolves those frames to the function, file
 ## Where it shows up
 
 - **Logs › Crashes** (the app): in "Where it crashed", your app's frames show the function, and the
-  file:line below it. Click one to open that line in your editor (Settings › Editor). A line under
+  file:line below it. Click one to open that line in your editor (Settings › Code editor). A line under
   the frames says where the numbers come from, or why there are none and what to do.
 - **MCP**: `ios_crash_get` returns `app_frames` (frame number, function, file relative to
   `project_path`, line, column), `symbolicated` (`full`, `partial`, `none` or `not-needed`) and a

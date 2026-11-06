@@ -412,6 +412,11 @@ def cmd_info(flags: dict) -> int:
         raise HelperError("not-a-project", "That folder isn't an xtool app (it needs Package.swift and xtool.yml).")
     info = _project_info(p)
     info["suggestedBuildSettings"] = build_settings.suggest(p, info["buildSettings"])
+    try:   # editor support in this project (.bsp file, ready, hint); see editor_setup.py
+        import editor_setup
+        info["editor"] = editor_setup.brief(p)
+    except Exception:  # noqa: BLE001 - never let it break project info
+        info["editor"] = None
     return common.ok(info)
 
 
@@ -684,6 +689,9 @@ def cmd_new(flags: dict) -> int:
     with _edit_state() as state:
         if str(dest.resolve()) not in state["added"]:
             state["added"].append(str(dest.resolve()))
+        # marks it as made by iOS Studio: editor files (.vscode/) are only written by themselves into these
+        state["meta"].setdefault(str(dest.resolve()), {})["createdFrom"] = tmpl_id
+    _editor_auto(dest.resolve())
     return common.ok({**_project_info(dest.resolve(), state=state), "template": tmpl_id, "usedXtool": used_xtool})
 
 
@@ -698,10 +706,22 @@ def cmd_convert(flags: dict) -> int:
     prefix = common.settings().get("bundlePrefix") or "com.example"
     bundle = flags.get("bundle_id") if isinstance(flags.get("bundle_id"), str) else f"{prefix}.{libs[0]}"
     (p / "xtool.yml").write_text(f"version: 1\nbundleID: {bundle}\nproduct: {libs[0]}\n")
+    _editor_auto(p)
     return cmd_add({"path": str(p)})
 
 
 # ---------------------------------------------------------------- editor / folder
+
+def _editor_auto(p: Path) -> None:
+    """Editor support files a project needs, written when missing, never overwriting (editor_setup.auto_project):
+    .bsp/xtool.json for every project; .vscode/ only for projects created from a template here (meta
+    createdFrom) when VS Code is the preferred editor. Best effort: never fails the caller."""
+    try:
+        import editor_setup
+        editor_setup.auto_project(p)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _editor_cmd() -> list[str]:
     st = common.settings()
@@ -1693,6 +1713,8 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
     _append_history({**entry, "diagnostics": _stored_diags(runner.diags)})
     runner.log_fh.write(f"\n# {entry['result']} in {duration}s\n")
     runner.close()
+    if ok_ and kind != "install":
+        _editor_auto(p)
     if ok_ and kind in ("ipa", "run", "renew"):
         import crash_symbols  # keep this build's binary + dSYM so its crash reports resolve to file:line
         crash_symbols.remember_build(p, product, config)

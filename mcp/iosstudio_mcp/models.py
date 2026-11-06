@@ -137,6 +137,21 @@ def _sources_dir(path: Any, product: Any) -> str | None:
     return d if product and os.path.isdir(d) else None
 
 
+def _editor_brief(e: Any) -> dict[str, Any] | None:
+    """`projects info` editor field, kept small (no paths)."""
+    if not isinstance(e, dict):
+        return None
+    b = e.get("bsp") if isinstance(e.get("bsp"), dict) else {}
+    auto = e.get("auto") if isinstance(e.get("auto"), dict) else None
+    return {"bsp": {"present": bool(b.get("present")), "stale": bool(b.get("stale")),
+                    "reason": clip(str(b["reason"]), 200) if b.get("reason") else None},
+            "ready": bool(e.get("ready")), "hint": clip(str(e["hint"]), 200) if e.get("hint") else None,
+            "preferred": e.get("preferred"), "created": bool(e.get("created")),
+            "auto": {"at": iso(auto.get("at")), "wrote": [os.path.basename(str(w.get("path")))
+                                                          for w in (auto.get("wrote") or [])
+                                                          if isinstance(w, dict)][:5]} if auto else None}
+
+
 class ProjectDetail(ProjectBrief):
     package: str | None = None
     product: str | None = None
@@ -154,6 +169,8 @@ class ProjectDetail(ProjectBrief):
                                                                      "as preset= to ios_run; details: ios_project_presets)")
     run_preset: str | None = Field(None, description="The preset selected in the app (its Run button uses it; "
                                                      "agents pass preset= explicitly)")
+    editor: dict[str, Any] | None = Field(None, description="Editor support: {bsp: {present, stale, reason}, ready, "
+                                                            "hint, preferred, created, auto}; see ios_editor_setup")
     next_steps: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -167,7 +184,8 @@ class ProjectDetail(ProjectBrief):
                    suggested_build_settings=p.get("suggestedBuildSettings") or None,
                    run_presets=[str(x.get("name"))[:40] for x in (p.get("runPresets") or [])
                                 if isinstance(x, dict) and x.get("name")][:50],
-                   run_preset=p.get("runPreset") or None, next_steps=next_steps or [])
+                   run_preset=p.get("runPreset") or None, editor=_editor_brief(p.get("editor")),
+                   next_steps=next_steps or [])
 
 
 class ProjectChange(Out):

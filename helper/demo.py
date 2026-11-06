@@ -511,6 +511,9 @@ def run(group: str, action: str, flags: dict) -> int:
     if group == "screenshots":
         import screenshots
         return screenshots.demo(action, flags)
+    if group == "editor":
+        import editor_setup
+        return editor_setup.demo(action, flags)
     if key == "setup check":
         return ok(_setup_check(flags))
     if key == "toolchain info":
@@ -533,7 +536,8 @@ def run(group: str, action: str, flags: dict) -> int:
         match = next((p for p in PROJECTS if p["name"] == want), None)
         if not match:
             return common.fail("not-found", "That project folder doesn't exist anymore.")
-        return ok(_project(match))
+        import editor_setup
+        return ok({**_project(match), "editor": editor_setup.demo_brief(str(flags.get("path") or ""))})
     if key == "projects check":
         return ok(_demo_check(flags))
     if key == "projects summary":

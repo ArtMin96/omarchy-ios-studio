@@ -27,6 +27,7 @@ MODULES = {
     "agents": "agents",
     "debug": "debugger",
     "screenshots": "screenshots",
+    "editor": "editor_setup",
 }
 
 
