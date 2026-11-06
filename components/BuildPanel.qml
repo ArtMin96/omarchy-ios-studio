@@ -12,6 +12,10 @@ import "../Model.js" as Model
 // Projects page; not modal, so the list stays usable. A run with a run preset names it in the
 // subtitle, the launch step and the result banner. A compile-on-save build (watch mode, build.watch)
 // shows up here when it finishes, like a finished Build: its problems, and its saved log in Log.
+// Style warnings (`format-lint`, StyleWarningsSection) follow the build's problems under their own
+// "Style" header; they never change the build's result, its banner or the tab's colour, and Hide keeps
+// them out (remembered). After "Lint project" on another project's card (svc.lintFocus), the drawer
+// shows only that project's style warnings until a build starts or "Show build" is pressed.
 //   BuildPanel { app: page.app; svc: page.app.projects; opened: page.panelOpen; onCloseRequested: … }
 Item {
   id: root
@@ -41,8 +45,19 @@ Item {
     if (st !== steps && (st.length > 0 || steps.length > 0)) steps = st
   }
   readonly property alias log: logView
+  // Style warnings: of the project lintFocus names (lint view: nothing about the build shows), else the build's.
+  readonly property bool lintView: !!(svc && svc.lintFocus)
+  readonly property string stylePath: lintView ? svc.lintFocus : (b.path || "")
+  readonly property var styleProject: svc && stylePath ? svc.projectByPath(stylePath) : null
+  readonly property var styleEntry: svc && stylePath ? svc.lintFor(stylePath) : null
+  readonly property var styleResult: styleEntry && styleEntry.result ? styleEntry.result : null
+  readonly property int styleTotal: styleResult ? (styleResult.total !== undefined ? styleResult.total : (styleResult.diagnostics || []).length) : 0
+  readonly property bool styleShown: app ? app.setting("showStyleWarnings", true) !== false : true
+  readonly property int styleCount: styleShown && styleEntry && styleEntry.state !== "error" ? styleTotal : 0
+  onStylePathChanged: if (svc && stylePath) svc.lintLastSoon(stylePath)
 
   signal closeRequested()
+  signal formatRequested(string path)     // "Format project…" in the Style section
 
   visible: slide.x < root.width
   clip: true
@@ -52,7 +67,22 @@ Item {
     return { run: "Run on iPhone", ipa: "Build .ipa", renew: "Re-sign & reinstall", install: "Reinstall", compile: "Build" }[k] || "Build"
   }
 
+  // The project's name goes on the subtitle line (lintSubtitle), so a long name never elides the count.
+  function lintHeadline() {
+    var e = root.styleEntry
+    if (!e || (e.state === "loading" && !e.result)) return "Checking the style"
+    if (e.state === "error") return "Couldn't check the style"
+    var n = root.styleTotal
+    return n ? Model.plural(n, "style warning") : "No style warnings"
+  }
+  function lintSubtitle(withPath) {
+    var name = root.styleProject ? root.styleProject.name : String(root.stylePath).split("/").pop()
+    var where = withPath ? (root.styleProject ? root.styleProject.displayPath || "" : root.stylePath) : ""
+    return [name, "Code style", where].filter(function(x) { return !!x }).join(" · ")
+  }
+
   function headline() {
+    if (root.lintView) return root.lintHeadline()
     if (!b.kind) return "No builds yet"
     if (b.active) return { run: "Building ", ipa: "Building ", renew: "Renewing ", install: "Reinstalling ", compile: "Building " }[b.kind] + b.name
     if (!result) return b.name
@@ -119,7 +149,9 @@ Item {
         GradientStop { position: 1.0; color: Util.alpha(Commons.Color.background, 0.55) }
       }
     }
-    MouseArea { anchors.fill: parent; acceptedButtons: Qt.NoButton }
+    // Takes hover too, so a card tooltip behind the panel can't show through, and the wheel a list inside
+    // has no use for (past the end of Problems or Log), so the Projects page behind doesn't scroll.
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.NoButton; hoverEnabled: true; onWheel: function(wheel) { wheel.accepted = true } }
 
     ColumnLayout {
       anchors.fill: parent
@@ -134,10 +166,17 @@ Item {
           Layout.preferredWidth: Style.font.display
           Layout.preferredHeight: Style.font.display
           Layout.alignment: Qt.AlignTop
-          Spinner { anchors.fill: parent; visible: !!root.b.active; running: visible }
+          Spinner { anchors.fill: parent; visible: root.lintView ? !!(root.styleEntry && root.styleEntry.state === "loading") : !!root.b.active; running: visible }
           Icon {
             anchors.centerIn: parent
-            visible: !root.b.active
+            visible: root.lintView && !(root.styleEntry && root.styleEntry.state === "loading")
+            size: Style.font.display
+            glyph: Model.Glyph.lint
+            color: root.styleEntry && root.styleEntry.state === "error" ? Theme.error : (root.styleResult && root.styleTotal === 0 ? Theme.success : Theme.dim)
+          }
+          Icon {
+            anchors.centerIn: parent
+            visible: !root.lintView && !root.b.active
             size: Style.font.display
             glyph: !root.result ? Model.Glyph.hammer : root.result.ok ? Model.Glyph.checkCircle : (root.result.error && root.result.error.code === "cancelled" ? Model.Glyph.stop : Model.Glyph.error)
             color: !root.result ? Theme.dim : root.result.ok ? Theme.success : (root.result.error && root.result.error.code === "cancelled" ? Theme.dim : Theme.error)
@@ -148,9 +187,14 @@ Item {
           spacing: Style.spacing.xs
           AppText { Layout.fillWidth: true; text: root.headline(); size: "heading"; strong: true; elide: Text.ElideRight }
           AppText {
+            id: subtitle
             Layout.fillWidth: true
+            Layout.preferredWidth: 0   // its width comes from the row, never from the text it picks below
             tone: "dim"; size: "small"; elide: Text.ElideRight
+            // lint view: the path is left out when the whole line doesn't fit (no "~/D…" stub)
+            TextMetrics { id: lintFull; font: subtitle.font; text: root.lintView ? root.lintSubtitle(true) : "" }
             text: {
+              if (root.lintView) return root.lintSubtitle(lintFull.advanceWidth <= subtitle.width)
               if (!root.b.kind) return ""
               var parts = [root.kindLabel(root.b.kind) + (root.b.kind === "run" && root.b.preset ? " (" + root.b.preset + ")" : "")]
               // watch mode: the next compile on save already runs (its result replaces this one)
@@ -163,13 +207,23 @@ Item {
             }
           }
         }
-        IconButton { Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.close; tooltip: "Hide (Esc). The build keeps running."; onClicked: root.closeRequested() }
+        ActionButton {
+          Layout.alignment: Qt.AlignTop
+          Layout.topMargin: Math.max(0, (closeBtn.implicitHeight - implicitHeight) / 2)   // centred on the close button
+          visible: root.lintView && !!root.b.kind
+          text: "Show build"
+          kind: "ghost"
+          compact: true
+          tooltip: "Back to " + (root.b.name || "the last build") + (root.b.active ? " (building now)" : "")
+          onClicked: { root.svc.lintFocus = ""; root.tab = root.b.active ? "log" : root.tab }
+        }
+        IconButton { id: closeBtn; Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.close; tooltip: root.lintView ? "Hide (Esc)" : "Hide (Esc). The build keeps running."; onClicked: root.closeRequested() }
       }
 
       // ---------------------------------------------------------- progress / result
       ProgressTrack {
         Layout.fillWidth: true
-        visible: !!root.b.active
+        visible: !!root.b.active && !root.lintView
         value: root.b.fraction || 0
         indeterminate: !(root.b.fraction > 0)
         label: root.b.detail || ""
@@ -179,7 +233,7 @@ Item {
       // success banner
       Rectangle {
         Layout.fillWidth: true
-        visible: !!(root.result && root.result.ok)
+        visible: !!(root.result && root.result.ok) && !root.lintView
         radius: Style.cornerRadius
         color: Theme.levelFill(root.result && root.result.data && root.result.data.launchError ? "warn" : "ok")
         border.width: Style.normalBorderWidth
@@ -213,7 +267,7 @@ Item {
 
       ErrorState {
         Layout.fillWidth: true
-        visible: !!(root.result && !root.result.ok && root.result.error && root.result.error.code !== "cancelled")
+        visible: !!(root.result && !root.result.ok && root.result.error && root.result.error.code !== "cancelled") && !root.lintView
         app: root.app
         banner: true
         error: root.result ? root.result.error : null
@@ -236,7 +290,7 @@ Item {
       // ---------------------------------------------------------- steps
       ColumnLayout {
         Layout.fillWidth: true
-        visible: root.steps.length > 0
+        visible: root.steps.length > 0 && !root.lintView
         spacing: Style.spacing.sm
         Repeater {
           model: root.steps
@@ -272,10 +326,11 @@ Item {
       // ---------------------------------------------------------- problems / log
       PageTabs {
         Layout.fillWidth: true
-        visible: !!root.b.kind
+        visible: !!root.b.kind && !root.lintView
         current: root.tab
+        // Style warnings add to the count but not to the colour: they don't make a build look broken.
         tabs: [
-          { key: "problems", label: "Problems", glyph: Model.Glyph.warn, count: root.diagCount || undefined, level: root.errorCount ? "error" : (root.warningCount ? "warn" : "") },
+          { key: "problems", label: "Problems", glyph: Model.Glyph.warn, count: (root.diagCount + root.styleCount) || undefined, level: root.errorCount ? "error" : (root.warningCount ? "warn" : "") },
           { key: "log", label: "Log", glyph: Model.Glyph.console }
         ]
         onSelected: function(k) { root.tab = k }
@@ -284,12 +339,12 @@ Item {
       Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        visible: !!root.b.kind
+        visible: !!root.b.kind || root.lintView
 
         LogView {
           id: logView
           anchors.fill: parent
-          visible: root.tab === "log"
+          visible: root.tab === "log" && !root.lintView
           showMeta: false
           emptyText: "The build's output appears here."
           onCopiedAll: function(n) { if (root.app) root.app.toast("Copied " + n + " lines", "ok") }
@@ -305,13 +360,13 @@ Item {
 
         ColumnLayout {
           anchors.fill: parent
-          visible: root.tab === "problems"
+          visible: root.tab === "problems" || root.lintView
           spacing: 0
 
           EmptyState {
             Layout.fillWidth: true
             Layout.topMargin: Style.spacing.huge
-            visible: root.diagCount === 0
+            visible: root.diagCount === 0 && !root.styleEntry && !root.lintView
             compact: true
             glyph: root.b.active ? Model.Glyph.hammer : Model.Glyph.checkCircle
             level: root.b.active ? "" : "ok"
@@ -323,12 +378,35 @@ Item {
             id: diagList
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: root.diagCount > 0
+            visible: root.diagCount > 0 || !!root.styleEntry || root.lintView
             clip: true
             spacing: Style.spacing.xs
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            model: root.svc ? root.svc.diagnostics : null
+            model: root.svc && !root.lintView ? root.svc.diagnostics : null
+            // No build problems, but style warnings below: say so in one quiet line.
+            header: QuietNote {
+              width: diagList.width
+              height: visible ? implicitHeight : 0
+              visible: root.diagCount === 0 && !root.lintView && !!root.b.kind
+              glyph: root.b.active ? Model.Glyph.hammer : Model.Glyph.checkCircle
+              level: root.b.active ? "" : "ok"
+              title: root.b.active ? "No build problems so far" : "No build problems"
+              text: root.b.active ? "" : "The build didn't report any errors or warnings."
+            }
+            footer: Item {
+              width: diagList.width
+              implicitHeight: styleSection.implicitHeight
+              height: styleSection.visible ? implicitHeight : 0
+              StyleWarningsSection {
+                id: styleSection
+                width: parent.width
+                app: root.app
+                svc: root.svc
+                path: root.stylePath
+                onFormatRequested: root.formatRequested(root.stylePath)
+              }
+            }
             delegate: BuildDiagnosticRow {
               required property int n
               required property int index
@@ -346,7 +424,7 @@ Item {
       EmptyState {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        visible: !root.b.kind
+        visible: !root.b.kind && !root.lintView
         glyph: Model.Glyph.hammer
         title: "No builds yet"
         text: "Press Run on a project. Its progress, problems and log show up here."
@@ -355,7 +433,7 @@ Item {
       // ---------------------------------------------------------- footer
       RowLayout {
         Layout.fillWidth: true
-        visible: !!root.b.active
+        visible: !!root.b.active && !root.lintView
         spacing: Style.spacing.md
         AppText { Layout.fillWidth: true; text: "You can hide this panel; the build keeps going."; tone: "faint"; size: "small"; elide: Text.ElideRight }
         ActionButton { text: "Cancel build"; glyph: Model.Glyph.stop; kind: "danger"; onClicked: root.svc.cancel() }

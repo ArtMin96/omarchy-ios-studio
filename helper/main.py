@@ -30,11 +30,15 @@ MODULES = {
     "editor": "editor_setup",
     "watch": "watch",
 }
+# one-word commands -> group + action
+ALIASES = {"format": ["projects", "format"], "format-lint": ["projects", "format-lint"]}
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return common.fail("usage", "usage: iosstudio-helper <group> <action> [--flags]; groups: " + ", ".join(MODULES)) or 2
+    if argv[0] in ALIASES:   # `format --project P` == `projects format --project P`
+        argv = ALIASES[argv[0]] + argv[1:]
     group, action, rest = argv[0], argv[1], argv[2:]
     if os.environ.get("IOSSTUDIO_DEMO"):   # screenshots / walkthroughs: made-up data, no side effects
         import demo

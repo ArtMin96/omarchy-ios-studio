@@ -2058,6 +2058,8 @@ GROUPS = {
         "list": cmd_list,
         "info": cmd_info,
         "check": cmd_check,
+        "format": lambda flags: __import__("format").cmd_format(flags),        # helper/format.py
+        "format-lint": lambda flags: __import__("format").cmd_lint(flags),
         "build-settings": cmd_build_settings,
         "presets": cmd_presets,
         "add": cmd_add,

@@ -543,6 +543,11 @@ def run(group: str, action: str, flags: dict) -> int:
         return ok({**_project(match), "editor": editor_setup.demo_brief(str(flags.get("path") or ""))})
     if key == "projects check":
         return ok(_demo_check(flags))
+    if key == "projects open":   # nothing is launched in demo mode
+        return ok({"demo": True, "editor": "zed", "argv": []})
+    if key in ("projects format", "projects format-lint"):
+        import format as swift_format
+        return swift_format.demo(action, flags)
     if key == "projects summary":
         h = sorted(_history(), key=lambda e: e["time"])
         return ok({"lastBuild": h[-1] if h else None, "recentBuilds": list(reversed(h))[:8], "expiring": []})

@@ -34,7 +34,10 @@ Item {
   readonly property bool _primary: kind === "primary"
 
   implicitWidth: btn.implicitWidth
-  implicitHeight: btn.implicitHeight
+  // Always as tall as a button with a glyph (the glyph line is taller than the label's), so a
+  // text-only "Cancel" next to an icon button in a Row has the same height and text baseline.
+  implicitHeight: Math.max(btn.implicitHeight, glyphProbe.implicitHeight + btn.verticalPadding * 2
+                           + btn._reservedBorderTop + btn._reservedBorderBottom)
   opacity: root.enabled && !root.disabled ? 1 : 0.45
 
   Behavior on opacity { NumberAnimation { duration: 120 } }
@@ -68,6 +71,16 @@ Item {
     background: "transparent"
     onClicked: if (root.interactive) root.clicked()
     onHovered: function(h) { root.hovered(h) }
+  }
+
+  // Measures the glyph line height for implicitHeight; never shown.
+  Text {
+    id: glyphProbe
+    visible: false
+    textFormat: Text.PlainText
+    text: String.fromCodePoint(0xF04E6)
+    font.family: Style.font.family
+    font.pixelSize: Style.font.icon
   }
 
   // disabled: swallow presses (no click, no press animation) and show a plain arrow, while

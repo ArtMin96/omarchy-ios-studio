@@ -1,0 +1,56 @@
+[
+  {
+    "character": 5,
+    "file": "/home/u/Developer/Demo/Sources/Demo/Clean.swift",
+    "line": 1,
+    "reason": "Variable name 'a' should be between 3 and 40 characters long",
+    "rule_id": "identifier_name",
+    "severity": "Error",
+    "type": "Identifier Name"
+  },
+  {
+    "character": 12,
+    "file": "/home/u/Developer/Demo/Sources/Demo/App.swift",
+    "line": 10,
+    "reason": "Colons should be next to the identifier when specifying a type and next to the key in dictionary literals",
+    "rule_id": "colon",
+    "severity": "Warning",
+    "type": "Colon Spacing"
+  },
+  {
+    "character": 18,
+    "file": "/home/u/Developer/Demo/Sources/Demo/App.swift",
+    "line": 10,
+    "reason": "Colons should be next to the identifier when specifying a type and next to the key in dictionary literals",
+    "rule_id": "colon",
+    "severity": "Warning",
+    "type": "Colon Spacing"
+  },
+  {
+    "character": 16,
+    "file": "/home/u/Developer/Demo/Sources/Demo/App.swift",
+    "line": 10,
+    "reason": "There should be no space before and one after any comma",
+    "rule_id": "comma",
+    "severity": "Warning",
+    "type": "Comma Spacing"
+  },
+  {
+    "character": 21,
+    "file": "/home/u/Developer/Demo/Sources/Demo/App.swift",
+    "line": 6,
+    "reason": "Variable name 'x' should be between 3 and 40 characters long",
+    "rule_id": "identifier_name",
+    "severity": "Error",
+    "type": "Identifier Name"
+  },
+  {
+    "character": 11,
+    "file": "/home/u/Developer/Demo/Sources/Demo/App.swift",
+    "line": 10,
+    "reason": "Variable name 'a' should be between 3 and 40 characters long",
+    "rule_id": "identifier_name",
+    "severity": "Error",
+    "type": "Identifier Name"
+  }
+]

@@ -80,6 +80,10 @@ NEXT_BY_CODE: dict[str, str] = {
     "interactive": "This step is done by the human in the app: ios_open_app(page='setup').",
     "no-pkexec": "Polkit isn't available, so system packages can't be installed from here. Ask the user to run "
                  "Setup in the app.",
+    "missing-swift-format": "swift-format comes with the Swift toolchain: run ios_toolchain_check, then "
+                            "ios_toolchain_install (step='swift').",
+    "bad-config": "The project's .swift-format isn't valid JSON: fix it (swift-format dump-configuration prints a "
+                  "valid one), then retry.",
     "disk-full": "Free disk space (ios_toolchain_info shows what can be cleaned), then retry.",
 }
 

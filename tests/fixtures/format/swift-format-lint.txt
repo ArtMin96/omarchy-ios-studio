@@ -1,0 +1,24 @@
+Package.swift:3:47: warning: [Spacing] remove 1 space
+Package.swift:3:79: warning: [Spacing] remove 1 space
+Sources/Demo/App.swift:3:1: warning: [Indentation] unindent by 2 spaces
+Sources/Demo/App.swift:4:1: warning: [Indentation] unindent by 4 spaces
+Sources/Demo/App.swift:4:15: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:5:1: warning: [Indentation] unindent by 6 spaces
+Sources/Demo/App.swift:6:1: warning: [Indentation] unindent by 10 spaces
+Sources/Demo/App.swift:7:1: warning: [Indentation] unindent by 4 spaces
+Sources/Demo/App.swift:8:1: warning: [Indentation] unindent by 2 spaces
+Sources/Demo/App.swift:10:10: warning: [Spacing] remove 1 space
+Sources/Demo/App.swift:10:13: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:17: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:18: warning: [Spacing] remove 1 space
+Sources/Demo/App.swift:10:20: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:23: warning: [Spacing] remove 1 space
+Sources/Demo/App.swift:10:25: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:27: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:30: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:40: warning: [Spacing] add 1 space
+Sources/Demo/App.swift:10:41: warning: [Spacing] add 1 space
+Sources/Demo/Broken.swift:1:8: error: expected ')' to end parameter clause
+Sources/Demo/Broken.swift:1:10: error: expected '}' to end function
+/home/u/Developer/Demo/Sources/Demo/Other.swift:12:3: warning: [NeverForceUnwrap] do not force unwrap 'x'
+warning: Unable to read configuration; using default

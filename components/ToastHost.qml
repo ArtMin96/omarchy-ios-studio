@@ -63,10 +63,20 @@ Item {
           anchors.fill: parent
           anchors.leftMargin: Style.spacing.xxl + Style.space(3)
           anchors.rightMargin: Style.spacing.xxl
+          // Insets, not centring: the glyph sits on the first text line, so a two-line toast
+          // keeps it beside the first line (as BuildDiagnosticRow does).
+          anchors.topMargin: Style.spacing.xl
+          anchors.bottomMargin: Style.spacing.xl
           spacing: Style.spacing.lg
-          Icon { glyph: Model.levelGlyph(toast.level); color: toast.tint; size: Style.font.icon }
-          AppText { Layout.fillWidth: true; text: toast.text; wrapMode: Text.WordWrap }
+          Item {
+            Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: toastIcon.implicitWidth
+            Layout.preferredHeight: toastMetrics.height
+            Icon { id: toastIcon; anchors.centerIn: parent; glyph: Model.levelGlyph(toast.level); color: toast.tint; size: Style.font.icon }
+          }
+          AppText { id: toastText; Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; text: toast.text; wrapMode: Text.WordWrap }
         }
+        FontMetrics { id: toastMetrics; font: toastText.font }
         HoverHandler { id: th }
         // MouseArea (not a passive TapHandler), so dismissing a toast doesn't also click what's under it.
         MouseArea { anchors.fill: parent; onClicked: root._remove(toast.uid) }
