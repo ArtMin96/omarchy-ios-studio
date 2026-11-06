@@ -178,6 +178,7 @@ Item {
   property DeviceService device: DeviceService { app: root }
   property ProjectService projects: ProjectService { app: root }
   property LogService logs: LogService { app: root }
+  property WatchService watch: WatchService { app: root }     // compile on save (one project machine-wide)
 
   // First run / something essential missing → open Setup once, unless the
   // user (or a deep link) already went somewhere.

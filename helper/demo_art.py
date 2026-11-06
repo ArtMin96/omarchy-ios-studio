@@ -5,14 +5,14 @@ Nothing here touches a real device or account. Files go to demo_dir() (under $XD
 from __future__ import annotations
 
 import colorsys
-import os
 import struct
 import zlib
 from pathlib import Path
 
 
 def demo_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    import device_client   # same fallback as the daemon (/run/user/<uid> when XDG_RUNTIME_DIR is unset)
+    base = device_client.xdg_runtime_dir() or "/tmp"
     d = Path(base) / "ios-studio-demo"
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -28,6 +28,7 @@ MODULES = {
     "debug": "debugger",
     "screenshots": "screenshots",
     "editor": "editor_setup",
+    "watch": "watch",
 }
 
 

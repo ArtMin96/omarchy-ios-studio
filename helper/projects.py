@@ -11,7 +11,7 @@ State (all under ~/.local/state/ios-studio/):
                     "runPresets": [{name, args, env, language, region, uiTestMode}], "runPreset": name}}}
                                                                               (see run_presets.py)
   builds.json     [{"project", "path", "name", "kind", "config", "result", "duration", "time",
-                    "ipa", "errors", "warnings", "logFile", "udid", "bundleId",
+                    "ipa", "errors", "warnings", "logFile", "udid", "bundleId", "buildId" (watch mode: w-<n>), "trigger" ("watch"),
                     "diagnostics": [{severity, message, category, file?, line?, col?, hint?, details?}]
                                    (≤ 200, errors first; see diagnostics.py)}]   newest last
   renewals.json   {path: {"udid", "bundleId", "signedAt", "expires", "via", "estimated"}}
@@ -1709,6 +1709,8 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
         "errors": errors, "warnings": warnings, "logFile": str(log_file), "udid": udid, "via": via,
         "bundleId": bundle, "errorCode": err.code if err else None, "errorMessage": err.message if err else None,
         "preset": preset["name"] if preset else None,
+        "buildId": flags["build_id"] if isinstance(flags.get("build_id"), str) else None,   # watch mode's w-<n>
+        "trigger": flags["trigger"] if isinstance(flags.get("trigger"), str) else None,     # "watch": compile on save
     }
     _append_history({**entry, "diagnostics": _stored_diags(runner.diags)})
     runner.log_fh.write(f"\n# {entry['result']} in {duration}s\n")

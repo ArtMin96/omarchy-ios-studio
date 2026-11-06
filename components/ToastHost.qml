@@ -68,7 +68,8 @@ Item {
           AppText { Layout.fillWidth: true; text: toast.text; wrapMode: Text.WordWrap }
         }
         HoverHandler { id: th }
-        TapHandler { onTapped: root._remove(toast.uid) }
+        // MouseArea (not a passive TapHandler), so dismissing a toast doesn't also click what's under it.
+        MouseArea { anchors.fill: parent; onClicked: root._remove(toast.uid) }
         Timer { interval: toast.ttl; running: !th.hovered; onTriggered: root._remove(toast.uid) }
       }
     }

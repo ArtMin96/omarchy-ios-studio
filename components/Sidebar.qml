@@ -7,6 +7,8 @@ import "../Model.js" as Model
 
 // App navigation (scaffold-internal). Badges come from each service's `summary`:
 // summary.badge (short text) or summary.level ("warn"/"error" → dot).
+// While a watch (compile on save, app.watch) runs, Projects also shows a small eye: faint while
+// watching, accent while compiling, red after a failed compile; its tooltip names the project.
 Rectangle {
   id: root
   property var app: null
@@ -64,6 +66,22 @@ Rectangle {
         readonly property string level: summary && summary.level ? String(summary.level) : ""
         readonly property string badge: summary && summary.badge ? String(summary.badge) : ""
         readonly property bool busy: svc ? svc.status === "loading" : false
+        readonly property var watchState: modelData.key === "projects" && root.app && root.app.watch ? root.app.watch.current : null
+        // A failed compile on save already turns the eye red: no second red marker for it.
+        readonly property bool hideBadgeForWatch: item.watchState !== null && item.summary !== null && item.summary.title === "Last build failed"
+        readonly property color watchTint: {
+          var w = item.watchState
+          if (!w) return Theme.faint
+          if (w.state === "compiling" || w.state === "starting" || w.state === "running") return Commons.Color.accent
+          if (w.last && !w.last.ok) return Commons.Color.urgent
+          return Theme.faint
+        }
+        readonly property string watchTip: {
+          var w = item.watchState
+          if (!w || !root.app) return ""
+          var l = root.app.watch.label(w)
+          return "Watching " + w.name + (l ? " · " + l.text.replace(/^Watching · /, "").replace(/^Watching for changes$/, "no changes yet") : "")
+        }
 
         Layout.fillWidth: true
         implicitHeight: Style.space(34)
@@ -104,14 +122,22 @@ Rectangle {
             strong: item.isCurrent
             elide: Text.ElideRight
           }
+          Icon {
+            visible: item.watchState !== null
+            glyph: Model.Glyph.eye
+            size: Style.font.bodySmall
+            color: item.watchTint
+            HoverHandler { id: watchHover }
+            PanelToolTip { visible: watchHover.hovered && item.watchTip !== ""; text: item.watchTip }
+          }
           Spinner { visible: item.busy; running: item.busy; size: Style.font.bodySmall }
           Badge {
-            visible: !item.busy && (item.badge !== "" || item.level === "warn" || item.level === "error")
+            visible: !item.busy && !item.hideBadgeForWatch && (item.badge !== "" || item.level === "warn" || item.level === "error")
             level: item.level === "" ? "info" : item.level
             text: item.badge
           }
           AppText {
-            visible: hover.hovered && item.badge === "" && !item.busy && item.level !== "warn" && item.level !== "error"
+            visible: hover.hovered && item.watchState === null && item.badge === "" && !item.busy && item.level !== "warn" && item.level !== "error"
             text: String(item.index + 1)
             size: "caption"
             tone: "faint"
@@ -131,13 +157,23 @@ Rectangle {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: Style.spacing.xs
-            visible: !item.busy && (item.level === "warn" || item.level === "error")
+            visible: !item.busy && !item.hideBadgeForWatch && (item.level === "warn" || item.level === "error")
             level: item.level
+          }
+          // watch mode: a small eye in the bottom corner
+          Icon {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: Style.spacing.xs
+            visible: item.watchState !== null
+            glyph: Model.Glyph.eye
+            size: Style.font.caption
+            color: item.watchTint
           }
         }
         PanelToolTip {
           visible: root.compact && hover.hovered
-          text: item.modelData.label + "  " + (item.index + 1)
+          text: item.modelData.label + "  " + (item.index + 1) + (item.watchTip !== "" ? "  ·  " + item.watchTip : "")
         }
         HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: root.selected(item.modelData.key) }

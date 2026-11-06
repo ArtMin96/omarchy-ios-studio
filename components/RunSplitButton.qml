@@ -15,6 +15,9 @@ import "../Model.js" as Model
 //   RunSplitButton { project: p; svc: app.projects; disabled: …; tooltip: "…"
 //                    onRun: …; onEditRequested: … }
 // `disabled` (with `tooltip` saying why) only blocks the Run part: the menu stays usable.
+// With `watchSvc` (app.watch) the menu ends with watch mode (compile on save, issue #7), below a hairline:
+// "Watch for changes" (a check while this project is watched) and "Run after a clean compile". A row
+// that can't be used right now is faint and says why in its detail column (`watchBlocker`, no iPhone…).
 // Menu keys: j/k or Up/Down move, Enter picks, Esc closes.
 Item {
   id: root
@@ -23,12 +26,15 @@ Item {
   property var svc: null
   property bool disabled: false
   property string tooltip: ""
+  property var watchSvc: null
+  property string watchBlocker: ""      // why watch can't start for this project ("" = it can)
+  readonly property var watchState: watchSvc ? watchSvc.forProject(project) : null
 
   readonly property var presets: svc ? svc.presetsOf(project) : (project.runPresets || [])
   readonly property string selected: svc ? svc.selectedPreset(project) : (project.runPreset || "")
   readonly property bool popupOpen: menu.opened
 
-  // Menu rows: { kind: "default" | "preset" | "edit", name, detail }
+  // Menu rows: { kind: "default" | "preset" | "edit" | "watch" | "autorun", name, detail, on, disabled }
   readonly property var rows: {
     var r = [{ kind: "default", name: "Default (no preset)", detail: "" }]
     for (var i = 0; i < presets.length; i++) {
@@ -36,6 +42,16 @@ Item {
       r.push({ kind: "preset", name: p.name, detail: p.language ? Model.languageLabel(p.language) + " · " + p.language : Model.presetSummary(p) })
     }
     r.push({ kind: "edit", name: presets.length ? "Edit presets…" : "New preset…", detail: "" })
+    if (watchSvc) {
+      var w = root.watchState
+      var other = watchSvc.current && !w ? watchSvc.current.name : ""
+      r.push({ kind: "watch", name: "Watch for changes", on: !!w, disabled: !w && root.watchBlocker !== "",
+               detail: !w && root.watchBlocker !== "" ? root.watchBlocker : (other ? "instead of " + other : "compile on save") })
+      var block = watchSvc.autoRunBlockerShort
+      var auto = !!(w && w.autoRun)
+      r.push({ kind: "autorun", name: "Run after a clean compile", on: auto, disabled: !auto && (block !== "" || (!w && root.watchBlocker !== "")),
+               detail: !auto && block !== "" ? block : "" })
+    }
     return r
   }
 
@@ -58,13 +74,21 @@ Item {
   function pick(i) {
     var r = root.rows[i]
     if (!r) return
-    menu.close()
+    if (r.kind !== "watch" && r.kind !== "autorun") menu.close()
     if (r.kind === "edit") { root.editRequested(); return }
+    if (r.kind === "watch" || r.kind === "autorun") {
+      if (r.disabled || !root.watchSvc) return
+      menu.close()
+      if (r.kind === "watch") root.watchSvc.toggle(root.project)
+      else root.watchSvc.setAutoRun(root.project, !r.on)
+      return
+    }
     var name = r.kind === "preset" ? r.name : ""
     if (name !== root.selected && root.svc) root.svc.selectPreset(root.project, name)
   }
 
   function rowIsCurrent(r) {
+    if (r.kind === "watch" || r.kind === "autorun") return !!r.on
     return (r.kind === "default" && root.selected === "") || (r.kind === "preset" && r.name === root.selected)
   }
 
@@ -119,7 +143,7 @@ Item {
       id: menuPart
       Layout.fillHeight: true
       iconText: Model.Glyph.chevronDown
-      tooltipText: menu.opened || Host.covers(root, Host.top) ? "" : (root.selected !== "" ? "Run preset: " + root.selected + ". Change it, or edit presets" : "Pick a run preset: launch arguments, environment and language")
+      tooltipText: menu.opened || Host.covers(root, Host.top) ? "" : (root.selected !== "" ? "Run preset: " + root.selected + ". Change it, edit presets" : "Pick a run preset: launch arguments, environment and language") + (root.watchSvc ? (root.selected !== "" ? ", or watch for changes" : ". Or watch for changes") : "")
       foreground: Commons.Color.foreground
       background: "transparent"
       iconSize: Style.font.icon
@@ -145,11 +169,16 @@ Item {
       color: Commons.Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.accent, Style.normalBorderWidth)
       radius: Style.cornerRadius
+      // Clicks on the padding and the hairlines stop here too.
+      MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
     }
 
     onOpened: {
       var at = 0
-      for (var i = 0; i < root.rows.length; i++) if (root.rowIsCurrent(root.rows[i])) at = i
+      for (var i = 0; i < root.rows.length; i++) {
+        var k = root.rows[i].kind
+        if ((k === "default" || k === "preset") && root.rowIsCurrent(root.rows[i])) at = i
+      }
       menu.cursor = at
       menuCol.forceActiveFocus()
     }
@@ -181,12 +210,12 @@ Item {
           Layout.fillWidth: true
           spacing: 0
 
-          // A hairline above "Edit presets…" sets it apart from the choices.
+          // A hairline above "Edit presets…" sets it apart from the choices, one above the watch rows.
           Rectangle {
             Layout.fillWidth: true
             Layout.topMargin: Style.spacing.xs
             Layout.bottomMargin: Style.spacing.xs
-            visible: menuRow.modelData.kind === "edit"
+            visible: menuRow.modelData.kind === "edit" || menuRow.modelData.kind === "watch"
             implicitHeight: Style.normalBorderWidth
             color: Theme.hairline
           }
@@ -195,7 +224,7 @@ Item {
             Layout.fillWidth: true
             implicitHeight: Math.max(Style.spacing.popupRowHeight, rowLayout.implicitHeight + Style.spacing.sm * 2)
             radius: Style.cornerRadius
-            color: menuRow.hot ? Style.hoverFillFor(Commons.Color.foreground, Commons.Color.accent) : "transparent"
+            color: menuRow.hot && !menuRow.modelData.disabled ? Style.hoverFillFor(Commons.Color.foreground, Commons.Color.accent) : "transparent"
 
             // Columns: glyph, name, then the detail right-aligned in its own column, at least
             // `detailGap` from the name. When the menu is at its widest, the detail elides first and
@@ -234,7 +263,7 @@ Item {
                 Layout.preferredWidth: rowLayout.nameWidth
                 text: menuRow.modelData.name
                 strong: menuRow.isCurrent
-                tone: menuRow.modelData.kind === "default" && !menuRow.isCurrent ? "dim" : "primary"
+                tone: menuRow.modelData.disabled ? "faint" : (menuRow.modelData.kind === "default" && !menuRow.isCurrent ? "dim" : "primary")
                 elide: Text.ElideRight
               }
               Item { Layout.fillWidth: true; Layout.minimumWidth: rowLayout.hasDetail ? root.detailGap : 0 }
@@ -251,8 +280,10 @@ Item {
               }
             }
 
-            HoverHandler { cursorShape: Qt.PointingHandCursor; onHoveredChanged: if (hovered) menu.cursor = menuRow.index }
-            TapHandler { onTapped: root.pick(menuRow.index) }
+            HoverHandler { cursorShape: menuRow.modelData.disabled ? Qt.ArrowCursor : Qt.PointingHandCursor; onHoveredChanged: if (hovered) menu.cursor = menuRow.index }
+            // A MouseArea, not a TapHandler: a TapHandler only grabs passively, so the click also reached
+            // whatever lies under the (non-modal) menu, e.g. a card's settings note.
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton; onClicked: root.pick(menuRow.index) }
           }
         }
       }

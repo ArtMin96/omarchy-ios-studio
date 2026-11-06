@@ -597,7 +597,7 @@ PageFrame {
           Layout.fillWidth: true
           glyph: modelData.result === "ok" ? Model.Glyph.checkCircle : (modelData.result === "cancelled" ? Model.Glyph.stop : Model.Glyph.error)
           glyphColor: modelData.result === "ok" ? Theme.success : (modelData.result === "cancelled" ? Theme.dim : Commons.Color.urgent)
-          title: (modelData.name || "App") + " · " + (page.logs.buildKindLabel ? page.logs.buildKindLabel(modelData.kind) : modelData.kind)
+          title: (modelData.name || "App") + " · " + (page.logs.buildKindLabel ? page.logs.buildKindLabel(modelData.kind, modelData) : modelData.kind)
           subtitle: Model.relativeTime(modelData.time) + (modelData.duration ? " · " + Model.formatDuration(modelData.duration) : "")
                     + (modelData.errors > 0 ? " · " + Model.plural(modelData.errors, "error") : "")
           onClicked: page.app.nav("logs", { tab: "builds" })

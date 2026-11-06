@@ -183,6 +183,29 @@ async def _history(project_path: str | None, limit: int) -> list[dict]:
     return builds[:limit]
 
 
+async def _newer_history(job: Job, project_path: str) -> dict | None:
+    """The project's latest history entry when it started after this session's job ended (a watch build, or
+    one from the app); None while the job runs or when the times are equal or missing (the job wins)."""
+    if not job.finished or not job.ended:
+        return None
+    try:
+        hist = await _history(project_path, 1)
+    except ToolError:
+        return None
+    h = hist[0] if hist else None
+    t = h.get("time") if h else None
+    return h if isinstance(t, (int, float)) and t > job.ended else None
+
+
+async def _watch_build(build_id: str) -> dict:
+    """The build history entry of a watch-mode build (w-N, see tools/watch.py)."""
+    for b in await _history(None, 300):
+        if b.get("buildId") == build_id:
+            return b
+    raise ToolError(f"No watch build '{build_id}' in the build history (it keeps the latest 300 builds). "
+                    "ios_watch_status shows the latest one.")
+
+
 def build_log_path(name: str) -> Path | None:
     """A build log the helper wrote: a path (or bare file name) inside BUILD_LOGS, else None."""
     p = Path(os.path.expanduser(str(name)))
@@ -393,7 +416,8 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, annotations=READ("Build diagnostics"))
     async def ios_build_diagnostics(
         ctx: Context,
-        build_id: Annotated[str | None, Field(description="A job from this session; omit to use project_path")] = None,
+        build_id: Annotated[str | None, Field(description="A job from this session, or a watch build 'w-N' "
+                                                          "(ios_watch_status); omit to use project_path")] = None,
         project_path: Annotated[str | None, Field(description="Use the latest build of this project (live or "
                                                               "from history)")] = None,
         severity: Annotated[Literal["all", "error", "warning"], Field(description="Only errors, only warnings, or both")] = "all",
@@ -415,13 +439,19 @@ def register(mcp: MCPServer) -> None:
         offset/next_offset; notes are left out unless include_notes=true.
 
         Pass build_id for a build started in this session, or project_path for that project's latest
-        build (also from earlier sessions or builds done in the app). Fix the files, then rebuild with
+        build (also from earlier sessions, builds done in the app or watch mode's, whichever is newest). Fix the files, then rebuild with
         ios_build_start(action='compile').
         """
         state = get_state(ctx)
         diags: list[dict]
         result = project = root = None
-        if build_id:
+        h: dict | None = None             # the history entry, when the diagnostics come from there
+        job = None
+        if build_id and build_id.strip().startswith("w-") and build_id.strip() not in state.jobs.jobs:
+            h = await _watch_build(build_id.strip())     # watch mode's builds live in the build history
+            diags, source, project, result, root = h.get("diagnostics") or [], f"history (watch build {build_id})", \
+                h.get("project"), h.get("result"), h.get("path")
+        elif build_id:
             job = state.jobs.get(build_id)
             diags, source, project, result, root = job.diagnostics, f"build {job.id}", job.project, job.state, \
                 job.project_path
@@ -429,9 +459,15 @@ def register(mcp: MCPServer) -> None:
             p = await resolve_project(state, project_path)
             root = p["path"]
             job = state.jobs.latest_for(p["path"])
-            if job:
+            newer = await _newer_history(job, p["path"]) if job else None
+            if job and not newer:
                 diags, source, project, result = job.diagnostics, f"build {job.id}", job.project, job.state
+            elif newer:
+                h, job = newer, None
+                diags, source, project, result = h.get("diagnostics") or [], "history (latest build)", \
+                    h.get("project"), h.get("result")
             else:
+                job = None
                 hist = await _history(p["path"], 1)
                 if not hist:
                     raise ToolError(f"{p.get('name')} has no builds yet. Start one with ios_build_start.")
@@ -462,14 +498,17 @@ def register(mcp: MCPServer) -> None:
         else:
             entries = [g for d in diags for g in B.group_diags([d], root, include_notes)]
         page, nxt_off = page_of(entries, offset, limit, lambda g: DiagGroup(**g), max_bytes)
+        bid = h.get("buildId") if h else (job.id if job else None)
+        watched = bool(h) and (h.get("trigger") == "watch" or str(h.get("buildId") or "").startswith("w-"))
+        again = ("save the files: watch mode compiles again by itself; ios_watch_status(wait_seconds=20) returns "
+                 "the new result") if watched else "rebuild with ios_build_start(action='compile')"
         nxt = []
         if "compiler" in err_cats:
-            nxt.append("Open each file at the given line, fix the error, then rebuild with "
-                       "ios_build_start(action='compile').")
+            nxt.append(f"Open each file at the given line, fix the error, then {again}.")
         others = [c for c in err_cats if c != "compiler"]
         if others:
-            nxt.append(f"{', '.join(others).capitalize()} error(s): follow each entry's hint, then rebuild with "
-                       "ios_build_start.")
+            nxt.append(f"{', '.join(others).capitalize()} error(s): follow each entry's hint, then "
+                       + (again + "." if watched else "rebuild with ios_build_start."))
         if others and set(others) <= {"other"}:
             nxt.append("Those errors have no known fix: ios_build_log(grep='error', context=3) shows the lines "
                        "around them.")
@@ -481,11 +520,13 @@ def register(mcp: MCPServer) -> None:
         if nxt_off is not None:
             note = (f"Showing {len(page)} of {len(entries)} entries; call again with offset={nxt_off} for more"
                     + (", or severity='error' for errors only." if severity == "all" and warnings else "."))
-        if source.startswith("history"):
+        if source.startswith("history") and not watched:
             nxt.append("History keeps only the first diagnostics of each build; rebuild for the full list.")
+        elif watched and len(diags) >= 200:
+            nxt.append("History keeps the first 200 diagnostics of a build; fix those and save to see the rest.")
         if notes and not include_notes:
             nxt.append(f"{notes} compiler notes hidden; include_notes=true shows them.")
-        return DiagnosticsPage(source=source, project=project, build_result=result, total=len(entries),
+        return DiagnosticsPage(source=source, build_id=bid, project=project, build_result=result, total=len(entries),
                                count=len(page), offset=offset, has_more=nxt_off is not None, next_offset=nxt_off,
                                errors=errors, warnings=warnings, notes=notes, categories=cats, diagnostics=page,
                                next_steps=nxt,
