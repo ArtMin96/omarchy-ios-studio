@@ -33,6 +33,7 @@ from ..models import (ActionResult, AppBrief, AppInstallResult, AppLaunchResult,
                       DeviceList, DevicePrepare, LocationResult, ProcessInfo, ProcessList, ScreenshotInfo)
 from ..state import AppState, get_state, resolve_project
 from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
+from .run_presets import PresetName, merge_launch, resolve_preset
 
 log = logging.getLogger("iosstudio.device")
 
@@ -406,7 +407,8 @@ async def _device_status(state: AppState) -> dict | None:
 
 async def on_startup(state: AppState) -> None:
     state.install_app = lambda udid, ipa, job: _install_for_job(state, udid, ipa, job)
-    state.launch_app = lambda udid, bundle_id: launch(state, udid, bundle_id, console=True)
+    state.launch_app = lambda udid, bundle_id, args=None, env=None: launch(state, udid, bundle_id, args, env,
+                                                                            console=True)
     state.device_udid = lambda: _device_udid(state)
     state.device_status = lambda: _device_status(state)
 
@@ -694,12 +696,19 @@ def register(mcp: MCPServer) -> None:
         console: Annotated[bool, Field(description="Also capture what the app prints (stdout/stderr, Swift "
                                                    "print()) for ios_app_console_read. Restarts it if running")] = False,
         udid: Udid = None,
+        preset: PresetName = None,
+        project_path: Annotated[str | None, Field(description="With preset: the app's project (name or path). "
+                                                              "Default: the listed project that builds bundle_id")] = None,
     ) -> AppLaunchResult:
-        """Open an installed app on the iPhone and return its pid. Brings it to the front if it's
-        already running (kill it first with ios_app_kill for a fresh start). The phone must be unlocked.
-        console=true also captures its print() output (read it with ios_app_console_read). To also capture
-        its logs and catch a crash, prefer ios_app_run_and_capture."""
+        """Open an installed app on the iPhone and return its pid. A running copy is ended and started
+        again, so the launch arguments and environment always apply (unsaved state in it is lost). The
+        phone must be unlocked. console=true also captures its print() output (read it with
+        ios_app_console_read). To also capture its logs and catch a crash, prefer ios_app_run_and_capture.
+        preset='<name>' launches with a run preset of the app's project (ios_project_presets): its args come
+        first, then `args`, and `env` overrides its environment."""
         state = get_state(ctx)
+        how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id) if preset else None
+        args, env = merge_launch(how, args, env)
         res = await launch(state, udid, bundle_id, args, env, console=console)
         bid = res.get("bundleId") or bundle_id
         con = (res.get("console") or {}) if console else {}
@@ -712,7 +721,10 @@ def register(mcp: MCPServer) -> None:
         if con.get("sessionId"):
             steps.insert(0, f"ios_app_console_read(session_id='{con['sessionId']}', wait_seconds=5) for what it prints.")
         return AppLaunchResult(bundle_id=bid, pid=res.get("pid"), console_session_id=con.get("sessionId"),
-                               console_error=con_err, next_steps=steps)
+                               console_error=con_err, preset=how["name"] if how else None,
+                               args=[B.clip(x, 300) for x in args or []][:64] if how else [],
+                               env={k: B.clip(v, 300) for k, v in (env or {}).items()} if how else {},
+                               next_steps=steps)
 
     @tool(mcp, annotations=ann("Stop app", read_only=False, destructive=False, idempotent=True, open_world=True))
     async def ios_app_kill(ctx: Context, bundle_id: BundleId, udid: Udid = None) -> ActionResult:

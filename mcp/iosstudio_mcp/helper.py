@@ -63,6 +63,10 @@ NEXT_BY_CODE: dict[str, str] = {
     "open-files-limit": "Lower open_files with ios_project_build_settings, or ask the user to raise the hard "
                         "open-file limit (it needs a new login session).",
     "invalid-setting": "Fix the value and call ios_project_build_settings again.",
+    "unknown-preset": "Use one of the preset names listed in the message (ios_project_presets(project_path) shows "
+                      "them with their args), or save it first with ios_project_presets(action='save').",
+    "invalid-preset": "Fix the preset (a name, args as a list of strings, env with string values, language like 'de', "
+                      "region like 'de_DE') and call ios_project_presets(action='save') again.",
     "no-build": "Call ios_run (or ios_build_start action='ipa') to produce a signed build first.",
     "build-failed": "Call ios_build_diagnostics and ios_build_log(grep='error') for the failing lines.",
     "compile-errors": "Call ios_build_diagnostics for file:line errors, fix them, then rebuild.",

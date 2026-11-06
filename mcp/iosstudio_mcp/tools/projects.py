@@ -102,7 +102,8 @@ def register(mcp: MCPServer) -> None:
         """Details of one project: path, Swift sources folder, product, bundle id, minimum iOS, branch,
         last build (result, errors, log file), signing expiry, auto-renew, the last signed .ipa, its build
         settings (prebuild, env, open-file limit, allow generated) and the settings its own build scripts
-        suggest (see ios_project_build_settings).
+        suggest (see ios_project_build_settings), and its run preset names with the one selected in the app
+        (see ios_project_presets).
         """
         state = get_state(ctx)
         p = await resolve_project(state, project_path)

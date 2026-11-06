@@ -36,7 +36,7 @@ from ..state import AppState
 log = logging.getLogger("iosstudio.tools")
 
 # Order matters only for on_startup hooks. Missing modules (device/logs/crashes until they exist) are skipped.
-MODULES = ["status", "projects", "build_settings", "project_check", "build", "account", "toolchain", "app", "device", "logs", "crashes", "screen", "network", "metrics", "files", "debug", "console"]
+MODULES = ["status", "projects", "build_settings", "project_check", "run_presets", "build", "account", "toolchain", "app", "device", "logs", "crashes", "screen", "network", "metrics", "files", "debug", "console"]
 
 MAX_WAIT = 25  # seconds; stays under opencode's 30 s and Codex's 60 s default tool timeouts
 
@@ -245,7 +245,16 @@ def _result_model(job: Job) -> BuildResult | None:
                        needs_install=bool(r.get("needsInstall")) and not r.get("installed"),
                        launched=bool(r.get("launched")), pid=r.get("pid"),
                        profile_expires=iso(prof.get("expires")) if isinstance(prof, dict) else None,
-                       duration_seconds=r.get("duration"))
+                       duration_seconds=r.get("duration"), **_launch_fields(r.get("launch"), r.get("preset")))
+
+
+def _launch_fields(how: Any, preset: Any = None) -> dict:
+    """preset / launch_args / launch_env of a run's `launch` data (run presets)."""
+    if not isinstance(how, dict):
+        return {"preset": str(preset)} if preset else {}
+    return {"preset": how.get("preset") or preset or None,
+            "launch_args": [B.clip(a, 300) for a in how.get("args") or []][:64],
+            "launch_env": {str(k): B.clip(v, 300) for k, v in list((how.get("env") or {}).items())[:64]}}
 
 
 def job_next_steps(job: Job) -> list[str]:
@@ -284,8 +293,11 @@ def job_next_steps(job: Job) -> list[str]:
         elif job.kind == "build" and job.action == "ipa" and r.get("ipa"):
             out.append(f"Signed .ipa at {r.get('ipa')}.")
         elif r.get("launched"):
+            pre = ((r.get("launch") or {}).get("preset") if isinstance(r.get("launch"), dict) else None) \
+                or r.get("preset")
             out.append("The app is running on the iPhone. To see what it does, call ios_app_run_and_capture("
-                       f"bundle_id='{r.get('installedBundleId') or r.get('bundleId')}') (relaunches it and reports "
+                       f"bundle_id='{r.get('installedBundleId') or r.get('bundleId')}'"
+                       + (f", preset='{pre}'" if pre else "") + ") (relaunches it and reports "
                        "logs and crashes), or ios_logs_start + ios_logs_read, ios_screenshot.")
         elif r.get("installed"):
             out.append("Installed on the iPhone.")

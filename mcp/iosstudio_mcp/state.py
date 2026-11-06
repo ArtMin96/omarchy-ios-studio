@@ -9,7 +9,7 @@ device tool call, so agents that never touch the phone open no tunnel; device to
 `tools.device.dcall(state, cmd, args)`, which maps DeviceError to a ToolError naming the next tool):
     state.device          the device client object (helper/device_client.py), or None until first use
     state.install_app     async (udid, ipa_path, job) -> dict      used by ios_run after a Wi-Fi build
-    state.launch_app      async (udid, bundle_id) -> dict           used by ios_run after install
+    state.launch_app      async (udid, bundle_id, args=None, env=None) -> dict   used by ios_run after install
     state.device_udid     async () -> str | None                    the active iPhone's udid
     state.device_status   async () -> dict | None                   live device.json-shaped dict (ios_status)
 A tool module may define `async def on_startup(state)` / `async def on_shutdown(state)`; the server
@@ -38,7 +38,7 @@ class AppState:
     # --- device slots (tools/device.py)
     device: Any = None
     install_app: Callable[[str, str, Job], Awaitable[dict]] | None = None
-    launch_app: Callable[[str, str], Awaitable[dict]] | None = None
+    launch_app: Callable[..., Awaitable[dict]] | None = None   # (udid, bundle_id, args=None, env=None)
     device_udid: Callable[[], Awaitable[str | None]] | None = None
     device_status: Callable[[], Awaitable[dict | None]] | None = None   # device.json-shaped dict
     # --- free-form per-module storage: "device" (event cache), "logs.sessions" (log ring buffers)

@@ -52,11 +52,38 @@ def make_installer(state: AppState, launch: bool):
     """Finisher for run/install/renew jobs: the helper builds and signs; installing over Wi-Fi (and
     launching) is done by the app's device daemon, which the device client reaches."""
 
+    async def launch_installed(job: Job, r: dict, udid: str | None, bundle: str | None) -> None:
+        """Open the installed app with the run's launch args/env (its preset's). Installed fine + launch
+        failed stays green with the error in the step and next_steps, as in the app."""
+        if not (launch and bundle and udid and state.launch_app) or r.get("launched"):
+            return
+        job.set_step("launch", "Launching", "running", owner="mcp")
+        job.current_step = "launch"
+        job.touch()
+        how = r.get("launch") if isinstance(r.get("launch"), dict) else {}
+        extra = {k: how[k] for k in ("args", "env") if how.get(k)}   # the run preset's, if any
+        try:
+            res = await state.launch_app(udid, bundle, **extra) or {}
+        except ToolError as exc:
+            job.set_step("launch", "Launching", "failed", error=str(exc))
+            job.next_steps.append(f"Installed, but it didn't open: {exc}")
+        else:
+            job.set_step("launch", "Launching", "done")
+            r.update(launched=True, pid=res.get("pid"))
+        job.touch()
+
     async def finish(job: Job) -> None:
         r = job.result or {}
-        if not r.get("needsInstall") or r.get("installed"):
+        how = r.get("launch") if isinstance(r.get("launch"), dict) else {}
+        udid, ipa = r.get("udid") or how.get("udid"), r.get("ipa")
+        bundle = how.get("bundleId") or r.get("bundleId")
+        if r.get("installed"):
+            # Installed by the helper (USB: `xtool dev run` installs but never launches): launch it here.
+            job.check_cancel()
+            await launch_installed(job, r, udid, bundle)
             return
-        udid, ipa, bundle = r.get("udid"), r.get("ipa"), r.get("bundleId")
+        if not r.get("needsInstall"):
+            return
         if helper.demo_mode() and state.install_app is None:
             job.check_cancel()
             job.set_step("install", "Installing", "running", owner="mcp")
@@ -89,24 +116,14 @@ def make_installer(state: AppState, launch: bool):
         except ToolError:
             pass
         job.check_cancel()
-        if launch and bundle and state.launch_app:
-            job.set_step("launch", "Launching", "running", owner="mcp")
-            job.touch()
-            try:
-                res = await state.launch_app(udid, bundle) or {}
-            except ToolError as exc:   # installed fine; only the launch failed (as in the app: keep it green)
-                job.set_step("launch", "Launching", "failed", error=str(exc))
-                job.next_steps.append(f"Installed, but it didn't open: {exc}")
-            else:
-                job.set_step("launch", "Launching", "done")
-                r.update(launched=True, pid=res.get("pid"))
+        await launch_installed(job, r, udid, bundle)
         job.touch()
 
     return finish
 
 
 async def start_build(state: AppState, ctx: Context, project_path: str, action: str, config: str,
-                      udid: str | None, via: str, wait_seconds: int) -> BuildStatus:
+                      udid: str | None, via: str, wait_seconds: int, preset: str | None = None) -> BuildStatus:
     p = await resolve_project(state, project_path)
     path = p["path"]
     busy = state.jobs.running_for(path)
@@ -114,6 +131,10 @@ async def start_build(state: AppState, ctx: Context, project_path: str, action: 
         raise ToolError(f"{p.get('name')} already has a running job {busy.id} ({busy.title}). Poll it with "
                         f"ios_build_status('{busy.id}') or stop it with ios_build_cancel.")
     flags: dict = {"path": path, "config": config}
+    if preset and action == "run":
+        # An unknown name fails here, listing the project's presets, instead of as a failed job.
+        await helper.call("projects", "presets", {"path": path, "resolve": preset})
+        flags["preset"] = preset
     if action in ("run", "install"):
         udid = udid or await state.active_udid()
         if not udid:
@@ -329,17 +350,23 @@ def register(mcp: MCPServer) -> None:
         udid: Udid = None,
         via: Via = "auto",
         wait_seconds: WaitSeconds = 20,
+        preset: Annotated[str | None, Field(description="Launch with this run preset of the project (saved launch "
+                                                        "args, env, language; see ios_project_presets), e.g. "
+                                                        "'German'")] = None,
     ) -> BuildStatus:
         """Build, sign, install and launch the app on the iPhone in one call: the "run it" button.
 
         Waits up to wait_seconds; if the build is still going it returns state='running' with the build_id,
-        so keep polling ios_build_status. Over USB xtool installs directly; over Wi-Fi the server installs
-        the signed .ipa through the device tools and launches it. When it can't install,
-        `result.needs_install` is true and next_steps says what to do. Needs a signed-in Apple ID and a
-        connected iPhone (check ios_status first).
+        so keep polling ios_build_status. Over USB xtool installs the app; over Wi-Fi the server installs
+        the signed .ipa through the device tools. Either way the server then launches it (xtool doesn't).
+        When it can't install, `result.needs_install` is true and next_steps says what to do. Needs a
+        signed-in Apple ID and a connected iPhone (check ios_status first). preset='<name>' launches with
+        that run preset's arguments, environment and language (an unknown name fails at once and lists the
+        presets). Without preset= it runs with no preset, even if the user selected one in the app;
+        ios_project_presets shows the presets and the selection.
         """
         state = get_state(ctx)
-        return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds)
+        return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds, preset)
 
     @tool(mcp, annotations=READ("Build status"))
     async def ios_build_status(

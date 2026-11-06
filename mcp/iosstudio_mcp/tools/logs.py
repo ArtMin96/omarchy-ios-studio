@@ -29,6 +29,7 @@ from . import MAX_WAIT, READ_REMOTE, ann, tool
 from .console import ConsoleSummary, capture_summary, fmt_line
 from .device import (AppInstallStatus, Udid, dcall, device_tool_error, get_install, install_status, new_client,
                      package_for, resolve_app, start_install, wait_install)
+from .run_presets import PresetName, merge_launch, resolve_preset
 
 log = logging.getLogger("iosstudio.logs")
 
@@ -52,6 +53,9 @@ class RunCaptureResult(RunCapture):
                                                              "the session for ios_app_console_read")
     console_lines: list[str] = Field(default_factory=list, description="The app's print() output, after the log "
                                      "lines: stderr lines and the latest ones, '<time> [stderr] <text>'")
+    preset: str | None = Field(None, description="Run preset the app was launched with")
+    launch_args: list[str] = Field(default_factory=list, description="Launch arguments passed (preset's, then explicit)")
+    launch_env: dict[str, str] = Field(default_factory=dict, description="Launch environment passed")
 
 
 @dataclass
@@ -395,6 +399,7 @@ def register(mcp: MCPServer) -> None:
         max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                                   "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
+        preset: PresetName = None,
     ) -> RunCaptureResult:
         """"Launch it and tell me what happened" in one call: (optionally installs a signed build,) starts
         a log capture filtered to the app, launches it, records for `seconds`, checks whether it is still
@@ -405,10 +410,14 @@ def register(mcp: MCPServer) -> None:
         (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
         An install that outlasts the call returns state='installing' with installed.install_id and nothing
         launched: call again with install_id (and the other arguments) to wait for it and then capture.
-        Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read."""
+        Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read.
+        preset='<name>' launches with a run preset of the app's project (ios_project_presets; the project is
+        project_path, else the one that builds bundle_id): its args come first, then `args`, and `env`
+        overrides its environment."""
         state = get_state(ctx)
         installed = None
         proj = None
+        how = None
         if project_path and not bundle_id:
             proj = await resolve_project(state, project_path)
             bundle_id = proj.get("bundleId")
@@ -416,6 +425,8 @@ def register(mcp: MCPServer) -> None:
                 raise ToolError(f"{proj.get('name')} has no bundle id yet. Check ios_project_info.")
         if not bundle_id and not install_id and not ipa_path:
             raise ToolError("Pass bundle_id or project_path (or ipa_path to install and run).")
+        if preset and (project_path or bundle_id):   # before any install: an unknown name fails at once
+            how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id)
         total = seconds + 6.0
         step = [0.0]
 
@@ -437,6 +448,7 @@ def register(mcp: MCPServer) -> None:
             if not job.finished:
                 again = (f"ios_app_run_and_capture(install_id='{job.id}'"
                          + (f", bundle_id='{bundle_id}'" if bundle_id else "")
+                         + (f", preset='{preset}'" if preset else "")
                          + f", seconds={seconds})")
                 installed = install_status(job, f"Still installing; nothing was launched yet. Call {again} to wait "
                                                 "for it, then launch and capture (pass your other arguments too).")
@@ -450,6 +462,9 @@ def register(mcp: MCPServer) -> None:
                 bundle_id = installed.bundle_id
         app = await resolve_app(state, bundle_id, udid)
         bid, exe = app["bundleId"], app.get("executable") or app.get("name")
+        if preset and how is None:   # the bundle id came from the install
+            how = await resolve_preset(state, preset, bundle_id=bid)
+        args, env = merge_launch(how, args, env)
         await progress(0.5, "Checking crash reports")
         try:
             before = {c.get("name") for c in await dcall(state, "crash.list", {"process": exe, "flush": True},
@@ -589,4 +604,7 @@ def register(mcp: MCPServer) -> None:
                                 other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
                                 truncated=omitted > 0 or con_cut > 0, omitted=max(0, omitted) + con_cut,
                                 note=note, full_output_path=full_path, console=con_sum,
-                                console_lines=con_lines).with_budget(max_bytes, links)
+                                console_lines=con_lines, preset=how["name"] if how else None,
+                                launch_args=[B.clip(x, 300) for x in args or []][:64] if how else [],
+                                launch_env={k: B.clip(v, 300) for k, v in (env or {}).items()} if how else {}
+                                ).with_budget(max_bytes, links)

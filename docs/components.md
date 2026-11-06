@@ -116,13 +116,21 @@ lock unlock key cert shield shieldCheck clock timer location camera image video 
 chevronRight/Left/Down/Up arrowRight arrowUp openExternal copy save export edit code swift disk memory
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
-robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart.
+robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune.
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
 `plural(n, word)`; `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
+
+Run presets (mirroring `helper/run_presets.py`, so the editor can preview and validate as you type; the helper
+still checks on save): `PRESET_LANGUAGES` (`{value, label, region}` for the language list: en, de, fr, es, it,
+pt-BR, nl, ru, ja, ko, zh-Hans, ar, he), `PRESET_MAX_NAME` (40), `PRESET_LANGUAGE_RE`, `PRESET_REGION_RE`,
+`ENV_NAME_RE`; `languageLabel(code)` → "German" (the code itself when it isn't in the list);
+`presetTag(value, sep)` → the helper's spelling (`"de-de"` → `"de-DE"` with `"-"`, `"de_DE"` with `"_"`);
+`presetResolve(p)` → `{args, env}` as the launch gets them (own args, then `-AppleLanguages (…)`, `-AppleLocale …`,
+`-UITestMode YES`); `presetSummary(p)` → "German · de_DE · 2 arguments · UI test mode"; `presetNames(project)`.
 
 ---
 
@@ -464,9 +472,26 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **ProjectCard**: one project on the Projects page. Props: `project`, `svc` (`app.projects`), `hasCursor`,
   `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
   `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
-  `openBuildSettings()`, `showBuild()`, `hovered(bool)`; read-only `blocked` (a generated project its build
-  settings don't allow yet). It asks `svc.checkSoon(project)` for a project check when it appears, gets the cursor
-  or expands, and shows a ProjectCheckView below the details.
+  `openBuildSettings()`, `editPresets()` (Edit presets… in Run's menu, or More › Run presets), `showBuild()`,
+  `hovered(bool)`; read-only `blocked` (a generated project its build settings don't allow yet) and `runPreset` (the
+  selected preset's name, from `svc.selectedPreset(project)`). Run is a RunSplitButton; a selected preset shows as
+  a faint "Runs with <name>" after the bundle ID, which elides before the bundle ID does. It asks
+  `svc.checkSoon(project)` for a project check when it appears, gets the cursor or expands, and shows a
+  ProjectCheckView below the details.
+- **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
+  Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
+  `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
+  button: Default (no preset), each preset (a check on the selected one, its language or `Model.presetSummary`
+  beside it) and Edit presets… (New preset… when there are none). Picking a preset calls `svc.selectPreset`.
+  `j`/`k` or the arrow keys move, Enter picks, Esc closes.
+- **RunPresetsSheet**: a project's Run presets sheet. Props: `app`, `svc`; `openFor(project)` opens the list,
+  `openFor(project, name)` goes straight to that preset's editor. The list has Default (no preset) and one row per
+  preset with Use for Run (or a "Used by Run" pill), edit and delete (asks first); the editor has name, language
+  (Same as the iPhone, `Model.PRESET_LANGUAGES` or Other language code…), region (with a "Use <region>"
+  suggestion), launch argument rows, environment variable rows, the UI test mode switch and a "What Run passes to
+  the app" preview with the generated arguments tagged by their source. It validates like the helper (name, codes,
+  env names) and shows the helper's error when a save is refused. Loads and saves through `svc.loadPresets` /
+  `svc.savePreset`. See [features/run-presets.md](features/run-presets.md).
 - **ProjectCheckView**: the project check on a ProjectCard. Props: `project`, `svc`, `showClean` (show the row for a
   clean project or a first check still running; the card passes its More state), `open` (issues shown). A summary
   row ("2 settings warnings", a spinner while the first check runs, "Couldn't check…" on an error) with Check again
@@ -481,7 +506,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   [features/project-build-settings.md](features/project-build-settings.md).
 - **BuildPanel**: the Projects page's build drawer (steps, progress, Problems and raw log, result banner). It
   slides in from the right and isn't modal. Props: `app`, `svc`, `opened`, `tab` (`log` or `problems`); read-only
-  `log` (the LogView); signal `closeRequested()`.
+  `log` (the LogView); signal `closeRequested()`. A run with a run preset names it in the subtitle ("Run
+  (German)"), the launch step and the result banner.
 - **BuildDiagnosticRow**: one build diagnostic. Props: `diag` (`{severity, message, category?, file?, line?, col?,
   hint?, details?}`, see `helper/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
   the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
@@ -503,6 +529,15 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`
   queues every project. The Projects page calls `checkAll()` when it opens, and a finished build calls `check()`
   for its project.
+- **ProjectService run presets** (`app.projects`, `projects presets`): `presetsOf(p)` (each with `resolved`) and
+  `selectedPreset(p)` (the name, or `""`) read the newest answer of `projects presets` for that project, else
+  `runPresets` / `runPreset` from `projects list`; a list refresh started after that answer takes over again.
+  `loadPresets(p, onDone, onFail)`, `savePreset(p, preset, renameFrom, onDone, onFail)` (toasts on success),
+  `deletePreset(p, name, onDone, onFail)` (asks first; says when Run goes back to a plain launch) and
+  `selectPreset(p, name, onDone, onFail)` (`""` clears; shown at once and rolled back with a toast if the helper
+  refuses). `onDone` gets the helper's `{path, presets, selected}`. `run(p)` passes `--preset` with the selected
+  one; `build.preset` holds its name, and the launch passes the build's `launch.args` / `launch.env` to the
+  daemon's `app.launch`.
 - **LogDeviceTab / LogSyslogView**: the Logs page's Device log tab (`app`) and its live list.
   LogSyslogView takes SyslogEntry batches with `push(batch)` (batched every 80 ms, the last `maxLines`, default
   5000) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,

@@ -9,7 +9,8 @@ import "../Model.js" as Model
 // Build drawer (projects slice): live step timeline, progress, problems and raw log, result
 // banner. Problems lists errors first; within a severity, pre-build project settings issues
 // (chip "Pre-build check") come before xtool's own output. Slides in from the right edge of the
-// Projects page; not modal, so the list stays usable.
+// Projects page; not modal, so the list stays usable. A run with a run preset names it in the
+// subtitle, the launch step and the result banner.
 //   BuildPanel { app: page.app; svc: page.app.projects; opened: page.panelOpen; onCloseRequested: … }
 Item {
   id: root
@@ -137,7 +138,7 @@ Item {
             tone: "dim"; size: "small"; elide: Text.ElideRight
             text: {
               if (!root.b.kind) return ""
-              var parts = [root.kindLabel(root.b.kind)]
+              var parts = [root.kindLabel(root.b.kind) + (root.b.kind === "run" && root.b.preset ? " (" + root.b.preset + ")" : "")]
               if (root.result && root.result.duration) parts.push(Model.formatDuration(root.result.duration))
               else if (root.b.active && root.b.eta) parts.push("about " + Model.formatDuration(root.b.eta) + " left")
               if (root.b.bundleId) parts.push(root.b.bundleId)
@@ -180,7 +181,8 @@ Item {
               if (!r || !r.ok) return ""
               var d = r.data || {}
               if (d.launchError) return "Installed, but it didn't open: " + Model.errorMessage(d.launchError)
-              if (root.b.kind === "run") return "Installed and opened on your iPhone. " + (root.warningCount ? root.warningsText() + " to look at." : "")
+              if (root.b.kind === "run") return "Installed and opened on your iPhone" + (root.b.preset ? " with the run preset “" + root.b.preset + "”" : "") + ". "
+                                                + (root.warningCount ? root.warningsText() + " to look at." : "")
               if (root.b.kind === "renew") return "Re-signed and reinstalled. It keeps opening for another 7 days."
               if (root.b.kind === "ipa") return "Saved to " + String(d.ipa || "").replace(app ? app.home : "", "~")
               if (root.b.kind === "compile") return "Your code compiles for iPhone." + (root.warningCount ? " " + root.warningsText() + "." : "")

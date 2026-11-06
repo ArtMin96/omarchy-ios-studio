@@ -150,6 +150,10 @@ class ProjectDetail(ProjectBrief):
                                                                     "see ios_project_build_settings")
     suggested_build_settings: dict[str, Any] | None = Field(None, description="Settings the project's own scripts "
                                                                               "imply that aren't set yet, with reasons")
+    run_presets: list[str] = Field(default_factory=list, description="Names of the project's run presets (pass one "
+                                                                     "as preset= to ios_run; details: ios_project_presets)")
+    run_preset: str | None = Field(None, description="The preset selected in the app (its Run button uses it; "
+                                                     "agents pass preset= explicitly)")
     next_steps: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -161,7 +165,9 @@ class ProjectDetail(ProjectBrief):
                    note=p.get("note"), ipa=p.get("ipa"), icon=p.get("icon"),
                    sources=_sources_dir(p.get("path"), product), build_settings=bs or None,
                    suggested_build_settings=p.get("suggestedBuildSettings") or None,
-                   next_steps=next_steps or [])
+                   run_presets=[str(x.get("name"))[:40] for x in (p.get("runPresets") or [])
+                                if isinstance(x, dict) and x.get("name")][:50],
+                   run_preset=p.get("runPreset") or None, next_steps=next_steps or [])
 
 
 class ProjectChange(Out):
@@ -249,6 +255,9 @@ class BuildResult(Out):
     pid: int | None = None
     profile_expires: str | None = None
     duration_seconds: float | None = None
+    preset: str | None = Field(None, description="Run preset the app was launched with")
+    launch_args: list[str] = Field(default_factory=list, description="Launch arguments (from the preset)")
+    launch_env: dict[str, str] = Field(default_factory=dict, description="Launch environment (from the preset)")
 
 
 class BuildStatus(Out):
@@ -319,11 +328,12 @@ class HistoryEntry(BuildBrief):
     path: str | None = None
     udid: str | None = None
     via: str | None = None
+    preset: str | None = Field(None, description="Run preset the run launched with")
 
     @classmethod
     def from_entry(cls, b: dict) -> "HistoryEntry":
         return cls(**BuildBrief.from_helper(b).model_dump(), project=b.get("project"), path=b.get("path"),
-                   udid=b.get("udid"), via=b.get("via"))
+                   udid=b.get("udid"), via=b.get("via"), preset=b.get("preset") or None)
 
 
 class BuildHistory(Budgeted, Out):
@@ -577,6 +587,9 @@ class AppLaunchResult(Out):
     console_session_id: str | None = Field(None, description="console=true: read its print() output with "
                                                              "ios_app_console_read")
     console_error: str | None = Field(None, description="console=true: why the output isn't captured")
+    preset: str | None = Field(None, description="Run preset used")
+    args: list[str] = Field(default_factory=list, description="Launch arguments passed (preset's, then explicit)")
+    env: dict[str, str] = Field(default_factory=dict, description="Launch environment passed")
     next_steps: list[str] = Field(default_factory=list)
 
 
