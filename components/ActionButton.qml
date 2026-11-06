@@ -57,7 +57,7 @@ Item {
     text: root.text
     iconText: root.busy ? String.fromCodePoint(0xF04E6) : root.glyph
     iconSpinning: root.busy
-    tooltipText: root.tooltip
+    tooltipText: Host.covers(root, Host.top) ? "" : root.tooltip   // none under a confirm or sheet
     hasCursor: root.hasCursor
     bordered: root.kind === "secondary"
     foreground: root._primary || root.kind === "danger" ? (root.kind === "danger" ? Commons.Color.urgent : Commons.Color.foreground) : Commons.Color.foreground

@@ -23,6 +23,7 @@ On the iPhone page you can:
 
 - manage installed apps and fake the phone's location
 - watch the screen live, take screenshots and record short videos for bug reports
+- save a screenshot as a screen's baseline and compare later ones with it, with the changes highlighted (iPhone › Screen › Compare: baseline, current and diff side by side)
 - read the app on the screen as a list of buttons and texts, press them on the phone, and run Apple's accessibility audit
 - import photos and videos from the camera roll, browse your apps' files, and feed camera code test images
 - make the phone act as if it's on a slow network, running hot or with a slow GPU, and record an app's traffic over USB
@@ -82,6 +83,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 - [docs/features/project-build-settings.md](docs/features/project-build-settings.md) explains build settings for projects that build through their own scripts.
 - [docs/features/project-check.md](docs/features/project-check.md) explains the project check: what each check looks for and when it runs.
 - [docs/features/run-presets.md](docs/features/run-presets.md) explains run presets: what each field passes to the app, where they're stored and how agents use them.
+- [docs/features/screenshot-compare.md](docs/features/screenshot-compare.md) explains screenshot baselines and diffs: what counts as a change, what's ignored, where the files go and the agent tools.
 - [docs/features/ui-inspect.md](docs/features/ui-inspect.md) explains reading the screen's elements, pressing them and the accessibility audit: how it works, its limits and the agent tools.
 - To report a security problem, see [SECURITY.md](SECURITY.md).
 

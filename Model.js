@@ -142,7 +142,10 @@ var Glyph = {
   textSize: g(0xF027F),
   clipped: g(0xF019F),
   hitArea: g(0xF0CFD),
-  label: g(0xF0316)
+  label: g(0xF0316),
+  // screenshot compare (ScreenshotCompareView)
+  compare: g(0xF018A),
+  imagePlus: g(0xF087C)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

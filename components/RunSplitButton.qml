@@ -92,7 +92,7 @@ Item {
       Layout.fillHeight: true
       text: "Run"
       iconText: Model.Glyph.play
-      tooltipText: root.tooltip
+      tooltipText: Host.covers(root, Host.top) ? "" : root.tooltip
       foreground: Commons.Color.foreground
       background: "transparent"
       fontSize: Style.font.body
@@ -119,7 +119,7 @@ Item {
       id: menuPart
       Layout.fillHeight: true
       iconText: Model.Glyph.chevronDown
-      tooltipText: menu.opened ? "" : (root.selected !== "" ? "Run preset: " + root.selected + ". Change it, or edit presets" : "Pick a run preset: launch arguments, environment and language")
+      tooltipText: menu.opened || Host.covers(root, Host.top) ? "" : (root.selected !== "" ? "Run preset: " + root.selected + ". Change it, or edit presets" : "Pick a run preset: launch arguments, environment and language")
       foreground: Commons.Color.foreground
       background: "transparent"
       iconSize: Style.font.icon

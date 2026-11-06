@@ -26,6 +26,7 @@ MODULES = {
     "app": "appconfig",
     "agents": "agents",
     "debug": "debugger",
+    "screenshots": "screenshots",
 }
 
 

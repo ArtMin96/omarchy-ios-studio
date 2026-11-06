@@ -508,6 +508,9 @@ def run(group: str, action: str, flags: dict) -> int:
     if group == "debug":
         import debugger
         return debugger.demo(action, flags)
+    if group == "screenshots":
+        import screenshots
+        return screenshots.demo(action, flags)
     if key == "setup check":
         return ok(_setup_check(flags))
     if key == "toolchain info":

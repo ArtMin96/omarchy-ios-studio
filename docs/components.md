@@ -64,7 +64,7 @@ PageFrame {
 | `app.closeConfirm(handle)` | Close that dialog (or drop it from the queue) unanswered: neither callback runs. Use it when whatever asked has gone away (e.g. the job that wanted an answer ended). |
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
-| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo` and the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming`. Pages may add keys. |
+| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs` | Services |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
@@ -117,7 +117,8 @@ chevronRight/Left/Down/Up arrowRight arrowUp openExternal copy save export edit 
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
 robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune, and for the UI inspector inspect accessibility tap text textbox toggle slider
-header tab list element linkVariant (element roles) and contrast textSize clipped hitArea label (audit issue types).
+header tab list element linkVariant (element roles) and contrast textSize clipped hitArea label (audit issue types), and compare imagePlus
+(screenshot compare).
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
@@ -396,7 +397,10 @@ Sheet {
 
 Hosted by `shell.qml`. Pages use them only through `app.confirm(...)`, `app.toast(...)` and
 `app.shortcutsOpen`. `Host` (singleton) is the overlay registry: `Host.depth > 0` means an overlay owns
-the keyboard.
+the keyboard. `Host.covers(item, Host.top)` is true while an overlay is open and `item` isn't inside it;
+`ActionButton`, `IconButton` and `RunSplitButton` use it to hide their tooltips under a confirm dialog or sheet
+(the pointer hasn't moved, so their hover would otherwise keep the tooltip up over the dim layer). Do the same for a
+hand-made `PanelToolTip`.
 
 ## Also available from qs.Ui
 
@@ -411,6 +415,7 @@ the keyboard.
 
 - **QuietNote**: slim, left-aligned "nothing here yet" line for small dashboard sections where a full
   `EmptyState` would outweigh the lists beside it. Props: `glyph`, `title`, `text`, `level` (tints the glyph).
+  The glyph is centred on the title's first line.
   ```qml
   QuietNote { Layout.fillWidth: true; glyph: Model.Glyph.hammer; title: "No builds yet"; text: "Builds you run show up here." }
   ```
@@ -462,7 +467,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `mirrorActive`, `measuredFps`, `mirrorNotice`, `recording`, `setMirrorMode()`, `startRecording(maxSeconds)`,
   `stopRecording()`, `dismissRecording()`. The settings keys `mirrorMode` and `mirrorView` remember the choice.
   Beside the phone, `PageTabs` switch `pane` between `"view"` (Live view: all of the above), `"elements"` and
-  `"audit"` (a `DeviceInspectView`, with counts on the tabs). While inspecting, the phone outlines the inspector's
+  `"audit"` (a `DeviceInspectView`, with counts on the tabs) and `"compare"` (a `ScreenshotCompareView`; the deep
+  link `device:screen:compare` opens it). While inspecting, the phone outlines the inspector's
   cursor row. `handleKey(action)` and `focusFilter()` are DevicePage's hooks into the inspector (it calls them on the
   Screen tab: `j`/`k`, Enter, `/`), and `devModeHelp()` asks the page to open the Developer Mode sheet.
 - **DeviceInspectView**: Screen › Elements and Audit (`app`, `section`: `"elements"` or `"audit"`,
@@ -488,6 +494,30 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ```qml
   DeviceInspectRow { glyph: Model.Glyph.tap; title: "Sign in"; secondary: "Button · loginButton"
                      pressable: true; onPressRequested: view.press(el) }
+  ```
+- **ScreenshotCompareView**: Screen › Compare (`app`). A project (Dropdown over `app.projects.items`: the
+  `compareProject` setting, else the last build's project, else the first) and a screen name (TextField; the
+  project's baselines are listed below it as `ListRow`s, a click picks the name, the bin deletes). Compare takes a
+  screenshot with `app.device.screenshot()` and calls `screenshots compare`; Save as baseline / Replace baseline
+  takes one and calls `screenshots save` (replacing asks first). The result: a verdict `StatusPill` (Same ok,
+  Changed and Size mismatch warn, No baseline info) with the diff % and the threshold, a line with the number of
+  changed areas and the ignored status bar, then baseline | current | diff in three equal `ScreenshotDiffPane`s,
+  and Accept as new baseline (`screenshots save` with the compared `current_path`, confirms when it replaces one)
+  and Delete baseline (`screenshots delete --confirm` after `app.confirm`). The list is read when the pane is
+  shown and after every save or delete; nothing polls. Every image reloads after a save (`revision`).
+  `setName(name)` fills the name field. Disabled buttons say why (no iPhone, no project, no name, busy).
+  ```qml
+  ScreenshotCompareView { app: root.app }
+  ```
+- **ScreenshotDiffPane**: one image of that comparison: `title`, `detail` (caption, e.g. the size), `path` (local
+  file), `revision` (bump to reload a file rewritten in place; the Image has `cache: false` and a `?v=` query),
+  `imageSize` (`{w, h}` pixels), `regions` (`[{x, y, w, h}]` pixels, outlined in the warn colour, at least 6 px on
+  screen, grown outward by the stroke plus a small gap so it never touches the change), `maskedTop` (pixels at the top that are shaded as ignored), `placeholder` + `placeholderGlyph` (no
+  `path`), `cellHeight` (set by the caller so the panes match). The image keeps its aspect ratio and is centred;
+  a click opens it with `xdg-open`.
+  ```qml
+  ScreenshotDiffPane { title: "Current"; path: r.current_path; imageSize: { w: r.width, h: r.height }
+                       regions: r.regions; maskedTop: r.masked_top; cellHeight: panes.cellH }
   ```
 - **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
   QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view

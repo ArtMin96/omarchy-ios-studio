@@ -67,6 +67,7 @@ PageFrame {
     else if (p.action === "reconnect") svc.reconnect()
     else if (p.action === "ddi") svc.mountDdi()
     else if (p.action === "screenshot") { page.tab = "screen"; svc.screenshot() }
+    else if (p.action === "compare") { page.tab = "screen"; screenView.pane = "compare" }
     else if (p.action === "mirror") { page.tab = "screen"; if (svc.connected && !svc.mirroring) svc.startMirror() }
     else if (p.tab === "files" && ["media", "apps", "camera"].indexOf(p.action) >= 0) filesView.show(p.action)
     if (svc.connected && svc.appsStatus === "unknown") svc.refreshApps()
