@@ -383,7 +383,8 @@ def register(mcp: MCPServer) -> None:
         category (compiler, linker, package, signing, device, toolchain, config, other), message, count, the
         first 3 'file:line:col' locations (relative to the project) when there is one, and for non-compiler
         problems a one-line `hint` (naming the tool that fixes it) plus a few `details` (e.g. the undefined
-        symbols and who references them). `categories` counts entries per category. Paginated with
+        symbols and who references them). `config` warnings come from the pre-build project check (see
+        ios_project_check). `categories` counts entries per category. Paginated with
         offset/next_offset; notes are left out unless include_notes=true.
 
         Pass build_id for a build started in this session, or project_path for that project's latest

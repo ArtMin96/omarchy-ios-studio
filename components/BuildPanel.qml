@@ -7,7 +7,9 @@ import qs.Ui
 import "../Model.js" as Model
 
 // Build drawer (projects slice): live step timeline, progress, problems and raw log, result
-// banner. Slides in from the right edge of the Projects page; not modal, so the list stays usable.
+// banner. Problems lists errors first; within a severity, pre-build project settings issues
+// (chip "Pre-build check") come before xtool's own output. Slides in from the right edge of the
+// Projects page; not modal, so the list stays usable.
 //   BuildPanel { app: page.app; svc: page.app.projects; opened: page.panelOpen; onCloseRequested: … }
 Item {
   id: root
@@ -22,6 +24,14 @@ Item {
   readonly property int diagCount: svc ? svc.diagnostics.count : 0
   readonly property int errorCount: svc ? svc.errorCount : 0
   readonly property int warningCount: svc ? svc.warningCount : 0
+  // Warnings from the pre-build project settings check (category "config"; they never fail a build).
+  readonly property int configCount: svc ? svc.configCount || 0 : 0
+  function warningsText() {
+    if (!root.warningCount) return ""
+    var t = Model.plural(root.warningCount, "warning")
+    if (root.configCount > 0) t += root.configCount >= root.warningCount ? " in project settings" : " (" + root.configCount + " in project settings)"
+    return t
+  }
   // Only reassigned when a step changes, not on every progress tick, so the step rows stay put.
   property var steps: []
   onBChanged: {
@@ -170,10 +180,10 @@ Item {
               if (!r || !r.ok) return ""
               var d = r.data || {}
               if (d.launchError) return "Installed, but it didn't open: " + Model.errorMessage(d.launchError)
-              if (root.b.kind === "run") return "Installed and opened on your iPhone. " + (root.warningCount ? Model.plural(root.warningCount, "warning") + " to look at." : "")
+              if (root.b.kind === "run") return "Installed and opened on your iPhone. " + (root.warningCount ? root.warningsText() + " to look at." : "")
               if (root.b.kind === "renew") return "Re-signed and reinstalled. It keeps opening for another 7 days."
               if (root.b.kind === "ipa") return "Saved to " + String(d.ipa || "").replace(app ? app.home : "", "~")
-              if (root.b.kind === "compile") return "Your code compiles for iPhone." + (root.warningCount ? " " + Model.plural(root.warningCount, "warning") + "." : "")
+              if (root.b.kind === "compile") return "Your code compiles for iPhone." + (root.warningCount ? " " + root.warningsText() + "." : "")
               return "Done."
             }
           }

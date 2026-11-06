@@ -7,7 +7,7 @@ import qs.components
 import "../Model.js" as Model
 
 // Projects (projects slice): your xtool apps, Run on iPhone, .ipa builds, 7-day renewal,
-// new-app templates, and the build drawer.
+// new-app templates, project settings checks (on each card), and the build drawer.
 Item {
   id: page
   required property var app
@@ -31,6 +31,7 @@ Item {
   function activated(params) {
     var p = params || {}
     if (svc.status === "unknown") svc.refresh()
+    else svc.checkAll()            // project settings checks (skipped for ones checked in the last minute)
     if (p.action === "new") Qt.callLater(function() { newSheet.open() })
     else if (p.action === "renew") {
       var target = p.path ? svc.projectByPath(p.path) : (page.expiring[0] || null)

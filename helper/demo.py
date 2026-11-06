@@ -248,6 +248,7 @@ def _build_stream(kind: str, flags: dict) -> int:
     steps = [("resolve", "Resolving packages"), ("compile", "Compiling"), ("link", "Linking"), ("sign", "Signing"), ("package", "Packaging")]
     lines = ["Fetching https://github.com/example/swift-collections", "Compiling " + name + " ContentView.swift",
              "Compiling " + name + " Model.swift", "Linking " + name, "Signing with Apple Development: " + NAME, "Packaging " + name + ".ipa"]
+    pre = _demo_prebuild_diags(path, name)
     if name == "HabitTracker":   # the demo project with a broken branch: fails to compile, like its history
         return _failing_build(kind, path, name, bundle, steps[:2], lines)
     fail = os.environ.get("IOSSTUDIO_DEMO_FAIL", "").strip().lower()
@@ -261,12 +262,52 @@ def _build_stream(kind: str, flags: dict) -> int:
             time.sleep(0.45)
         common.step(sid, title, "done")
     data = {"project": name, "name": name, "path": path, "kind": kind, "config": "debug", "result": "ok", "duration": 11.8,
-            "time": NOW, "errors": 0, "warnings": 0, "udid": flags.get("udid"), "via": "wifi", "bundleId": bundle,
-            "ipa": path + "/xtool/" + name + ".ipa", "diagnostics": [], "installed": False}
+            "time": NOW, "errors": 0, "warnings": len(pre), "udid": flags.get("udid"), "via": "wifi", "bundleId": bundle,
+            "ipa": path + "/xtool/" + name + ".ipa", "diagnostics": pre, "installed": False}
     if kind in ("run", "renew", "install"):
         data["needsInstall"] = True
         data["launch"] = {"bundleId": bundle, "udid": flags.get("udid")} if kind == "run" else None
     return common.done(True, data)
+
+
+def _config_issues(name: str) -> list[dict]:
+    """Made-up `projects check` findings (same shape and wording as helper/project_check.py)."""
+    import project_check as pc
+    h = pc.HINTS
+    return [
+        pc._issue("xtool-keys", "xtool.yml has an unknown key 'bundleId': did you mean 'bundleID'?",
+                  "Rename it to 'bundleID'. " + h["unknown-key"], "xtool.yml", 3),
+        pc._issue("usage-descriptions", "The code uses the camera (ScannerView.swift:24) but Info.plist has no "
+                  "NSCameraUsageDescription, so the app crashes when it asks for access.",
+                  h["usage"].format(key="NSCameraUsageDescription", what="the camera"),
+                  f"Sources/{name}/ScannerView.swift", 24),
+        pc._issue("icon", "The icon has transparency (an alpha channel).", h["icon-alpha"], "Resources/AppIcon.png"),
+        pc._issue("entitlements", "aps-environment (push notifications) needs a paid Apple Developer account.",
+                  h["entitlement"], f"{name}.entitlements", 5),
+    ]
+
+
+def _demo_check(flags: dict) -> dict:
+    import project_check as pc
+    path = str(flags.get("path") or "")
+    name = path.rstrip("/").split("/")[-1] or "App"
+    try:
+        cap = max(0, int(flags.get("max") or 50))
+    except (TypeError, ValueError):
+        cap = 50
+    return pc.summarize(path, _config_issues(name), "builtin", 14, cap)
+
+
+def _demo_prebuild_diags(path: str, name: str) -> list[dict]:
+    """The pre-build check's warnings, shown before the build output like a real build."""
+    out = []
+    for i in _config_issues(name)[:2]:
+        d = {k: v for k, v in i.items() if v is not None}
+        if d.get("file"):
+            d["file"] = path.rstrip("/") + "/" + d["file"]
+        common.event("diagnostic", **d)
+        out.append(d)
+    return out
 
 
 def _failing_build(kind: str, path: str, name: str, bundle: str, steps: list, lines: list) -> int:
@@ -430,6 +471,8 @@ def run(group: str, action: str, flags: dict) -> int:
         if not match:
             return common.fail("not-found", "That project folder doesn't exist anymore.")
         return ok(_project(match))
+    if key == "projects check":
+        return ok(_demo_check(flags))
     if key == "projects summary":
         h = sorted(_history(), key=lambda e: e["time"])
         return ok({"lastBuild": h[-1] if h else None, "recentBuilds": list(reversed(h))[:8], "expiring": []})

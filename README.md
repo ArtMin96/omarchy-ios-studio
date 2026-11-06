@@ -14,7 +14,7 @@ iOS Studio is a desktop app for [Omarchy](https://omarchy.org/). It installs the
 | Setup | Install Swift, xtool, the iOS SDK and the iPhone tools with one button. |
 | Apple ID | Sign in and see your team, certificates, profiles and the free-account limits. |
 | iPhone | Pair your phone and work with it: see the list below. |
-| Projects | Create an app from a template, build it, run it on your iPhone and re-sign it. A failed build lists each problem with its file and line, or with a hint when the problem is outside your code. Projects that build through their own scripts get build settings: a prebuild command, environment variables, an open-file limit and permission to build a generated `xtool.yml`. |
+| Projects | Create an app from a template, build it, run it on your iPhone and re-sign it. A failed build lists each problem with its file and line, or with a hint when the problem is outside your code. Each project card warns about settings mistakes before you build: misspelled `xtool.yml` keys, a missing camera or location permission text in `Info.plist`, a bad icon, entitlements a free Apple ID can't use. Projects that build through their own scripts get build settings: a prebuild command, environment variables, an open-file limit and permission to build a generated `xtool.yml`. |
 | Logs | Read your iPhone's live log, see what your app prints (`print()`), open crash reports with the file and line your app crashed on, and look back at build logs. |
 | Toolchain | Check versions and disk usage, free space, repair or remove everything. |
 | Settings | Project folders, editor, notifications, automatic re-signing, AI agents, a launcher shortcut, tiled or floating, opaque window. |
@@ -64,7 +64,7 @@ The [user guide](docs/guide.md) walks through each page. If something goes wrong
 
 ## AI agents
 
-iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can also read what your app prints while it runs. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
+iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can check a project's settings for mistakes before building. It can also read what your app prints while it runs. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
 
 ## Uninstall
 
@@ -79,6 +79,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 - [docs/camera-testing.md](docs/camera-testing.md) has the hook for testing camera code with files.
 - [docs/development.md](docs/development.md) explains how the app is built, how to run it from source and how to run the tests.
 - [docs/features/project-build-settings.md](docs/features/project-build-settings.md) explains build settings for projects that build through their own scripts.
+- [docs/features/project-check.md](docs/features/project-check.md) explains the project check: what each check looks for and when it runs.
 - To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Credits

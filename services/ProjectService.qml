@@ -14,11 +14,15 @@ import "../Model.js" as Model
 //   items: [Project]             (helper `projects list` objects)
 //   convertible, templates, history, recent (top 4 projects, for Home)
 //   build: {active, kind, path, name, steps[], fraction, detail, eta, result, started}
-//   diagnostics: ListModel of {n} rows, errors first; diagnostic(n) is the object · errorCount, warningCount
+//   diagnostics: ListModel of {n} rows, errors first (within a severity, pre-build config checks
+//     before the build's own output); diagnostic(n) is the object · errorCount, warningCount,
+//     configCount (the warnings among them from the pre-build project check)
 //   building (bool), canRun (an iPhone is connected)
 //   run(p) · buildIpa(p) · compile(p) · renew(p) · reinstall(p) · cancel()
 //   create(opts, onDone, onFail) · addFolder(path, …) · remove(p) · openInEditor(p, file, line, col)
 //   reveal(p) · setAutoRenew(p, on) · convert(path)
+//   checks: { path: {state: "loading"|"ready"|"error", result, error, at} } · checkFor(p)
+//   check(p) (now) · checkSoon(p) (queued, skipped when fresh) · checkAll()   (`projects check`)
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -61,9 +65,11 @@ Item {
   ListModel { id: diagModel }
   readonly property alias diagnostics: diagModel
   property var _diags: []
-  property var _rankCounts: [0, 0, 0, 0]
+  // Buckets: severity rank × (config check first, then the build's own output).
+  property var _rankCounts: [0, 0, 0, 0, 0, 0, 0, 0]
   property int errorCount: 0
   property int warningCount: 0
+  property int configCount: 0
   readonly property var _severityRank: ({ error: 0, warning: 1, note: 2 })
   function diagnostic(n) { return root._diags[n] || null }
   function diagnosticList() { return root._diags.slice() }
@@ -242,20 +248,23 @@ Item {
   function _clearDiagnostics() {
     diagModel.clear()
     root._diags = []
-    root._rankCounts = [0, 0, 0, 0]
+    root._rankCounts = [0, 0, 0, 0, 0, 0, 0, 0]
     root.errorCount = 0
     root.warningCount = 0
+    root.configCount = 0
   }
 
   function _addDiagnostic(d) {
     var rank = root._severityRank[d.severity]
     if (rank === undefined) rank = 3
+    var bucket = rank * 2 + (d.check ? 0 : 1)
     var n = root._diags.length
     root._diags.push(d)
     var at = 0
-    for (var r = 0; r <= rank; r++) at += root._rankCounts[r]
-    root._rankCounts[rank]++
+    for (var r = 0; r <= bucket; r++) at += root._rankCounts[r]
+    root._rankCounts[bucket]++
     diagModel.insert(at, { n: n })
+    if (d.check && d.severity === "warning") root.configCount++
     if (d.severity === "error") root.errorCount++
     else if (d.severity === "warning") root.warningCount++
   }
@@ -418,12 +427,17 @@ Item {
     b.detail = ok ? "Done" : (error ? error.message : "Stopped")
     b.result = { ok: ok, data: data || {}, error: error, duration: data && data.duration ? data.duration : (Date.now() - b.started) / 1000 }
     if (data && data.diagnostics && data.diagnostics.length > root._diags.length) {
+      // Keep the pre-build config issues if the final list doesn't repeat them.
+      var hasConfig = data.diagnostics.some(function(x) { return x && x.check })
+      var keep = hasConfig ? [] : root._diags.filter(function(x) { return x && x.check })
       _clearDiagnostics()
+      for (var j = 0; j < keep.length; j++) _addDiagnostic(keep[j])
       for (var i = 0; i < data.diagnostics.length; i++) _addDiagnostic(data.diagnostics[i])
     }
     root._cancelling = false
     root.build = b
     root.buildFinished(ok)
+    if (b.path) check({ path: b.path })      // the build may have been the user fixing a setting
 
     var cancelled = error && error.code === "cancelled"
     if (!cancelled) {
@@ -519,6 +533,56 @@ Item {
       app.toast(d.changes && d.changes.length ? "Build settings saved for " + p.name : "Nothing changed", d.changes && d.changes.length ? "ok" : "info")
       if (onDone) onDone(d)
     }, function(e) { if (onFail) onFail(e) })
+  }
+
+  // ------------------------------------------------------------ project check (helper/project_check.py)
+  // Config mistakes xtool won't flag until late (misspelled xtool.yml keys, missing usage
+  // descriptions, icon, entitlements, bundle id, version). Warnings only, under a second, never
+  // changes files. Results per project path; reassigned (not mutated) so bindings update.
+  property var checks: ({})
+  property var _checkQueue: []
+  property bool _checkBusy: false
+  readonly property int _checkFreshMs: 60000
+  function checkFor(p) {
+    var path = p && p.path ? p.path : p
+    return path ? (root.checks[path] || null) : null
+  }
+  function _setCheck(path, fields) {
+    var all = Object.assign({}, root.checks)
+    all[path] = Object.assign({}, all[path] || {}, fields)
+    root.checks = all
+  }
+  // Runs now (a click on "Check again", or after a build). onDone(result) / onFail(err) optional.
+  function check(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    root._setCheck(path, { state: "loading", error: null })
+    app.cli.call(["projects", "check", "--path", path], "", function(d) {
+      root._setCheck(path, { state: "ready", result: d, error: null, at: Date.now() })
+      if (onDone) onDone(d)
+    }, function(e) {
+      root._setCheck(path, { state: "error", error: e, at: Date.now() })
+      if (onFail) onFail(e)
+    }, { timeout: 20000 })
+  }
+  // Queued, one at a time, skipped when checked in the last minute (page open, cursor moves).
+  function checkSoon(p) {
+    var path = p && p.path ? p.path : p
+    if (!path) return
+    var c = root.checks[path]
+    if (c && (c.state === "loading" || (c.at && Date.now() - c.at < root._checkFreshMs))) return
+    if (root._checkQueue.indexOf(path) >= 0) return
+    root._checkQueue = root._checkQueue.concat([path])
+    root._nextCheck()
+  }
+  function checkAll() { for (var i = 0; i < root.items.length; i++) checkSoon(root.items[i]) }
+  function _nextCheck() {
+    if (root._checkBusy || root._checkQueue.length === 0) return
+    var path = root._checkQueue[0]
+    root._checkQueue = root._checkQueue.slice(1)
+    root._checkBusy = true
+    var next = function() { root._checkBusy = false; Qt.callLater(root._nextCheck) }
+    check({ path: path }, next, next)
   }
 
   function openBuildLog(file) {

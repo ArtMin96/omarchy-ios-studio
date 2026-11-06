@@ -411,6 +411,23 @@ def cmd_info(flags: dict) -> int:
     return common.ok(info)
 
 
+def cmd_check(flags: dict) -> int:
+    """projects check --path P [--max N]: config mistakes found before building (warnings only; reads, never
+    writes). See helper/project_check.py."""
+    p = _require_path(flags)
+    if not _is_project(p):
+        raise HelperError("not-a-project", "That folder isn't an xtool app (it needs Package.swift and xtool.yml).")
+    try:
+        cap = max(0, int(flags.get("max") or 50))
+    except (TypeError, ValueError):
+        raise HelperError("usage", "--max must be a number.") from None
+    import project_check
+    t0 = time.monotonic()
+    res = project_check.check(p)
+    return common.ok(project_check.summarize(p, res["issues"], res["keysSource"],
+                                             int((time.monotonic() - t0) * 1000), cap))
+
+
 def cmd_build_settings(flags: dict) -> int:
     """projects build-settings --path P [--set '<json patch>' [--dry-run]]: show or change a project's build
     settings (prebuild, env, openFiles, allowGenerated). The patch is merged (see build_settings.apply_patch);
@@ -1588,10 +1605,13 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
                 info = _project_info(p)
                 product, bundle = info["product"], info["bundleId"]
                 runner.enter(plan[1])
+                _precheck(runner, p)
                 rc = runner.run(argv, p)
             else:
                 err = _prebuild_failed(runner, prebuild, rc, p)
         else:
+            if kind != "install":
+                _precheck(runner, p)
             rc = runner.run(argv, p)
     except Cancelled:
         err = HelperError("cancelled", "Build cancelled.")
@@ -1646,6 +1666,25 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
         err.detail = None  # the UI has the full log already; keep the done event small
         data = {"diagnostics": runner.diags, **entry}
     return (0 if ok_ else 1), data, err
+
+
+PRECHECK_BUDGET = 0.8    # seconds; the checks stop early and report what they have
+PRECHECK_MAX = 20
+
+
+def _precheck(runner: BuildRunner, p: Path) -> None:
+    """Config warnings (project_check) as the build's first diagnostics. Warnings only, never an error, so they
+    can't change how the build is judged; any failure here is swallowed and the build goes on."""
+    try:
+        import project_check
+        res = project_check.check(p, deadline=time.monotonic() + PRECHECK_BUDGET)
+        for issue in [i for i in res["issues"] if i["severity"] == "warning"][:PRECHECK_MAX]:
+            d = {k: v for k, v in issue.items() if v is not None}
+            if d.get("file"):
+                d["file"] = os.path.normpath(os.path.join(p, d["file"]))
+            runner.add_diag(d)
+    except Exception:  # noqa: BLE001  a check must never fail or block a build
+        pass
 
 
 def _run_prebuild(runner: BuildRunner, cmd: str, p: Path) -> int:
@@ -1947,6 +1986,7 @@ GROUPS = {
     "projects": {
         "list": cmd_list,
         "info": cmd_info,
+        "check": cmd_check,
         "build-settings": cmd_build_settings,
         "add": cmd_add,
         "remove": cmd_remove,

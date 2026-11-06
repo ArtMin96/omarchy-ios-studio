@@ -28,6 +28,7 @@ helper/
   common.py          shared helper code: ok()/fail()/event(), paths, fix links
   setup.py, account.py, projects.py, appconfig.py   one module per helper group
   build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
+  project_check.py   the project check: config mistakes found before building (xtool.yml keys, usage descriptions, icon, entitlements), used by projects.py
   diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
   xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
@@ -53,11 +54,11 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (76 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (77 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, MCP jobs, budget and console reads
+tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, project check (fixture projects in fixtures/project-check/), MCP jobs, budget and console reads
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 ```
@@ -83,7 +84,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; `projects check` in project_check.py, see [features/project-check.md](features/project-check.md); per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -198,7 +199,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), and the helper's state files, crash report dates, the app console's line splitting and buffers, and the MCP server's jobs, output budget, diagnostics and console reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
+`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), the project check has one small project per case in `tests/fixtures/project-check/` (`tests/test_project_check.py` also runs a compile-only build through a fake xtool to see the pre-build warnings come first and leave the build ok, and `tests/test_mcp_project_check.py` covers `ios_project_check`), and the helper's state files, crash report dates, the app console's line splitting and buffers, and the MCP server's jobs, output budget, diagnostics and console reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
 
 ```bash
 python3 -m unittest discover -s tests

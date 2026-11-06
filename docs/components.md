@@ -465,7 +465,14 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
   `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
   `openBuildSettings()`, `showBuild()`, `hovered(bool)`; read-only `blocked` (a generated project its build
-  settings don't allow yet).
+  settings don't allow yet). It asks `svc.checkSoon(project)` for a project check when it appears, gets the cursor
+  or expands, and shows a ProjectCheckView below the details.
+- **ProjectCheckView**: the project check on a ProjectCard. Props: `project`, `svc`, `showClean` (show the row for a
+  clean project or a first check still running; the card passes its More state), `open` (issues shown). A summary
+  row ("2 settings warnings", a spinner while the first check runs, "Couldn't check…" on an error) with Check again
+  (off while this project is building), expanding to one BuildDiagnosticRow per issue (`showChip: false`; a click
+  opens the file at the line) and a "Showing N of M" line when the result was cut. Reads `svc.checkFor(project)`.
+  See [features/project-check.md](features/project-check.md).
 - **ProjectNewSheet**: the New app sheet (name, template, location, bundle id). Props: `app`, `svc`,
   `template` (default `swiftui-app`); `open()`, `reset()`; signal `created(project)`.
 - **ProjectBuildSettingsSheet**: a project's Build settings sheet (prebuild command, environment variable rows,
@@ -480,11 +487,22 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
   `package`, `signing`, `device`, `toolchain`, `config`, `other` (a row with a file and no category counts as
   `compiler`). Non-compiler rows show their category label, up to three `details` lines and the `hint` (what to do).
+  A `config` diagnostic with a `check` id comes from the pre-build project check: instead of the category label it
+  gets a "Pre-build check" chip beside the message, or at the start of the location line on narrow rows.
+  `showChip` (default true) turns the chip off, as in ProjectCheckView where every row is such an issue. A
+  relative `file` is shown as it is (project check results are relative to the project).
 - **ProjectService build diagnostics** (`app.projects`): `diagnostics` is a `ListModel` of `{n}` rows, errors
-  before warnings before notes, kept outside `build`; `diagnostic(n)` returns the object (it never changes once
+  before warnings before notes (within a severity, pre-build check rows (those with a `check` field) before the build's own output), kept outside
+  `build`; `diagnostic(n)` returns the object (it never changes once
   added) and `diagnosticList()` a copy of all of them. `errorCount` and `warningCount` count up while the build
-  runs; `diagnosticAdded(d)` fires per new one. Bind a Repeater/ListView to `diagnostics` and read
+  runs, and `configCount` counts the pre-build check warnings among them (BuildPanel's banner says "N in project
+  settings"); `diagnosticAdded(d)` fires per new one. Bind a Repeater/ListView to `diagnostics` and read
   `svc.diagnostic(model.n)` in the delegate.
+- **ProjectService project checks** (`app.projects`): `checks` maps a project path to `{state: "loading" | "ready"
+  | "error", result, error, at}`; `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
+  `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`
+  queues every project. The Projects page calls `checkAll()` when it opens, and a finished build calls `check()`
+  for its project.
 - **LogDeviceTab / LogSyslogView**: the Logs page's Device log tab (`app`) and its live list.
   LogSyslogView takes SyslogEntry batches with `push(batch)` (batched every 80 ms, the last `maxLines`, default
   5000) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,

@@ -183,6 +183,22 @@ The open-file limit in the project's Build settings is above your session's hard
 
 Builds get a soft limit of 65536 (or your hard limit, if lower). If a project needs more, set Open-file limit in its Build settings; if the hard limit is too low, raise it as above.
 
+### A setting in xtool.yml does nothing
+
+xtool ignores keys it doesn't know without a word, and keys are case-sensitive: `bundleId:` or `iconFile:` is skipped, and xtool uses its default instead. The project card's settings warnings (and the Problems list, marked "Pre-build check") name the unknown key, its line and the key you probably meant. Rename it and press Check again. See [Settings warnings on a project card](guide.md#settings-warnings-on-a-project-card).
+
+### The app crashes when it opens the camera (or asks for location, photos, contacts…)
+
+iOS ends an app that asks for a permission without the matching text in its `Info.plist`, such as `NSCameraUsageDescription` for the camera or `NSLocationWhenInUseUsageDescription` for location. There's no error at build time. The project check warns about it: "The code uses the camera (ScannerView.swift:24) but Info.plist has no NSCameraUsageDescription". Add that key to `Info.plist` with one sentence saying why the app needs it (iOS shows it in the permission prompt). If the project has no `Info.plist` yet, create one and point `infoPath` in `xtool.yml` at it. The list of features and keys is in [features/project-check.md](features/project-check.md#usage-descriptions).
+
+### "… needs a paid Apple Developer account" (push notifications, app groups, iCloud)
+
+The project's entitlements file asks for something a free Apple ID can't get. xtool leaves it out when it signs for a free team, so the app installs but that feature doesn't work on the iPhone (no push token, no shared app group folder, no iCloud). Remove the entitlement, or sign with a paid account; with a paid account you can ignore the warning. The full list is in [features/project-check.md](features/project-check.md#paid-only-entitlements).
+
+### The app icon is blank, or black around the edges
+
+A blank icon means `xtool.yml` has no `iconPath`. A black background means the icon has transparency, which iOS fills with black. The icon must be a 1024×1024 PNG without transparency; the project card's settings warnings say which of these is wrong.
+
 ## Setup and updates
 
 ### Swift broke after a system update
