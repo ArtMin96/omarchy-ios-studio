@@ -151,7 +151,11 @@ var Glyph = {
   fileCode: g(0xF022E),
   // format and lint (ProjectFormatSheet, StyleWarningsSection)
   format: g(0xF0068),       // auto-fix: Format project…
-  lint: g(0xF0694)          // code-tags-check: Lint project, style warnings
+  lint: g(0xF0694),         // code-tags-check: Lint project, style warnings
+  // Swift packages (ProjectPackagesSheet)
+  packages: g(0xF0431),     // puzzle: Packages…
+  checkboxOn: g(0xF0132),
+  checkboxOff: g(0xF0131)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`
@@ -228,6 +232,11 @@ var SHORTCUTS = [
   { group: "Actions", keys: "/", text: "Search on this page" },
   { group: "Actions", keys: "x", text: "Remove the highlighted item (asks first)" },
   { group: "Actions", keys: "c", text: "Copy the highlighted value" },
+  { group: "Projects", keys: "n  a", text: "New app / add a project you have" },
+  { group: "Projects", keys: "B", text: "Check build (compile only)" },
+  { group: "Projects", keys: "w", text: "Compile on save, on or off" },
+  { group: "Projects", keys: "F  L", text: "Format / lint the project" },
+  { group: "Projects", keys: "P", text: "The project's Swift packages" },
   { group: "Help", keys: "?", text: "Show or hide this sheet" }
 ]
 

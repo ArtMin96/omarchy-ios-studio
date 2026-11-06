@@ -10,7 +10,7 @@ import "../Model.js" as Model
 // new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:
 // in each card's Run menu, `w` for the highlighted one), format and lint (More › Format project… / Lint
 // project, `F` / `L` for the highlighted one: ProjectFormatSheet, style warnings in the drawer's
-// Problems) and the build drawer.
+// Problems), Swift packages (More › Packages…, `P`: ProjectPackagesSheet) and the build drawer.
 Item {
   id: page
   required property var app
@@ -87,6 +87,7 @@ Item {
     if (event.text === "w" && cur) { page.toggleWatch(cur); return true }
     if (event.text === "F" && cur) { formatSheet.openFor(cur); return true }
     if (event.text === "L" && cur) { page.lintProject(cur); return true }
+    if (event.text === "P" && cur) { packagesSheet.openFor(cur); return true }
     return false
   }
 
@@ -310,6 +311,7 @@ Item {
         onShowBuild: { page.svc.lintFocus = ""; page.panelOpen = true }
         onFormatProject: formatSheet.openFor(modelData)
         onLintProject: page.lintProject(modelData)
+        onManagePackages: packagesSheet.openFor(modelData)
         onShowProblems: page.showWatchProblems(modelData)
       }
     }
@@ -396,6 +398,14 @@ Item {
     id: formatSheet
     app: page.app
     svc: page.svc
+  }
+
+  ProjectPackagesSheet {
+    id: packagesSheet
+    app: page.app
+    svc: page.svc
+    // Check build after adding: a compile-only build through the usual build flow, in the build panel.
+    onCheckBuild: function(p) { page.startKind(p, "compile") }
   }
 
   RunPresetsSheet {

@@ -1,0 +1,23 @@
+{
+  "template": {"identity": "swift-collections", "products": ["Collections", "DequeModule", "OrderedCollections"], "target_deps": [["PkgDemo", "Collections"]]},
+  "no-trailing-commas": {"identity": "swift-collections", "products": ["Collections", "OrderedCollections"], "target_deps": [["Glance", "OrderedCollections"]]},
+  "comments": {"identity": "swift-collections", "products": ["Collections", "DequeModule"], "target_deps": [["Notes", "DequeModule"]]},
+  "comments-charts": {"source": "comments", "identity": "charts", "products": ["DGCharts"], "target_deps": []},
+  "comments-log": {"source": "comments", "identity": "swift-log", "products": ["Logging"], "target_deps": [["Notes", "Logging"]]},
+  "multiline-entry": {"identity": "swift-composable-architecture", "products": ["ComposableArchitecture"], "target_deps": [["Shop", "ComposableArchitecture"]]},
+  "multiline-entry-kingfisher": {"source": "multiline-entry", "identity": "kingfisher", "products": ["Kingfisher"], "target_deps": [["Shop", "Kingfisher"]]},
+  "legacy-name": {"identity": "kingfisher", "names": ["Kingfisher"], "products": ["Kingfisher"], "target_deps": [["Photos", "Kingfisher"]]},
+  "legacy-name-lottie": {"source": "legacy-name", "identity": "lottie-spm", "products": ["Lottie"], "target_deps": [["Photos", "Lottie"]]},
+  "local-path": {"identity": "weatherkitmock", "url": "../WeatherKitMock", "products": ["WeatherKitMock"], "target_deps": [["Weather", "WeatherKitMock"]]},
+  "tricky-strings": {"identity": "swift-collections", "products": ["Collections"], "target_deps": [["Odd", "Collections"]]},
+  "emptying": {"identity": "swift-collections", "products": ["Collections", "DequeModule"], "target_deps": [["Solo", "Collections"], ["Solo", "DequeModule"], ["SoloTests", "Collections"]]},
+  "bare-strings": {"identity": "alamofire", "products": ["Alamofire"], "local_targets": ["Core", "Legacy", "LegacyTests"], "target_deps": [["Legacy", "Alamofire"], ["LegacyTests", "Alamofire"]]},
+  "bare-strings-snapkit": {"source": "bare-strings", "identity": "snapkit", "products": ["SnapKit"], "local_targets": ["Core", "Legacy", "LegacyTests"], "target_deps": [["Legacy", "SnapKit"]]},
+  "single-line": {"identity": "swift-collections", "products": ["Collections"], "target_deps": [["Tiny", "Collections"]]},
+  "single-line-log": {"source": "single-line", "identity": "swift-log", "products": ["Logging"], "target_deps": [["Tiny", "Logging"]]},
+  "product-vs-target": {"identity": "swift-collections", "products": ["Collections", "DequeModule", "OrderedCollections"], "local_targets": ["Collections", "Mixed"], "target_deps": [["Mixed", "OrderedCollections"], ["Mixed", "DequeModule"]]},
+  "variables": {"identity": "swift-collections", "products": ["Collections"], "target_deps": [[null, "Collections"]]},
+  "append-unsupported": {"identity": "swift-collections", "products": ["Collections"], "problems": true},
+  "computed-url": {"identity": "swift-collections", "products": ["Collections"], "problems": true},
+  "crlf": {"identity": "swift-collections", "products": ["Collections"], "target_deps": [["Crlf", "Collections"]]}
+}

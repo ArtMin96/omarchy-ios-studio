@@ -37,22 +37,27 @@ ColumnLayout {
   readonly property int visibleCount: shown && !failed ? total : 0
 
   signal formatRequested()
+  signal rowHovered()                  // a warning row took the hover (the panel drops its own row cursor)
 
-  function toolsText() {
+  // The hovered row gets the same highlight as the build's problem rows (CursorSurface's cursor).
+  property int _hoverIndex: -1
+
+  // tools, config, when: separate items, so a narrow drawer wraps between them, never inside one
+  function toolsParts() {
     var r = root.result
-    if (!r) return ""
+    if (!r) return []
     var tools = (r.tools || []).map(function(t) { return t === "swiftlint" ? "SwiftLint" : t })
     if (!tools.length) tools = ["swift-format"]
     var parts = [tools.join(" + ")]
     parts.push(r.config_path ? String(r.config_path) : "default style")
     if (root.entry && root.entry.at) parts.push("checked " + Model.relativeTime(root.entry.at))
-    return parts.join(" · ")
+    return parts
   }
 
   function countText() {
     if (root.failed) return ""
     if (root.loading && !root.result) return "checking…"
-    if (!root.result) return ""
+    if (!root.result || root.total === 0) return ""     // "No style warnings" says it under the header
     return root.shown ? String(root.total) : root.total + " hidden"
   }
 
@@ -87,6 +92,28 @@ ColumnLayout {
     ]
   }
 
+  // Small faint items joined by " · " that wrap as whole items (the meta line under the header).
+  component MetaFlow: Flow {
+    id: flow
+    property var parts: []
+    spacing: 0                            // Flow spaces rows too; the gap between items is the item's padding
+    Repeater {
+      model: flow.parts
+      delegate: AppText {
+        id: part
+        required property string modelData
+        required property int index
+        FontMetrics { id: partMetrics; font: part.font }
+        text: modelData + (index < flow.parts.length - 1 ? " ·" : "")
+        rightPadding: index < flow.parts.length - 1 ? partMetrics.averageCharacterWidth : 0   // one space
+        tone: "faint"; size: "small"
+        // one item wider than the line (a long config path) elides instead of overflowing
+        width: Math.min(implicitWidth, flow.width)
+        elide: Text.ElideMiddle
+      }
+    }
+  }
+
   // One status line (loading, error, clean, hidden, notes) on the rows' glyph column and text edge.
   component StatusLine: RowLayout {
     id: line
@@ -95,6 +122,7 @@ ColumnLayout {
     property bool spinning: false
     property string title: ""
     property string detail: ""
+    property var detailParts: []          // instead of detail: items that wrap whole (MetaFlow)
     property string titleTone: "dim"
     Layout.fillWidth: true
     Layout.leftMargin: Style.spacing.rowPaddingX
@@ -116,17 +144,17 @@ ColumnLayout {
       spacing: Style.spacing.xxs
       AppText { id: lineTitle; Layout.fillWidth: true; text: line.title; tone: line.titleTone; wrapMode: Text.WordWrap }
       AppText { Layout.fillWidth: true; visible: line.detail !== ""; text: line.detail; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+      MetaFlow { Layout.fillWidth: true; visible: line.detailParts.length > 0; parts: line.detailParts }
     }
   }
 
   // tools, config, when (the clean state says it in its own line)
-  AppText {
+  MetaFlow {
     Layout.fillWidth: true
     Layout.leftMargin: Style.spacing.rowPaddingX + Style.font.iconLarge * 1.4 + Style.spacing.xl
     Layout.rightMargin: Style.spacing.md
     visible: !!root.result && !root.failed && root.total > 0
-    text: root.toolsText()
-    tone: "faint"; size: "small"; wrapMode: Text.WordWrap
+    parts: root.toolsParts()
   }
 
   // how many of them formatting fixes, with the way to do it
@@ -176,7 +204,7 @@ ColumnLayout {
     glyph: Model.Glyph.checkCircle
     glyphColor: Theme.success
     title: "No style warnings"
-    detail: root.toolsText()
+    detailParts: root.toolsParts()
   }
   StatusLine {
     visible: !!root.result && !root.failed && root.total > 0 && !root.shown
@@ -189,9 +217,16 @@ ColumnLayout {
     model: root.shown && !root.failed ? root.items : []
     delegate: BuildDiagnosticRow {
       required property var modelData
+      required property int index
       Layout.fillWidth: true
       diag: modelData
       projectPath: root.path
+      showCategory: false          // the section header says "Style"
+      hasCursor: root._hoverIndex === index
+      onHovered: function(h) {
+        if (h) { root._hoverIndex = index; root.rowHovered() }
+        else if (root._hoverIndex === index) root._hoverIndex = -1
+      }
       onClicked: if (root.svc) root.svc.openInEditor({ path: root.path }, modelData.file, modelData.line, modelData.col)
     }
   }

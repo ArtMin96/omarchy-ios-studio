@@ -1,0 +1,178 @@
+{
+  "cLanguageStandard" : null,
+  "cxxLanguageStandard" : null,
+  "defaultLocalization" : null,
+  "dependencies" : [
+    {
+      "sourceControl" : [
+        {
+          "identity" : "alamofire",
+          "location" : {
+            "remote" : [
+              {
+                "urlString" : "https://github.com/Alamofire/Alamofire.git"
+              }
+            ]
+          },
+          "productFilter" : null,
+          "requirement" : {
+            "range" : [
+              {
+                "lowerBound" : "5.8.0",
+                "upperBound" : "6.0.0"
+              }
+            ]
+          },
+          "traits" : [
+            {
+              "name" : "default"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceControl" : [
+        {
+          "identity" : "snapkit",
+          "location" : {
+            "remote" : [
+              {
+                "urlString" : "https://github.com/SnapKit/SnapKit.git"
+              }
+            ]
+          },
+          "productFilter" : null,
+          "requirement" : {
+            "range" : [
+              {
+                "lowerBound" : "5.7.0",
+                "upperBound" : "6.0.0"
+              }
+            ]
+          },
+          "traits" : [
+            {
+              "name" : "default"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "name" : "Legacy",
+  "packageKind" : {
+    "root" : [
+      "/home/u/Developer/P"
+    ]
+  },
+  "pkgConfig" : null,
+  "platforms" : [
+
+  ],
+  "products" : [
+    {
+      "name" : "Legacy",
+      "settings" : [
+
+      ],
+      "targets" : [
+        "Legacy"
+      ],
+      "type" : {
+        "library" : [
+          "automatic"
+        ]
+      }
+    }
+  ],
+  "providers" : null,
+  "swiftLanguageVersions" : null,
+  "targets" : [
+    {
+      "dependencies" : [
+
+      ],
+      "exclude" : [
+
+      ],
+      "name" : "Core",
+      "packageAccess" : false,
+      "resources" : [
+
+      ],
+      "settings" : [
+
+      ],
+      "type" : "regular"
+    },
+    {
+      "dependencies" : [
+        {
+          "byName" : [
+            "Alamofire",
+            null
+          ]
+        },
+        {
+          "byName" : [
+            "Core",
+            null
+          ]
+        },
+        {
+          "byName" : [
+            "SnapKit",
+            null
+          ]
+        }
+      ],
+      "exclude" : [
+
+      ],
+      "name" : "Legacy",
+      "packageAccess" : false,
+      "resources" : [
+
+      ],
+      "settings" : [
+
+      ],
+      "type" : "regular"
+    },
+    {
+      "dependencies" : [
+        {
+          "byName" : [
+            "Legacy",
+            null
+          ]
+        },
+        {
+          "byName" : [
+            "Alamofire",
+            null
+          ]
+        }
+      ],
+      "exclude" : [
+
+      ],
+      "name" : "LegacyTests",
+      "packageAccess" : false,
+      "resources" : [
+
+      ],
+      "settings" : [
+
+      ],
+      "type" : "test"
+    }
+  ],
+  "toolsVersion" : {
+    "_version" : "5.3.0"
+  },
+  "traits" : [
+
+  ]
+}

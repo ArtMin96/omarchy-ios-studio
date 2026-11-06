@@ -19,6 +19,9 @@ CursorSurface {
   property var diag: ({})
   property string projectPath: ""
   property bool showChip: true
+  // false where a section header already names the category (StyleWarningsSection under "Style"),
+  // so the location line starts with the rule instead of repeating it.
+  property bool showCategory: true
   readonly property bool preBuild: diag.category === "config" && !!diag.check
   readonly property bool style: diag.category === "style"
   readonly property string sev: diag.severity || "error"
@@ -35,7 +38,7 @@ CursorSurface {
   }
   readonly property string where: {
     var parts = []
-    if (category && category !== "compiler" && !preBuild) parts.push(categoryLabels[category] || category)
+    if (showCategory && category && category !== "compiler" && !preBuild) parts.push(categoryLabels[category] || category)
     if (style && diag.rule) parts.push(String(diag.rule))
     if (hasFile) parts.push(relFile + (diag.line ? ":" + diag.line + (diag.col ? ":" + diag.col : "") : ""))
     return parts.join(" · ")
@@ -128,8 +131,12 @@ CursorSurface {
           visible: root.where !== ""
           implicitHeight: fileText.implicitHeight
           readonly property real fileW: Math.min(fileText.implicitWidth, width)
-          readonly property real sepW: sepText.visible ? sepText.implicitWidth : 0
-          readonly property real rest: Math.max(0, width - fileW - sepW)
+          // The separator's room is reserved from what the lead has, never from whether the lead shows:
+          // that made rest → lead width → lead/separator visibility → rest a binding loop.
+          readonly property bool hasLead: root.whereLead !== "" && root.hasFile
+          readonly property real sepFull: hasLead ? sepText.implicitWidth : 0
+          readonly property real sepW: sepText.visible ? sepFull : 0
+          readonly property real rest: Math.max(0, width - fileW - sepFull)
           readonly property real dirRoom: rest - leadText.implicitWidth
           // the folder: whole, middle-elided while at least 6 of its characters show (plus the "…"), else hidden
           readonly property real dirW: dirText.implicitWidth <= dirRoom ? dirText.implicitWidth
@@ -145,7 +152,7 @@ CursorSurface {
             id: sepText
             // after the lead's painted text, so an elided lead leaves no gap
             x: leadText.visible ? Math.min(leadText.width, leadText.contentWidth) : 0
-            visible: root.whereLead !== "" && root.hasFile && leadText.visible
+            visible: loc.hasLead && leadText.visible
             text: " · "; tone: "faint"; size: "small"
           }
           AppText {

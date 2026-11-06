@@ -124,10 +124,10 @@ More, Run) stays as it is. `F` and `L` do the same for the highlighted project.
 - **Lint project** runs the lint and opens the build panel on Problems. The button spins while it runs, and its
   tooltip has the last count and when. When the panel shows that project's build, the style warnings follow
   its problems under a **Style** header; for another project the panel switches to that project's style
-  warnings only ("5 style warnings", "WeatherGlance · Code style · ~/…" under it, with Show build to go back; a build starting goes back
+  warnings only ("5 style warnings", "WeatherGlance · ~/…" under it, with Show build to go back; a build starting goes back
   too). The section has the count, Hide/Show and Check again, a line with the tools, the style and when it
   ran, and, when formatting fixes some of them, "Formatting fixes 3 of these." with Format project…. Each
-  warning reads "Style · rule · file:line", with a dim glyph (amber only for a rule set to error), and a click
+  warning reads "rule · file:line", with a dim glyph (amber only for a rule set to error), and a click
   opens the file at the line in your editor, like a compiler error.
 - Style warnings never make a build look failed: the result banner, the headline and the Problems tab's colour
   only count the build's own problems. The tab's number includes the style warnings while they're shown.

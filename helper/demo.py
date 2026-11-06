@@ -517,6 +517,9 @@ def run(group: str, action: str, flags: dict) -> int:
     if group == "watch":
         import watch
         return watch.demo(action, flags)
+    if group == "packages":
+        import packages
+        return packages.demo(action, flags)
     if key == "setup check":
         return ok(_setup_check(flags))
     if key == "toolchain info":

@@ -85,6 +85,31 @@ NEXT_BY_CODE: dict[str, str] = {
     "bad-config": "The project's .swift-format isn't valid JSON: fix it (swift-format dump-configuration prints a "
                   "valid one), then retry.",
     "disk-full": "Free disk space (ios_toolchain_info shows what can be cleaned), then retry.",
+    "already-added": "The package is already in Package.swift: call ios_package_add with the same url and "
+                     "product='<name>' to link a product, or see ios_package_list.",
+    "fetch-failed": "Check the URL (a git repository that clones without a password), then call ios_package_add "
+                    "again.",
+    "resolve-failed": "No version matches the rule: call ios_package_add again with another version or rule "
+                      "(rule='branch', version='main').",
+    "no-versions": "The repository has no release tags: call ios_package_add with rule='branch' (version='main') "
+                   "or rule='revision'.",
+    "no-products": "The package has no library products, so an app can't use it. Remove it with "
+                   "ios_package_remove.",
+    "unknown-product": "Use one of the product names in the message (ios_package_add(product=...)).",
+    "unknown-package": "Use an identity from ios_package_list.",
+    "unknown-target": "Use a target name from ios_package_list (targets).",
+    "bad-url": "Pass the package's git URL (https://github.com/owner/repo) or a local package folder.",
+    "bad-version": "Pass a version like 1.2.0 (from/upToNextMinor/exact), a branch name or a commit hash.",
+    "bad-rule": "rule is one of from, upToNextMinor, exact, branch, revision.",
+    "manifest-invalid": "Package.swift has errors: fix the lines listed (ios_build_diagnostics after a compile "
+                        "shows them too), then retry.",
+    "edit-invalid": "Nothing was changed. Package.swift needs this edit by hand: show the user the diff and "
+                    "problems.",
+    "changed": "Package.swift changed meanwhile: call ios_package_remove again without confirm for a new diff.",
+    "package-busy": "Another package change of this project (from the app or another agent) is running: wait a "
+                    "minute and retry.",
+    "package-failed": "Read the message; fix Package.swift or the request, then retry.",
+    "missing-swift": "Run ios_toolchain_check, then ios_toolchain_install (step='swift').",
 }
 
 NEXT_BY_PAGE: dict[str, str] = {

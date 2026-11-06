@@ -1,0 +1,15 @@
+// swift-tools-version:5.3
+import PackageDescription
+
+let package = Package(
+    name: "Legacy",
+    products: [.library(name: "Legacy", targets: ["Legacy"])],
+    dependencies: [
+        .package(url: "https://github.com/SnapKit/SnapKit.git", from: "5.7.0"),
+    ],
+    targets: [
+        .target(name: "Core"),
+        .target(name: "Legacy", dependencies: ["Core", "SnapKit"]),
+        .testTarget(name: "LegacyTests", dependencies: ["Legacy"]),
+    ]
+)

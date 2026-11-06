@@ -29,6 +29,7 @@ MODULES = {
     "screenshots": "screenshots",
     "editor": "editor_setup",
     "watch": "watch",
+    "packages": "packages",
 }
 # one-word commands -> group + action
 ALIASES = {"format": ["projects", "format"], "format-lint": ["projects", "format-lint"]}

@@ -40,6 +40,10 @@ import "../Model.js" as Model
 //     lintLastSoon(p) (the saved result, `format-lint --last`, once per path) · lintFocus: a project whose style
 //     warnings the build panel shows instead of the last build ("" = the build's own project); showLint(p) sets it.
 //     Style warnings never count as build problems (errorCount/warningCount leave them out).
+//   Swift packages (`packages`, helper/packages.py): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
+//     onDone, onFail) (dry run unless confirm) · packagesAddProduct(p, id, products, target, onDone, onFail) ·
+//     packagesChanged(p) (re-checks the card and the editor status after Package.swift changed). add, update and
+//     resolve stream; ProjectPackagesSheet runs them.
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -893,6 +897,34 @@ Item {
       if (root.lints[path]) root.lint(p)
       if (onDone) onDone(d)
     }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
+  }
+
+  // ------------------------------------------------------------ Swift packages (`packages`, helper/packages.py)
+  // One-shot calls; the long ones (add, update, resolve) stream and live in ProjectPackagesSheet.
+  function packagesList(p, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    app.cli.call(["packages", "list", "--project", path], "", function(d) { if (onDone) onDone(d) },
+                 function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+  }
+  // Dry run (a diff and whether the edited manifest still parses) unless confirm.
+  function packagesRemove(p, pkg, confirm, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    var argv = ["packages", "remove", "--project", path, "--package", pkg]
+    if (confirm) argv.push("--confirm")
+    app.cli.call(argv, "", function(d) { if (onDone) onDone(d) }, function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+  }
+  // products: a name or a list of names, linked in one edit.
+  function packagesAddProduct(p, pkg, products, target, onDone, onFail) {
+    var path = p && p.path ? p.path : p
+    var argv = ["packages", "add-product", "--project", path, "--package", pkg, "--products", JSON.stringify([].concat(products))]
+    if (target) argv.push("--target", target)
+    app.cli.call(argv, "", function(d) { if (onDone) onDone(d) }, function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+  }
+  // After Package.swift changed: the card's settings check and the editor status, quietly.
+  function packagesChanged(p) {
+    if (!p || !p.path) return
+    root.check(p)
+    root.editorStatus(p)
   }
 
   function openBuildLog(file) {
