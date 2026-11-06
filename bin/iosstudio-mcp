@@ -26,7 +26,7 @@ if [[ ! -x $venv/bin/python || "$(cat "$stamp" 2>/dev/null || true)" != "$want" 
     say "setting up the server's Python environment in $venv (first run only, needs internet)…"
     mapfile -t deps < <(python3 -c 'import sys, tomllib; print("\n".join(tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"]))' "$pkg/pyproject.toml")
     if command -v uv >/dev/null 2>&1; then
-      uv venv --quiet --allow-existing --python ">=3.10" "$venv" >&2
+      uv venv --quiet --allow-existing --python ">=3.11" "$venv" >&2
       VIRTUAL_ENV="$venv" uv pip install --quiet "${deps[@]}" >&2
     else
       [[ -x $venv/bin/python ]] || python3 -m venv "$venv" >&2

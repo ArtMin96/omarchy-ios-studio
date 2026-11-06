@@ -619,7 +619,6 @@ def bsp_status(project: Path, env: Env) -> dict:
 
 def bsp_action(project: Path, env: Env) -> dict:
     st = bsp_status(project, env)
-    rel = BSP_REL if st["kind"] == "bsp" else LEGACY_REL
     act = {"path": st["path"], "scope": "project"}
     if st["skipLSP"] and not st["present"]:
         return {**act, "kind": "skip", "detail": "Turned off by skipLSP: true in xtool.yml. Remove that line to "

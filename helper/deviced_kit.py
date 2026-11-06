@@ -26,7 +26,7 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 HOOKS = ("client_gone", "tunnel_drop", "session_end", "shutdown")
 SCOPES = ("tunnel", "session", "daemon")
