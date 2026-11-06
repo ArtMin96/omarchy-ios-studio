@@ -1,0 +1,34 @@
+{
+ "pressed": {
+  "id": "e3",
+  "role": "button",
+  "label": "Decrement",
+  "value": null,
+  "hint": null,
+  "identifier": null,
+  "traits": [
+   "button"
+  ],
+  "frame": null,
+  "enabled": true
+ },
+ "changes": {
+  "added": [],
+  "removed": [],
+  "changedValues": [
+   {
+    "label": "countLabel",
+    "from": "Count: 1",
+    "to": "Count: 0"
+   }
+  ]
+ },
+ "after": {
+  "count": 10,
+  "complete": true
+ },
+ "elapsedMs": 11684,
+ "bundleId": "XTL-2WX6B428SL.dev.iosstudio.uiprobe",
+ "pid": 3117,
+ "_note": "Real capture: iPhone 17 Pro, iOS 27.3 (24C5037i), UIProbe test app, ui.press label='Decrement' (Count 1 -> 0). No personal text."
+}

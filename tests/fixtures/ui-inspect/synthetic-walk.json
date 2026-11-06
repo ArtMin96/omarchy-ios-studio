@@ -1,0 +1,184 @@
+{
+ "_note": "SYNTHETIC: shaped like ui.tree raw=true output (to_plain of focus events + attrs); replace with a real capture",
+ "walk": [
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "UI Probe, Heading",
+    "SpokenDescriptionValue_v1": "UI Probe. Heading",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a010000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "UI Probe",
+    "Traits": 65536,
+    "Frame": "{{16, 70}, {370, 41}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Count: 0",
+    "SpokenDescriptionValue_v1": "Count: 0",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a020000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Count: 0",
+    "Identifier": "countLabel",
+    "Traits": 64,
+    "Frame": "{{150, 125}, {102, 28}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Decrement, Button",
+    "SpokenDescriptionValue_v1": "Decrement. Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a030000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Decrement",
+    "Traits": 1,
+    "Frame": "{{70, 170}, {120, 34}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Increment, Button",
+    "SpokenDescriptionValue_v1": "Increment. Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a040000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Increment",
+    "Identifier": "incrementButton",
+    "Hint": "Adds one to the count",
+    "Traits": 1,
+    "Frame": "{{202, 170}, {120, 34}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Add item, Button",
+    "SpokenDescriptionValue_v1": "Add item. Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a050000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Add item",
+    "Traits": 1,
+    "Frame": "{{140, 222}, {112, 34}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Water plants",
+    "SpokenDescriptionValue_v1": "Water plants",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a060000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Water plants",
+    "Traits": 64,
+    "Frame": "{{148, 274}, {106, 20}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Notes, 1, Switch button",
+    "SpokenDescriptionValue_v1": "Notes. 1. Switch button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a070000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Notes",
+    "Value": "1",
+    "Traits": 9007199254740993,
+    "Frame": "{{32, 312}, {338, 31}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Faint text that is hard to read",
+    "SpokenDescriptionValue_v1": "Faint text that is hard to read",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a080000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Label": "Faint text that is hard to read",
+    "Traits": 64,
+    "Frame": "{{88, 361}, {226, 20}}"
+   }
+  },
+  {
+   "focus": {
+    "_type": "AXAuditInspectorFocus_v1",
+    "CaptionTextValue_v1": "Reset, Button",
+    "SpokenDescriptionValue_v1": "Reset. Button",
+    "ElementValue_v1": {
+     "_type": "AXAuditElement_v1",
+     "PlatformElementValue_v1": {
+      "_bytes": "0a090000000000000000000000000000"
+     }
+    }
+   },
+   "attrs": {
+    "Traits": 1,
+    "Frame": "{{193, 399}, {16, 16}}"
+   }
+  }
+ ],
+ "loopsBackTo": {
+  "focus": {
+   "_type": "AXAuditInspectorFocus_v1",
+   "CaptionTextValue_v1": "UI Probe, Heading",
+   "SpokenDescriptionValue_v1": "UI Probe. Heading",
+   "ElementValue_v1": {
+    "_type": "AXAuditElement_v1",
+    "PlatformElementValue_v1": {
+     "_bytes": "0a010000000000000000000000000000"
+    }
+   }
+  },
+  "attrs": {}
+ }
+}

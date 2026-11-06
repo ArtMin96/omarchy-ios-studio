@@ -8,6 +8,9 @@ import "../Model.js" as Model
 
 // Live screen: a big drawn phone with the mirror, the way it's shown (smooth stream, screenshots or
 // AirPlay), short recordings for bug reports, and stills. Narrow windows stack the phone above.
+// Beside the phone, tabs switch between that Live view and the Elements and Audit panes
+// (DeviceInspectView), whose cursor row is outlined on the phone. handleKey/focusFilter are the
+// page's hooks for those panes.
 GridLayout {
   id: root
   readonly property bool narrow: width > 0 && width < Style.space(680)
@@ -18,6 +21,13 @@ GridLayout {
   readonly property var svc: app.device
   property int rotationSteps: 0
   readonly property string currentFile: svc.framePath !== "" ? svc.framePath : svc.lastShot
+  property string pane: "view"            // "view" | "elements" | "audit"
+  readonly property bool inspecting: pane !== "view"
+  signal devModeHelp()
+
+  // Elements/Audit keys from DevicePage.handleKey; false = not handled.
+  function handleKey(action) { return root.inspecting && inspector.handleKey(action) }
+  function focusFilter() { if (root.pane === "elements") inspector.focusFilter() }
 
   // "auto" (smooth stream, falls back to screenshots), "screenshot" or "airplay" (UxPlay, its own window)
   property string view: app.setting("mirrorView", svc.mirrorMode)
@@ -104,6 +114,7 @@ GridLayout {
        : "A smooth live view streamed from your iPhone (iOS 27 or later). Older iPhones use screenshots instead.")
 
   DevicePhoneFrame {
+    id: phone
     Layout.preferredWidth: root.rotationSteps % 2 ? Style.space(560) : Style.space(260)
     Layout.preferredHeight: root.rotationSteps % 2 ? Style.space(260) : Style.space(564)
     Layout.alignment: root.narrow ? (Qt.AlignTop | Qt.AlignHCenter) : Qt.AlignTop
@@ -114,7 +125,10 @@ GridLayout {
     rotationSteps: root.rotationSteps
     glyph: Model.Glyph.camera
     placeholder: !root.svc.connected ? "Connect your iPhone to see its screen"
+               : root.inspecting ? "The screen shows here when it's read"
                : (root.airplayView ? "AirPlay opens its own window" : "Press Start to watch your iPhone's screen here")
+    highlight: root.inspecting ? inspector.highlight : null
+    highlightSpace: inspector.space
     onFrameShown: function(url) { root.svc.ackFrame(url) }
     mirrorService: root.svc
     Behavior on Layout.preferredWidth { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
@@ -126,209 +140,239 @@ GridLayout {
     Layout.alignment: Qt.AlignTop
     spacing: Style.spacing.huge
 
+    PageTabs {
+      Layout.fillWidth: true
+      tabs: [
+        { key: "view", label: "Live view", glyph: Model.Glyph.camera },
+        { key: "elements", label: "Elements", glyph: Model.Glyph.inspect, count: inspector.elements.length || undefined },
+        { key: "audit", label: "Audit", glyph: Model.Glyph.accessibility, count: inspector.auditRows.length || undefined,
+          level: inspector.auditRows.length ? "warn" : "" }
+      ]
+      current: root.pane
+      onSelected: function(k) { root.pane = k }
+    }
+
+    DeviceInspectView {
+      id: inspector
+      Layout.fillWidth: true
+      visible: root.pane !== "view"
+      section: root.pane === "audit" ? "audit" : "elements"
+      app: root.app
+      // Beside the phone, the lists end where it does; stacked under it they get a fixed height.
+      availableHeight: root.narrow ? Style.space(480) : phone.height - y
+      onDevModeHelp: root.devModeHelp()
+      onShowElements: root.pane = "elements"
+    }
+
     ColumnLayout {
       Layout.fillWidth: true
-      spacing: Style.spacing.md
-      RowLayout {
+      visible: root.pane === "view"
+      spacing: Style.spacing.huge
+
+      ColumnLayout {
         Layout.fillWidth: true
-        spacing: Style.spacing.lg
-        AppText { text: root.svc.mirroring ? "Watching your iPhone" : "Screen"; size: "heading"; strong: true }
-        StatusPill { visible: root.liveText !== ""; level: root.svc.mirrorActive === "stream" ? "ok" : "info"; text: root.liveText; showGlyph: false }
-        Item { Layout.fillWidth: true }
-      }
-      AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; tone: "dim"; text: root.description }
-    }
-
-    // how it's shown
-    Flow {
-      Layout.fillWidth: true
-      spacing: Style.spacing.lg
-      ButtonGroupLite {
-        id: viewGroup
-        options: [{ value: "auto", label: "Smooth" }, { value: "screenshot", label: "Screenshots" }, { value: "airplay", label: "AirPlay" }]
-        value: root.view
-        onPicked: function(v) { root.pickView(v) }
-      }
-      AppText { visible: root.view === "screenshot"; text: "Speed"; tone: "dim"; size: "small"; height: viewGroup.height; verticalAlignment: Text.AlignVCenter }
-      ButtonGroupLite {
-        visible: root.view === "screenshot"
-        options: [{ value: "1", label: "1 fps" }, { value: "2", label: "2 fps" }, { value: "8", label: "Max" }]
-        value: String(root.svc.mirrorFps >= 8 ? 8 : root.svc.mirrorFps)
-        onPicked: function(v) { root.svc.setFps(Number(v)) }
-      }
-    }
-
-    // in-app live view
-    Flow {
-      Layout.fillWidth: true
-      visible: !root.airplayView
-      spacing: Style.spacing.lg
-      ActionButton {
-        text: root.svc.mirroring ? "Stop" : "Start live view"
-        glyph: root.svc.mirroring ? Model.Glyph.stop : Model.Glyph.play
-        kind: "primary"
-        enabled: root.svc.connected
-        onClicked: root.svc.mirroring ? root.svc.stopMirror() : root.svc.startMirror()
-      }
-    }
-
-    // AirPlay (UxPlay)
-    ColumnLayout {
-      Layout.fillWidth: true
-      visible: root.airplayView
-      spacing: Style.spacing.md
-      RowLayout {
-        Layout.fillWidth: true
-        spacing: Style.spacing.lg
-        ActionButton {
-          visible: root.uxplayInstalled
-          kind: "primary"
-          text: uxplay.running ? "Stop AirPlay receiver" : "Start AirPlay receiver"
-          glyph: uxplay.running ? Model.Glyph.stop : Model.Glyph.window
-          onClicked: {
-            if (uxplay.running) { uxplay.running = false; return }
-            uxplay.running = true
-            root.app.toast("On your iPhone: Control Center › Screen Mirroring › iOS Studio", "info")
-          }
-        }
-        ActionButton {
-          visible: !root.uxplayInstalled
-          kind: "primary"
-          text: "Set up AirPlay mirroring"; glyph: Model.Glyph.download
-          onClicked: root.app.openSetupStep("uxplay")
-        }
-        AppText {
+        spacing: Style.spacing.md
+        RowLayout {
           Layout.fillWidth: true
-          visible: uxplay.running
-          text: "Waiting for your iPhone: open Control Center › Screen Mirroring and pick “iOS Studio”. Same Wi-Fi needed."
-          size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+          spacing: Style.spacing.lg
+          AppText { text: root.svc.mirroring ? "Watching your iPhone" : "Screen"; size: "heading"; strong: true }
+          StatusPill { visible: root.liveText !== ""; level: root.svc.mirrorActive === "stream" ? "ok" : "info"; text: root.liveText; showGlyph: false }
+          Item { Layout.fillWidth: true }
         }
+        AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; tone: "dim"; text: root.description }
       }
-      AppText {
-        Layout.fillWidth: true
-        visible: !root.uxplayInstalled
-        text: "AirPlay needs the free UxPlay receiver. Setup installs it in a few minutes."
-        size: "small"; tone: "faint"; wrapMode: Text.WordWrap
-      }
-    }
 
-    // why it isn't smooth / what streaming does to the phone
-    RowLayout {
-      Layout.fillWidth: true
-      visible: !root.airplayView && (root.svc.mirrorNotice !== "" || root.view === "auto")
-      spacing: Style.spacing.md
-      Icon { glyph: Model.Glyph.info; color: root.svc.mirrorNotice !== "" ? Theme.levelColor("warn") : Theme.faint; Layout.alignment: Qt.AlignTop }
-      AppText {
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        size: "small"
-        tone: root.svc.mirrorNotice !== "" ? "dim" : "faint"
-        text: root.svc.mirrorNotice !== "" ? root.svc.mirrorNotice
-            : "While it streams, your iPhone shows a screen-sharing indicator and apps can't use the camera or microphone. Pick Screenshots if your app needs them."
-      }
-    }
-
-    ErrorState {
-      Layout.fillWidth: true
-      visible: !!root.svc.mirrorError && !root.airplayView
-      banner: true
-      app: root.app
-      error: root.svc.mirrorError
-      onRetry: root.svc.startMirror()
-    }
-
-    // ---------------------------------------------------------------- record
-    SectionHeader { Layout.fillWidth: true; text: "Record"; detail: root.recActive ? "" : "Short videos for bug reports" }
-    Flow {
-      Layout.fillWidth: true
-      spacing: Style.spacing.lg
-      visible: !root.airplayView
-      ActionButton {
-        text: !root.recActive ? "Record" : (root.recNow.state === "finishing" ? "Saving…" : "Stop recording")
-        glyph: root.recActive ? Model.Glyph.stop : Model.Glyph.dot
-        kind: root.recActive ? "danger" : "secondary"
-        busy: root.recActive && root.recNow.state === "finishing"
-        enabled: root.svc.connected || root.recActive
-        onClicked: root.recActive ? root.svc.stopRecording() : root.svc.startRecording(root.recLimit)
-      }
-      AppText {
-        visible: root.recActive
-        height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter
-        text: root.clock(root.recElapsed) + " / " + root.clock(root.rec ? (root.rec.maxSeconds || root.recLimit) : root.recLimit)
-              + (root.rec && root.rec.bytes ? "  ·  " + Model.formatBytes(root.rec.bytes) : "")
-        tone: "dim"
-      }
-      AppText { visible: !root.recActive; text: "Up to"; tone: "dim"; size: "small"; height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter }
-      ButtonGroupLite {
-        id: recLimitGroup
-        visible: !root.recActive
-        options: [{ value: "30", label: "30 s" }, { value: "60", label: "1 min" }, { value: "300", label: "5 min" }]
-        value: String(root.recLimit)
-        onPicked: function(v) { root.recLimit = Number(v) }
-      }
-    }
-    AppText {
-      Layout.fillWidth: true
-      visible: root.airplayView
-      text: "Recording works with the Smooth and Screenshots views."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
-    }
-
-    ErrorState {
-      Layout.fillWidth: true
-      visible: !!root.rec && root.rec.state === "failed" && !!root.rec.error
-      banner: true
-      app: root.app
-      error: root.rec && root.rec.error ? root.rec.error : null
-      onRetry: root.svc.startRecording(root.recLimit)
-    }
-
-    // the finished recording
-    ColumnLayout {
-      Layout.fillWidth: true
-      visible: root.recDone
-      spacing: Style.spacing.md
-      AppText {
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        text: !root.recDone ? "" : (root.recNow.placeholder ? (root.recNow.notice || "")
-              : "Saved a " + root.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
-                + (root.recNow.mode === "stream" ? "smooth" : "from screenshots") + ")")
-      }
-      AppText {
-        Layout.fillWidth: true
-        visible: root.recDone && !root.recNow.placeholder
-        text: !root.recDone ? "" : (root.recNow.path.indexOf(root.app.home + "/") === 0 ? "~" + root.recNow.path.slice(root.app.home.length) : root.recNow.path)
-        size: "small"; tone: "faint"; elide: Text.ElideMiddle
-      }
+      // how it's shown
       Flow {
         Layout.fillWidth: true
         spacing: Style.spacing.lg
-        ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Show in folder"; glyph: Model.Glyph.folderOpen; onClicked: root.showRecording() }
-        ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Copy path"; glyph: Model.Glyph.copy; onClicked: root.copyRecordingPath() }
-        ActionButton { text: "Done"; kind: "ghost"; onClicked: root.svc.dismissRecording() }
+        ButtonGroupLite {
+          id: viewGroup
+          options: [{ value: "auto", label: "Smooth" }, { value: "screenshot", label: "Screenshots" }, { value: "airplay", label: "AirPlay" }]
+          value: root.view
+          onPicked: function(v) { root.pickView(v) }
+        }
+        AppText { visible: root.view === "screenshot"; text: "Speed"; tone: "dim"; size: "small"; height: viewGroup.height; verticalAlignment: Text.AlignVCenter }
+        ButtonGroupLite {
+          visible: root.view === "screenshot"
+          options: [{ value: "1", label: "1 fps" }, { value: "2", label: "2 fps" }, { value: "8", label: "Max" }]
+          value: String(root.svc.mirrorFps >= 8 ? 8 : root.svc.mirrorFps)
+          onPicked: function(v) { root.svc.setFps(Number(v)) }
+        }
       }
-      // inline player; left out when Qt Multimedia isn't installed (the Loader fails quietly)
-      Loader {
-        id: preview
-        Layout.preferredWidth: Style.space(160)
-        Layout.preferredHeight: active && status === Loader.Ready ? Style.space(348) : 0
-        active: root.recDone && !root.recNow.placeholder
-        visible: status === Loader.Ready
-        source: "DeviceRecordingPreview.qml"
-        onLoaded: item.source = Qt.binding(function() { return root.recDone ? "file://" + root.recNow.path : "" })
-      }
-    }
 
-    // ---------------------------------------------------------------- stills
-    SectionHeader { Layout.fillWidth: true; text: "Capture" }
-    Flow {
-      Layout.fillWidth: true
-      spacing: Style.spacing.lg
-      ActionButton { text: "Take screenshot"; glyph: Model.Glyph.camera; busy: root.svc.shooting; enabled: root.svc.connected; onClicked: root.svc.screenshot() }
-      ActionButton { text: "Save to Pictures"; glyph: Model.Glyph.save; enabled: root.svc.connected || root.currentFile !== ""; onClicked: root.saveShot() }
-      ActionButton { text: "Copy image"; glyph: Model.Glyph.copy; enabled: root.svc.connected || root.currentFile !== ""; onClicked: root.copyShot() }
-      ActionButton { text: "Rotate"; glyph: Model.Glyph.sync; onClicked: root.rotationSteps = (root.rotationSteps + 1) % 4 }
+      // in-app live view
+      Flow {
+        Layout.fillWidth: true
+        visible: !root.airplayView
+        spacing: Style.spacing.lg
+        ActionButton {
+          text: root.svc.mirroring ? "Stop" : "Start live view"
+          glyph: root.svc.mirroring ? Model.Glyph.stop : Model.Glyph.play
+          kind: "primary"
+          enabled: root.svc.connected
+          onClicked: root.svc.mirroring ? root.svc.stopMirror() : root.svc.startMirror()
+        }
+      }
+
+      // AirPlay (UxPlay)
+      ColumnLayout {
+        Layout.fillWidth: true
+        visible: root.airplayView
+        spacing: Style.spacing.md
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.spacing.lg
+          ActionButton {
+            visible: root.uxplayInstalled
+            kind: "primary"
+            text: uxplay.running ? "Stop AirPlay receiver" : "Start AirPlay receiver"
+            glyph: uxplay.running ? Model.Glyph.stop : Model.Glyph.window
+            onClicked: {
+              if (uxplay.running) { uxplay.running = false; return }
+              uxplay.running = true
+              root.app.toast("On your iPhone: Control Center › Screen Mirroring › iOS Studio", "info")
+            }
+          }
+          ActionButton {
+            visible: !root.uxplayInstalled
+            kind: "primary"
+            text: "Set up AirPlay mirroring"; glyph: Model.Glyph.download
+            onClicked: root.app.openSetupStep("uxplay")
+          }
+          AppText {
+            Layout.fillWidth: true
+            visible: uxplay.running
+            text: "Waiting for your iPhone: open Control Center › Screen Mirroring and pick “iOS Studio”. Same Wi-Fi needed."
+            size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+          }
+        }
+        AppText {
+          Layout.fillWidth: true
+          visible: !root.uxplayInstalled
+          text: "AirPlay needs the free UxPlay receiver. Setup installs it in a few minutes."
+          size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+        }
+      }
+
+      // why it isn't smooth / what streaming does to the phone
+      RowLayout {
+        Layout.fillWidth: true
+        visible: !root.airplayView && (root.svc.mirrorNotice !== "" || root.view === "auto")
+        spacing: Style.spacing.md
+        Icon { glyph: Model.Glyph.info; color: root.svc.mirrorNotice !== "" ? Theme.levelColor("warn") : Theme.faint; Layout.alignment: Qt.AlignTop }
+        AppText {
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          size: "small"
+          tone: root.svc.mirrorNotice !== "" ? "dim" : "faint"
+          text: root.svc.mirrorNotice !== "" ? root.svc.mirrorNotice
+              : "While it streams, your iPhone shows a screen-sharing indicator and apps can't use the camera or microphone. Pick Screenshots if your app needs them."
+        }
+      }
+
+      ErrorState {
+        Layout.fillWidth: true
+        visible: !!root.svc.mirrorError && !root.airplayView
+        banner: true
+        app: root.app
+        error: root.svc.mirrorError
+        onRetry: root.svc.startMirror()
+      }
+
+      // ---------------------------------------------------------------- record
+      SectionHeader { Layout.fillWidth: true; text: "Record"; detail: root.recActive ? "" : "Short videos for bug reports" }
+      Flow {
+        Layout.fillWidth: true
+        spacing: Style.spacing.lg
+        visible: !root.airplayView
+        ActionButton {
+          text: !root.recActive ? "Record" : (root.recNow.state === "finishing" ? "Saving…" : "Stop recording")
+          glyph: root.recActive ? Model.Glyph.stop : Model.Glyph.dot
+          kind: root.recActive ? "danger" : "secondary"
+          busy: root.recActive && root.recNow.state === "finishing"
+          enabled: root.svc.connected || root.recActive
+          onClicked: root.recActive ? root.svc.stopRecording() : root.svc.startRecording(root.recLimit)
+        }
+        AppText {
+          visible: root.recActive
+          height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter
+          text: root.clock(root.recElapsed) + " / " + root.clock(root.rec ? (root.rec.maxSeconds || root.recLimit) : root.recLimit)
+                + (root.rec && root.rec.bytes ? "  ·  " + Model.formatBytes(root.rec.bytes) : "")
+          tone: "dim"
+        }
+        AppText { visible: !root.recActive; text: "Up to"; tone: "dim"; size: "small"; height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter }
+        ButtonGroupLite {
+          id: recLimitGroup
+          visible: !root.recActive
+          options: [{ value: "30", label: "30 s" }, { value: "60", label: "1 min" }, { value: "300", label: "5 min" }]
+          value: String(root.recLimit)
+          onPicked: function(v) { root.recLimit = Number(v) }
+        }
+      }
+      AppText {
+        Layout.fillWidth: true
+        visible: root.airplayView
+        text: "Recording works with the Smooth and Screenshots views."
+        size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      }
+
+      ErrorState {
+        Layout.fillWidth: true
+        visible: !!root.rec && root.rec.state === "failed" && !!root.rec.error
+        banner: true
+        app: root.app
+        error: root.rec && root.rec.error ? root.rec.error : null
+        onRetry: root.svc.startRecording(root.recLimit)
+      }
+
+      // the finished recording
+      ColumnLayout {
+        Layout.fillWidth: true
+        visible: root.recDone
+        spacing: Style.spacing.md
+        AppText {
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          text: !root.recDone ? "" : (root.recNow.placeholder ? (root.recNow.notice || "")
+                : "Saved a " + root.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
+                  + (root.recNow.mode === "stream" ? "smooth" : "from screenshots") + ")")
+        }
+        AppText {
+          Layout.fillWidth: true
+          visible: root.recDone && !root.recNow.placeholder
+          text: !root.recDone ? "" : (root.recNow.path.indexOf(root.app.home + "/") === 0 ? "~" + root.recNow.path.slice(root.app.home.length) : root.recNow.path)
+          size: "small"; tone: "faint"; elide: Text.ElideMiddle
+        }
+        Flow {
+          Layout.fillWidth: true
+          spacing: Style.spacing.lg
+          ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Show in folder"; glyph: Model.Glyph.folderOpen; onClicked: root.showRecording() }
+          ActionButton { visible: root.recDone && !root.recNow.placeholder; text: "Copy path"; glyph: Model.Glyph.copy; onClicked: root.copyRecordingPath() }
+          ActionButton { text: "Done"; kind: "ghost"; onClicked: root.svc.dismissRecording() }
+        }
+        // inline player; left out when Qt Multimedia isn't installed (the Loader fails quietly)
+        Loader {
+          id: preview
+          Layout.preferredWidth: Style.space(160)
+          Layout.preferredHeight: active && status === Loader.Ready ? Style.space(348) : 0
+          active: root.recDone && !root.recNow.placeholder
+          visible: status === Loader.Ready
+          source: "DeviceRecordingPreview.qml"
+          onLoaded: item.source = Qt.binding(function() { return root.recDone ? "file://" + root.recNow.path : "" })
+        }
+      }
+
+      // ---------------------------------------------------------------- stills
+      SectionHeader { Layout.fillWidth: true; text: "Capture" }
+      Flow {
+        Layout.fillWidth: true
+        spacing: Style.spacing.lg
+        ActionButton { text: "Take screenshot"; glyph: Model.Glyph.camera; busy: root.svc.shooting; enabled: root.svc.connected; onClicked: root.svc.screenshot() }
+        ActionButton { text: "Save to Pictures"; glyph: Model.Glyph.save; enabled: root.svc.connected || root.currentFile !== ""; onClicked: root.saveShot() }
+        ActionButton { text: "Copy image"; glyph: Model.Glyph.copy; enabled: root.svc.connected || root.currentFile !== ""; onClicked: root.copyShot() }
+        ActionButton { text: "Rotate"; glyph: Model.Glyph.sync; onClicked: root.rotationSteps = (root.rotationSteps + 1) % 4 }
+      }
     }
   }
 }

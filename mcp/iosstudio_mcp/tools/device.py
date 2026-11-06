@@ -76,6 +76,21 @@ def _next_for(code: str, fix: dict | None) -> str | None:
                               "or ask the user to open iOS Studio: ios_open_app(page='device').",
         "socket-path-too-long": "Set IOSSTUDIO_RUNTIME_DIR to a shorter folder (socket paths max out at 107 bytes), "
                                 "then restart the MCP server.",
+        # UI inspection (ui.* in docs/deviced-protocol.md)
+        "no-element": "No element has that label or id. Use one of the close labels above, or call ios_ui_tree "
+                      "(filter=...) to see what's on screen now.",
+        "ambiguous-label": "Several elements match. Press one by element_id (listed above), or pass the full "
+                           "label with match='exact'.",
+        "stale-element": "The screen changed since that id was read. Call ios_ui_tree again and use a fresh id.",
+        "press-failed": "The iPhone didn't activate that element (some controls ignore accessibility presses). "
+                        "Try its parent cell or a nearby button from ios_ui_tree, and check with ios_screenshot.",
+        "bad-args": "Check the arguments named in the message (ios_ui_press takes exactly one of element_id or label).",
+        "ax-unavailable": "The iPhone's accessibility inspection service isn't available. Make sure the iPhone is "
+                          "unlocked with Developer Mode on (ios_device_prepare), then ios_device_reconnect and retry.",
+        "wrong-app": "That app isn't the one in front (or isn't installed or running). Launch it with "
+                     "ios_app_launch(bundle_id) first (ios_app_list shows what's installed), then retry.",
+        "no-app-in-front": "No app was detected in front. Open the app with ios_app_launch(bundle_id) first, or pass "
+                           "bundle_id, then retry.",
     }
     if code in table:
         return table[code]
@@ -93,6 +108,10 @@ def device_tool_error(exc: Exception, not_found: str | None = None) -> ToolError
     out = f"{msg} [{code}]"
     if detail and code in ("failed", "install-failed", "ddi", "bad-package", "daemon-unavailable"):
         out += f" Detail: {str(detail).strip()[:300]}"
+    elif detail and code in ("no-element", "ambiguous-label", "wrong-app", "press-failed", "ax-unavailable"):
+        if isinstance(detail, (list, tuple)):
+            detail = "; ".join(str(x) for x in detail)
+        out += f" Detail: {str(detail).strip()[:250]}"
     if nxt:
         out += f" Next: {nxt}"
     return ToolError(out)

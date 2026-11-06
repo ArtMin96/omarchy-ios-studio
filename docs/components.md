@@ -116,7 +116,8 @@ lock unlock key cert shield shieldCheck clock timer location camera image video 
 chevronRight/Left/Down/Up arrowRight arrowUp openExternal copy save export edit code swift disk memory
 cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package signature developer heart
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
-robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune.
+robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune, and for the UI inspector inspect accessibility tap text textbox toggle slider
+header tab list element linkVariant (element roles) and contrast textSize clipped hitArea label (audit issue types).
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
@@ -446,15 +447,48 @@ the keyboard.
 live mirror when no frame can be seen). Frames are double-buffered: the next one decodes in a hidden `Image` and they swap
   once it's ready, and a frame that arrives while one is still loading replaces the queued one. The rounded
   mask is one layer effect on the container. `frameShown(url)` fires for every frame shown; pass it to
-  `app.device.ackFrame(url)` so the daemon doesn't send faster than the window can draw.
+  `app.device.ackFrame(url)` so the daemon doesn't send faster than the window can draw. `highlight`
+  (`{x, y, w, h}`) outlines part of the screen in an accent box, and `highlightSpace` (`{w, h}`) is the whole
+  screen; both are in the iPhone's points. The box is mapped onto the image as shown (cropped to fill the glass)
+  and turns with it. Nothing is drawn without an image, a highlight or a space, so a missing size never gives a
+  misplaced outline.
   ```qml
   DevicePhoneFrame { source: app.device.screenSource; live: app.device.mirroring; mirrorService: app.device
+                     highlight: inspector.highlight; highlightSpace: inspector.space
                      onFrameShown: function(url) { app.device.ackFrame(url) } }
   ```
 - **DeviceScreenView**: the iPhone › Screen tab: the live view (Smooth, Screenshots or AirPlay through UxPlay),
   the frame rate it reaches, recordings and stills. State and actions are on `app.device`: `mirrorMode`,
   `mirrorActive`, `measuredFps`, `mirrorNotice`, `recording`, `setMirrorMode()`, `startRecording(maxSeconds)`,
   `stopRecording()`, `dismissRecording()`. The settings keys `mirrorMode` and `mirrorView` remember the choice.
+  Beside the phone, `PageTabs` switch `pane` between `"view"` (Live view: all of the above), `"elements"` and
+  `"audit"` (a `DeviceInspectView`, with counts on the tabs). While inspecting, the phone outlines the inspector's
+  cursor row. `handleKey(action)` and `focusFilter()` are DevicePage's hooks into the inspector (it calls them on the
+  Screen tab: `j`/`k`, Enter, `/`), and `devModeHelp()` asks the page to open the Developer Mode sheet.
+- **DeviceInspectView**: Screen › Elements and Audit (`app`, `section`: `"elements"` or `"audit"`,
+  `availableHeight`: the lists scroll inside it so the phone stays beside them). Elements calls `ui.tree`, filters
+  by label, value, role, identifier or hint, and presses the cursor row with `ui.press` (Press button or Enter),
+  then shows what changed and reads the screen again. Audit calls `ui.audit` and groups the issues by type, most
+  frequent first; an issue whose `details.elementId` is in the last read links to that row (`revealElement(id)`
+  and the `showElements()` signal switch the pane). `highlight` is the cursor row's frame (an audit issue's own
+  frame, else its element's) and `space` the screen size in points: ui.tree's `screen`, else the size of the
+  screenshot each read takes, divided by the iPhone's scale. `no-app-in-front` shows as an empty state, Developer
+  Mode off as a blocked state with `devModeHelp()`. When no element has a frame (iOS 27.3), the footer says rows
+  can't be outlined. `handleKey(action)` (`up`, `down`, `home`, `end`, `activate`) and `focusFilter()`.
+  ```qml
+  DeviceInspectView { app: root.app; section: "elements"; availableHeight: phone.height - y
+                      onDevModeHelp: root.devModeHelp(); onShowElements: root.pane = "elements" }
+  ```
+- **DeviceInspectRow**: one row of those lists, on `CursorSurface`: `glyph`, `glyphColor`, `title` (`titleMuted`
+  for a placeholder such as "No label", `titleLines` for audit messages), a dim `value` after it, and `secondary`
+  under it. `pressable` adds a Press button on the cursor row (its room is always kept, so the text doesn't shift;
+  `pressBusy`, `pressEnabled`, `pressTooltip`, signal `pressRequested()`). `clickable` makes the row a link with a
+  chevron on the cursor row (`clickTooltip`, `clicked()`). `hovered(bool)` moves the view's cursor; `hasCursor`
+  draws it.
+  ```qml
+  DeviceInspectRow { glyph: Model.Glyph.tap; title: "Sign in"; secondary: "Button · loginButton"
+                     pressable: true; onPressRequested: view.press(el) }
+  ```
 - **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
   QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view
   leaves the preview out.

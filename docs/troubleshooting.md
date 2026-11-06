@@ -103,6 +103,22 @@ While the Smooth view streams, the phone keeps the camera and microphone for its
 
 The phone sets the pace. Over Wi-Fi each screenshot takes about 0.6 seconds on a busy screen, so 1.5 to 2 frames a second is normal (a still screen is a little faster). On iOS 27 or later, pick Smooth instead.
 
+### Elements shows nothing
+
+Elements reads the app that's in front on the iPhone, so "No app on the screen" means it found none. Unlock the phone, open the app and leave it in front while it reads (the home screen, the lock screen or Control Center don't count). If the list stops early with "the focus left the app" or "couldn't move further", an alert, a permission prompt or the keyboard is up: answer or close it on the phone and press Read the screen again. "Can't read the screen yet" with Developer Mode means the phone's accessibility inspector needs Developer Mode; "Couldn't reach the iPhone's accessibility service" means the same, or a locked phone.
+
+### "… isn't the app in front" (wrong-app)
+
+The command was told which app to read (an AI agent passes its bundle id, and a press uses the app of the last read), and another app is showing. iOS Studio refuses rather than reading or pressing the wrong app. Bring that app to the front and unlock the phone, then try again. If it says the app isn't installed or isn't running, install or launch it first.
+
+### No outlines on the phone for elements
+
+On iOS 27.3 the iPhone doesn't report where an element is on the screen, so rows in Elements can't be outlined; the list says so under it. Audit issues come with their position and are outlined. The demo iPhone has positions, so you see outlines there.
+
+### Pressing an element does nothing
+
+The ids in the list belong to the screen as it was read. If the app moved on since (a sheet opened, a list scrolled, a row was added), the press fails with "Read the screen again" or misses: press Read the screen again and press the fresh row. Some controls don't respond to an accessibility press at all ("The iPhone didn't accept the press"); try the cell or button around them. If "Nothing on the screen changed", the app may still be loading: read the screen again after a moment.
+
 ### "This app doesn't share files"
 
 App Store apps only show their Documents folder when they turn on file sharing, and this one doesn't. Your own apps, built in iOS Studio, always show their whole container.

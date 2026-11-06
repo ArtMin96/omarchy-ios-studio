@@ -404,6 +404,99 @@ Demo mode paints the frames. `IOSSTUDIO_DEMO_MEDIA_BUSY=1` makes the demo iPhone
 held the camera, so `auto` falls back with the notice. A demo recording is a real MP4 made with
 ffmpeg, or a placeholder path with a `notice` when ffmpeg is missing.
 
+### UI inspection (`ui.*`), used by Screen › Elements and Audit and the `ios_ui_*` tools
+
+The app in front as accessibility elements, pressing one, and Apple's accessibility audit. All three
+open their own connection to the accessibility inspector service
+(`com.apple.accessibility.axAuditDaemon.remoteserver.shim.remote`, pymobiledevice3's
+`AccessibilityAudit`) over the session's RSD, not the shared DVT connection, and close it when done.
+Commands for one device run one at a time. Code: `helper/ui_inspect.py` (shaping, no device),
+`deviced_features/ui.py` (iPhone), `deviced_demo_features/ui.py` (demo). More in
+[features/ui-inspect.md](features/ui-inspect.md).
+
+| cmd | args | reply data |
+|---|---|---|
+| `ui.tree` | `{udid?, bundleId?, max?: 150 (≤400), timeout?: 12 (s, 2–20), raw?: false}` | `{elements: [Element…], count, truncated, complete, method: "focus-walk", elapsedMs, screen, stoppedBy, bundleId, pid, otherProcessElements?, raw?}` |
+| `ui.press` | `{udid?, id?` or `label?, match?: "exact" \| "contains", bundleId?, max?, timeout?}` | `{pressed: Element, changes: {added, removed, changedValues}, after: {count, complete}, elapsedMs, bundleId, pid}` |
+| `ui.audit` | `{udid?, bundleId?, types?: [type…], raw?: false}` | `{issues: [Issue…], supported: [type…], unsupported: [type…], elapsedMs, bundleId, pid, timedOut?, raw?}` |
+
+**The app.** With `bundleId` (plain or `XTL-<TEAM>.` form), the daemon points the inspector at that
+app's pids (`deviceSetAuditTargetPid:`), newest first, and moves the focus to the first element. The
+first focus event must come from that pid, else the app isn't in front. Without `bundleId` it tries
+the 5 newest running apps the same way. An element's pid is the first 4 bytes (little-endian) of its
+`PlatformElementValue_v1`. `bundleId` and `pid` in each reply name the app that was used.
+
+**`ui.tree`** walks the VoiceOver focus first → next and stops at the first element seen again
+(`stoppedBy: "loop"`, `complete: true`), at `max` (`"max"`, `truncated: true`), at `timeout`
+(`"timeout"`), when the focus stops moving (`"no-focus"`, after 2 retries of 1.5 s) or after more than 20
+elements of other processes (`"foreign"`). Those elements (the keyboard, an alert) are left out and
+counted in `otherProcessElements`. For each element it reads `Label`, `Value`, `Hint`, `Identifier`
+and `Traits`. The walk replaces the device's id map (`e1`, `e2`, … → element reference), which
+`ui.press` and `ui.audit` use; a tunnel drop clears it. `screen` (`{w, h}` in points) is `null` on
+the real phone; the demo sends `{w: 390, h: 844}`. `raw: true` adds every focus event and its
+attributes as plain JSON (`[{focus, attrs}…]`, what `tests/fixtures/ui-inspect/real-tree.json` holds).
+
+Element:
+
+```json
+{"id": "e4", "role": "button", "label": "Increment", "value": null, "hint": "Adds one to the count",
+ "identifier": "incrementButton", "traits": ["button"], "frame": null, "enabled": true}
+```
+
+`role` ∈ `searchField`, `toggle`, `button`, `link`, `adjustable`, `tabBar`, `keyboardKey`, `header`,
+`image`, `staticText`, `textField` or `null` (the first one found in `traits`). `traits` are
+UIAccessibilityTraits names (`button`, `selected`, `notEnabled`, `header`, `toggle`, …). `frame` is
+`{x, y, w, h}` in points, or `null`: iOS 27.3 answers none of the frame attributes. `enabled` is
+`false` for `notEnabled`, `null` when nothing says.
+
+**`ui.press`** takes `id` (from the last `ui.tree`) or `label`. By id it targets the app of that walk
+and fails with `stale-element` when there was no walk or the app's pid changed. By label it walks
+first (8 s at most) and matches the label or identifier, case-insensitively: `exact` (the default)
+or `contains`. It sends the Activate action (`AXAction-2010`) with the element in the archive format
+of an attribute read (pymobiledevice3 11.49's `perform_press` is ignored on iOS 27.3), waits 0.8 s and
+walks again, all within about 20 s. `changes` compares the two walks: elements with the same
+identifier, then the same label and role, whose label or value changed go in
+`changedValues: [{label, from, to}]` (named by the identifier when the label itself changed); the
+rest are `added` and `removed` labels, 25 of each at most. Example (`real-press.json`):
+
+```json
+{"pressed": {"id": "e3", "role": "button", "label": "Decrement", "…": "…"},
+ "changes": {"added": [], "removed": [], "changedValues": [{"label": "countLabel", "from": "Count: 1", "to": "Count: 0"}]},
+ "after": {"count": 10, "complete": true}, "elapsedMs": 11684,
+ "bundleId": "XTL-2WX6B428SL.dev.iosstudio.uiprobe", "pid": 3117}
+```
+
+**`ui.audit`** asks the phone which audit types it supports and runs them, or only `types` (slugs
+such as `contrast`, or Apple's raw names). It gives up after 18 s with `timedOut: true` and the issues
+found so far. Types and their raw names: `missing-label` (`testTypeSufficientElementDescription`,
+code 5000), `contrast` (`testTypeContrast`, 12/13), `hit-region` (`testTypeHitRegion`, 100),
+`element-detection` (`testTypeElementDetection`, 1000), `clipped-text` (`testTypeTextClipped`, 3003),
+`traits` (`testTypeTrait`), `dynamic-type` (`testTypeDynamicText`, 3001/3002). iOS 27.3 supports those
+seven. A requested type the phone doesn't offer goes in `unsupported`. `raw: true` adds the
+supported list and the issues as plain JSON.
+
+Issue (`real-audit.json`):
+
+```json
+{"type": "hit-region", "rawType": "testTypeHitRegion",
+ "message": "The touch target is smaller than recommended (44×44 points). Current size is 10 x 11.",
+ "element": {"label": "Counterclockwise Curved Arrow", "frame": {"x": 196.4, "y": 463.1, "w": 9.5, "h": 11.3}},
+ "details": {"code": 100, "extra": "Current size is 10 x 11", "elementId": "e9", "identifier": "arrow.counterclockwise"}}
+```
+
+`element` is `null` when the issue has neither a label nor a frame. `details` may hold `code`,
+`fontSize`, `foreground` and `background` (contrast), `description` (Apple's generated description),
+`extra` (Apple's explanation), `elementId` (the matching element of the last walk of the same pid,
+matched by its reference, else by frame overlap) and `identifier`.
+
+Errors: `no-element` (`detail`: close labels), `ambiguous-label` (`detail`: `[{id, label, role}…]`),
+`stale-element`, `press-failed`, `wrong-app` (the `bundleId` app isn't installed, isn't running or
+isn't in front), `no-app-in-front` (no `bundleId`, and none of the 5 newest apps answered),
+`ax-unavailable` (the service couldn't be opened: locked phone or Developer Mode off), `bad-args`.
+
+Demo: WeatherGlance is in front until HabitTracker has been launched. Pressing Units, a habit or Add
+habit changes the next walk; each screen has a few audit issues. Elements have frames.
+
 ### Location
 
 | cmd | args | reply data |

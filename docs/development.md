@@ -30,6 +30,7 @@ helper/
   build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
   project_check.py   the project check: config mistakes found before building (xtool.yml keys, usage descriptions, icon, entitlements), used by projects.py
   run_presets.py     run presets: saved launch arguments, environment, language/region and UI test mode per project, and the launch args they resolve to, used by projects.py
+  ui_inspect.py      UI inspection without a device: accessibility focus events -> elements, label matching, the change summary of a press, audit issues (used by deviced_features/ui.py and its demo twin)
   diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
   xip_version.py     reads the Xcode version out of a .xip without unpacking it
   agents.py          Settings › AI agents: connect the MCP server to coding agents
@@ -41,7 +42,7 @@ helper/
   deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
   deviced_features/  one module per feature group of the real daemon: apps, cameratest, conditions,
                      console, crashes, ddi, debug, files, install, location, metrics, mirror, pairing,
-                     pcap, profiles, screen, syslog
+                     pcap, profiles, screen, syslog, ui
   device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
   device_client.py   asyncio client for the broker (used by the MCP server)
   device_link.py, device_crash.py, device_models.py   device helpers
@@ -55,11 +56,11 @@ helper/
   deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
   root/              scripts that run as root through pkexec
 mcp/
-  iosstudio_mcp/     the MCP server: server.py, tools/*.py (78 tools), prompts, resources
+  iosstudio_mcp/     the MCP server: server.py, tools/*.py (81 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                 ios-studio launcher, iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, project check (fixture projects in fixtures/project-check/), run presets, MCP jobs, budget and console reads
+tests/               unit tests: build output parser (captured output in fixtures/), helper state files, crash report dates, crash symbolication, app console, project check (fixture projects in fixtures/project-check/), run presets, UI inspection (iPhone captures in fixtures/ui-inspect/), MCP jobs, budget and console reads
 templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 ```
@@ -200,7 +201,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), the project check has one small project per case in `tests/fixtures/project-check/` (`tests/test_project_check.py` also runs a compile-only build through a fake xtool to see the pre-build warnings come first and leave the build ok, and `tests/test_mcp_project_check.py` covers `ios_project_check`), run presets have `tests/test_run_presets.py` (argument building, validation, storage in `projects.json`, unknown names failing before a build through a fake xtool, demo mode) and `tests/test_mcp_run_presets.py` (`ios_project_presets`, `preset=` on `ios_run`, `ios_app_launch` and `ios_app_run_and_capture`, the merge rules, and the launch after a USB install), and the helper's state files, crash report dates, the app console's line splitting and buffers, and the MCP server's jobs, output budget, diagnostics and console reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
+`setup install` accepts `--dry-run`. The build output parser has unit tests with captured xtool output in `tests/fixtures/build-output/`, crash symbolication has a small arm64 dSYM fixture in `tests/fixtures/crash-symbolication/` (its `build.sh` rebuilds it), the project check has one small project per case in `tests/fixtures/project-check/` (`tests/test_project_check.py` also runs a compile-only build through a fake xtool to see the pre-build warnings come first and leave the build ok, and `tests/test_mcp_project_check.py` covers `ios_project_check`), run presets have `tests/test_run_presets.py` (argument building, validation, storage in `projects.json`, unknown names failing before a build through a fake xtool, demo mode) and `tests/test_mcp_run_presets.py` (`ios_project_presets`, `preset=` on `ios_run`, `ios_app_launch` and `ios_app_run_and_capture`, the merge rules, and the launch after a USB install), UI inspection has `tests/test_ui_inspect.py` (turning focus events into elements, the walk stopping at the first repeat, label matching and its errors, the change summary, audit types and issues matched to elements, and the demo commands) and `tests/test_mcp_ui_inspect.py` (paging and filtering `ios_ui_tree`, `ios_ui_press` results and capped change lists, `ios_a11y_audit` grouping, and the error codes with their next steps); `tests/fixtures/ui-inspect/` holds `real-*.json` captures from an iPhone 17 Pro on iOS 27.3 (a walk with `raw: true` before and after a press, a press and an audit of a small test app) and two `synthetic-*.json` files shaped like them, and the helper's state files, crash report dates, the app console's line splitting and buffers, and the MCP server's jobs, output budget, diagnostics and console reading have their own (stdlib `unittest`; the `test_mcp_*` files need the server's venv and are skipped without it). `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain:
 
 ```bash
 python3 -m unittest discover -s tests

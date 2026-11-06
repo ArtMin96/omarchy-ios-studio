@@ -23,6 +23,7 @@ On the iPhone page you can:
 
 - manage installed apps and fake the phone's location
 - watch the screen live, take screenshots and record short videos for bug reports
+- read the app on the screen as a list of buttons and texts, press them on the phone, and run Apple's accessibility audit
 - import photos and videos from the camera roll, browse your apps' files, and feed camera code test images
 - make the phone act as if it's on a slow network, running hot or with a slow GPU, and record an app's traffic over USB
 - measure an app's CPU, memory, energy and frame rate, with a report of anything unusual
@@ -64,7 +65,7 @@ The [user guide](docs/guide.md) walks through each page. If something goes wrong
 
 ## AI agents
 
-iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can check a project's settings for mistakes before building. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can also read what your app prints while it runs. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
+iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can check a project's settings for mistakes before building. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can also read what your app prints while it runs. It can read the app's screen as data (the buttons and texts VoiceOver reads), press a button on your iPhone to check that a change works, and run Apple's accessibility audit. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
 
 ## Uninstall
 
@@ -81,6 +82,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 - [docs/features/project-build-settings.md](docs/features/project-build-settings.md) explains build settings for projects that build through their own scripts.
 - [docs/features/project-check.md](docs/features/project-check.md) explains the project check: what each check looks for and when it runs.
 - [docs/features/run-presets.md](docs/features/run-presets.md) explains run presets: what each field passes to the app, where they're stored and how agents use them.
+- [docs/features/ui-inspect.md](docs/features/ui-inspect.md) explains reading the screen's elements, pressing them and the accessibility audit: how it works, its limits and the agent tools.
 - To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Credits

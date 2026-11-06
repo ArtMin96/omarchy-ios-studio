@@ -1,0 +1,45 @@
+{
+ "_note": "SYNTHETIC: shaped like ui.audit raw=true output; replace with a real capture",
+ "supported": [
+  12,
+  13,
+  100,
+  1000,
+  3001,
+  3002,
+  3003,
+  5000
+ ],
+ "issues": [
+  {
+   "_type": "AXAuditIssue_v1",
+   "IssueClassificationValue_v1": 12,
+   "ElementRectValue_v1": "{{88, 361}, {226, 20}}",
+   "FontSizeValue_v1": 17.0,
+   "ForegroundColorValue_v1": "#E0E0E0",
+   "BackgroundColorValue_v1": "#FFFFFF",
+   "MLGeneratedDescriptionValue_v1": null,
+   "ElementLongDescExtraInfo_v1": null
+  },
+  {
+   "_type": "AXAuditIssue_v1",
+   "IssueClassificationValue_v1": 100,
+   "ElementRectValue_v1": "{{193, 399}, {16, 16}}",
+   "FontSizeValue_v1": null,
+   "ForegroundColorValue_v1": null,
+   "BackgroundColorValue_v1": null,
+   "MLGeneratedDescriptionValue_v1": "Reset",
+   "ElementLongDescExtraInfo_v1": null
+  },
+  {
+   "_type": "AXAuditIssue_v1",
+   "IssueClassificationValue_v1": 3003,
+   "ElementRectValue_v1": "{{141, 440}, {120, 18}}",
+   "FontSizeValue_v1": 15.0,
+   "ForegroundColorValue_v1": null,
+   "BackgroundColorValue_v1": null,
+   "MLGeneratedDescriptionValue_v1": null,
+   "ElementLongDescExtraInfo_v1": null
+  }
+ ]
+}

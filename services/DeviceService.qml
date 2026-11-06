@@ -86,6 +86,8 @@ Item {
     if (cmd === "app.install") return 600000
     if (cmd === "crash.list" || cmd === "apps.list" || cmd === "app.launch" || cmd === "ddi.mount") return 90000
     if (cmd === "crash.pull" || cmd === "profiles.list" || cmd === "screenshot" || cmd === "app.uninstall") return 60000
+    // Walking the screen element by element takes ~10 s on a busy screen; a press re-reads it.
+    if (cmd === "ui.tree" || cmd === "ui.audit" || cmd === "ui.press") return 60000
     return 40000
   }
 
