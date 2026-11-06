@@ -46,17 +46,24 @@ Item {
     anchors.right: parent.right
     implicitHeight: bannerRow.implicitHeight + Style.spacing.lg * 2
     radius: Style.cornerRadius
-    color: Util.alpha(Commons.Color.urgent, 0.10)
+    color: Util.alpha(Theme.errorTint, 0.16)
     border.width: Style.normalBorderWidth
-    border.color: Util.alpha(Commons.Color.urgent, 0.35)
+    border.color: Util.alpha(Theme.errorTint, 0.5)
     RowLayout {
       id: bannerRow
       anchors.fill: parent
       anchors.margins: Style.spacing.lg
       anchors.leftMargin: Style.spacing.xxl
       spacing: Style.spacing.lg
-      Icon { glyph: Model.Glyph.error; color: Commons.Color.urgent }
-      AppText { Layout.fillWidth: true; text: root.message; wrapMode: Text.WordWrap }
+      // the glyph centred on the message's first line, not on the whole block (one line: all centred)
+      FontMetrics { id: bannerMetrics; font: bannerText.font }
+      Item {
+        Layout.alignment: bannerText.lineCount > 1 ? Qt.AlignTop : Qt.AlignVCenter
+        implicitWidth: bannerIcon.implicitWidth
+        implicitHeight: bannerMetrics.height
+        Icon { id: bannerIcon; anchors.centerIn: parent; glyph: Model.Glyph.error; color: Commons.Color.urgent }
+      }
+      AppText { id: bannerText; Layout.fillWidth: true; Layout.alignment: lineCount > 1 ? Qt.AlignTop : Qt.AlignVCenter; text: root.message; wrapMode: Text.WordWrap }
       ActionButton { visible: !!root.fix; text: root.fix ? root.fix.label : ""; kind: "primary"; compact: true; onClicked: root.runFix() }
       ActionButton { visible: root.showRetry && !root.fix; text: root.retryText; glyph: Model.Glyph.refresh; kind: "ghost"; compact: true; onClicked: root.retry() }
     }
@@ -76,9 +83,9 @@ Item {
       implicitWidth: (root.compact ? Style.font.display : Style.font.displayLarge) * 2
       implicitHeight: implicitWidth
       radius: Style.cornerRadius > 0 ? width / 2 : 0
-      color: Util.alpha(Commons.Color.urgent, 0.12)
+      color: Util.alpha(Theme.errorTint, 0.16)
       border.width: Style.normalBorderWidth
-      border.color: Util.alpha(Commons.Color.urgent, 0.3)
+      border.color: Util.alpha(Theme.errorTint, 0.45)
       Icon { anchors.centerIn: parent; glyph: Model.Glyph.warn; size: root.compact ? Style.font.display : Style.font.displayLarge; color: Commons.Color.urgent }
     }
     AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.title; size: root.compact ? "title" : "heading"; strong: true; wrapMode: Text.WordWrap }

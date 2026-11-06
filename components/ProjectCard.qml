@@ -24,6 +24,7 @@ import "../Model.js" as Model
 // Format and lint (`format`, `format-lint`): "Format project…" and "Lint project" sit under More, next to
 // Check build. Format opens ProjectFormatSheet (formatProject()); Lint shows the style warnings in the
 // build panel's Problems (lintProject()). While a lint runs, its button spins; its tooltip has the last count.
+// Swift packages (`packages`): "Packages…" under More opens ProjectPackagesSheet (managePackages()).
 BorderSurface {
   id: root
 
@@ -68,6 +69,7 @@ BorderSurface {
   signal showProblems()
   signal formatProject()
   signal lintProject()
+  signal managePackages()
   signal hovered(bool h)
 
   radius: Style.cornerRadius
@@ -345,6 +347,7 @@ BorderSurface {
       ActionButton { text: "Check build"; glyph: Model.Glyph.hammer; kind: "ghost"; compact: true; enabled: !root.svc.building && !root.blocked; tooltip: "Compile for iPhone without signing or installing (Shift+B)"; onClicked: root.checkBuild() }
       ActionButton { text: "Format project…"; glyph: Model.Glyph.format; kind: "ghost"; compact: true; tooltip: "See what swift-format would change, then apply it (F)"; onClicked: root.formatProject() }
       ActionButton { text: "Lint project"; glyph: Model.Glyph.lint; kind: "ghost"; compact: true; busy: !!(root.lintEntry && root.lintEntry.state === "loading"); tooltip: root.lintTip; onClicked: root.lintProject() }
+      ActionButton { text: "Packages…"; glyph: Model.Glyph.packages; kind: "ghost"; compact: true; tooltip: "Add, update or remove the Swift packages it depends on (P)"; onClicked: root.managePackages() }
       ActionButton { text: "Build .ipa"; glyph: Model.Glyph.package; kind: "ghost"; compact: true; enabled: !root.svc.building && !root.blocked; tooltip: "Build and sign an installable .ipa file"; onClicked: root.buildIpa() }
       ActionButton { text: "Re-sign & reinstall"; glyph: Model.Glyph.sync; kind: "ghost"; compact: true; enabled: !root.svc.building && !root.blocked; tooltip: "Free Apple IDs sign apps for 7 days. This renews it for another week."; onClicked: root.renew() }
       ActionButton { text: root.project.autoRenew ? "Auto-renew: on" : "Auto-renew: off"; glyph: Model.Glyph.timer; kind: "ghost"; compact: true; tooltip: "Re-sign this app automatically before it expires"; onClicked: root.toggleAutoRenew() }

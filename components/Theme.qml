@@ -36,6 +36,10 @@ QtObject {
   property color success: "#7fb77e"
   property color warn: "#d9a44a"
   readonly property color error: urgent
+  // The error hue at a saturation and lightness that stay red over any background: a pale urgent colour
+  // tinted over a green theme otherwise mixes to brown. For fills and borders behind error content
+  // (ErrorState; DiffView's removed lines use the same recipe). Text and glyphs keep `error`.
+  readonly property color errorTint: Qt.hsla(urgent.hslHue, Math.max(urgent.hslSaturation, 0.7), 0.5, 1)
   readonly property color info: accent
 
   function levelColor(level) {

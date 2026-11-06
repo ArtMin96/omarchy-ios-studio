@@ -71,7 +71,8 @@ Item {
   Rectangle {
     anchors.fill: parent
     color: Theme.scrim
-    MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+    // A wheel or hover over the scrim or the panel never reaches the page behind the sheet.
+    MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: root.dismiss(); onWheel: function(wheel) { wheel.accepted = true } }
   }
 
   FocusScope {
@@ -91,7 +92,7 @@ Item {
       color: Commons.Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.accent, Style.normalBorderWidth)
       implicitHeight: layout.implicitHeight + Style.spacing.panelPadding * 2
-      MouseArea { anchors.fill: parent }   // swallow clicks
+      MouseArea { anchors.fill: parent; onWheel: function(wheel) { wheel.accepted = true } }   // swallow clicks and wheels
 
       ColumnLayout {
         id: layout

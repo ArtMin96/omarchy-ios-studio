@@ -1,0 +1,133 @@
+{
+  "cLanguageStandard" : null,
+  "cxxLanguageStandard" : null,
+  "defaultLocalization" : null,
+  "dependencies" : [
+    {
+      "sourceControl" : [
+        {
+          "identity" : "kingfisher",
+          "location" : {
+            "remote" : [
+              {
+                "urlString" : "https://github.com/onevcat/Kingfisher.git"
+              }
+            ]
+          },
+          "nameForTargetDependencyResolutionOnly" : "Kingfisher",
+          "productFilter" : null,
+          "requirement" : {
+            "range" : [
+              {
+                "lowerBound" : "7.0.0",
+                "upperBound" : "8.0.0"
+              }
+            ]
+          },
+          "traits" : [
+            {
+              "name" : "default"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceControl" : [
+        {
+          "identity" : "lottie-spm",
+          "location" : {
+            "remote" : [
+              {
+                "urlString" : "https://github.com/airbnb/lottie-spm.git"
+              }
+            ]
+          },
+          "nameForTargetDependencyResolutionOnly" : "Lottie",
+          "productFilter" : null,
+          "requirement" : {
+            "range" : [
+              {
+                "lowerBound" : "4.4.0",
+                "upperBound" : "5.0.0"
+              }
+            ]
+          },
+          "traits" : [
+            {
+              "name" : "default"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "name" : "Photos",
+  "packageKind" : {
+    "root" : [
+      "/home/u/Developer/P"
+    ]
+  },
+  "pkgConfig" : null,
+  "platforms" : [
+
+  ],
+  "products" : [
+    {
+      "name" : "Photos",
+      "settings" : [
+
+      ],
+      "targets" : [
+        "Photos"
+      ],
+      "type" : {
+        "library" : [
+          "automatic"
+        ]
+      }
+    }
+  ],
+  "providers" : null,
+  "swiftLanguageVersions" : null,
+  "targets" : [
+    {
+      "dependencies" : [
+        {
+          "product" : [
+            "Kingfisher",
+            "Kingfisher",
+            null,
+            null
+          ]
+        },
+        {
+          "product" : [
+            "Lottie",
+            "Lottie",
+            null,
+            null
+          ]
+        }
+      ],
+      "exclude" : [
+
+      ],
+      "name" : "Photos",
+      "packageAccess" : false,
+      "resources" : [
+
+      ],
+      "settings" : [
+
+      ],
+      "type" : "regular"
+    }
+  ],
+  "toolsVersion" : {
+    "_version" : "5.5.0"
+  },
+  "traits" : [
+
+  ]
+}

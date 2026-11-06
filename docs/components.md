@@ -142,6 +142,7 @@ pt-BR, nl, ru, ja, ko, zh-Hans, ar, he), `PRESET_MAX_NAME` (40), `PRESET_LANGUAG
 |---|---|
 | `Theme.success`, `Theme.warn` | Picked by hue from the theme's colors.toml, synthesised when the theme has no fitting colour. |
 | `Theme.error` (= urgent), `Theme.info` (= accent) | |
+| `Theme.errorTint` | The error hue at saturation ≥ 0.7 and lightness 0.5: for fills and borders behind error content, which stay red over any background (a pale urgent colour tinted over a green theme mixes to brown). ErrorState uses it; DiffView's removed lines use the same recipe. Text and glyphs keep `Theme.error`. |
 | `Theme.dim`, `Theme.faint` | Secondary and tertiary text |
 | `Theme.hairline` | Separators and quiet borders |
 | `Theme.surface`, `Theme.surfaceRaised` | Card fills (resting / hover) |
@@ -187,6 +188,7 @@ ActionButton { text: "Install"; disabled: !app.device.connected; tooltip: disabl
 ## IconButton
 
 Glyph-only toolbar or row button: `glyph`, `tooltip`, `danger` (turns urgent on hover), `busy`, `enabled`.
+`disabled: true` dims it and swallows clicks but keeps hover, so `tooltip` can say why (as ActionButton's).
 ```qml
 IconButton { glyph: Model.Glyph.trash; tooltip: "Uninstall"; danger: true; onClicked: page.uninstall(app) }
 ```
@@ -315,7 +317,8 @@ Plain-language error with a one-click fix. `app` (needed for the fix button), `e
 object `{code, message, fix?: {label, page, step?, action?, url?}, detail?}`), or `message`; `title`,
 `compact`, `banner` (slim inline strip), `showRetry`, `retryText`; signals `retry()`, `fixed(fix)`.
 The fix button opens `fix.url` externally when present, else calls `app.nav(fix.page, fix)`.
-"Show details" reveals `detail`, selectable.
+"Show details" reveals `detail`, selectable. Fills and borders use `Theme.errorTint`. In a banner the error glyph
+sits on the message's first line when the message wraps (everything is centred when it's one line).
 ```qml
 ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; visible: svc.status === "error"; onRetry: svc.refresh() }
 ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; banner: true }
@@ -382,7 +385,8 @@ In-window modal for forms (sign-in, 2FA, pickers). Declare it anywhere in your p
 into the window overlay, so the scrim covers the whole app. Props: `title`, `subtitle`, `glyph`, `opened`,
 `dismissible`, `busy` (progress strip, blocks dismissal), `preferredWidth`, `footer` (buttons, right
 aligned). Body children go into a ColumnLayout. `open()`, `close()`; signals `shown()`, `closed()`.
-Esc, the close button or a scrim click dismiss it.
+Esc, the close button or a scrim click dismiss it. Wheel and hover over the scrim or the panel stop there, so
+the page behind never scrolls or highlights while a sheet is open.
 ```qml
 Sheet {
   id: signIn
@@ -403,7 +407,8 @@ Hosted by `shell.qml`. Pages use them only through `app.confirm(...)`, `app.toas
 the keyboard. `Host.covers(item, Host.top)` is true while an overlay is open and `item` isn't inside it;
 `ActionButton`, `IconButton` and `RunSplitButton` use it to hide their tooltips under a confirm dialog or sheet
 (the pointer hasn't moved, so their hover would otherwise keep the tooltip up over the dim layer). Do the same for a
-hand-made `PanelToolTip`. A toast's level glyph sits on its first text line, so a two-line toast keeps it beside
+hand-made `PanelToolTip`. ShortcutSheet shows `Model.SHORTCUTS` by group (Navigate, Actions, Projects, Help)
+beside the page list. A toast's level glyph sits on its first text line, so a two-line toast keeps it beside
 the first line rather than centred on the block.
 
 ## Also available from qs.Ui
@@ -561,7 +566,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   project (ghost compact, after Check build); signals `formatProject()` (the page opens ProjectFormatSheet) and
   `lintProject()` (the page calls `svc.showLint` and opens the drawer on Problems). Read-only `lintEntry`
   (`svc.lintFor(project)`): Lint project spins while it runs, and `lintTip` adds the last count and when.
-  `F` / `L` on the page do the same for the highlighted card.
+  `F` / `L` on the page do the same for the highlighted card. Packages: More has Packages… (after Lint project);
+  signal `managePackages()` (the page opens ProjectPackagesSheet). `P` on the page does the same.
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
@@ -656,6 +662,52 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `disabled` with `applyBlocker` as its tooltip while loading, after an error or with nothing to change. Apply
   calls `svc.formatApply` and closes on success; a failed apply shows a banner above the diff. Answers for an
   earlier open are dropped (`_ticket`).
+- **ProjectPackagesSheet**: "Packages · <name>" (`app`, `svc`; `openFor(project)` opens and lists through
+  `svc.packagesList`; signal `checkBuild(project)`, the page starts a compile-only build). One sheet, `view`:
+  - One column system for every view: block content (fields, diffs, banners) spans the body; glyphs sit in the
+    Sheet header glyph's column (`glyphW`, the header glyph measured) and text starts on the title's edge
+    (`textX` = `glyphW` + `xxl`); buttons end on the body's right edge, and compact ghost buttons get an `xs` right
+    margin so their label ends where an IconButton's glyph does (the header ×, the rows' bin). Rows and status
+    lines have no fill or border of their own, so nothing is inset from an edge the header doesn't have.
+  - `list`: LoadingState, ErrorState (retry) or EmptyState "No packages yet" (Add package…). Otherwise "N packages"
+    with ghost Update all and Add package…, then one row per package, hairlines between rows from the text edge:
+    the name (bold, keeps its whole width and elides first) with a `local` Badge; the URL or path dim and
+    middle-elided; "Used by <targets> · <products>" faint (amber "Not linked to a target yet"). Like ListRow, the
+    right cluster is centred on the whole row: the requirement ("from 1.1.0"), a Badge with the resolved version
+    (green; amber "not fetched") and the IconButtons Update (sync; spins while it updates; `disabled` for local
+    packages) and Remove (trash), `disabled` with the reason while a job or removal runs. Rows aren't clickable,
+    so they have no hover fill. The text column is placed by hand and always ends before the right cluster.
+    Status lines above the rows (glyph in the glyph column on the first line, text on the text edge, button on
+    the right): "Unresolved: N packages not fetched yet" (amber, with Resolve) when `unresolved` isn't empty or
+    there's no Package.resolved; while update or resolve runs, a spinner, the latest progress line and Cancel;
+    afterwards "N packages updated" with "swift-collections 1.1.3 → 1.1.4" lines, "Everything is up to date",
+    cancelled or the error, with a dismiss ×.
+  - `add`: Package URL (validated as you type: https/ssh/git@ or a local path; a URL already in the project is
+    named), Version rule Dropdown (Up to next major/minor, Exact version, Branch, Revision; one-line explanation
+    each; as tall as the field beside it) beside Version/Branch/Commit (empty = the newest release; hidden for a
+    local path), Add to target (the list's `targets`, `app_target` first choice; hidden when there are none). Two
+    columns while the body is at least 560 px wide. Footer Back and primary Add package, `disabled` with the first
+    problem as its tooltip. Enter submits.
+  - `job`: the steps the helper streams (`step` events: check, add, fetch, products, link, validate) in the
+    BuildPanel step style (glyph in the glyph column, title on the text edge), each with its detail when it differs from the title; footer Cancel (`{cancel: true}` on
+    stdin, then stop after 3 s). A failure shows an ErrorState banner ("… Package.swift is unchanged."); Try again
+    is left out for errors a retry can't fix (`bad-url`, `bad-version`, `already-added`, …); Back returns to the form.
+  - `products` (`needs_product`): the subtitle says "<pkg> has N libraries. Pick the ones <target> imports.", then a
+    checklist on the same columns: the checkbox glyph (accent when checked, nothing else changes), the library
+    name, hairlines between; hover brightens the checkbox and name. Clicks go through a MouseArea, not a
+    TapHandler, so they never reach the page behind the sheet. Primary Link library / Link N libraries (one
+    `svc.packagesAddProduct` call with all of them), Not now keeps the package unlinked.
+  - `added`: "Added <name>" (its glyph column is the Sheet header glyph's measured width, so the text starts on the
+    title's edge), one line each for what was linked, requirement · resolved, and demo mode; the Package.swift
+    DiffView; footer Done and primary Check build (`disabled` while another build runs or the project's generated
+    xtool.yml isn't allowed).
+  - `remove`: the dry run (`svc.packagesRemove(…, false)`): "Remove <name> from Package.swift" with the target
+    dependencies it unlinks, the DiffView and a danger "Remove <name>". An edit that wouldn't parse (`valid: false`
+    or `edit-invalid`, whose error carries `diff` and `would_remove`) shows the helper's reason in a banner, the
+    diff for doing it by hand, and no Remove button.
+  The subtitle follows the view. The Sheet is `busy` (no dismissal, progress strip) while a job, a link or a
+  removal runs. Successful changes call `svc.packagesChanged(project)` and reload the list. Answers for an earlier
+  open are dropped (`_ticket`).
 - **DiffView**: a read-only unified diff (`text`, `maxHeight`, `maxLines`; read-only `rows`, `fileCount`). While it
   scrolls, a wheel past its top or bottom stops there instead of scrolling the page behind the sheet.
   `parse(text)` turns `---`/`+++` pairs into one file row (file glyph + path, bold, `surfaceRaised`), `@@` lines into
@@ -703,6 +755,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ignored). `lintFocus` is the project the drawer shows style warnings for instead of the build; `showLint(p)` sets
   it (or clears it when the drawer already shows that project's build) and lints; a build starting or a compile on
   save shown clears it. Errors arrive as the helper's error object, with `hint`.
+- **ProjectService packages** (`app.projects`, `packages`, helper/packages.py): `packagesList(p, onDone, onFail)`,
+  `packagesRemove(p, id, confirm, onDone, onFail)` (a dry run unless `confirm`), `packagesAddProduct(p, id, products,
+  target, onDone, onFail)` and `packagesChanged(p)` (runs the card's settings check and the editor status again after
+  Package.swift changed). add, update and resolve stream (JSON lines, cancel with `{cancel: true}` on stdin);
+  ProjectPackagesSheet runs them with its own Stream.
 - **ProjectService project checks** (`app.projects`): `checks` maps a project path to `{state: "loading" | "ready"
   | "error", result, error, at}`; `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
   `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`
