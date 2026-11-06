@@ -35,13 +35,26 @@ Rectangle {
   }
 
   FontMetrics { id: fm; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall }
-  readonly property real cw: fm.advanceWidth("0")
+  // advanceWidth() alone is evaluated once, before the font above is applied (it gave a 16 px font's
+  // advance: gutters 40 % too wide, sideways scrolling far past the longest line); reading
+  // averageCharacterWidth makes it re-evaluate when the font changes.
+  readonly property real cw: fm.averageCharacterWidth > 0 ? fm.advanceWidth("0") : 0
   readonly property real lineH: Math.ceil(fm.height * 1.25)
   readonly property real padX: Style.spacing.lg
   readonly property real gutterW: Math.ceil(numDigits * cw) + Style.spacing.md * 2
-  readonly property real markW: Math.ceil(cw * 2)
+  readonly property real markW: Math.ceil(cw * 2) + Style.spacing.xs   // "+"/"−", then a gap before the text
   readonly property real textX: gutterW * 2 + markW
-  readonly property real contentW: Math.max(list.width, textX + Math.ceil(maxChars * cw) + padX * 2)
+  // (plus the vertical bar's lane, so the end of the longest line can scroll out from under it)
+  readonly property real contentW: Math.max(list.width, textX + Math.ceil(maxChars * cw) + padX * 2 + (vbar.needed ? barLane : 0))
+
+  // Line tints. Added lines: the theme's success colour. Removed lines: its error colour's hue at a
+  // saturation and lightness that stay red over any background (a pale error colour over a green
+  // theme otherwise mixes to brown). Both faint, so the text on them keeps its contrast.
+  readonly property real tintAlpha: 0.14
+  readonly property real delSaturation: 0.7
+  readonly property color delFillBase: Qt.hsla(Theme.error.hslHue, Math.max(Theme.error.hslSaturation, delSaturation), 0.5, 1)
+  readonly property color addFill: Util.alpha(Theme.success, tintAlpha)
+  readonly property color delFill: Util.alpha(delFillBase, tintAlpha * 1.5)
 
   // "--- a/x" + "+++ b/x" → one file row; "@@ -a,b +c,d @@ ctx" → a hunk row; then +, -, context.
   function parse(src) {
@@ -78,9 +91,30 @@ Rectangle {
   color: Theme.surface
   border.width: Style.normalBorderWidth
   border.color: Theme.hairline
-  implicitHeight: Math.min(list.contentHeight, maxHeight) + border.width * 2
+  implicitHeight: Math.min(list.contentHeight + list.bottomMargin, maxHeight) + border.width * 2
   implicitWidth: Style.space(420)
   clip: true
+
+  // Always shown while there is more to scroll (a diff cut off at maxHeight must say so): a faint
+  // thumb in the theme's foreground, stronger while hovered or dragged. The list keeps a lane free
+  // under the horizontal bar (bottomMargin) and past the longest line for the vertical one (contentW),
+  // so a bar never covers text.
+  readonly property real barLane: Style.spacing.sm + Style.spacing.xxs * 2
+  component DiffScrollBar: ScrollBar {
+    id: bar
+    readonly property bool needed: size < 1
+    policy: needed ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+    padding: Style.spacing.xxs
+    minimumSize: 0.08
+    contentItem: Rectangle {
+      implicitWidth: Style.spacing.sm
+      implicitHeight: Style.spacing.sm
+      radius: Style.cornerRadius
+      color: bar.pressed ? Theme.dim : bar.hovered ? Util.alpha(Theme.fg, 0.45) : Util.alpha(Theme.fg, 0.22)
+      Behavior on color { ColorAnimation { duration: 120 } }
+    }
+    background: Item {}
+  }
 
   // A wheel the list can't use any more (at its top or bottom edge) stops here instead of
   // scrolling the page behind the sheet. Only while the diff scrolls at all.
@@ -100,8 +134,9 @@ Rectangle {
     contentWidth: root.contentW
     flickableDirection: Flickable.AutoFlickIfNeeded
     boundsBehavior: Flickable.StopAtBounds
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+    bottomMargin: root.contentW > list.width ? root.barLane : 0
+    ScrollBar.vertical: DiffScrollBar { id: vbar; orientation: Qt.Vertical }
+    ScrollBar.horizontal: DiffScrollBar { id: hbar; orientation: Qt.Horizontal }
 
     delegate: Rectangle {
       id: line
@@ -116,8 +151,8 @@ Rectangle {
 
       width: root.contentW
       height: k === "file" ? root.lineH + Style.spacing.md * 2 : root.lineH
-      color: k === "add" ? Util.alpha(Theme.success, 0.14)
-             : k === "del" ? Util.alpha(Theme.error, 0.14)
+      color: k === "add" ? root.addFill
+             : k === "del" ? root.delFill
              : k === "hunk" ? Util.alpha(Commons.Color.accent, 0.07)
              : k === "file" ? Theme.surfaceRaised : "transparent"
 
@@ -129,7 +164,7 @@ Rectangle {
         visible: line.k === "file"
         x: list.contentX + root.padX     // the path stays in view while scrolled sideways
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.spacing.md
+        spacing: Style.spacing.lg      // the icon–text gap of the app's other small glyph + text lines
         Icon { anchors.verticalCenter: parent.verticalCenter; glyph: Model.Glyph.fileCode; size: Style.font.bodySmall; color: Theme.dim }
         AppText { anchors.verticalCenter: parent.verticalCenter; text: line.modelData.t; size: "small"; strong: true }
       }
@@ -144,6 +179,8 @@ Rectangle {
           AppText {
             text: line.k === "hunk" ? line.modelData.t : line.body
             size: "small"
+            // the characters as they are in the file: no ligatures ("->" stays two characters, not an arrow)
+            font.features: { "liga": 0, "calt": 0 }
             tone: line.k === "hunk" ? "accent" : line.k === "meta" ? "faint" : line.changed ? "inherit" : "dim"
             color: line.tint
           }
@@ -161,12 +198,14 @@ Rectangle {
         // Line numbers and +/- stay put while the text scrolls sideways (opaque, over the text).
         Item {
           x: list.contentX
-          width: root.textX - Style.spacing.xs
+          width: root.textX - Style.spacing.xxs   // text scrolled sideways stays clear of the mark
           height: parent.height
           Rectangle { anchors.fill: parent; color: Commons.Color.popups.background }
           Rectangle { anchors.fill: parent; color: Theme.surface }
           Rectangle { anchors.fill: parent; color: line.color }
           Rectangle { visible: line.changed; width: Style.space(2); height: parent.height; color: line.tint }
+          // scrolled sideways: a hairline between the gutter and the cut-off text
+          Rectangle { visible: list.contentX > 0; anchors.right: parent.right; width: Style.normalBorderWidth; height: parent.height; color: Theme.hairline }
           AppText {
             x: 0; width: root.gutterW - Style.spacing.md
             anchors.verticalCenter: parent.verticalCenter

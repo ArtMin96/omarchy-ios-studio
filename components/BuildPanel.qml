@@ -78,7 +78,7 @@ Item {
   function lintSubtitle(withPath) {
     var name = root.styleProject ? root.styleProject.name : String(root.stylePath).split("/").pop()
     var where = withPath ? (root.styleProject ? root.styleProject.displayPath || "" : root.stylePath) : ""
-    return [name, "Code style", where].filter(function(x) { return !!x }).join(" · ")
+    return [name, where].filter(function(x) { return !!x }).join(" · ")
   }
 
   function headline() {
@@ -405,6 +405,7 @@ Item {
                 svc: root.svc
                 path: root.stylePath
                 onFormatRequested: root.formatRequested(root.stylePath)
+                onRowHovered: diagList.currentIndex = -1     // one highlighted row at a time
               }
             }
             delegate: BuildDiagnosticRow {

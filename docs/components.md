@@ -626,23 +626,31 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   headline and the banner only follow the build's own `errorCount` / `warningCount`. While `lintView`
   (`svc.lintFocus` is set) the drawer shows only that project's style warnings: headline "5 style warnings"
   ("No style warnings", "Checking the style") with the lint glyph (spinner while running), subtitle
-  "<name> · Code style · <path>", without the path when the whole line doesn't fit (the name lives there so it
+  "<name> · <path>", without the path when the whole line doesn't fit (the name lives there so it
   never elides the count), no steps, banners, tabs or
   Log, and a ghost Show build (when there is a build; it clears `lintFocus`), centred on the close button. Signal
   `formatRequested(path)` (the section's Format project…).
 - **StyleWarningsSection**: the style warnings of one project (`app`, `svc`, `path`), from `svc.lintFor(path)`.
-  A SectionHeader "Style" with the count ("5", "5 hidden", "checking…") and ghost compact Hide/Show (the
+  A SectionHeader "Style" with the count ("5", "5 hidden", "checking…"; none when there are no warnings) and ghost compact Hide/Show (the
   `showStyleWarnings` setting) and Check again (`svc.lint`; busy while it runs); a faint line with the tools, the
-  style (`config_path` or "default style") and when it ran; "Formatting fixes N of these." with Format project…
+  style (`config_path` or "default style") and when it ran, as " · "-separated items that wrap whole (a Flow, never
+  "checked 2 / minutes ago"); "Formatting fixes N of these." with Format project…
   (signal `formatRequested()`) when some findings carry the helper's "Format project …" hint (that hint is left out
-  of their rows); then one BuildDiagnosticRow per warning (a click opens the file at the line). Loading, error, "No
+  of their rows); then one BuildDiagnosticRow per warning (`showCategory: false`: the header already says Style, so the location
+  line starts with the rule; the hovered row gets the cursor highlight, and signal `rowHovered()` lets the panel drop
+  its own row cursor; a click opens the file at the line). Loading, error, "No
   style warnings" (with the tools line) and hidden states are status lines on the rows' glyph column and text edge.
   Read-only `total`, `shown`, `visibleCount`. A truncated or timed-out result says so under the rows.
 - **ProjectFormatSheet**: "Format project…" (`app`, `svc`; `openFor(project)` opens and runs the dry run through
   `svc.formatPreview`). `phase`: `loading` (LoadingState; Esc still closes), `ready`, `error` (ErrorState with the
   helper's hint; its fix button closes the sheet) or `applying` (the Sheet's busy strip). Ready: "N files would
-  change" with files checked, style and swift-format version (glyph column and gap as the Sheet header, so the
-  text starts at the title's edge), an amber box for files swift-format couldn't read (first five), the DiffView,
+  change" with files checked, style and swift-format version (glyph column as wide as the Sheet header's glyph and
+  the same gap, so the text starts at the title's edge). The boxed blocks (apply error, unreadable files, diff, the
+  long-diff note) start at the header glyph's ink (`inkInset`: Icon centres the glyph's advance and the ink overflows
+  it, measured from the glyph's tight bounds), so they line up with the glyph you see, and end on the footer
+  buttons' right edge; the summary glyph is ink-centred on the header glyph. The diff takes the height the window
+  leaves (`diffMaxHeight`, space(160)–space(380)), so the sheet itself doesn't scroll and the long-diff note stays in
+  view. An amber box for files swift-format couldn't read (first five), the DiffView,
   and for a cut diff "Showing the start of a long diff." with the full diff's path and Open. Nothing to change:
   EmptyState "Already formatted". Footer: Cancel (Close when already formatted) and primary Apply to N files,
   `disabled` with `applyBlocker` as its tooltip while loading, after an error or with nothing to change. Apply
@@ -652,8 +660,12 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   scrolls, a wheel past its top or bottom stops there instead of scrolling the page behind the sheet.
   `parse(text)` turns `---`/`+++` pairs into one file row (file glyph + path, bold, `surfaceRaised`), `@@` lines into
   hunk bands (accent text, the function context faint, accent tint) and the rest into add/del/context rows with old
-  and new line numbers. Added lines use `Theme.success`, removed ones `Theme.error`, each on a 14 % tint with a 2 px
-  bar in that colour; context is dim. Trailing spaces on changed lines show as dots. Tabs become 4 spaces. Lines
+  and new line numbers. Added lines use `Theme.success` on a 14 % tint; removed ones `Theme.error` text on a tint of
+  the error hue at a saturation that stays red (`delFill`: a pale error colour over a green theme otherwise mixes to
+  brown); each has a 2 px bar in its text colour; context is dim. The file row's glyph sits `spacing.lg` from the path.
+  Scroll bars show whenever there's more to scroll (faint thumb, stronger on hover/drag), and the list keeps a lane
+  free for each so neither covers text. Code text has ligatures off (`->` stays two characters). Scrolled sideways,
+  a hairline separates the fixed gutter from the cut-off text. Trailing spaces on changed lines show as dots. Tabs become 4 spaces. Lines
   don't wrap: the list scrolls both ways once taller than `maxHeight` or wider than the box, and the line numbers,
   +/- marks and file paths stay in place while it scrolls sideways (the font is monospace, so widths come from one
   character's advance).
@@ -666,7 +678,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   gets a "Pre-build check" chip beside the message, or at the start of the location line on narrow rows.
   `showChip` (default true) turns the chip off, as in ProjectCheckView where every row is such an issue. A
   relative `file` is shown as it is (project check results are relative to the project). A `style` diagnostic
-  (`format-lint`) reads "Style · <rule> · file:line" and its glyph is `Theme.dim` (`Theme.warn` for a rule set to
+  (`format-lint`) reads "Style · <rule> · file:line" ("<rule> · file:line" with `showCategory: false`, as under the
+  Style section header) and its glyph is `Theme.dim` (`Theme.warn` for a rule set to
   error), never the error colour. Short of room, the location line first middle-elides the folder, hiding it once
   fewer than about 6 of its characters would show, then elides the lead ("Style · line_leng… · "); the file
   name:line:col stays whole unless it alone is wider than the row.

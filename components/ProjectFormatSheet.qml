@@ -41,6 +41,15 @@ Sheet {
   preferredWidth: Style.space(820)
   busy: applying                         // loading can still be cancelled
 
+  // The header glyph's box and ink (Sheet draws it at display size). A Nerd Font glyph is wider than
+  // its advance, and Icon centres the advance in its box, so the ink starts inside the box. Boxed
+  // blocks (apply error, unreadable files, diff, long-diff note) start where the ink does, so their
+  // left edge lines up with the glyph you see; the summary's glyph column is as wide as the header's
+  // box, so its text starts on the title's left edge. Measured 100x larger for sub-pixel bounds.
+  Icon { id: headGlyph; visible: false; glyph: root.glyph; size: Style.font.display }
+  TextMetrics { id: headInk; font.family: Style.font.family; font.pixelSize: Style.font.display * 100; text: root.glyph }
+  readonly property real inkInset: Math.max(0, (headGlyph.implicitWidth - headInk.advanceWidth / 100) / 2 + headInk.tightBoundingRect.x / 100)
+
   function openFor(p) {
     root.project = p || {}
     root.open()
@@ -79,6 +88,20 @@ Sheet {
       root.phase = "ready"
     })
   }
+
+  // The diff takes the height left in the window (up to space(380), at least space(160)), so on a
+  // short window the sheet doesn't scroll as a whole and the long-diff note under it stays in view.
+  // The Sheet's own chrome (padding, header, footer) is what its body Flickable doesn't get.
+  property Item _bodyFlick: null
+  Component.onCompleted: {
+    for (var p = changesCol.parent; p; p = p.parent) if (p instanceof Flickable) { root._bodyFlick = p; break }
+  }
+  readonly property real _chromeH: _bodyFlick && _bodyFlick.parent ? _bodyFlick.parent.height - _bodyFlick.height + Style.spacing.panelPadding * 2 : 0
+  readonly property real _othersH: [applyBanner, summaryRow, warnBox, truncRow].reduce(function(h, it) {
+    return h + (it.visible ? it.implicitHeight + changesCol.spacing : 0)
+  }, 0)
+  readonly property real diffMaxHeight: Math.min(Style.space(380), Math.max(Style.space(160),
+                                         root.height - Style.spacing.huge * 4 - _chromeH - _othersH))
 
   // Answers that arrive after the sheet closed are dropped.
   onClosed: { root._ticket++; if (root.phase === "loading") root.phase = "idle" }
@@ -135,12 +158,15 @@ Sheet {
 
   // ---- what would change
   ColumnLayout {
+    id: changesCol
     Layout.fillWidth: true
     visible: (root.phase === "ready" || root.applying) && !!root.result && root.changedCount > 0
     spacing: Style.spacing.xl
 
     ErrorState {
+      id: applyBanner
       Layout.fillWidth: true
+      Layout.leftMargin: root.inkInset
       visible: !!root.applyError
       banner: true
       app: root.app
@@ -151,16 +177,25 @@ Sheet {
     }
 
     // summary: glyph centred on the headline's line, detail under it. The glyph column and gap are the
-    // Sheet header's (display-size glyph, xxl), so the summary text starts on the title's left edge.
+    // Sheet header's (its display-size glyph's width, xxl), so the summary text starts on the title's left edge.
     RowLayout {
+      id: summaryRow
       Layout.fillWidth: true
       spacing: Style.spacing.xxl
       FontMetrics { id: headMetrics; font: headText.font }
       Item {
         Layout.alignment: Qt.AlignTop
-        Layout.preferredWidth: Style.font.display
+        Layout.preferredWidth: headGlyph.implicitWidth
         Layout.preferredHeight: headMetrics.height
-        Icon { anchors.centerIn: parent; glyph: Model.Glyph.edit; size: Style.font.iconLarge; color: Commons.Color.accent }
+        // ink-centred on the header glyph's ink (both glyphs overflow their advance to the right)
+        OpticalGlyph {
+          width: Style.font.iconLarge
+          height: parent.height
+          x: root.inkInset + headInk.tightBoundingRect.width / 200 - width / 2
+          text: Model.Glyph.edit
+          fontSize: Style.font.iconLarge
+          color: Commons.Color.accent
+        }
       }
       ColumnLayout {
         Layout.fillWidth: true
@@ -172,7 +207,9 @@ Sheet {
 
     // files swift-format couldn't read (skipped)
     Rectangle {
+      id: warnBox
       Layout.fillWidth: true
+      Layout.leftMargin: root.inkInset
       visible: root.fileErrors.length > 0
       radius: Style.cornerRadius
       color: Theme.levelFill("warn")
@@ -185,12 +222,21 @@ Sheet {
         anchors.margins: Style.spacing.lg
         anchors.leftMargin: Style.spacing.xxl
         spacing: Style.spacing.xs
+        // glyph centred on the first line (it may wrap); the file lines below start on its text edge
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.lg
-          Icon { glyph: Model.Glyph.warn; color: Theme.warn; size: Style.font.icon }
+          FontMetrics { id: errMetrics; font: errTitle.font }
+          Item {
+            Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: errIcon.implicitWidth
+            Layout.preferredHeight: errMetrics.height
+            Icon { id: errIcon; anchors.centerIn: parent; glyph: Model.Glyph.warn; color: Theme.warn; size: Style.font.icon }
+          }
           AppText {
+            id: errTitle
             Layout.fillWidth: true
+            Layout.alignment: Qt.AlignTop
             text: Model.plural(root.fileErrors.length, "file") + " couldn't be read and stay as they are"
             wrapMode: Text.WordWrap
           }
@@ -200,14 +246,14 @@ Sheet {
           delegate: AppText {
             required property var modelData
             Layout.fillWidth: true
-            Layout.leftMargin: Style.font.icon + Style.spacing.lg
+            Layout.leftMargin: errIcon.implicitWidth + Style.spacing.lg
             text: (modelData.file || "") + (modelData.message ? ": " + modelData.message : "")
             tone: "dim"; size: "small"; elide: Text.ElideMiddle
           }
         }
         AppText {
           Layout.fillWidth: true
-          Layout.leftMargin: Style.font.icon + Style.spacing.lg
+          Layout.leftMargin: errIcon.implicitWidth + Style.spacing.lg
           visible: root.fileErrors.length > 5
           text: "and " + (root.fileErrors.length - 5) + " more"
           tone: "faint"; size: "small"
@@ -217,13 +263,16 @@ Sheet {
 
     DiffView {
       Layout.fillWidth: true
+      Layout.leftMargin: root.inkInset
       text: root.result && root.result.diff ? root.result.diff : ""
-      maxHeight: Style.space(380)
+      maxHeight: root.diffMaxHeight
     }
 
     // the diff was cut: where the whole one is
     RowLayout {
+      id: truncRow
       Layout.fillWidth: true
+      Layout.leftMargin: root.inkInset
       visible: !!root.result && root.result.truncated === true
       spacing: Style.spacing.lg
       Icon { glyph: Model.Glyph.info; size: Style.font.bodySmall; color: Theme.faint }
