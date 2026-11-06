@@ -32,6 +32,14 @@ PageFrame {
   function activated(params) {
     if (!page.integration) refresh()
     var p = params || {}
+    if (p.section === "editor") {
+      page.app.projects.loadEditors()
+      Qt.callLater(function() {
+        var f = page.flickable
+        var y = editorSection.mapToItem(f.contentItem, 0, 0).y - Style.spacing.lg
+        f.contentY = Math.max(0, Math.min(y, f.contentHeight - f.height))
+      })
+    }
     if (p.section === "agents" || p.tab === "agents" || String(p.action || "").indexOf("agents") === 0) {
       agents.refresh()
       if (p.action === "agents-repair") agents.prepare(true)
@@ -183,17 +191,6 @@ PageFrame {
 
     SettingRow {
       separator: false
-      title: "Code editor"
-      description: "Command used by “Open in editor”. Leave empty to use Omarchy's default editor."
-      TextField {
-        id: editorField
-        width: Style.space(240)
-        text: page.app.settings.editorCommand || ""
-        placeholderText: "Omarchy default"
-        onEditingFinished: if (text !== (page.app.settings.editorCommand || "")) { page.app.setSetting("editorCommand", text.trim()); page.app.toast("Editor saved", "ok") }
-      }
-    }
-    SettingRow {
       title: "Default iPhone"
       description: "Used for Run when more than one iPhone is connected."
       Dropdown {
@@ -232,6 +229,9 @@ PageFrame {
       }
     }
   }
+
+  // ---------------------------------------------------------------- code editor (+ Swift completion)
+  EditorSection { id: editorSection; Layout.fillWidth: true; app: page.app }
 
   // ---------------------------------------------------------------- AI agents
   AgentsSection { id: agents; Layout.fillWidth: true; app: page.app }

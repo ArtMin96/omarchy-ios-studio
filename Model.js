@@ -145,7 +145,10 @@ var Glyph = {
   label: g(0xF0316),
   // screenshot compare (ScreenshotCompareView)
   compare: g(0xF018A),
-  imagePlus: g(0xF087C)
+  imagePlus: g(0xF087C),
+  // editor setup (Settings › Code editor)
+  editorSetup: g(0xF107B),
+  fileCode: g(0xF022E)
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

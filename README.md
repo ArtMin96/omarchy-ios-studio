@@ -17,7 +17,7 @@ iOS Studio is a desktop app for [Omarchy](https://omarchy.org/). It installs the
 | Projects | Create an app from a template, build it, run it on your iPhone and re-sign it. A failed build lists each problem with its file and line, or with a hint when the problem is outside your code. Each project card warns about settings mistakes before you build: misspelled `xtool.yml` keys, a missing camera or location permission text in `Info.plist`, a bad icon, entitlements a free Apple ID can't use. Run presets save launch arguments, environment variables and an app language per project, so Run can open the app in German or with a debug flag; the Run button's menu picks one. Projects that build through their own scripts get build settings: a prebuild command, environment variables, an open-file limit and permission to build a generated `xtool.yml`. |
 | Logs | Read your iPhone's live log, see what your app prints (`print()`), open crash reports with the file and line your app crashed on, and look back at build logs. |
 | Toolchain | Check versions and disk usage, free space, repair or remove everything. |
-| Settings | Project folders, editor, notifications, automatic re-signing, AI agents, a launcher shortcut, tiled or floating, opaque window. |
+| Settings | Project folders, your editor and Swift completion for it (Zed, Neovim with LazyVim, VS Code: set up in one click), notifications, automatic re-signing, AI agents, a launcher shortcut, tiled or floating, opaque window. |
 
 On the iPhone page you can:
 
@@ -66,7 +66,7 @@ The [user guide](docs/guide.md) walks through each page. If something goes wrong
 
 ## AI agents
 
-iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can check a project's settings for mistakes before building. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can also read what your app prints while it runs. It can read the app's screen as data (the buttons and texts VoiceOver reads), press a button on your iPhone to check that a change works, and run Apple's accessibility audit. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
+iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can check a project's settings for mistakes before building, and set up Zed, Neovim or VS Code for Swift completion. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can also read what your app prints while it runs. It can read the app's screen as data (the buttons and texts VoiceOver reads), press a button on your iPhone to check that a change works, and run Apple's accessibility audit. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
 
 ## Uninstall
 
@@ -83,6 +83,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 - [docs/features/project-build-settings.md](docs/features/project-build-settings.md) explains build settings for projects that build through their own scripts.
 - [docs/features/project-check.md](docs/features/project-check.md) explains the project check: what each check looks for and when it runs.
 - [docs/features/run-presets.md](docs/features/run-presets.md) explains run presets: what each field passes to the app, where they're stored and how agents use them.
+- [docs/features/editor-setup.md](docs/features/editor-setup.md) explains Swift completion in Zed, Neovim and VS Code: what's set up once, what each project gets by itself, and what each file contains.
 - [docs/features/screenshot-compare.md](docs/features/screenshot-compare.md) explains screenshot baselines and diffs: what counts as a change, what's ignored, where the files go and the agent tools.
 - [docs/features/ui-inspect.md](docs/features/ui-inspect.md) explains reading the screen's elements, pressing them and the accessibility audit: how it works, its limits and the agent tools.
 - To report a security problem, see [SECURITY.md](SECURITY.md).
