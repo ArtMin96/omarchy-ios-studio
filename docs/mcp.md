@@ -188,7 +188,7 @@ The server also offers a few read-only resources: the live log of a job (`iosstu
 
 ## Output size
 
-Build logs, crash reports and the phone's log can be megabytes long, and an agent pays for every byte in its context window. Every tool follows the same rules, and new tools should too. The helpers are in `mcp/iosstudio_mcp/budget.py`.
+Build logs, crash reports and the phone's log can be megabytes long, and an agent pays for every byte in its context window. Every tool follows the same rules, and new tools should too. The helpers are in `mcp/iosstudio_mcp/core/budget.py`.
 
 - A result is at most 12 KB (about 3,000 tokens), counting the text block and `structuredContent` together. Tools that return bulk output (`ios_build_log`, `ios_build_diagnostics`, `ios_logs_read`, `ios_crash_get`, `ios_app_run_and_capture`, `ios_metrics_events`, `ios_camera_test`) take `max_bytes`, which raises that combined limit to at most 48,000. For every tool, a final check shrinks the longest lists, and then the longest strings, at any depth, until the result fits, marks it `truncated` and says what was cut. It never cuts cursors, ids or paths. It never turns a large result into an error.
 - Every result is sent twice, so it reaches clients that give the model `content` and those that give it `structuredContent`. `structuredContent` has every field, log lines and crash text included. The text block shows the same result for reading: compact JSON of the other fields, then the log lines or crash text as plain lines. Because of the copy, bulk lines get a bit under half of the budget, about 5 KB of lines by default and about 22 KB with `max_bytes=48000`.
@@ -202,6 +202,28 @@ Build logs, crash reports and the phone's log can be megabytes long, and an agen
 - Errors are one line plus a next step. Details are cut at 300 characters, and raw stderr never goes into a result; the error points to the log file instead.
 - A debugger backtrace shows 20 frames of one thread and groups the others by identical stacks (12 groups at most); every frame of every thread goes to `~/.cache/ios-studio/mcp/debug/`. A debugger stop shows 20 frames and 30 variables, with values cut at 200 characters.
 - Other lists have caps too: `ios_process_list` returns 50 by default and 200 at most, and account and signing lists show 20 with totals. Free-form `data` and dry-run `would` lists stop at 20 items with "+N more".
+
+## For tool authors
+
+The server lives in `mcp/iosstudio_mcp/`. Tool modules are in `tools/`, one per area. Each has a `register(mcp)` function and can have `on_startup(state)` and `on_shutdown(state)`. The modules are listed in `MODULES` in `tools/__init__.py`. Shared code is in two folders:
+
+- `core/` holds the rules that every tool follows. `registry.py` has `tool()`, `to_result()`, `page_of()`, `fit_page()`, `dry_run()` and `MAX_WAIT` (25 s). `params.py` has the parameter types that several tools take (`Udid`, `BundleId`, `ProjectPath`, `MaxBytes`, `WaitSeconds`, `PresetName`), each defined once. `errors.py` turns an error code into one line with a next step. `job_status.py` builds the `BuildStatus` of a helper job. `budget.py` has the output-size rules (see [Output size](#output-size)).
+- `backends/` holds the code that talks to the iPhone, the helper and its files, so that several tools can use it. `device.py` has the device client, `dcall()`, `resolve_app()`, `launch()` and background installs. `projects.py` has `resolve_project()` and run presets. `builds.py` has the build history and the install-and-launch step after a Wi-Fi build. `console.py` reads an app's console. `crashes.py` reads crash reports.
+
+A tool module imports from `core/` and `backends/` only, never from another tool module (`tests/mcp/test_mcp_core.py` checks this). Code that a second tool module needs moves to `backends/`. A parameter type that a second module needs moves to `core/params.py`.
+
+Register a tool with `@tool(mcp, "Title", kind=...)` instead of `@mcp.tool()`. The return annotation is a Pydantic model, which also gives the output schema. `tool()` sends the result through `to_result()` and makes any error a single line. `kind` sets all four annotation hints:
+
+| `kind` | Use it for | readOnly | destructive | idempotent | openWorld |
+|---|---|---|---|---|---|
+| `read` | reading local state | true | false | true | false |
+| `read_remote` | reading from the iPhone, Apple or the internet | true | false | true | true |
+| `write` | changing something that can be changed back | false | false | false | false |
+| `destructive` | deleting or overwriting what the user may want back (takes `confirm`, dry run first) | false | true | false | false |
+
+Pass `idempotent=True` when repeating the call changes nothing more, `open_world=True` when a `write` or `destructive` tool reaches the iPhone, Apple or the internet, and `idempotent=False` for a read that gives a new result each time, such as a screenshot. Stopping or relaunching an app counts as `write`: it loses unsaved state but deletes nothing.
+
+Phone calls go through `await dcall(state, "cmd", {...})`. A device error becomes `"<message> [code] Next: <step>"`, with the step taken from `core/errors.py`. When a feature has a better next step for a code, pass `hints={"code": "step"}` and don't catch and re-raise the error. For example, `hints={"not-found": "Call ios_crash_list for valid names."}`.
 
 ## Safety
 

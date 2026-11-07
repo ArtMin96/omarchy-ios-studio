@@ -29,13 +29,15 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.device import dcall, resolve_app
+from ..core import budget as B
+from ..core.job_status import wait_with_progress
+from ..core.params import BundleId, Udid
+from ..core.registry import MAX_WAIT, tool
 from ..jobs import Job
 from ..models import ActionResult, ErrorInfo, Out
 from ..state import AppState, get_state
-from . import MAX_WAIT, READ_REMOTE, ann, tool, wait_with_progress
-from .device import BundleId, Udid, dcall, resolve_app
 
 log = logging.getLogger("iosstudio.debug")
 
@@ -521,7 +523,7 @@ async def on_shutdown(state: AppState) -> None:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Capture a backtrace", read_only=False, idempotent=False, open_world=True))
+    @tool(mcp, "Capture a backtrace", kind="write", open_world=True)
     async def ios_debug_backtrace(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Your app's bundle id (the XTL-<TEAM>. form also works). "
@@ -571,7 +573,7 @@ def register(mcp: MCPServer) -> None:
             return backtrace_summary(job, job.result or {}, "succeeded")
         return backtrace_summary(job, job.result or {}, "failed", job.error or {"code": "failed", "message": "Failed."})
 
-    @tool(mcp, annotations=ann("Start a debug session", read_only=False, idempotent=False, open_world=True))
+    @tool(mcp, "Start a debug session", kind="write", open_world=True)
     async def ios_debug_session_start(
         ctx: Context,
         bundle_id: BundleId,
@@ -614,7 +616,7 @@ def register(mcp: MCPServer) -> None:
         await s.wait(lambda: s.state in ("stopped", "ended", "failed"), wait_seconds)
         return session_view(s)
 
-    @tool(mcp, annotations=ann("Wait for the debugger", read_only=True, idempotent=False, open_world=True))
+    @tool(mcp, "Wait for the debugger", kind="read_remote", idempotent=False)
     async def ios_debug_session_wait(
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
@@ -629,7 +631,7 @@ def register(mcp: MCPServer) -> None:
                      wait_seconds)
         return session_view(s)
 
-    @tool(mcp, annotations=ann("Control the debugger", read_only=False, idempotent=False, open_world=True))
+    @tool(mcp, "Control the debugger", kind="write", open_world=True)
     async def ios_debug_session_command(
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
@@ -672,7 +674,7 @@ def register(mcp: MCPServer) -> None:
             raise ToolError(B.clip_error(str(ack.get("message") or "The debugger refused that command.")))
         return session_view(s)
 
-    @tool(mcp, annotations=ann("End a debug session", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "End a debug session", kind="write", idempotent=True, open_world=True)
     async def ios_debug_session_end(
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
@@ -695,7 +697,7 @@ def register(mcp: MCPServer) -> None:
                             ["The debugger may not have detached cleanly; if the app seems frozen, relaunch it with "
                              "ios_app_launch."])
 
-    @tool(mcp, annotations=READ_REMOTE("Debugger and symbols status"))
+    @tool(mcp, "Debugger and symbols status", kind="read_remote")
     async def ios_debug_symbols_status(ctx: Context, udid: Udid = None) -> DebugSymbols:
         """Whether the debugger (lldb) is installed and the state of this iPhone's debug symbols (the
         Swift runtime and system libraries of its iOS build, a one-time ~7 GB download done by the

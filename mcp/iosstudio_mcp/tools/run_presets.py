@@ -12,20 +12,16 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out
-from ..state import AppState, get_state, resolve_project
-from . import ann, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 VALUE_CUT = 300     # one argument or env value in a result
 MAX_ITEMS = 64      # args / env entries shown per preset
-
-PresetName = Annotated[str | None, Field(description="A run preset saved for the app's project (see "
-                                                     "ios_project_presets), e.g. 'German'. Its launch arguments come "
-                                                     "first, then `args`; `env` overrides its environment")]
 
 
 class PresetIn(BaseModel):
@@ -106,61 +102,13 @@ def _names(data: dict) -> list[str]:
     return [str(p.get("name")) for p in (data.get("presets") or []) if isinstance(p, dict) and p.get("name")]
 
 
-def plain_bundle(bid: str | None) -> str:
-    """com.example.app from XTL-<TEAM>.com.example.app (free teams' installed form)."""
-    b = str(bid or "").strip()
-    return b.split(".", 1)[1] if b.startswith("XTL-") and "." in b else b
-
-
-async def project_for_bundle(state: AppState, bundle_id: str) -> dict:
-    """The listed project whose bundle id is `bundle_id` (plain or XTL- form), or a ToolError asking for
-    project_path."""
-    want = plain_bundle(bundle_id)
-    items = (await state.projects()).get("projects") or []
-    hits = [p for p in items if want and plain_bundle(p.get("bundleId")) == want] or \
-        [p for p in items if want and str(p.get("name") or "").lower() == want.lower()]   # a display name
-    if len(hits) == 1:
-        return hits[0]
-    if len(hits) > 1:
-        paths = ", ".join(helper.tilde(p.get("path")) or "" for p in hits[:5])
-        raise ToolError(f"Several projects build {want} ({paths}). Pass project_path to say whose presets to use.")
-    raise ToolError(f"No listed project builds {want}, so its presets can't be found. Pass project_path "
-                    "(ios_project_list shows projects).")
-
-
-async def resolve_preset(state: AppState, preset: str, *, project_path: str | None = None,
-                         bundle_id: str | None = None) -> dict:
-    """{"name", "args", "env"} of a project's preset. The project is project_path, else the listed project
-    that builds bundle_id. An unknown name raises the helper's unknown-preset error (it lists the names)."""
-    if project_path:
-        p = await resolve_project(state, project_path)
-    elif bundle_id:
-        p = await project_for_bundle(state, bundle_id)
-    else:
-        raise ToolError("preset needs the app's project: pass project_path or bundle_id.")
-    data = await helper.call("projects", "presets", {"path": p["path"], "resolve": preset})
-    data = data if isinstance(data, dict) else {}
-    return {"name": str(data.get("name") or preset), "args": [str(x) for x in data.get("args") or []],
-            "env": {str(k): str(v) for k, v in (data.get("env") or {}).items()}, "project": p}
-
-
-def merge_launch(resolved: dict | None, args: list[str] | None, env: dict[str, str] | None
-                 ) -> tuple[list[str] | None, dict[str, str] | None]:
-    """The preset's args then the explicit ones; the explicit env overrides the preset's."""
-    if not resolved:
-        return args, env
-    a = list(resolved.get("args") or []) + list(args or [])
-    e = {**(resolved.get("env") or {}), **(env or {})}
-    return a or None, e or None
-
-
 def _more_note(k: int, total: int) -> str:
     return f"Showing {k} of {total} presets; pass name=<preset> for one of them, or raise max_bytes."
 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Run presets", read_only=False, destructive=True, idempotent=False))
+    @tool(mcp, "Run presets", kind="destructive")
     async def ios_project_presets(
         ctx: Context,
         project_path: ProjectPath,

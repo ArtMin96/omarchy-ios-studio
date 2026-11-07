@@ -11,13 +11,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out, iso
-from ..state import get_state, resolve_project
-from . import READ, ann, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 FILES_CAP = 50              # files_changed entries in a result
 ERRORS_CAP = 20
@@ -136,7 +136,7 @@ def _lint_note(k: int, total: int) -> str:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Format Swift code", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, "Format Swift code", kind="write", idempotent=True)
     async def ios_format(
         ctx: Context,
         project_path: ProjectPath,
@@ -196,7 +196,7 @@ def register(mcp: MCPServer) -> None:
             full_output_path=data.get("full_output_path"), note=" ".join(notes) or None)
         return model.with_budget(max_bytes)
 
-    @tool(mcp, annotations=READ("Lint Swift code"))
+    @tool(mcp, "Lint Swift code", kind="read")
     async def ios_format_lint(
         ctx: Context,
         project_path: ProjectPath,

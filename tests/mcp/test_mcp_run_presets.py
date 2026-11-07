@@ -16,8 +16,10 @@ from unittest import mock
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from iosstudio_mcp import budget as B
 from iosstudio_mcp import helper as H
+from iosstudio_mcp.backends import device as BD
+from iosstudio_mcp.backends import projects as P
+from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.jobs import Job
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import build as BUILD
@@ -73,7 +75,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     def patches(self, *extra):
         ps = [mock.patch.object(H, "call", self.fake_call()),
-              mock.patch.object(T, "resolve_project", fake_resolve_project)] + list(extra)
+              mock.patch.object(T, "resolve_project", fake_resolve_project),
+              mock.patch.object(P, "resolve_project", fake_resolve_project)] + list(extra)
         stack = __import__("contextlib").ExitStack()
         for p in ps:
             stack.enter_context(p)
@@ -306,7 +309,7 @@ class RunWithPreset(Base):
             await BUILD.make_installer(self.state, launch=True)(job)
         self.assertEqual(launched, [("UDID1", BUNDLE, ["-AppleLanguages", "(de)"], {"API_ENV": "staging"})])
         self.assertTrue(job.result["launched"])
-        from iosstudio_mcp.tools import _result_model, job_next_steps
+        from iosstudio_mcp.core.job_status import _result_model, job_next_steps
         res = _result_model(job)
         self.assertEqual((res.preset, res.launch_args), ("German", ["-AppleLanguages", "(de)"]))
         job.state = "succeeded"
@@ -412,7 +415,7 @@ class RunWithPreset(Base):
             sent.append((cmd, a))
             return {"pid": 5}
 
-        with mock.patch.object(D, "resolve_app", fake_resolve_app), mock.patch.object(D, "dcall", fake_dcall):
+        with mock.patch.object(BD, "resolve_app", fake_resolve_app), mock.patch.object(BD, "dcall", fake_dcall):
             await D.on_startup(self.state)
             await self.state.launch_app("UDID1", BUNDLE, args=["-X"], env={"A": "1"})
             await self.state.launch_app("UDID1", BUNDLE)
@@ -437,8 +440,8 @@ class AppLaunchWithPreset(Base):
             self.sent.append((cmd, a))
             return {"pid": 31}
 
-        with self.patches(mock.patch.object(D, "resolve_app", fake_resolve_app),
-                          mock.patch.object(D, "dcall", fake_dcall)):
+        with self.patches(mock.patch.object(BD, "resolve_app", fake_resolve_app),
+                          mock.patch.object(BD, "dcall", fake_dcall)):
             res = await self.tool(self.ctx, **kw)
         return res.structured_content
 
@@ -486,20 +489,20 @@ class AppLaunchWithPreset(Base):
 
 class Merge(unittest.TestCase):
     def test_merge_launch(self):
-        self.assertEqual(T.merge_launch(None, ["-a"], {"A": "1"}), (["-a"], {"A": "1"}))
-        self.assertEqual(T.merge_launch({"args": ["-p"], "env": {"A": "0", "B": "2"}}, ["-a"], {"A": "1"}),
+        self.assertEqual(P.merge_launch(None, ["-a"], {"A": "1"}), (["-a"], {"A": "1"}))
+        self.assertEqual(P.merge_launch({"args": ["-p"], "env": {"A": "0", "B": "2"}}, ["-a"], {"A": "1"}),
                          (["-p", "-a"], {"A": "1", "B": "2"}))
-        self.assertEqual(T.merge_launch({"args": [], "env": {}}, None, None), (None, None))
+        self.assertEqual(P.merge_launch({"args": [], "env": {}}, None, None), (None, None))
 
     def test_plain_bundle(self):
-        self.assertEqual(T.plain_bundle("XTL-ABC123.com.example.app"), "com.example.app")
-        self.assertEqual(T.plain_bundle("com.example.app"), "com.example.app")
+        self.assertEqual(P.plain_bundle("XTL-ABC123.com.example.app"), "com.example.app")
+        self.assertEqual(P.plain_bundle("com.example.app"), "com.example.app")
 
 
 class BuildOutputs(unittest.TestCase):
     def test_history_and_result_show_the_preset(self):
+        from iosstudio_mcp.core.job_status import _result_model
         from iosstudio_mcp.models import HistoryEntry
-        from iosstudio_mcp.tools import _result_model
         self.assertEqual(HistoryEntry.from_entry({"kind": "run", "preset": "German"}).preset, "German")
         self.assertIsNone(HistoryEntry.from_entry({"kind": "run"}).preset)
         j = Job(id="b-2", kind="build", action="run", title="Run")

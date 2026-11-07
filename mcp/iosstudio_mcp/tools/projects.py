@@ -16,6 +16,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
+from ..backends.projects import existing_dir, resolve_project
+from ..core.params import ProjectPath
+from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import (
     ActionResult,
     Convertible,
@@ -26,11 +29,7 @@ from ..models import (
     Template,
     TemplateList,
 )
-from ..state import existing_dir, get_state, resolve_project
-from . import MAX_WAIT, READ, ann, dry_run, fit_page, page_of, tool
-
-ProjectPath = Annotated[str, Field(description="Project folder (absolute or ~/…) or a project name from "
-                                               "ios_project_list, e.g. '~/Developer/WeatherGlance' or 'WeatherGlance'")]
+from ..state import get_state
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,48}$")
 BUNDLE_RE = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
@@ -67,7 +66,7 @@ DEMO_NEXT = ["Demo mode keeps its three made-up projects. Continue with one of t
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("List projects"))
+    @tool(mcp, "List projects", kind="read")
     async def ios_project_list(
         ctx: Context,
         query: Annotated[str | None, Field(description="Case-insensitive filter on name, path or bundle id")] = None,
@@ -105,7 +104,7 @@ def register(mcp: MCPServer) -> None:
             next_steps=nxt), "projects", offset,
             lambda k, end: f"Showing {k} of {len(items)}; call again with offset={end}, or narrow with query.")
 
-    @tool(mcp, annotations=READ("Project details"))
+    @tool(mcp, "Project details", kind="read")
     async def ios_project_info(project_path: ProjectPath, ctx: Context) -> ProjectDetail:
         """Details of one project: path, Swift sources folder, product, bundle id, minimum iOS, branch,
         last build (result, errors, log file), signing expiry, auto-renew, the last signed .ipa, its build
@@ -119,7 +118,7 @@ def register(mcp: MCPServer) -> None:
         p = await helper.call("projects", "info", {"path": p["path"]})
         return ProjectDetail.from_helper(p, _detail_next(p))
 
-    @tool(mcp, annotations=READ("App templates"))
+    @tool(mcp, "App templates", kind="read")
     async def ios_project_templates() -> TemplateList:
         """List the templates ios_project_create accepts, the default bundle-id prefix and the default folder
         for new apps."""
@@ -130,7 +129,7 @@ def register(mcp: MCPServer) -> None:
                        for t in data.get("templates") or []],
             bundle_prefix=data.get("bundlePrefix") or "com.example", default_dir=data.get("defaultDir") or "")
 
-    @tool(mcp, annotations=ann("Create app", read_only=False, destructive=False, idempotent=False))
+    @tool(mcp, "Create app", kind="write")
     async def ios_project_create(
         ctx: Context,
         name: Annotated[str, Field(description="App name: starts with a letter; letters, digits, _ only "
@@ -196,7 +195,7 @@ def register(mcp: MCPServer) -> None:
         return ProjectChange(done=True, message=f"Created {data.get('name')} at {data.get('path')}.",
                              project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
 
-    @tool(mcp, annotations=ann("Add existing project", read_only=False, idempotent=True))
+    @tool(mcp, "Add existing project", kind="write", idempotent=True)
     async def ios_project_add(
         ctx: Context,
         project_path: Annotated[str, Field(description="Existing folder with Package.swift and xtool.yml")],
@@ -213,7 +212,7 @@ def register(mcp: MCPServer) -> None:
         return ProjectChange(done=True, message=f"Added {data.get('name')}.", project=ProjectDetail.from_helper(data),
                              next_steps=_detail_next(data))
 
-    @tool(mcp, annotations=ann("Convert package to app", read_only=False, idempotent=True))
+    @tool(mcp, "Convert package to app", kind="write", idempotent=True)
     async def ios_project_convert(
         ctx: Context,
         project_path: Annotated[str, Field(description="Swift package folder: one library product, iOS platform, "
@@ -235,7 +234,7 @@ def register(mcp: MCPServer) -> None:
         return ProjectChange(done=True, message=f"{data.get('name')} is now an app ({data.get('bundleId')}).",
                              project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
 
-    @tool(mcp, annotations=ann("Project settings", read_only=False, idempotent=True))
+    @tool(mcp, "Project settings", kind="write", idempotent=True)
     async def ios_project_set(
         ctx: Context,
         project_path: ProjectPath,
@@ -262,7 +261,7 @@ def register(mcp: MCPServer) -> None:
             nxt.append("Make sure the daily renewal timer is on: ios_project_autorenew(action='status').")
         return ProjectChange(done=True, message=msg, project=ProjectDetail.from_helper(data), next_steps=nxt)
 
-    @tool(mcp, annotations=ann("Remove project from list", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Remove project from list", kind="destructive", idempotent=True)
     async def ios_project_remove(
         ctx: Context,
         project_path: ProjectPath,

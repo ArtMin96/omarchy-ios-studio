@@ -9,13 +9,13 @@ from typing import Annotated, Literal
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out
-from ..state import get_state, resolve_project
-from . import READ, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 CHECKS = ("xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version")
 HELPER_MAX = 500        # issues asked of the helper; max_issues and the check filter apply on this side
@@ -76,7 +76,7 @@ def _more_note(k: int, total: int, check: str | None, by_check: dict[str, int]) 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("Check project config"))
+    @tool(mcp, "Check project config", kind="read")
     async def ios_project_check(
         ctx: Context,
         project_path: ProjectPath,

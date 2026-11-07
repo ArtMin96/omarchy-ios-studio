@@ -15,8 +15,8 @@ from unittest import mock
 
 import crash_symbols as S
 import device_crash
-from iosstudio_mcp import budget as B
-from iosstudio_mcp.tools import crashes as T
+from iosstudio_mcp.backends import crashes as T
+from iosstudio_mcp.core import budget as B
 from support.crash import ips
 
 PROJECT = "/work/Crashy"

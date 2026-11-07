@@ -15,12 +15,13 @@ from typing import Annotated, Any
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import ProjectPath
+from ..core.registry import MAX_WAIT, tool
 from ..models import Out, iso
-from ..state import get_state, resolve_project
-from . import MAX_WAIT, READ, ann, tool
-from .projects import ProjectPath
+from ..state import get_state
 
 FIRST_ERRORS = 5
 MESSAGE_CUT = 200
@@ -180,7 +181,7 @@ DebounceMs = Annotated[int | None, Field(ge=100, le=10_000, description="Wait th
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Start watch mode", read_only=False, idempotent=True))
+    @tool(mcp, "Start watch mode", kind="write", idempotent=True)
     async def ios_watch_start(
         ctx: Context,
         project_path: ProjectPath,
@@ -209,7 +210,7 @@ def register(mcp: MCPServer) -> None:
         state.extras["watch.path"] = p["path"]
         return to_status(data or {}, p["path"]).with_budget(None)
 
-    @tool(mcp, annotations=ann("Stop watch mode", read_only=False, idempotent=True))
+    @tool(mcp, "Stop watch mode", kind="write", idempotent=True)
     async def ios_watch_stop(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Only stop if this project is the one watched; "
@@ -232,7 +233,7 @@ def register(mcp: MCPServer) -> None:
                              "project_path stops it."]
         return st
 
-    @tool(mcp, annotations=READ("Watch mode status"))
+    @tool(mcp, "Watch mode status", kind="read")
     async def ios_watch_status(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Report on this project (says so when another one "

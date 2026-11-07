@@ -6,9 +6,9 @@ import asyncio
 from mcp.server.mcpserver import Context, MCPServer
 
 from .. import helper
+from ..core.registry import tool
 from ..models import DeviceBrief, HistoryEntry, Problem, StatusReport, iso
 from ..state import get_state, last_device_state
-from . import READ, tool
 
 
 async def _safe(coro):
@@ -44,7 +44,7 @@ async def device_brief(state) -> DeviceBrief | None:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("iOS Studio status"))
+    @tool(mcp, "iOS Studio status", kind="read")
     async def ios_status(ctx: Context) -> StatusReport:
         """START HERE. One-call readiness check for iPhone development on this computer.
 

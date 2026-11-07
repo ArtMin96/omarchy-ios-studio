@@ -21,17 +21,12 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
-from ..models import ActionResult, LogRead, LogSession, RunCapture
-from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ_REMOTE, ann, tool
-from .console import ConsoleSummary, capture_summary, fmt_line
-from .device import (
+from ..backends.console import ConsoleSummary, capture_summary, fmt_line
+from ..backends.crashes import crash_detail
+from ..backends.device import (
     AppInstallStatus,
-    Udid,
     dcall,
-    device_tool_error,
     get_install,
     install_status,
     new_client,
@@ -40,7 +35,13 @@ from .device import (
     start_install,
     wait_install,
 )
-from .run_presets import PresetName, merge_launch, resolve_preset
+from ..backends.projects import merge_launch, resolve_preset, resolve_project
+from ..core import budget as B
+from ..core.errors import device_error
+from ..core.params import PresetName, Udid
+from ..core.registry import MAX_WAIT, tool
+from ..models import ActionResult, LogRead, LogSession, RunCapture
+from ..state import AppState, get_state
 
 log = logging.getLogger("iosstudio.logs")
 
@@ -172,7 +173,7 @@ async def open_session(state: AppState, filters: dict, udid: str | None, interna
         with contextlib.suppress(Exception):
             await s.client.close()
         if exc.__class__.__name__ == "DeviceError":
-            raise device_tool_error(exc) from None
+            raise device_error(exc) from None
         raise
     s.running = True
     sessions[sid] = s
@@ -245,8 +246,7 @@ def _filter_desc(f: dict) -> str:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Start iPhone log", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Start iPhone log", kind="write", open_world=True)
     async def ios_logs_start(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Only this app's lines (its process, plus lines naming "
@@ -274,7 +274,7 @@ def register(mcp: MCPServer) -> None:
                                       "the behaviour on the phone meanwhile (ios_app_launch).",
                                       f"ios_logs_stop(session_id='{s.id}') when done."])
 
-    @tool(mcp, annotations=READ_REMOTE("Read iPhone log"))
+    @tool(mcp, "Read iPhone log", kind="read_remote")
     async def ios_logs_read(
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_logs_start, e.g. 'L1'")],
@@ -367,8 +367,7 @@ def register(mcp: MCPServer) -> None:
                        next_steps=steps, truncated=bool(cut_rows or skipped), omitted=cut_rows,
                        note=note).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Stop iPhone log", read_only=False, destructive=False, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Stop iPhone log", kind="write", idempotent=True, open_world=True)
     async def ios_logs_stop(
         ctx: Context,
         session_id: Annotated[str | None, Field(description="Session to stop; omit to stop all of yours")] = None,
@@ -385,8 +384,7 @@ def register(mcp: MCPServer) -> None:
 
     # -------------------------------------------------------------- workflow
 
-    @tool(mcp, annotations=ann("Run app and capture", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Run app and capture", kind="write", open_world=True)
     async def ios_app_run_and_capture(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App to launch, e.g. 'com.example.myapp' (installed "
@@ -533,7 +531,6 @@ def register(mcp: MCPServer) -> None:
                 fresh = [c for c in after if c.get("name") not in before and c.get("process") in (None, exe)
                          and float(c.get("ts") or 0) >= started_wall - 5]
                 if fresh:
-                    from .crashes import crash_detail
                     with contextlib.suppress(ToolError):
                         new_crash = await crash_detail(state, fresh[0]["name"], udid)
                     others = [c["name"] for c in fresh[1:]]

@@ -21,12 +21,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.device import dcall
+from ..core import budget as B
+from ..core.params import Udid
+from ..core.registry import MAX_WAIT, tool
 from ..models import Out
 from ..state import AppState, get_state
-from . import MAX_WAIT, READ_REMOTE, ann, tool
-from .device import Udid, dcall
 
 THUMB_DIM = 320          # long edge of the inline thumbnail
 THUMB_BYTES = 60_000     # it's a preview; ios_screenshot is the tool for a sharp still
@@ -178,7 +179,7 @@ def _brief(d: dict | None) -> RecordingInfo | None:
 
 def register(mcp: MCPServer) -> None:
 
-    @mcp.tool(annotations=ann("Record the screen", read_only=True, idempotent=False, open_world=True))
+    @tool(mcp, "Record the screen", kind="read_remote", idempotent=False)
     async def ios_screen_record(
         ctx: Context,
         seconds: Annotated[int, Field(ge=1, le=60, description="Length of the recording")] = 10,
@@ -232,7 +233,7 @@ def register(mcp: MCPServer) -> None:
             content.insert(0, ImageContent(type="image", data=base64.b64encode(img).decode(), mime_type=f"image/{fmt}"))
         return CallToolResult(content=content, structured_content=B.dump(info))
 
-    @tool(mcp, annotations=READ_REMOTE("Screen mirror status"))
+    @tool(mcp, "Screen mirror status", kind="read_remote")
     async def ios_mirror_status(ctx: Context, udid: Udid = None) -> MirrorStatus:
         """How the live screen view of the iPhone works right now: whether it runs, in which mode (stream =
         smooth, iOS 27+; screenshot = a few frames a second), the frame rate it actually reaches, which modes

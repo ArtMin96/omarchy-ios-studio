@@ -1,23 +1,17 @@
 """iPhone and app tools, through the shared device daemon (helper/device_client.py).
 
 The MCP server is one more client of the per-user device broker that the iOS Studio window also
-uses, so both share one tunnel to the phone. The client connects lazily, on the first tool that
-needs the phone; ios_status only attaches when a daemon is already running. This module also fills
+uses, so both share one tunnel to the phone. On startup this module fills
 the AppState device slots (install_app, launch_app, device_udid, device_status) used by ios_run,
 renewals and ios_status.
 
-Other modules call the phone with `await dcall(state, "cmd", {...})`, which turns a DeviceError into
-a ToolError naming the next tool to call.
+The client, dcall and the install/launch helpers live in backends/device.py.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import itertools
 import logging
-import os
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -26,13 +20,29 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
-from ..jobs import Job
+from ..backends.device import (
+    AppInstallStatus,
+    apps,
+    attach,
+    close,
+    dcall,
+    get_install,
+    hub,
+    install_status,
+    launch,
+    package_for,
+    resolve_app,
+    start_install,
+    wait_install,
+)
+from ..backends.projects import merge_launch, resolve_preset
+from ..core import budget as B
+from ..core.params import BundleId, PresetName, Udid
+from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import (
     ActionResult,
     AppBrief,
-    AppInstallResult,
     AppLaunchResult,
     AppList,
     DeviceDetails,
@@ -44,416 +54,9 @@ from ..models import (
     ProcessList,
     ScreenshotInfo,
 )
-from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
-from .run_presets import PresetName, merge_launch, resolve_preset
+from ..state import AppState, get_state
 
 log = logging.getLogger("iosstudio.device")
-
-Udid = Annotated[str | None, Field(description="iPhone udid; default: the active iPhone (see ios_device_list)")]
-BundleId = Annotated[str, Field(description="Bundle id, e.g. 'com.example.myapp'. The installed "
-                                            "'XTL-<TEAM>.com.example.myapp' form also works")]
-
-# Device-wide events the MCP client wants. Not 'frame' (mirror images) or icons: nobody here reads them.
-EVENTS = ["ready", "devices", "connection", "deviceInfo", "installProgress", "transfer", "cameratest"]
-
-
-# ------------------------------------------------------------------ errors
-
-def _next_for(code: str, fix: dict | None) -> str | None:
-    pair = ("Pairing is a human step: ask the user to connect the iPhone by cable, unlock it and tap Trust "
-            "(or pair over Wi-Fi in iOS Studio): ios_open_app(page='device'). Then ios_device_list.")
-    table = {
-        "no-device": pair, "not-paired": pair, "not-trusted": pair, "device-not-found": pair,
-        "unreachable": "Ask the user to wake and unlock the iPhone and keep it on the same Wi-Fi (or plug it in), "
-                       "then ios_device_reconnect and retry.",
-        "locked": "Ask the user to unlock the iPhone, then retry.",
-        "developer-mode-off": "Call ios_device_prepare: it tells the user how to turn on Developer Mode.",
-        "ddi": "Call ios_device_prepare(mount=true); mounting the developer disk image needs internet.",
-        "busy": "Another operation (e.g. pairing in the iOS Studio window) is running. Wait a moment and retry.",
-        "pmd3-api": "The iPhone tools need an update: ios_toolchain_check, then ios_toolchain_install.",
-        "needs-setup": "The iPhone tools aren't installed: ios_toolchain_check, then ios_toolchain_install.",
-        "app-limit": "Free Apple IDs allow 3 of your own apps per iPhone. Show ios_app_list(scope='own') to the "
-                     "user and, only with their OK, remove one with ios_app_uninstall.",
-        "device-not-registered": "Install once over USB so the iPhone is registered: plug it in and run "
-                                 "ios_run(project_path, via='usb').",
-        "no-space": "The iPhone is out of storage. Ask the user to free some space.",
-        "incompatible": "The app's minimum iOS or architecture doesn't match this iPhone (ios_device_info shows its "
-                        "iOS version).",
-        "bad-signature": "Re-sign the app: ios_run(project_path) or ios_project_renew.",
-        "bad-package": "The file isn't a valid signed .ipa or .app. Build one with ios_build_start(action='ipa').",
-        "timeout": "The iPhone was slow to answer. Make sure it's awake and unlocked, then retry "
-                   "(ios_device_list shows its connection).",
-        "disconnected": "The device service restarted. Retry the call.",
-        "daemon-unavailable": "The iPhone service couldn't start. Run ios_toolchain_check (pymobiledevice3 step), "
-                              "or ask the user to open iOS Studio: ios_open_app(page='device').",
-        "socket-path-too-long": "Set IOSSTUDIO_RUNTIME_DIR to a shorter folder (socket paths max out at 107 bytes), "
-                                "then restart the MCP server.",
-        # UI inspection (ui.* in docs/deviced-protocol.md)
-        "no-element": "No element has that label or id. Use one of the close labels above, or call ios_ui_tree "
-                      "(filter=...) to see what's on screen now.",
-        "ambiguous-label": "Several elements match. Press one by element_id (listed above), or pass the full "
-                           "label with match='exact'.",
-        "stale-element": "The screen changed since that id was read. Call ios_ui_tree again and use a fresh id.",
-        "press-failed": "The iPhone didn't activate that element (some controls ignore accessibility presses). "
-                        "Try its parent cell or a nearby button from ios_ui_tree, and check with ios_screenshot.",
-        "bad-args": "Check the arguments named in the message (ios_ui_press takes exactly one of element_id or label).",
-        "ax-unavailable": "The iPhone's accessibility inspection service isn't available. Make sure the iPhone is "
-                          "unlocked with Developer Mode on (ios_device_prepare), then ios_device_reconnect and retry.",
-        "wrong-app": "That app isn't the one in front (or isn't installed or running). Launch it with "
-                     "ios_app_launch(bundle_id) first (ios_app_list shows what's installed), then retry.",
-        "no-app-in-front": "No app was detected in front. Open the app with ios_app_launch(bundle_id) first, or pass "
-                           "bundle_id, then retry.",
-    }
-    if code in table:
-        return table[code]
-    page = (fix or {}).get("page")
-    if page == "device":
-        return "Ask the user to check the iPhone in iOS Studio: ios_open_app(page='device')."
-    return helper.NEXT_BY_PAGE.get(page) if page else None
-
-
-def device_tool_error(exc: Exception, not_found: str | None = None) -> ToolError:
-    code = str(getattr(exc, "code", "failed") or "failed")
-    msg = str(getattr(exc, "message", None) or exc).strip()
-    nxt = not_found if code == "not-found" and not_found else _next_for(code, getattr(exc, "fix", None))
-    detail = getattr(exc, "detail", None)
-    out = f"{msg} [{code}]"
-    if detail and code in ("failed", "install-failed", "ddi", "bad-package", "daemon-unavailable"):
-        out += f" Detail: {str(detail).strip()[:300]}"
-    elif detail and code in ("no-element", "ambiguous-label", "wrong-app", "press-failed", "ax-unavailable"):
-        if isinstance(detail, (list, tuple)):
-            detail = "; ".join(str(x) for x in detail)
-        out += f" Detail: {str(detail).strip()[:250]}"
-    if nxt:
-        out += f" Next: {nxt}"
-    return ToolError(out)
-
-
-# ------------------------------------------------------------------ the shared client
-
-def _hub(state: AppState) -> dict:
-    return state.extras.setdefault("device", {"lock": asyncio.Lock(), "connection": None, "info": {},
-                                              "listeners": []})
-
-
-def _socket_exists() -> bool:
-    _ensure_runtime_dir()
-    try:
-        return helper.device_client_module().socket_path().exists()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _ensure_runtime_dir() -> None:
-    """The daemon's socket lives in $XDG_RUNTIME_DIR. Agents often start MCP servers with a trimmed
-    environment; without this the server would start a second daemon under /tmp instead of sharing the
-    one the iOS Studio window uses."""
-    if not os.environ.get("XDG_RUNTIME_DIR"):
-        run = Path(f"/run/user/{os.getuid()}")
-        if run.is_dir() and os.access(run, os.W_OK):
-            os.environ["XDG_RUNTIME_DIR"] = str(run)
-
-
-def new_client(name: str, events: list[str] | None):
-    _ensure_runtime_dir()
-    mod = helper.device_client_module()
-    return mod.DeviceClient(name=name, events=events, connect_timeout=40.0)
-
-
-async def client(state: AppState):
-    """The server's DeviceClient, connected (spawning the daemon if needed)."""
-    hub = _hub(state)
-    async with hub["lock"]:
-        if state.device is None:
-            dev = new_client("mcp", EVENTS)
-
-            def on_event(name: str, data: Any) -> None:
-                if name == "connection" and isinstance(data, dict):
-                    hub["connection"] = data
-                elif name == "deviceInfo" and isinstance(data, dict):
-                    hub["info"].update({k: v for k, v in data.items()})
-                for cb in list(hub["listeners"]):
-                    cb(name, data)
-
-            dev.on_event(on_event)
-            state.device = dev
-        if not state.device.connected:
-            try:
-                await state.device.connect()
-            except Exception as exc:  # noqa: BLE001
-                raise device_tool_error(exc) from None
-            log.info("connected to the device daemon (pid %s)", (state.device.hello or {}).get("pid"))
-        return state.device
-
-
-async def dcall(state: AppState, cmd: str, args: dict | None = None, *, timeout: float = 60.0,
-                udid: str | None = None, not_found: str | None = None) -> Any:
-    """One device request. DeviceError -> ToolError with the next step."""
-    dev = await client(state)
-    a = dict(args or {})
-    if udid:
-        a["udid"] = udid
-    try:
-        return await dev.request(cmd, a, timeout=timeout)
-    except Exception as exc:  # noqa: BLE001
-        if exc.__class__.__name__ == "DeviceError":
-            raise device_tool_error(exc, not_found) from None
-        raise
-
-
-async def apps(state: AppState, udid: str | None = None, system: bool = False) -> list[dict]:
-    data = await dcall(state, "apps.list", {"system": system, "icons": False, "sizes": False}, udid=udid, timeout=40)
-    if isinstance(data, dict):  # {apps, stale, fetchedAt}
-        data = data.get("apps")
-    return data if isinstance(data, list) else []
-
-
-def match_app(items: list[dict], want: str) -> dict | None:
-    """Free teams install com.example.app as XTL-<TEAM>.com.example.app; match either form (as the GUI does)."""
-    want = want.strip()
-    for a in items:
-        if a.get("bundleId") == want:
-            return a
-    plain = want.split(".", 1)[-1] if want.startswith("XTL-") else want
-    for a in items:
-        b = str(a.get("bundleId") or "")
-        if b == plain or b.endswith("." + plain):
-            return a
-    low = want.lower()
-    for a in items:   # last resort: the app's display name
-        if str(a.get("name", "")).lower() == low:
-            return a
-    return None
-
-
-async def resolve_app(state: AppState, bundle_id: str, udid: str | None = None) -> dict:
-    items = await apps(state, udid)
-    a = match_app(items, bundle_id)
-    if a is None:
-        own = ", ".join(str(x.get("bundleId")) for x in items if x.get("developer"))[:400] or "none"
-        raise ToolError(f"No app '{bundle_id}' is installed on the iPhone. Your own apps there: {own}. "
-                        "Install it with ios_run(project_path) or ios_app_install(path).")
-    return a
-
-
-# ------------------------------------------------------------------ slots for ios_run / ios_status
-
-async def install_ipa(state: AppState, udid: str | None, path: str, on_progress=None) -> dict:
-    """app.install with installProgress forwarded to on_progress(percent, status)."""
-    hub = _hub(state)
-
-    def listener(name: str, data: Any) -> None:
-        if name == "installProgress" and isinstance(data, dict) and on_progress and \
-                (not data.get("path") or data.get("path") == path):
-            try:
-                r = on_progress(float(data.get("percent") or 0), str(data.get("status") or ""))
-                if asyncio.iscoroutine(r):
-                    asyncio.ensure_future(r)
-            except Exception:  # noqa: BLE001
-                pass
-
-    await client(state)
-    hub["listeners"].append(listener)
-    try:
-        return await dcall(state, "app.install", {"path": path}, udid=udid, timeout=600) or {}
-    finally:
-        hub["listeners"].remove(listener)
-
-
-async def _install_for_job(state: AppState, udid: str, ipa: str, job: Job) -> dict:
-    def prog(pct: float, status: str) -> None:
-        job.set_step("install", "Installing", "running", detail=f"{status or 'installing'} {pct:.0f}%", owner="mcp")
-        job.progress_detail = f"Installing on the iPhone: {pct:.0f}%"
-        job.touch()
-    res = await install_ipa(state, udid, ipa, prog)
-    job.add_line(f"Installed {res.get('bundleId') or ipa} on the iPhone in {res.get('seconds') or '?'} s")
-    if res.get("bundleId") and job.result is not None:
-        job.result["installedBundleId"] = res["bundleId"]
-    return res
-
-
-class AppInstallStatus(AppInstallResult):
-    """AppInstallResult plus the state of the background install (ios_app_install, ios_app_run_and_capture)."""
-    state: Literal["running", "succeeded"] = Field("succeeded", description="running: still installing; call "
-                                                   "the same tool again with install_id")
-    install_id: str | None = Field(None, description="Pass back as install_id to wait for this install")
-    progress: float | None = Field(None, description="0-1 while installing")
-    progress_detail: str | None = None
-    elapsed_seconds: float | None = None
-
-
-@dataclass
-class InstallJob:
-    """One app.install running in this server, so a tool can return before it ends (installs over Wi-Fi
-    can take minutes) and a later call can wait for it."""
-    id: str
-    pkg: str
-    started: float = field(default_factory=time.time)
-    task: asyncio.Task | None = None
-    percent: float | None = None
-    status: str = ""
-    result: dict | None = None
-    error: BaseException | None = None
-    changed: asyncio.Event = field(default_factory=asyncio.Event)
-
-    @property
-    def finished(self) -> bool:
-        return self.task is not None and self.task.done()
-
-
-_install_ids = itertools.count(1)
-INSTALLS_KEPT = 10
-
-
-def _installs(state: AppState) -> dict[str, InstallJob]:
-    return state.extras.setdefault("device.installs", {})
-
-
-def start_install(state: AppState, udid: str | None, pkg: str, project: dict | None = None) -> InstallJob:
-    """Start app.install as a background task of this server (it keeps going if the tool call returns or the
-    client gives up), recording the install on the project when it ends."""
-    jobs = _installs(state)
-    for k in [k for k, j in jobs.items() if j.finished][:max(0, len(jobs) - INSTALLS_KEPT)]:
-        jobs.pop(k, None)
-    job = InstallJob(id=f"i{int(time.time()) % 100000}-{next(_install_ids)}", pkg=pkg)
-
-    def prog(pct: float, status: str) -> None:
-        job.percent, job.status = pct, status
-        job.changed.set()
-
-    async def run() -> None:
-        try:
-            u = udid or await state.active_udid()
-            job.result = await install_ipa(state, udid, pkg, prog)
-            if project:
-                try:
-                    await helper.call("projects", "record-install", {"path": project["path"], "udid": u,
-                                                                     "via": "wifi", "ipa": pkg})
-                except ToolError:
-                    pass
-        except BaseException as exc:  # noqa: BLE001 - kept for the status
-            job.error = exc
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-        finally:
-            job.changed.set()
-
-    jobs[job.id] = job
-    job.task = asyncio.create_task(run(), name=f"install-{job.id}")
-    return job
-
-
-def get_install(state: AppState, install_id: str) -> InstallJob:
-    job = _installs(state).get(install_id.strip())
-    if job is None:
-        known = ", ".join(_installs(state)) or "none"
-        raise ToolError(f"Unknown install_id '{install_id}' (known here: {known}). Ids live only while this MCP "
-                        "server runs; start the install again.")
-    return job
-
-
-async def wait_install(job: InstallJob, seconds: float, on_progress=None) -> None:
-    """Wait up to `seconds` (≤ MAX_WAIT) for the install, calling on_progress(percent, status) as it moves."""
-    deadline = time.monotonic() + max(0.0, min(seconds, MAX_WAIT))
-    while not job.finished:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            break
-        job.changed.clear()
-        try:
-            await asyncio.wait_for(job.changed.wait(), min(left, 5.0))
-        except asyncio.TimeoutError:
-            pass
-        if on_progress and job.percent is not None:
-            try:
-                await on_progress(job.percent, job.status)
-            except Exception:  # noqa: BLE001
-                pass
-
-
-def install_status(job: InstallJob, next_step: str | None = None) -> AppInstallStatus:
-    """The install's result, or state='running'; raises the install's error if it failed."""
-    if not job.finished:
-        pct = job.percent
-        return AppInstallStatus(
-            installed=False, state="running", install_id=job.id, path=helper.tilde(job.pkg),
-            progress=round(pct / 100, 3) if pct is not None else None,
-            progress_detail=f"{job.status or 'installing'} {pct:.0f}%" if pct is not None else "starting",
-            elapsed_seconds=round(time.time() - job.started, 1),
-            next_steps=[next_step or f"Still installing. Call ios_app_install(install_id='{job.id}', "
-                                     "wait_seconds=20) again to wait for it."])
-    if job.error is not None:
-        if isinstance(job.error, ToolError):
-            raise ToolError(str(job.error))
-        raise ToolError(f"Installing {helper.tilde(job.pkg)} failed: {job.error}")
-    res = job.result or {}
-    bid = res.get("bundleId")
-    return AppInstallStatus(installed=True, state="succeeded", install_id=job.id, bundle_id=bid,
-                            package_bundle_id=res.get("packageBundleId"), path=helper.tilde(job.pkg),
-                            seconds=res.get("seconds"), elapsed_seconds=round(time.time() - job.started, 1),
-                            next_steps=[f"Launch it and see what happens: ios_app_run_and_capture(bundle_id='{bid}')."
-                                        if bid else "Launch it with ios_app_launch."])
-
-
-async def launch(state: AppState, udid: str | None, bundle_id: str, args: list[str] | None = None,
-                 env: dict[str, str] | None = None, console: bool = False) -> dict:
-    app = await resolve_app(state, bundle_id, udid)
-    a: dict = {"bundleId": app["bundleId"]}
-    if console:
-        a["console"] = True    # capture stdout/stderr for ios_app_console_read (tools/console.py)
-    if args:
-        a["args"] = args
-    if env:
-        a["env"] = env
-    res = await dcall(state, "app.launch", a, udid=udid, timeout=60) or {}
-    res.setdefault("bundleId", app["bundleId"])
-    return res
-
-
-async def _active(state: AppState, connect: bool) -> dict | None:
-    if state.device is None or not state.device.connected:
-        if not connect and not _socket_exists():
-            return None
-    devs = await dcall(state, "devices.list", timeout=10)
-    return next((d for d in devs or [] if d.get("active")), None)
-
-
-async def _device_udid(state: AppState) -> str | None:
-    d = await _active(state, connect=False)
-    return d.get("udid") if d else None
-
-
-async def _device_status(state: AppState) -> dict | None:
-    d = await _active(state, connect=False)
-    if not d:
-        return None
-    hub = _hub(state)
-    conn = hub.get("connection") or {}
-    info = hub.get("info") or {}
-    if conn.get("udid") not in (None, d.get("udid")):
-        conn = {}
-    return {"udid": d.get("udid"), "name": d.get("name"), "model": d.get("model"), "iosVersion": d.get("ios"),
-            "connection": conn.get("state") or d.get("state"), "transport": d.get("transport"),
-            "developerMode": info.get("developerMode") if info.get("udid") in (None, d.get("udid")) else None,
-            "updatedAt": time.time()}
-
-
-async def on_startup(state: AppState) -> None:
-    state.install_app = lambda udid, ipa, job: _install_for_job(state, udid, ipa, job)
-    state.launch_app = lambda udid, bundle_id, args=None, env=None: launch(state, udid, bundle_id, args, env,
-                                                                            console=True)
-    state.device_udid = lambda: _device_udid(state)
-    state.device_status = lambda: _device_status(state)
-
-
-async def on_shutdown(state: AppState) -> None:
-    dev, state.device = state.device, None
-    if dev is not None:
-        try:
-            await asyncio.wait_for(dev.close(), 5)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 # ------------------------------------------------------------------ formatting
@@ -478,53 +81,21 @@ def _app(a: dict) -> AppBrief:
                     running=bool(a.get("running")), pid=a.get("pid"))
 
 
-def _check_package(raw: str) -> str:
-    p = helper.expand(raw)
-    if p.suffix.lower() not in (".ipa", ".app"):
-        raise ToolError(f"{helper.tilde(str(p))} isn't an .ipa or .app. Build a signed one with "
-                        "ios_build_start(action='ipa'), or pass project_path.")
-    if helper.demo_mode():
-        return str(p)
-    if not p.exists():
-        raise ToolError(f"No file at {helper.tilde(str(p))}.")
-    if p.suffix.lower() == ".app" and not p.is_dir():
-        raise ToolError(f"{helper.tilde(str(p))} should be an .app folder.")
-    if not helper.inside_home(p):
-        raise ToolError("The app must be inside your home folder (or a folder in IOSSTUDIO_MCP_ALLOW_PATHS).")
-    return str(p)
-
-
-async def package_for(state: AppState, path: str | None, project_path: str | None) -> tuple[str, dict | None]:
-    """(.ipa/.app path, project entry) from an explicit path or a project's last signed build."""
-    if path:
-        return _check_package(path), None
-    if not project_path:
-        raise ToolError("Pass path (a signed .ipa or .app) or project_path.")
-    proj = await resolve_project(state, project_path)
-    info = proj if proj.get("ipa") else await helper.call("projects", "info", {"path": proj["path"]})
-    ipa = info.get("ipa")
-    if not ipa:   # a build from this session, else the newest build in the history that produced one
-        job = state.jobs.latest_for(proj["path"])
-        ipa = (job.result or {}).get("ipa") if job and job.state == "succeeded" else None
-    if not ipa:
-        from .build import _history
-        ipa = next((b.get("ipa") for b in await _history(proj["path"], 20) if b.get("ipa") and b.get("result") == "ok"),
-                   None)
-    if not ipa:
-        raise ToolError(f"{proj.get('name')} has no signed build yet. Run ios_build_start(project_path, action='ipa') "
-                        "or ios_run(project_path).")
-    return _check_package(ipa), proj
-
-
-# ------------------------------------------------------------------ screenshots
-
 # ------------------------------------------------------------------ tools
+
+async def on_startup(state: AppState) -> None:
+    attach(state)
+
+
+async def on_shutdown(state: AppState) -> None:
+    await close(state)
+
 
 def register(mcp: MCPServer) -> None:
 
     # -------------------------------------------------------------- devices
 
-    @tool(mcp, annotations=READ_REMOTE("List iPhones"))
+    @tool(mcp, "List iPhones", kind="read_remote")
     async def ios_device_list(ctx: Context) -> DeviceList:
         """iPhones this computer knows (paired over USB and/or Wi-Fi), which one is active, and its
         connection state (connected / locked / unreachable / not-paired…).
@@ -535,7 +106,7 @@ def register(mcp: MCPServer) -> None:
         """
         state = get_state(ctx)
         devs = await dcall(state, "devices.list", timeout=15) or []
-        conn = _hub(state).get("connection") or {}
+        conn = hub(state).get("connection") or {}
         active = next((d for d in devs if d.get("active")), None)
         nxt = []
         if not devs:
@@ -552,7 +123,7 @@ def register(mcp: MCPServer) -> None:
         return DeviceList(devices=[_entry(d) for d in devs], active_udid=active.get("udid") if active else None,
                           connection=conn.get("message") if conn else None, next_steps=nxt)
 
-    @tool(mcp, annotations=READ_REMOTE("iPhone details"))
+    @tool(mcp, "iPhone details", kind="read_remote")
     async def ios_device_info(
         ctx: Context,
         udid: Udid = None,
@@ -566,7 +137,7 @@ def register(mcp: MCPServer) -> None:
         d = await dcall(state, "device.info", {"fresh": fresh}, udid=udid, timeout=45) or {}
         bat = d.get("battery") or {}
         sto = d.get("storage") or {}
-        conn = _hub(state).get("connection") or {}
+        conn = hub(state).get("connection") or {}
         nxt = []
         if d.get("developerMode") is False or d.get("ddiMounted") is False:
             nxt.append("Not ready to launch apps: call ios_device_prepare.")
@@ -582,7 +153,7 @@ def register(mcp: MCPServer) -> None:
                              locked=d.get("locked"), wifi_paired=d.get("wifiPaired"), usb_paired=d.get("usbPaired"),
                              next_steps=nxt)
 
-    @tool(mcp, annotations=ann("Select iPhone", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Select iPhone", kind="write", idempotent=True)
     async def ios_device_select(
         ctx: Context,
         udid: Annotated[str, Field(description="udid from ios_device_list")],
@@ -591,10 +162,10 @@ def register(mcp: MCPServer) -> None:
         then use it. Shared with the window (last choice wins). Returns the updated device list."""
         state = get_state(ctx)
         await dcall(state, "device.select", {"udid": udid}, timeout=30,
-                    not_found="Call ios_device_list for valid udids.")
+                    hints={"not-found": "Call ios_device_list for valid udids."})
         return await ios_device_list(ctx)
 
-    @tool(mcp, annotations=ann("Reconnect iPhone", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Reconnect iPhone", kind="write", idempotent=True, open_world=True)
     async def ios_device_reconnect(ctx: Context, udid: Udid = None) -> DeviceList:
         """Drop and reopen the connection to the iPhone now (skips the retry back-off). Use after the user
         woke/unlocked the phone or joined the same Wi-Fi, or when calls time out. Returns the device list
@@ -603,12 +174,12 @@ def register(mcp: MCPServer) -> None:
         await dcall(state, "device.reconnect", udid=udid, timeout=20)
         for _ in range(16):
             await asyncio.sleep(0.5)
-            if (_hub(state).get("connection") or {}).get("state") in ("connected", "locked", "not-paired",
+            if (hub(state).get("connection") or {}).get("state") in ("connected", "locked", "not-paired",
                                                                         "untrusted", "error"):
                 break
         return await ios_device_list(ctx)
 
-    @tool(mcp, annotations=ann("Prepare iPhone for development", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Prepare iPhone for development", kind="write", idempotent=True, open_world=True)
     async def ios_device_prepare(
         ctx: Context,
         udid: Udid = None,
@@ -651,7 +222,7 @@ def register(mcp: MCPServer) -> None:
 
     # -------------------------------------------------------------- apps
 
-    @tool(mcp, annotations=READ_REMOTE("List installed apps"))
+    @tool(mcp, "List installed apps", kind="read_remote")
     async def ios_app_list(
         ctx: Context,
         scope: Annotated[Literal["own", "all"], Field(description="own: development-signed apps (yours, e.g. built "
@@ -686,7 +257,7 @@ def register(mcp: MCPServer) -> None:
                                 omitted=len(items) - len(page)), "apps", offset,
                         lambda k, end: f"Showing {k} of {len(items)}; call again with offset={end}, or narrow with query.")
 
-    @tool(mcp, annotations=ann("Install app", read_only=False, destructive=False, idempotent=False, open_world=True))
+    @tool(mcp, "Install app", kind="write", open_world=True)
     async def ios_app_install(
         ctx: Context,
         path: Annotated[str | None, Field(description="A signed .ipa file or .app folder, e.g. "
@@ -721,7 +292,7 @@ def register(mcp: MCPServer) -> None:
         await wait_install(job, wait_seconds, prog)
         return install_status(job)
 
-    @tool(mcp, annotations=ann("Launch app", read_only=False, destructive=False, idempotent=False, open_world=True))
+    @tool(mcp, "Launch app", kind="write", open_world=True)
     async def ios_app_launch(
         ctx: Context,
         bundle_id: BundleId,
@@ -760,7 +331,7 @@ def register(mcp: MCPServer) -> None:
                                env={k: B.clip(v, 300) for k, v in (env or {}).items()} if how else {},
                                next_steps=steps)
 
-    @tool(mcp, annotations=ann("Stop app", read_only=False, destructive=False, idempotent=True, open_world=True))
+    @tool(mcp, "Stop app", kind="write", idempotent=True, open_world=True)
     async def ios_app_kill(ctx: Context, bundle_id: BundleId, udid: Udid = None) -> ActionResult:
         """Terminate a running app on the iPhone (like swiping it away; unsaved state in the app is lost).
         Does nothing if it isn't running."""
@@ -771,7 +342,7 @@ def register(mcp: MCPServer) -> None:
         return ActionResult(done=True, message=f"Stopped {app.get('name')} (pid {', '.join(map(str, killed))})."
                             if killed else f"{app.get('name')} wasn't running.", data={"bundle_id": app["bundleId"]})
 
-    @tool(mcp, annotations=ann("Uninstall app", read_only=False, destructive=True, idempotent=True, open_world=True))
+    @tool(mcp, "Uninstall app", kind="destructive", idempotent=True, open_world=True)
     async def ios_app_uninstall(
         ctx: Context,
         bundle_id: BundleId,
@@ -792,7 +363,7 @@ def register(mcp: MCPServer) -> None:
         await dcall(state, "app.uninstall", {"bundleId": app["bundleId"]}, udid=udid, timeout=60)
         return ActionResult(done=True, message=f"Uninstalled {what}.", data={"bundle_id": app["bundleId"]})
 
-    @tool(mcp, annotations=READ_REMOTE("List processes"))
+    @tool(mcp, "List processes", kind="read_remote")
     async def ios_process_list(
         ctx: Context,
         apps_only: Annotated[bool, Field(description="Only app processes (not system daemons)")] = True,
@@ -815,7 +386,7 @@ def register(mcp: MCPServer) -> None:
                            note=f"Showing {len(out)} of {len(items)} (sorted by name); narrow with query"
                                 + (" or apps_only=true." if not apps_only else ".") if cut else None)
 
-    @mcp.tool(annotations=ann("Screenshot", read_only=True, idempotent=False, open_world=True))
+    @tool(mcp, "Screenshot", kind="read_remote", idempotent=False)
     async def ios_screenshot(
         ctx: Context,
         max_dimension: Annotated[int, Field(ge=256, le=B.IMG_MAX_DIM, description="Downscale so the long edge is "
@@ -832,10 +403,7 @@ def register(mcp: MCPServer) -> None:
         down from 80 until it fits); width, height and bytes are reported. inline=false returns only the
         path. The phone must be unlocked with the screen on. If your client can't show images, open the path."""
         state = get_state(ctx)
-        try:
-            shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
-        except ToolError as exc:
-            raise ToolError(B.clip_error(str(exc))) from None
+        shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
         src = Path(str(shot.get("path") or ""))
         if not src.is_file():
             raise ToolError("The iPhone returned no screenshot file. Retry with the phone unlocked.")
@@ -868,7 +436,7 @@ def register(mcp: MCPServer) -> None:
              "(about 2 minutes after both this server and the iOS Studio window have closed). It applies to the "
              "whole phone and every app.")
 
-    @tool(mcp, annotations=ann("Simulate location", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Simulate location", kind="write", idempotent=True, open_world=True)
     async def ios_location_set(
         ctx: Context,
         lat: Annotated[float, Field(ge=-90, le=90, description="Latitude, e.g. 38.7223")],
@@ -883,7 +451,7 @@ def register(mcp: MCPServer) -> None:
         return LocationResult(active=True, lat=res.get("lat", lat), lon=res.get("lon", lon),
                               message="The iPhone now reports this location. " + LASTS)
 
-    @tool(mcp, annotations=ann("Clear simulated location", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Clear simulated location", kind="write", idempotent=True, open_world=True)
     async def ios_location_clear(ctx: Context, udid: Udid = None) -> LocationResult:
         """Stop simulating a location; the iPhone goes back to its real position."""
         state = get_state(ctx)

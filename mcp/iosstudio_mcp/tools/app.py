@@ -11,10 +11,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..core import budget as B
+from ..core.registry import tool
 from ..models import ActionResult
-from . import ann, tool
 
 PAGES = ("home", "setup", "account", "device", "projects", "logs", "crashes", "toolchain", "settings")
 
@@ -26,7 +26,6 @@ HUMAN_STEP = {
     "setup": "Ask the user to finish the highlighted Setup step in the window (some steps need their password "
              "or an Xcode download). Then call ios_toolchain_check.",
 }
-
 
 
 def _session_env() -> dict[str, str]:
@@ -50,7 +49,7 @@ def _session_env() -> dict[str, str]:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Open iOS Studio", read_only=False, idempotent=True))
+    @tool(mcp, "Open iOS Studio", kind="write", idempotent=True)
     async def ios_open_app(
         page: Annotated[Literal[PAGES], Field(description="Page to show. 'account' for Apple ID sign-in, 'device' "
                                                           "for pairing/Developer Mode, 'setup' for manual setup "

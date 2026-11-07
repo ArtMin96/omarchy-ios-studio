@@ -17,34 +17,28 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
+from ..backends.device import dcall
+from ..core import budget as B
+from ..core.params import Udid
+from ..core.registry import MAX_WAIT, dry_run, tool
 from ..models import ActionResult, Out, iso
 from ..state import get_state
-from . import MAX_WAIT, READ_REMOTE, ann, dry_run, tool
-from .device import Udid, dcall
 
 USB_NEXT = ("Ask the user to connect the iPhone with a USB cable (ios_device_list shows the transport), then "
             "call again.")
 
 
-def _hint(exc: ToolError) -> ToolError:
-    text = str(exc)
-    if "[needs-usb]" in text:
-        return ToolError(text.split(" Next:")[0] + " Next: " + USB_NEXT)
-    if "[unsafe-over-wifi]" in text:
-        return ToolError(text + " Next: pick a milder profile from ios_network_conditions, or ask the user to plug "
-                         "the iPhone in by USB.")
-    if "[busy]" in text:
-        return ToolError(text + " Next: another capture (maybe in the iOS Studio window) is running; wait or ask "
-                         "the user to stop it.")
-    return exc
+# This feature's next steps, in place of the generic ones (core/errors.py).
+HINTS = {
+    "needs-usb": USB_NEXT,
+    "unsafe-over-wifi": "pick a milder profile from ios_network_conditions, or ask the user to plug the iPhone in "
+                        "by USB.",
+    "busy": "another capture (maybe in the iOS Studio window) is running; wait or ask the user to stop it.",
+}
 
 
-async def _call(state, cmd: str, args: dict | None = None, **kw) -> Any:
-    try:
-        return await dcall(state, cmd, args, **kw)
-    except ToolError as exc:
-        raise _hint(exc) from None
+async def _call(state, cmd: str, args: dict | None = None, *, hints: dict[str, str] | None = None, **kw) -> Any:
+    return await dcall(state, cmd, args, hints={**HINTS, **(hints or {})}, **kw)
 
 
 # ------------------------------------------------------------------ models
@@ -176,7 +170,7 @@ async def _wait_capture(state, ctx: Context | None, cid: str, seconds: float) ->
 # ------------------------------------------------------------------ tools
 
 def register(mcp: MCPServer) -> None:
-    @tool(mcp, annotations=READ_REMOTE("List network conditions"))
+    @tool(mcp, "List network conditions", kind="read_remote")
     async def ios_network_conditions(ctx: Context, udid: Udid = None) -> ConditionList:
         """Conditions the iPhone can simulate (Developer Mode needed): slow networks (Edge, 3G, LTE, DSL, 100% loss,
         high-latency DNS...), thermal states and GPU performance states, and the one active now if any. Over Wi-Fi
@@ -198,8 +192,7 @@ def register(mcp: MCPServer) -> None:
             note += " The iPhone is on Wi-Fi: network profiles also slow down iOS Studio's own connection to it."
         return ConditionList(transport=r.get("transport"), active=_active(r.get("active")), groups=groups, note=note)
 
-    @tool(mcp, annotations=ann("Simulate network condition", read_only=False, destructive=False, idempotent=True,
-                               open_world=True))
+    @tool(mcp, "Simulate network condition", kind="write", idempotent=True, open_world=True)
     async def ios_network_condition_set(
         ctx: Context,
         profile: Annotated[str, Field(description="Profile id from ios_network_conditions, e.g. 'SlowNetwork3G', "
@@ -246,8 +239,7 @@ def register(mcp: MCPServer) -> None:
                             next_steps=["Exercise the app now (ios_app_run_and_capture, ios_screenshot), then call "
                                         "ios_network_condition_clear."])
 
-    @tool(mcp, annotations=ann("Clear network condition", read_only=False, destructive=False, idempotent=True,
-                               open_world=True))
+    @tool(mcp, "Clear network condition", kind="write", idempotent=True, open_world=True)
     async def ios_network_condition_clear(ctx: Context, udid: Udid = None) -> ActionResult:
         """Switch off the simulated condition (network, thermal or GPU); the iPhone behaves normally again."""
         state = get_state(ctx)
@@ -255,8 +247,7 @@ def register(mcp: MCPServer) -> None:
         return ActionResult(done=True, message="Condition switched off; the iPhone is back to normal." if r.get("cleared")
                             else "No condition was active.")
 
-    @tool(mcp, annotations=ann("Capture network traffic", read_only=True, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Capture network traffic", kind="read_remote", idempotent=False)
     async def ios_pcap_capture(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Only this app's traffic (bundle id, plain or XTL- form); "
@@ -285,7 +276,7 @@ def register(mcp: MCPServer) -> None:
             if bundle_id:
                 args["bundleId"] = bundle_id
             st = await _call(state, "pcap.start", args, udid=udid, timeout=60,
-                             not_found="Check the bundle id with ios_app_list(scope='own').") or {}
+                             hints={"not-found": "Check the bundle id with ios_app_list(scope='own')."}) or {}
             st = await _wait_capture(state, ctx, _capture_id(st), wait_seconds)
         cid = _capture_id(st)
         if st.get("running"):

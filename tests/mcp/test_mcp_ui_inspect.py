@@ -13,9 +13,9 @@ from unittest import mock
 from mcp.server.mcpserver.exceptions import ToolError
 
 from device_client import DeviceError
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.core import budget as B
+from iosstudio_mcp.core.errors import device_error
 from iosstudio_mcp.state import AppState
-from iosstudio_mcp.tools import device as D
 from iosstudio_mcp.tools import ui_inspect as T
 from support.mcp_fakes import FakeMCP, size_of
 
@@ -39,7 +39,7 @@ def big_tree(n: int = 400, complete: bool = True) -> dict:
 class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         mcp = FakeMCP()
-        with mock.patch.object(T, "tool", lambda m, **k: m.tool(**k)):   # the bare functions: models, not results
+        with mock.patch.object(T, "tool", lambda m, *a, **k: m.tool(**k)):   # the bare functions: models, not results
             T.register(mcp)
         self.tools = mcp.tools
         self.state = AppState()
@@ -47,11 +47,11 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.calls: list = []
         self.replies: dict = {}
 
-    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, not_found=None):
+    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, hints=None):
         self.calls.append((cmd, dict(args or {}), udid))
         r = self.replies[cmd]
         if isinstance(r, Exception):
-            raise D.device_tool_error(r)      # what the real dcall does with a DeviceError
+            raise device_error(r, hints)      # what the real dcall does with a DeviceError
         return r
 
     async def call(self, name, **kw):
@@ -60,9 +60,9 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     async def call_wrapped(self, name, **kw):
         """Through the real @tool wrapper (to_result + error clipping), as the server runs it."""
-        from iosstudio_mcp.tools import tool as real_tool
+        from iosstudio_mcp.core.registry import tool as real_tool
         rec = FakeMCP()
-        with mock.patch.object(T, "tool", lambda m, **k: real_tool(rec, **k)), \
+        with mock.patch.object(T, "tool", lambda m, *a, **k: real_tool(rec, *a, **k)), \
                 mock.patch.object(T, "dcall", self.dcall):
             T.register(rec)
             return await rec.tools[name](self.ctx, **kw)

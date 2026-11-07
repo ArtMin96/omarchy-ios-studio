@@ -12,12 +12,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes
+from ..core.registry import tool
 from ..models import Out
-from ..state import get_state, resolve_project
-from . import ann, tool
-from .build import MaxBytes
+from ..state import get_state
 
 EDITORS = ("vscode", "zed", "neovim")
 DETAIL_CUT = 400
@@ -91,7 +92,7 @@ class EditorSetupResult(B.Budgeted, Out):
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Set up editor", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, "Set up editor", kind="write", idempotent=True)
     async def ios_editor_setup(
         ctx: Context,
         editor: Annotated[EditorId, Field(description="vscode, zed, neovim, or auto: every installed one")] = "auto",

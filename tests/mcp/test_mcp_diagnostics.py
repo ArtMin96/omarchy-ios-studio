@@ -9,10 +9,10 @@ import json
 import unittest
 
 import diagnostics as D
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.core import budget as B
+from iosstudio_mcp.core.job_status import job_next_steps
 from iosstudio_mcp.jobs import Job
 from iosstudio_mcp.models import DiagGroup, DiagnosticsPage
-from iosstudio_mcp.tools import job_next_steps
 from support import ROOT
 
 FIXTURES = ROOT / "tests" / "fixtures" / "build-output"

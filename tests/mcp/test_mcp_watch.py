@@ -18,7 +18,7 @@ from unittest import mock
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import build as BT
 from iosstudio_mcp.tools import watch as T

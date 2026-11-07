@@ -20,12 +20,14 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.device import dcall, package_for, resolve_app
+from ..core import budget as B
+from ..core.errors import rehint
+from ..core.params import BundleId, Udid
+from ..core.registry import MAX_WAIT, fit_page, tool
 from ..models import Out
 from ..state import AppState, get_state
-from . import MAX_WAIT, READ_REMOTE, ann, fit_page, tool
-from .device import BundleId, Udid, dcall, package_for, resolve_app
 
 MAX_JOBS = 10
 ITEMS_SHOWN = 20            # reset dry run: items listed
@@ -49,19 +51,7 @@ NEXT = {
 
 async def call(state: AppState, cmd: str, args: dict, udid: str | None, timeout: float = 60.0) -> Any:
     """dcall with this feature's next steps on its own error codes."""
-    try:
-        return await dcall(state, cmd, args, udid=udid, timeout=timeout)
-    except ToolError as exc:
-        raise with_next(exc) from None
-
-
-def with_next(exc: Exception) -> ToolError:
-    text = str(exc)
-    m = re.search(r"\[([a-z-]+)\]", text)
-    nxt = NEXT.get(m.group(1)) if m else None
-    if nxt:      # ours replaces the generic page hint device_tool_error adds
-        text = text.split(" Next: ", 1)[0] + f" Next: {nxt}"
-    return ToolError(text)
+    return await dcall(state, cmd, args, udid=udid, timeout=timeout, hints=NEXT)
 
 
 # ------------------------------------------------------------------ models
@@ -224,7 +214,7 @@ def _reset_status(job: ResetJob) -> ResetResult:
         return ResetResult(state="running", **common, message=f"{what}…",
                            next_steps=[f"Call ios_app_reset(job_id='{job.id}', wait_seconds=20) again to wait."])
     if job.error is not None:
-        return ResetResult(state="failed", **common, error=B.clip_error(str(with_next(job.error))),
+        return ResetResult(state="failed", **common, error=B.clip_error(str(rehint(job.error, NEXT))),
                            next_steps=["Fix the problem in the error, then repeat the reset (dry run first)."])
     r = job.result or {}
     failed = [str(x) for x in (r.get("failed") or [])]
@@ -253,7 +243,7 @@ def _defaults_status(job: ResetJob) -> AppDefaults:
                                    "installing the app's last build over it (about 20 s)…",
                            next_steps=[f"Call ios_app_defaults(job_id='{job.id}') again to wait."])
     if job.error is not None:
-        return AppDefaults(state="failed", done=False, **common, error=B.clip_error(str(with_next(job.error))),
+        return AppDefaults(state="failed", done=False, **common, error=B.clip_error(str(rehint(job.error, NEXT))),
                            next_steps=["Fix the problem in the error, then repeat (dry run first)."])
     r = job.result or {}
     refreshed = bool(r.get("refreshed"))
@@ -317,8 +307,7 @@ def _get_job(state: AppState, job_id: str, kind: str) -> ResetJob:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Read or change an app's UserDefaults", read_only=False, destructive=True,
-                               idempotent=True, open_world=True))
+    @tool(mcp, "Read or change an app's UserDefaults", kind="destructive", idempotent=True, open_world=True)
     async def ios_app_defaults(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
@@ -448,10 +437,10 @@ def register(mcp: MCPServer) -> None:
         await _wait(job, wait_seconds)
         if job.finished and job.error is not None:
             _jobs(state).pop(job.id, None)
-            raise with_next(job.error)
+            raise rehint(job.error, NEXT)
         return _defaults_status(job)
 
-    @tool(mcp, annotations=READ_REMOTE("Read an app's SwiftData / Core Data stores"))
+    @tool(mcp, "Read an app's SwiftData / Core Data stores", kind="read_remote")
     async def ios_app_store(
         ctx: Context,
         bundle_id: BundleId,
@@ -529,8 +518,7 @@ def register(mcp: MCPServer) -> None:
         page.with_budget(max_bytes)
         return fit_page(page, "rows", offset, lambda k, e: f"Showing {k} of {total} rows; call again with offset={e}.")
 
-    @tool(mcp, annotations=ann("Reset an app's data", read_only=False, destructive=True, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Reset an app's data", kind="destructive", open_world=True)
     async def ios_app_reset(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
@@ -596,7 +584,7 @@ def register(mcp: MCPServer) -> None:
             raise job.error
         if job.finished and job.error is not None:
             jobs.pop(job.id, None)
-            raise with_next(job.error)
+            raise rehint(job.error, NEXT)
         return _reset_status(job)
 
 

@@ -9,10 +9,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
+from ..core.job_status import start_and_wait
+from ..core.params import WaitSeconds
+from ..core.registry import dry_run, tool
 from ..models import ActionResult, BuildStatus, DiskItem, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
 from ..state import get_state
-from . import READ, ann, dry_run, start_and_wait, tool
-from .build import WaitSeconds
 
 MB = 1024 * 1024
 
@@ -26,7 +27,7 @@ def _human(step: dict) -> str | None:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("Toolchain check"))
+    @tool(mcp, "Toolchain check", kind="read")
     async def ios_toolchain_check(
         include_done: Annotated[bool, Field(description="Also list steps that are already done")] = False,
     ) -> ToolchainCheck:
@@ -59,7 +60,7 @@ def register(mcp: MCPServer) -> None:
                               essential_missing=list(summ.get("essentialMissing") or []), auto_installable=auto,
                               steps=steps, next_steps=nxt)
 
-    @tool(mcp, annotations=READ("Toolchain versions and disk"))
+    @tool(mcp, "Toolchain versions and disk", kind="read")
     async def ios_toolchain_info(
         refresh_disk: Annotated[bool, Field(description="Re-measure disk usage (can take 10-30 s); default uses "
                                                         "the last measurement")] = False,
@@ -87,8 +88,7 @@ def register(mcp: MCPServer) -> None:
                              free_mb=round((disk.get("free") or 0) / MB, 1) if disk else None,
                              disk_cached_at=iso(disk.get("cachedAt")), next_steps=nxt)
 
-    @tool(mcp, annotations=ann("Install toolchain", read_only=False, destructive=False, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Install toolchain", kind="write", idempotent=True, open_world=True)
     async def ios_toolchain_install(
         ctx: Context,
         step: Annotated[str | None, Field(description="One step id from ios_toolchain_check, e.g. 'xtool'")] = None,
@@ -116,7 +116,7 @@ def register(mcp: MCPServer) -> None:
                                     flags=flags, title=f"Install {'toolchain' if all else step}", prefix="t",
                                     wait_seconds=wait_seconds)
 
-    @tool(mcp, annotations=ann("Clean toolchain files", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Clean toolchain files", kind="destructive", idempotent=True)
     async def ios_toolchain_clean(
         ctx: Context,
         item: Annotated[str, Field(description="Disk item id from ios_toolchain_info with cleanable=true, e.g. "
