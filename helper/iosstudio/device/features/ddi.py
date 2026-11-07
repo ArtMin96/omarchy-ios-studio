@@ -8,7 +8,7 @@ def register(reg):
     @reg.command("ddi.status")
     async def c_ddi_status(d, a):
         s, rsd = await d.rsd(a)
-        async with d.pmd3.MobileImageMounterService(lockdown=rsd) as m:
+        async with s.open_service(d.pmd3.MobileImageMounterService) as m:
             mounted = bool(await m.is_image_mounted(d.pmd3.image_type_for_device(rsd)))
         s.info["ddiMounted"] = mounted
         return {"mounted": mounted}

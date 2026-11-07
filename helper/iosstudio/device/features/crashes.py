@@ -6,16 +6,16 @@ import contextlib
 import posixpath
 
 from iosstudio.device import device_crash
-from iosstudio.device.deviced_core import CRASH_DIR, classify, err, safe_name, write_bytes
+from iosstudio.device.deviced_core import CRASH_DIR, err, reclassify, safe_name, write_bytes
 from iosstudio.features import crash_symbols
 
 
 def register(reg):
     @reg.command("crash.list")
     async def c_crash_list(d, a):
-        s, rsd = await d.rsd(a)
+        s, _ = await d.rsd(a)
         want = (a.get("process") or "").strip()
-        async with d.pmd3.CrashReportsManager(rsd) as c:
+        async with s.open_service(d.pmd3.CrashReportsManager) as c:
             if a.get("flush", True):
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(c.flush(), 20)
@@ -36,17 +36,14 @@ def register(reg):
         name = a.get("name") or ""
         if not name or ".." in name.split("/"):
             raise err("bad-args", "Which crash report? (name missing)")
-        s, rsd = await d.rsd(a)
+        s, _ = await d.rsd(a)
         local = CRASH_DIR / safe_name(s.udid) / safe_name(posixpath.basename(name))
         if not local.exists():
-            async with d.pmd3.CrashReportsManager(rsd) as c:
+            async with s.open_service(d.pmd3.CrashReportsManager) as c:
                 try:
                     data = await c.afc.get_file_contents(name if name.startswith("/") else "/" + name)
-                except BaseException as exc:  # noqa: BLE001
-                    e = classify(exc)
-                    if e.code == "failed":
-                        raise err("not-found", "That crash report is no longer on your iPhone.", None, repr(exc))
-                    raise e
+                except Exception as exc:  # noqa: BLE001
+                    raise reclassify(exc, "not-found", "That crash report is no longer on your iPhone.") from exc
             await asyncio.to_thread(write_bytes, local, data)
         text = await asyncio.to_thread(local.read_text, "utf-8", "replace")
         summary = device_crash.parse_ips(text)

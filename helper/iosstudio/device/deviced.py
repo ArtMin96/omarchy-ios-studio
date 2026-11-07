@@ -23,19 +23,16 @@ import os
 import sys
 import time
 import traceback
-from pathlib import Path
 
+from iosstudio.core import appdirs, fileio
+from iosstudio.core.output import HelperError, fix
+from iosstudio.device import backend, device_broker, protocol
+from iosstudio.device import device_link as link
 from iosstudio.device import deviced_core as core
-
-core.init_output()
-
-from iosstudio.core import appdirs, fileio  # noqa: E402
-from iosstudio.core.output import HelperError, fix  # noqa: E402
-from iosstudio.device import device_broker  # noqa: E402
-from iosstudio.device import device_link as link  # noqa: E402
-from iosstudio.device import deviced_kit as kit  # noqa: E402
-from iosstudio.device.device_models import marketing_name  # noqa: E402
-from iosstudio.device.deviced_core import (  # noqa: E402
+from iosstudio.device import deviced_kit as kit
+from iosstudio.device.backend import Backend
+from iosstudio.device.device_models import marketing_name
+from iosstudio.device.deviced_core import (
     DEVICE_CACHE,
     DEVICE_STATE,
     LAST_DEVICE,
@@ -54,6 +51,8 @@ from iosstudio.device.deviced_core import (  # noqa: E402
 BACKOFF = [3, 5, 10, 20, 30]
 HEALTH_EVERY_S = 60
 DISCOVERY_EVERY_S = 3
+SERVICE_OPEN_S = 30    # Session.open_service: an open that takes longer reads as a dropped link
+SERVICE_CLOSE_S = 5    # ... and a close that takes longer is left behind
 INFO_FRESH_S = 10      # a `fresh` device.info joins a refresh started this recently instead of a new one
 
 
@@ -374,17 +373,44 @@ class Session:
         return obj
 
     @contextlib.asynccontextmanager
-    async def open_service(self, factory, *args, **kw):
+    async def open_service(self, factory, *args, open_timeout: float = SERVICE_OPEN_S,
+                           fail: HelperError | None = None, **kw):
         """`async with s.open_service(AfcService) as afc:` one service connection for this call.
 
         factory(rsd, *args, **kw) is a pymobiledevice3 service class (AfcService, PcapdService,
         DiagnosticsService, ...) or a coroutine function returning one (HouseArrestService.create).
         The object is entered as an async context manager and closed on exit.
+
+        Opening is bounded by open_timeout (a hung open reads as a dropped link) and closing by
+        SERVICE_CLOSE_S. `fail`: the feature's own error for an open that fails for no known reason
+        (classify() -> "failed"), e.g. err("ax-unavailable", ...), with the original as its detail.
+        Connection, lock and trust problems are raised unchanged, so dispatch still reacts to them.
         """
         rsd = await self.get_rsd()
-        obj = await self._make(factory, rsd, *args, **kw)
-        async with obj as svc:
+        try:
+            obj = await asyncio.wait_for(self._make(factory, rsd, *args, **kw), open_timeout)
+            svc = await asyncio.wait_for(obj.__aenter__(), open_timeout)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            if fail is not None and classify(exc).code == "failed":
+                raise core.reclassify(exc, fail.code, fail.message, fail.fix) from exc
+            raise
+        try:
             yield svc
+        except BaseException as exc:
+            await self._exit_service(obj, type(exc), exc, exc.__traceback__)
+            raise
+        await self._exit_service(obj, None, None, None)
+
+    @staticmethod
+    async def _exit_service(obj, *exc_info):
+        try:
+            await asyncio.wait_for(obj.__aexit__(*exc_info), SERVICE_CLOSE_S)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - a service that won't close mustn't fail the call
+            dlog(f"closing {type(obj).__name__}: {exc!r}")
 
     async def cached_service(self, key: str, factory, *args, **kw):
         """Like open_service, but the entered service stays open and is shared until the tunnel
@@ -473,19 +499,16 @@ class Session:
     async def ensure_ddi(self):
         rsd = await self.get_rsd()
         p = self.pmd3
-        async with p.MobileImageMounterService(lockdown=rsd) as m:
+        async with self.open_service(p.MobileImageMounterService) as m:
             mounted = await m.is_image_mounted(p.image_type_for_device(rsd))
         if not mounted:
             dlog("mounting the developer disk image")
             try:
                 await p.auto_mount(rsd)
-            except BaseException as exc:  # noqa: BLE001
-                e = classify(exc)
-                if e.code == "failed":
-                    raise err("ddi", "Couldn't prepare your iPhone for developer tools (the developer disk "
-                              "image). Check your internet connection and that the iPhone is unlocked.",
-                              fix("Try again", "device", action="ddi"), e.detail)
-                raise e
+            except Exception as exc:  # noqa: BLE001
+                raise core.reclassify(exc, "ddi", "Couldn't prepare your iPhone for developer tools (the developer "
+                                      "disk image). Check your internet connection and that the iPhone is unlocked.",
+                                      fix("Try again", "device", action="ddi")) from exc
             self.info["ddiMounted"] = True
             emit("deviceInfo", {"udid": self.udid, "ddiMounted": True})
 
@@ -562,7 +585,12 @@ class Session:
 
 # ---------------------------------------------------------------- the daemon
 
-class Daemon:
+class Daemon(Backend):
+    """The real iPhone backend: discovery, the one Session, and the core commands. Feature modules
+    under features/ get it as `d`."""
+
+    features = "features"
+
     def __init__(self, pmd3, resources: kit.Resources | None = None):
         self.pmd3 = pmd3
         self.usb: set[str] = set()
@@ -573,21 +601,11 @@ class Daemon:
         self.disc_task: asyncio.Task | None = None
         self._last_devices = None
         self.stopping = asyncio.Event()
-        self.bg = core.TaskSet()           # fire-and-forget work, cancelled at shutdown
         self.records = link.PairRecords(pmd3)
         self._settings = core.MtimeFile(appdirs.SETTINGS_FILE, lambda p: fileio.load_json(p, {}) or {}, {})
         self._last_device = core.MtimeFile(LAST_DEVICE, lambda p: p.read_text().strip(), "")
         self._state_old: dict | None = None
-        self.resources = resources or kit.Resources(log=dlog)
-        self.registry = kit.FeatureRegistry(log=dlog)
-        self._register_core(self.registry.module("core"))
-        kit.load_features(self.registry, "features")
-        if self.registry.failed:
-            dlog(f"features that failed to load: {', '.join(sorted(self.registry.failed))}")
-
-    def client(self):
-        """The client whose request is running (key for d.resources), None in --once mode."""
-        return core.current_client()
+        super().__init__(resources, dlog)
 
     # -- devices
     def remember(self, udid: str, info: dict):
@@ -750,7 +768,7 @@ class Daemon:
 
     # -------------------------------------------------------- core commands
 
-    def _register_core(self, reg):
+    def register_core(self, reg):
         @reg.command("daemon.ping")
         async def c_daemon_ping(d, a):
             return {"pong": True, "ts": time.time()}
@@ -800,15 +818,7 @@ class Daemon:
             info.update(locked=s.state == "locked")
             return info
 
-        reg.commit()
-
-    # -------------------------------------------------------- dispatch
-
-    async def dispatch(self, cmd: str, args: dict):
-        fn = self.registry.lookup(cmd)
-        if fn is None:
-            raise err("bad-args", f"Unknown command {cmd!r}.")
-        return await fn(self, args if isinstance(args, dict) else {})
+    # -------------------------------------------------------- errors
 
     def error_json(self, exc: BaseException, cmd: str) -> dict:
         e = classify(exc)
@@ -817,18 +827,6 @@ class Daemon:
         if e.code == "unreachable" and not isinstance(exc, HelperError) and self.session:
             self.session.drop(f"{cmd}: {exc!r}")
         return e.to_json()
-
-    async def handle(self, msg: dict) -> dict:
-        """--once mode: one request -> its reply object."""
-        rid = msg.get("id")
-        cmd = str(msg.get("cmd") or "")
-        try:
-            data = await self.dispatch(cmd, msg.get("args") or {})
-            return {"id": rid, "ok": True, "data": data if data is not None else {}}
-        except asyncio.CancelledError:
-            return {"id": rid, "ok": False, "error": {"code": "cancelled", "message": "Cancelled."}}
-        except BaseException as exc:  # noqa: BLE001
-            return {"id": rid, "ok": False, "error": self.error_json(exc, cmd)}
 
     # -------------------------------------------------------- broker backend (device_broker.py)
 
@@ -842,14 +840,8 @@ class Daemon:
                 out.append(("connection", s.last_connection))
             if s.info:
                 out.append(("deviceInfo", {"udid": s.udid, **s.info, **self.registry.info(self, s)}))
-        out.extend(await self.registry.welcome(self))
+        out.extend(await super().welcome())
         return out
-
-    def _syslog(self):
-        phone = self.registry.provided.get("syslog")
-        if phone is None:
-            raise err("failed", "The live log isn't available (its module failed to load; see deviced.log).")
-        return phone
 
     def syslog_target(self, args: dict) -> str:
         self._syslog()
@@ -858,44 +850,41 @@ class Daemon:
     def syslog_open(self, pid: int):
         self._syslog().open(self.session, pid)
 
-    async def syslog_close(self):
-        phone = self.registry.provided.get("syslog")
-        if phone is not None:
-            await phone.close()
-
     async def syslog_resolve(self, bid: str):
         """bundleId filter -> (executable, installed bundle id). Never waits for the tunnel."""
         return await self._syslog().resolve(self.session, bid)
-
-    async def client_gone(self, client):
-        await self.registry.run_hooks("client_gone", self, client)
 
     async def shutdown(self):
         self.stopping.set()
         if self.disc_task:
             self.disc_task.cancel()
-        await self.resources.release_all("shutdown")
-        await self.registry.run_hooks("shutdown", self)
+        await super().shutdown()
+
+    async def close_device(self):
         if self.session:
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(self.session.close(), 5)
-        await self.bg.close(grace=3)   # let service closes finish (each is bounded), cancel the rest
 
 
-class BrokenBackend:
-    """--serve when pymobiledevice3 can't be loaded: every request answers with the same error."""
+class BrokenBackend(Backend):
+    """--serve when pymobiledevice3 can't be loaded (or another daemon owns the phone): daemon.ping
+    answers, every other request answers with the same error."""
 
     def __init__(self, exc: BaseException):
         self.e = classify(exc)
+        super().__init__(log=dlog)
+
+    def register_core(self, reg):
+        reg.command("daemon.ping", lambda d, a: {"pong": True, "ts": time.time()})
 
     async def welcome(self):
         return [("ready", {"version": VERSION, "pymobiledevice3": None, "python": sys.executable, "pid": os.getpid(),
                            "error": self.e.to_json()})]
 
     async def dispatch(self, cmd, args):
-        if cmd == "daemon.ping":
-            return {"pong": True, "ts": time.time()}
-        raise self.e
+        if not self.registry.has(cmd):
+            raise self.e
+        return await super().dispatch(cmd, args)
 
     def error_json(self, exc, cmd):
         return classify(exc).to_json()
@@ -906,15 +895,6 @@ class BrokenBackend:
     def syslog_open(self, pid):
         pass
 
-    async def syslog_close(self):
-        pass
-
-    async def syslog_resolve(self, bid):
-        return None, bid
-
-    async def shutdown(self):
-        pass
-
 
 async def once(cmd: str, raw_args: str) -> int:
     """`iosstudio-deviced --once <cmd> '<json args>'`: open the tunnel, run one command, print one reply."""
@@ -922,40 +902,38 @@ async def once(cmd: str, raw_args: str) -> int:
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
 
     def reply(obj: dict) -> int:
+        obj.pop("id", None)
         send(obj)
         return 0 if obj.get("ok") else 1
 
+    def fail(e: BaseException) -> int:
+        return reply(protocol.reply_error(None, classify(e)))
+
     try:
-        args = json.loads(raw_args or "{}")
-        if not isinstance(args, dict):
-            raise ValueError("args must be a JSON object")
-    except (json.JSONDecodeError, ValueError) as exc:
-        return reply({"ok": False, "error": {"code": "bad-args", "message": "The arguments aren't valid JSON.", "detail": str(exc)}})
-    try:
+        args = protocol.parse_args(raw_args)
         pmd3 = link.load_pmd3()
-    except link.ApiError as exc:
-        return reply({"ok": False, "error": classify(exc).to_json()})
+    except (protocol.DeviceError, link.ApiError) as exc:
+        return fail(exc)
     d = Daemon(pmd3)
     if not d.registry.has(cmd):
-        return reply({"ok": False, "error": {"code": "bad-args", "message": f"Unknown command {cmd!r}."}})
+        return fail(backend.unknown_command(cmd))
     d.usb = set(await link.usb_udids(pmd3))
     d.wifi, d.lockdown = await asyncio.to_thread(d.records.read)
     udid = args.get("udid") or d.default_udid()
     if not udid:
-        return reply({"ok": False, "error": err("no-device", "No paired iPhone was found.", PAIR_FIX).to_json()})
+        return fail(err("no-device", "No paired iPhone was found.", PAIR_FIX))
     if udid not in d.usb and udid not in d.wifi:
-        return reply({"ok": False, "error": err("not-paired", "That iPhone isn't paired with this computer.", PAIR_FIX).to_json()})
+        return fail(err("not-paired", "That iPhone isn't paired with this computer.", PAIR_FIX))
     s = Session(d, udid)
     d.session = s
     s.start()
     out: dict = {}
     try:
-        out = await d.handle({"id": None, "cmd": cmd, "args": args})
+        out = await d.handle(protocol.request(None, cmd, args))
     finally:
         with contextlib.suppress(BaseException):
             await asyncio.wait_for(d.shutdown(), 6)
-    out.pop("id", None)
-    return reply(out or {"ok": False, "error": {"code": "failed", "message": "No reply."}})
+    return reply(out or protocol.reply_error(None, err("failed", "No reply.")))
 
 
 def _other_real_daemon() -> str | None:
@@ -964,8 +942,7 @@ def _other_real_daemon() -> str | None:
     if not os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("IOSSTUDIO_ALLOW_SECOND_TUNNEL") == "1":
         return None
     from iosstudio.device import device_client  # the default base, as if IOSSTUDIO_RUNTIME_DIR weren't set
-    base = device_client.xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}"
-    default = Path(base) / "ios-studio" / "deviced.sock"
+    default = device_client.default_runtime_base() / "ios-studio" / "deviced.sock"
     if default != device_broker.paths(None)["sock"] and device_broker.socket_alive(default):
         return str(default)
     return None
@@ -1002,6 +979,10 @@ async def serve() -> int:
 
 
 def main() -> int:
+    # Before anything can print: the protocol keeps a private copy of stdout and fd 1 becomes stderr
+    # (pymobiledevice3, loaded later with the features, prints progress bars). Not done at import, so
+    # tests can import this module.
+    core.init_output()
     code = 0
     try:
         if len(sys.argv) >= 3 and sys.argv[1] == "--once":

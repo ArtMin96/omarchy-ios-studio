@@ -21,6 +21,9 @@ from pathlib import Path
 from iosstudio.core import appdirs
 from iosstudio.core.output import HelperError, fix
 from iosstudio.device import device_link as link
+from iosstudio.device import protocol
+from iosstudio.device.backend import TaskSet  # noqa: F401  (feature modules and tests use core.TaskSet)
+from iosstudio.device.protocol import DeviceError
 
 VERSION = "1"
 SCREENS_DIR = appdirs.CACHE_DIR / "screens"      # screenshots (kept, pruned)
@@ -51,11 +54,11 @@ BROKER = None  # --serve mode: device_broker.Broker; events go to the subscribed
 def init_output() -> None:
     """The protocol owns a private copy of stdout; fd 1 itself is pointed at stderr so that nothing
     a library prints (pymobiledevice3's rich progress bars redirect sys.stdout while installing) can
-    ever corrupt the JSON lines. deviced.py calls this once, at import."""
+    ever corrupt the JSON lines. deviced.main() calls this first."""
     global _OUT
     if _OUT is not None:
         return
-    _OUT = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
+    _OUT = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)
     sys.stdout = sys.stderr
 
@@ -71,11 +74,10 @@ def flush_output() -> None:
 
 
 def send(obj: dict) -> None:
-    line = json.dumps(obj, separators=(",", ":"), default=str)
+    """One protocol line on the private stdout (--once mode's reply / events without a broker)."""
     with _out_lock:
         try:
-            _OUT.write(line + "\n")
-            _OUT.flush()
+            protocol.write_line(_OUT, obj)
         except (BrokenPipeError, ValueError, OSError, AttributeError):
             os._exit(0)
 
@@ -89,7 +91,7 @@ def emit(name: str, data) -> None:
     if BROKER is not None:
         BROKER.emit(name, data)
         return
-    send({"event": name, "data": data})
+    send(protocol.event(name, data))
 
 
 def dlog(text: str, level: str = "debug") -> None:
@@ -112,8 +114,9 @@ def current_client():
 
 # ---------------------------------------------------------------- errors
 
-def err(code: str, message: str, fix_: dict | None = None, detail: str | None = None) -> HelperError:
-    return HelperError(code, message, fix_, detail)
+def err(code: str, message: str, fix_: dict | None = None, detail: str | None = None) -> DeviceError:
+    """The protocol's error (a HelperError too): what feature handlers raise."""
+    return DeviceError(code, message, fix_, detail)
 
 
 PAIR_FIX = fix("Pair iPhone", "device", action="pair")
@@ -148,6 +151,15 @@ def classify(exc: BaseException, pmd3=None) -> HelperError:
 
 def is_connection_error(exc: BaseException) -> bool:
     return classify(exc).code == "unreachable"
+
+
+def reclassify(exc: BaseException, code: str, message: str, fix_: dict | None = None) -> HelperError:
+    """classify(exc), except that the generic `failed` becomes this feature's own error (code, message,
+    fix) with the original as detail. Connection, lock and trust problems keep their own codes."""
+    e = classify(exc)
+    if e.code == "failed":
+        return err(code, message, fix_, e.detail)
+    return e
 
 
 # ---------------------------------------------------------------- small utils
@@ -195,39 +207,6 @@ def battery_view(b: dict | None) -> dict | None:
         "health": health,
         "temperature": round(b["Temperature"] / 100, 1) if isinstance(b.get("Temperature"), (int, float)) else None,
     }
-
-
-class TaskSet:
-    """Background tasks the daemon starts and doesn't await at once (closing a service after a tunnel
-    drop, a deviceInfo refresh, ...). Each is kept until it ends, so none is garbage-collected
-    mid-flight or outlives the daemon: close() waits a moment for them, then cancels the rest."""
-
-    def __init__(self):
-        self.tasks: set[asyncio.Task] = set()
-
-    def spawn(self, coro, name: str | None = None) -> asyncio.Task:
-        t = asyncio.get_running_loop().create_task(coro, name=name)
-        self.tasks.add(t)
-        t.add_done_callback(self._done)
-        return t
-
-    def _done(self, t: asyncio.Task) -> None:
-        self.tasks.discard(t)
-        if not t.cancelled() and t.exception() is not None:
-            dlog(f"background task {t.get_name()} failed: {t.exception()!r}")
-
-    def __len__(self) -> int:
-        return len(self.tasks)
-
-    async def close(self, grace: float = 0.0) -> None:
-        """Wait up to `grace` seconds for running tasks, then cancel what's left and wait for it."""
-        pending = [t for t in self.tasks if not t.done()]
-        if pending and grace > 0:
-            _, pending = await asyncio.wait(pending, timeout=grace)
-        for t in pending:
-            t.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
 
 
 class MtimeFile:

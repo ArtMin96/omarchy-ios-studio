@@ -8,8 +8,8 @@ from iosstudio.device.deviced_core import dlog
 def register(reg):
     @reg.command("profiles.list")
     async def c_profiles_list(d, a):
-        s, rsd = await d.rsd(a)
-        async with d.pmd3.MisagentService(lockdown=rsd) as m:
+        s = d.need_session(a)
+        async with s.open_service(d.pmd3.MisagentService) as m:
             raw = await m.copy_all()
         out = []
         for p in raw:

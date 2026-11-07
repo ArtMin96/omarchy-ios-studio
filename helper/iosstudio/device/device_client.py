@@ -3,8 +3,9 @@
 The device daemon (`bin/iosstudio-deviced`) is a per-user broker that owns the one tunnel to the
 iPhone. The GUI and any number of other clients (e.g. the MCP server) talk to it over a Unix socket
 with the JSON-lines protocol in docs/deviced-protocol.md. This module is that client. It is stdlib
-only and imports nothing else from the repo, so it can be imported as `iosstudio.device.device_client` (helper/ on
-sys.path), loaded by file path (the MCP server does) or vendored.
+only and needs nothing from the repo but protocol.py next to it (the wire format), so it can be
+imported as `iosstudio.device.device_client` (helper/ on sys.path) or loaded by file path (the MCP
+server does; protocol.py is then loaded by path too).
 
 API
 ---
@@ -63,8 +64,8 @@ Synthetic events (generated locally, delivered to iterators/callbacks that want 
   "disconnected" {reason}         the connection to the daemon dropped
   "reconnected"  {hello}          connected again (daemon restarted); redo syslog.start etc.
 
-class DeviceError(Exception): .code .message .fix (dict | None) .detail (str | None);
-  .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
+class DeviceError (protocol.DeviceError; a core.output.HelperError inside the iosstudio package):
+  .code .message .fix (dict | None) .detail (str | None); .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
   "timeout", "disconnected", "daemon-unavailable", "socket-path-too-long".
 
 socket_path(demo=None) -> pathlib.Path    <base>/ios-studio[-demo]/deviced.sock, where <base> is
@@ -88,37 +89,30 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterable
 
+
+def _load_protocol():
+    """protocol.py next to this file: the package import inside iosstudio, else loaded by path (the MCP
+    server loads this file by path, outside the package)."""
+    if __package__:
+        from . import protocol
+        return protocol
+    import importlib.util
+    import sys
+    name = "iosstudio_device_protocol"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("protocol.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[name]
+
+
+proto = _load_protocol()
+DeviceError = proto.DeviceError
+
 __all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path", "runtime_dir"]
 
 PROTOCOL_VERSION = "1"
-_MAX_LINE = 16 * 1024 * 1024
-
-
-class DeviceError(Exception):
-    def __init__(self, code: str, message: str, fix: dict | None = None, detail: str | None = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.fix = fix
-        self.detail = detail
-
-    @classmethod
-    def from_json(cls, e: Any) -> "DeviceError":
-        if not isinstance(e, dict):
-            return cls("failed", str(e))
-        return cls(str(e.get("code") or "failed"), str(e.get("message") or "Something went wrong."),
-                   e.get("fix"), e.get("detail"))
-
-    def to_json(self) -> dict:
-        out: dict = {"code": self.code, "message": self.message}
-        if self.fix:
-            out["fix"] = self.fix
-        if self.detail:
-            out["detail"] = self.detail
-        return out
-
-    def __repr__(self) -> str:
-        return f"DeviceError({self.code!r}, {self.message!r})"
 
 
 def _demo_flag(demo) -> str | None:
@@ -148,12 +142,19 @@ def xdg_runtime_dir() -> str | None:
     return None
 
 
+def default_runtime_base() -> Path:
+    """The base without the IOSSTUDIO_RUNTIME_DIR override: $XDG_RUNTIME_DIR (or /run/user/<uid>, see
+    xdg_runtime_dir), else /tmp/ios-studio-<uid>."""
+    return Path(xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}")
+
+
 def runtime_base() -> Path:
-    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else $XDG_RUNTIME_DIR
-    (or /run/user/<uid>, see xdg_runtime_dir), else /tmp/ios-studio-<uid>. Shared by the device daemon,
-    its clients (app bridge, MCP), and watch mode."""
-    base = os.environ.get("IOSSTUDIO_RUNTIME_DIR") or xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}"
-    return Path(base)
+    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else
+    default_runtime_base(). The one rule for where the daemon's socket, lock and log live; shared by
+    the device daemon, its clients (app bridge, MCP) and watch mode. The GUI gets the resulting paths
+    from the daemon (`hello` reply and `ready` event: runtimeDir, log) instead of working them out."""
+    override = os.environ.get("IOSSTUDIO_RUNTIME_DIR")
+    return Path(override) if override else default_runtime_base()
 
 
 def runtime_dir(demo=None) -> Path:
@@ -290,7 +291,7 @@ class DeviceClient:
 
     async def _try_connect(self) -> bool:
         try:
-            r, w = await asyncio.open_unix_connection(str(self.socket), limit=_MAX_LINE)
+            r, w = await asyncio.open_unix_connection(str(self.socket), limit=proto.MAX_LINE)
         except (FileNotFoundError, ConnectionRefusedError, OSError):
             return False
         self._reader, self._writer = r, w
@@ -311,11 +312,11 @@ class DeviceClient:
         out = b""
         with contextlib.suppress(Exception):
             out = proc.stdout.read() or b""
-        for line in out.decode(errors="replace").splitlines():
-            with contextlib.suppress(ValueError, AttributeError):
-                e = (json.loads(line).get("data") or {}).get("error")
-                if e:
-                    return DeviceError.from_json(e)
+        for msg in proto.read_lines(out.splitlines()):
+            data = msg.get("data")
+            e = data.get("error") if isinstance(data, dict) else None
+            if e:
+                return DeviceError.from_json(e)
         if proc.returncode:
             return DeviceError("daemon-unavailable", "The iPhone service couldn't be started.", None,
                                f"exit code {proc.returncode}")
@@ -374,13 +375,11 @@ class DeviceClient:
         rid = next(self._ids)
         fut = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
-        line = json.dumps({"id": rid, "cmd": cmd, "args": args}, separators=(",", ":")) + "\n"
         try:
             w = self._writer
             if w is None:
                 raise DeviceError("disconnected", "Not connected to the iPhone service.")
-            w.write(line.encode())
-            await w.drain()
+            await proto.write_line_async(w, proto.request(rid, cmd, args))
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             raise DeviceError("timeout", f"The iPhone didn't answer {cmd} within {timeout:g} s. "
@@ -430,17 +429,8 @@ class DeviceClient:
         reader = self._reader
         reason = "the iPhone service closed the connection"
         try:
-            while True:
-                raw = await reader.readline()
-                if not raw:
-                    break
-                try:
-                    msg = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                if "event" in msg:
+            async for msg in proto.read_lines_async(reader):
+                if proto.is_event(msg):
                     self._dispatch(str(msg["event"]), msg.get("data"))
                     continue
                 fut = self._pending.get(msg.get("id"))
@@ -452,7 +442,7 @@ class DeviceClient:
                     fut.set_exception(DeviceError.from_json(msg.get("error")))
         except asyncio.CancelledError:
             raise
-        except (ConnectionError, OSError, ValueError) as exc:
+        except (ConnectionError, OSError, proto.LineTooLong) as exc:
             reason = repr(exc)
         self._on_lost(reason)
 

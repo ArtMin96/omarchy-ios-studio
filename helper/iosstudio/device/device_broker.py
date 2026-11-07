@@ -13,16 +13,8 @@ Stdlib only. Used two ways:
   socket, so a client that speaks JSON lines over stdio (the GUI's Stream) needs no changes.
   `--once` sends one request to the live daemon, or falls back to the standalone one-shot daemon.
 
-Backend interface (duck-typed):
-    async welcome() -> [(event, data), ...]     sent to every new client (ready, devices, ...)
-    async dispatch(cmd, args) -> data           raise on error; current_client() tells who asks
-    error_json(exc, cmd) -> dict                exception -> protocol error object
-    syslog_target(args) -> udid                 raise if no device for a syslog stream
-    syslog_open(pid: int)                       start the one phone stream (-1 = no phone filter)
-    async syslog_close()
-    async syslog_resolve(bundle_id) -> (executable | None, full bundle id)
-    async client_gone(client)                   optional: a client disconnected (after its resources)
-    async shutdown()                            close the tunnel and everything else
+The backend is a backend.Backend (deviced.Daemon, deviced.BrokenBackend, deviced_demo.DemoBackend);
+backend.py lists what the broker calls on it. Framing and message shapes come from protocol.py.
 The backend calls broker.emit(name, data) for device-wide events and feeds syslog entries to
 broker.syslog.feed(entry) / .stream_state(...) / .stream_failed(error). broker.resources is the
 shared deviced_kit.Resources; the broker releases a client's holds when it disconnects.
@@ -46,12 +38,13 @@ import time
 from collections import deque
 from pathlib import Path
 
-from iosstudio.device import deviced_kit
+from iosstudio.device import deviced_kit, protocol
+from iosstudio.device.backend import Backend, TaskSet
 from iosstudio.device.device_client import runtime_dir, socket_path_error
 
 VERSION = "1"
 IDLE_DEFAULT_S = 120.0
-MAX_LINE = 16 * 1024 * 1024
+MAX_LINE = protocol.MAX_LINE
 CLIENT_BUFFER_MAX = 32 * 1024 * 1024   # a client that stops reading is disconnected
 LOG_MAX = 4 * 1024 * 1024               # deviced.log (tmpfs, so RAM) moves to deviced.log.1 past this
 LOG_CHECK_S = 30.0
@@ -290,7 +283,7 @@ class SyslogHub:
         return s
 
     def _send_state(self, sub: SyslogSub, running: bool | None = None):
-        sub.client.send({"event": "syslogState", "data": self.state(sub, running)})
+        sub.client.send(protocol.event("syslogState", self.state(sub, running)))
 
     def min_level(self) -> int:
         return self._min
@@ -459,7 +452,7 @@ class SyslogHub:
     def _flush_sub(self, sub: SyslogSub, all_: bool = False):
         while sub.buf:
             n = min(len(sub.buf), SYSLOG_BATCH)
-            sub.client.send({"event": "syslog", "data": [sub.buf.popleft() for _ in range(n)]})
+            sub.client.send(protocol.event("syslog", [sub.buf.popleft() for _ in range(n)]))
             if not all_:
                 break
 
@@ -499,8 +492,7 @@ class Client:
         if self.closed:
             return
         try:
-            line = json.dumps(obj, separators=(",", ":"), default=str) + "\n"
-            self.w.write(line.encode("utf-8"))
+            self.w.write(protocol.encode(obj))
             if self.w.transport.get_write_buffer_size() > CLIENT_BUFFER_MAX:
                 log(f"{self.name} isn't reading; disconnecting it")
                 self.close()
@@ -533,8 +525,9 @@ class Broker:
             except ValueError:
                 idle = IDLE_DEFAULT_S
         self.idle = max(0.0, idle)
-        self.backend = None
+        self.backend: Backend | None = None
         self.clients: set[Client] = set()
+        self._connecting = 0                  # clients waiting for the backend to come up
         self.syslog = SyslogHub(self)
         self.resources = deviced_kit.Resources(log=log)
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -545,14 +538,16 @@ class Broker:
         self._server: asyncio.AbstractServer | None = None
         self._lock_fd: int | None = None
         self._log_redirected = False
-        self._bg: set[asyncio.Task] = set()   # fire-and-forget work, cancelled at shutdown
+        self._bg = TaskSet(log)               # fire-and-forget work, cancelled at shutdown
 
     def spawn(self, coro, name: str | None = None) -> asyncio.Task:
         """A background task the broker keeps a reference to until it ends (or shutdown cancels it)."""
-        t = asyncio.get_running_loop().create_task(coro, name=name)
-        self._bg.add(t)
-        t.add_done_callback(self._bg.discard)
-        return t
+        return self._bg.spawn(coro, name=name)
+
+    def where(self) -> dict:
+        """The runtime paths clients show (the GUI's "open log"); sent in `hello` and `ready` so no
+        client works out the runtime-dir rules itself (device_client.runtime_base is the one rule)."""
+        return {"socket": str(self.p["sock"]), "runtimeDir": str(self.p["dir"]), "log": str(self.p["log"])}
 
     # -- single instance
     def acquire(self, wait: float = 10.0) -> bool:
@@ -619,7 +614,7 @@ class Broker:
         if threading.get_ident() != self._thread and self.loop is not None:
             self.loop.call_soon_threadsafe(self.emit, name, data)
             return
-        obj = {"event": name, "data": data}
+        obj = protocol.event(name, data)
         for c in list(self.clients):
             if c.wants(name):
                 c.send(obj)
@@ -633,7 +628,7 @@ class Broker:
             self._idle_handle = self.loop.call_later(self.idle, self._idle_exit)
 
     def _idle_exit(self):
-        if not self.clients:
+        if not self.clients and not self._connecting:   # a slow first start mustn't drop its first client
             log(f"no clients for {self.idle:g} s, exiting")
             self.stop()
 
@@ -678,11 +673,7 @@ class Broker:
             if self.backend is not None:
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(self.backend.shutdown(), 8)
-            bg = [t for t in self._bg if not t.done()]
-            for t in bg:
-                t.cancel()
-            if bg:
-                await asyncio.gather(*bg, return_exceptions=True)
+            await self._bg.close()
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(self.syslog.close(), 3)
             log("bye")
@@ -691,39 +682,36 @@ class Broker:
     # -- connections
     async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         c = Client(self, writer)
-        await self._ready.wait()
+        self._connecting += 1
+        try:
+            await self._ready.wait()
+        finally:
+            self._connecting -= 1
         self.clients.add(c)
         self._check_idle()
         log(f"{c.name} connected ({len(self.clients)} client(s))")
         tasks: set[asyncio.Task] = set()
         try:
             for name, data in await self.backend.welcome():
-                c.send({"event": name, "data": data})
-            while not c.closed:
-                try:
-                    raw = await reader.readline()
-                except (ValueError, asyncio.LimitOverrunError):
-                    c.send({"event": "log", "data": {"level": "warn", "text": "request line too long"}})
-                    break
-                if not raw:
-                    break
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    m = json.loads(raw)
-                    if not isinstance(m, dict):
-                        raise ValueError
-                except ValueError:
-                    c.send({"event": "log", "data": {"level": "warn", "text": "ignored a malformed request line"}})
-                    continue
-                token = _current.set(c)
-                try:
-                    t = asyncio.create_task(self._request(c, m))
-                finally:
-                    _current.reset(token)
-                tasks.add(t)
-                t.add_done_callback(tasks.discard)
+                if name == "ready" and isinstance(data, dict):
+                    data = {**data, **self.where()}
+                c.send(protocol.event(name, data))
+
+            def malformed():
+                c.send(protocol.event("log", {"level": "warn", "text": "ignored a malformed request line"}))
+            try:
+                async for m in protocol.read_lines_async(reader, malformed):
+                    if c.closed:
+                        break
+                    token = _current.set(c)
+                    try:
+                        t = asyncio.create_task(self._request(c, m))
+                    finally:
+                        _current.reset(token)
+                    tasks.add(t)
+                    t.add_done_callback(tasks.discard)
+            except protocol.LineTooLong:
+                c.send(protocol.event("log", {"level": "warn", "text": "request line too long"}))
         except (ConnectionError, OSError):
             pass
         finally:
@@ -737,22 +725,20 @@ class Broker:
     async def _client_gone(self, c: Client):
         """Release what the client held (mirror, port forwards, ...), then tell the backend."""
         await self.resources.client_gone(c)
-        hook = getattr(self.backend, "client_gone", None)
-        if hook is not None:
+        if self.backend is not None:
             with contextlib.suppress(Exception):
-                await hook(c)
+                await self.backend.client_gone(c)
 
     async def _request(self, c: Client, m: dict):
         rid = m.get("id")
         cmd = str(m.get("cmd") or "")
         args = m.get("args") if isinstance(m.get("args"), dict) else {}
         try:
-            data = await self._command(c, cmd, args)
-            c.send({"id": rid, "ok": True, "data": data if data is not None else {}})
+            c.send(protocol.reply_ok(rid, await self._command(c, cmd, args)))
         except asyncio.CancelledError:
-            c.send({"id": rid, "ok": False, "error": {"code": "cancelled", "message": "Cancelled."}})
+            c.send(protocol.reply_error(rid, protocol.CANCELLED))
         except BaseException as exc:  # noqa: BLE001
-            c.send({"id": rid, "ok": False, "error": self.backend.error_json(exc, cmd)})
+            c.send(protocol.reply_error(rid, self.backend.error_json(exc, cmd)))
         if cmd == "daemon.shutdown" and not args.get("all"):
             await asyncio.sleep(0.05)
             c.close()
@@ -766,7 +752,7 @@ class Broker:
                 c.events = None if ev is None or ev == "*" or (isinstance(ev, list) and "*" in ev) \
                     else {str(x) for x in ev}
             return {"version": VERSION, "pid": os.getpid(), "clientId": c.id, "name": c.name,
-                    "clients": len(self.clients), "demo": bool(self.demo), "socket": str(self.p["sock"]),
+                    "clients": len(self.clients), "demo": bool(self.demo), **self.where(),
                     "idle": self.idle, "events": sorted(c.events) if c.events is not None else None}
         if cmd == "daemon.clients":
             return [x.describe() for x in sorted(self.clients, key=lambda x: x.id)]
@@ -866,32 +852,26 @@ def bridge(s: socket.socket) -> int:
 def once_via_socket(s: socket.socket, cmd: str, raw_args: str) -> int:
     """`--once` against the live daemon: same output contract as the standalone one-shot mode."""
     def reply(obj: dict) -> int:
-        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        obj.pop("id", None)
+        protocol.write_line(sys.stdout.buffer, obj)
         return 0 if obj.get("ok") else 1
     try:
-        args = json.loads(raw_args or "{}")
-        if not isinstance(args, dict):
-            raise ValueError("args must be a JSON object")
-    except ValueError as exc:
-        return reply({"ok": False, "error": {"code": "bad-args", "message": "The arguments aren't valid JSON.", "detail": str(exc)}})
-    f = s.makefile("rwb", buffering=0)
-    hello = {"id": "h", "cmd": "hello", "args": {"name": "once", "events": ["connection", "installProgress", "pair"]}}
-    f.write((json.dumps(hello) + "\n" + json.dumps({"id": "r", "cmd": cmd, "args": args}) + "\n").encode())
-    for raw in f:
-        try:
-            m = json.loads(raw)
-        except ValueError:
-            continue
-        if "event" in m:
-            if m["event"] in ("connection", "installProgress", "pair"):
+        args = protocol.parse_args(raw_args)
+    except protocol.DeviceError as exc:
+        return reply(protocol.reply_error(None, exc))
+    shown = ["connection", "installProgress", "pair"]
+    f = s.makefile("rwb")
+    protocol.write_line(f, protocol.request("h", "hello", {"name": "once", "events": shown}))
+    protocol.write_line(f, protocol.request("r", cmd, args))
+    for m in protocol.read_lines(f):
+        if protocol.is_event(m):
+            if m["event"] in shown:
                 print(f"[{time.strftime('%H:%M:%S')}] deviced: {m['event']}: {json.dumps(m.get('data'))[:300]}",
                       file=sys.stderr, flush=True)
             continue
         if m.get("id") == "r":
-            m.pop("id", None)
             return reply(m)
-    return reply({"ok": False, "error": {"code": "unreachable", "message": "The iPhone service stopped before answering."}})
+    return reply(protocol.reply_error(None, protocol.DeviceError("unreachable", "The iPhone service stopped before answering.")))
 
 
 def pycache_args() -> list[str]:
@@ -926,8 +906,8 @@ def launch(argv: list[str]) -> int:
     bad = socket_path_error(p["sock"])
     if bad is not None:
         # the same `ready` error bin/iosstudio-deviced sends when the iPhone tools are missing
-        print(json.dumps({"event": "ready", "data": {"version": VERSION, "pymobiledevice3": None,
-                                                     "error": bad.to_json()}}), flush=True)
+        protocol.write_line(sys.stdout.buffer, protocol.event("ready", {"version": VERSION, "pymobiledevice3": None,
+                                                                         "error": bad.to_json()}))
         return 3
     s = connect_or_spawn(p["sock"], deviced)
     if s is None:
