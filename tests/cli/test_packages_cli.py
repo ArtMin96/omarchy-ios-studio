@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio.features import packages as P
+from iosstudio.features.packages import add as PA
+from iosstudio.features.packages import project as PP
 from support import HELPER
 from support.fakes import FAKE_SWIFT
 from support.projects import package_project as make_project
@@ -68,7 +69,7 @@ class CLI(unittest.TestCase):
         for e in events:
             if e.get("event") == "step":
                 steps[e["id"]] = e["state"]
-        self.assertEqual(steps, {s: "done" for s, _ in P.STEPS_ADD})
+        self.assertEqual(steps, {s: "done" for s, _ in PA.STEPS_ADD})
         self.assertTrue(any(e.get("event") == "progress" and e.get("fraction") == 1.0 for e in events))
         self.assertTrue(any(e.get("event") == "log" and "Fetched" in e["text"] for e in events))
         self.assertNotEqual((self.proj / "Package.swift").read_text(), before)
@@ -245,8 +246,8 @@ class CLI(unittest.TestCase):
 
     def test_busy(self):
         root = Path(os.path.realpath(self.proj))
-        with mock.patch.object(P, "LOCKS", self.dir / "state/ios-studio/packages"):
-            with P.project_lock(root):
+        with mock.patch.object(PP, "LOCKS", self.dir / "state/ios-studio/packages"):
+            with PP.project_lock(root):
                 _, res = self.run_cli("add-product", "--package", "x", "--product", "X")
         self.assertEqual(res["error"]["code"], "package-busy")
 

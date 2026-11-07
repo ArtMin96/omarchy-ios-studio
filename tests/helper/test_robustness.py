@@ -19,7 +19,8 @@ from unittest import mock
 
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError
-from iosstudio.features import packages, projects, setup
+from iosstudio.features import projects, setup
+from iosstudio.features.packages import swift as package_swift
 from iosstudio.features.watch import fswatch, lifecycle
 from support import write_exe
 
@@ -160,10 +161,10 @@ class Timeouts(Tmp):
 
     def test_ls_remote_timeout(self):
         git = self.exe("git", "#!/bin/sh\nsleep 30 &\necho $! > " + str(self.tmp / "pid") + "\nsleep 30\n")
-        with mock.patch.object(packages.shutil, "which", return_value=git), \
-                mock.patch.object(packages, "LS_REMOTE_TIMEOUT", 0.5):
+        with mock.patch.object(package_swift.shutil, "which", return_value=git), \
+                mock.patch.object(package_swift, "LS_REMOTE_TIMEOUT", 0.5):
             t0 = time.monotonic()
-            self.assertIsNone(packages.latest_version("https://example.invalid/x.git"))
+            self.assertIsNone(package_swift.latest_version("https://example.invalid/x.git"))
         self.assertLess(time.monotonic() - t0, 5)
         self.assertTrue(gone_soon(self.grandchild()))
 
