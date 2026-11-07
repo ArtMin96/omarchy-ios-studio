@@ -10,6 +10,8 @@ import "../../lib/Model.js" as Model
 // stdout and stderr). The daemon keeps each launch's lines (console.* in deviced-protocol.md);
 // this tab shows the newest launch, catches up from the daemon's buffer when it opens or falls
 // behind, then appends the live `console` events. Run on a project, or Launch here, starts one.
+// Replies can arrive after the tab is gone (the Logs page's background load can be thrown away and
+// started over, see shell.qml loadNow): `root` is null then, and the callbacks drop them.
 Item {
   id: root
   required property var app
@@ -72,6 +74,7 @@ Item {
   function reload() {
     if (!root.ready) return
     dev.request("console.list", {}, function(ok, d) {
+      if (!root) return              // the tab was destroyed while the request ran (see the note at the top)
       root.loaded = true
       if (!ok) return
       root.sessions = d.sessions || []
@@ -96,6 +99,7 @@ Item {
     root.loading = true
     var sid = root.sessionId
     dev.request("console.read", { sessionId: sid, cursor: from, limit: 2000 }, function(ok, d) {
+      if (!root) return
       root.loading = false
       if (sid !== root.sessionId) return
       if (!ok) { if (d && d.code !== "not-found") root.app.toast(Model.errorMessage(d), "warn"); return }
@@ -130,6 +134,7 @@ Item {
     root.launching = true
     root.followLatest = true
     dev.request("app.launch", { bundleId: bid, console: true }, function(ok, d) {
+      if (!root) return
       root.launching = false
       if (!ok) { root.app.toast(Model.errorMessage(d), "error"); return }
       var c = d && d.console ? d.console : null

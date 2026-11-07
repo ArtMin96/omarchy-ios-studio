@@ -306,24 +306,31 @@ ColumnLayout {
     }
   }
 
-  AppText {
-    id: footLine
+  // The footer line sits in a box whose width only the layout sets: the text picks the long or the short
+  // form by that width, so it must not feed back into it (a binding loop with the line's own width).
+  Item {
+    id: footBox
     Layout.fillWidth: true
+    implicitHeight: footLine.implicitHeight
     visible: root.status === "ready" && !root.empty
-    readonly property string shortText: {
-      if (!root.reply) return ""
-      var p = [Model.plural(root.keys.length, "key")]
-      if (root.reply.keys > root.keys.length) p[0] = "First " + root.keys.length + " of " + root.reply.keys + " keys"
-      else if (root.reply.truncated) p[0] += ", long values shortened"
-      if (root.reply.size) p.push(Model.formatBytes(root.reply.size))
-      return p.join("  ·  ")
+    AppText {
+      id: footLine
+      width: footBox.width
+      readonly property string shortText: {
+        if (!root.reply) return ""
+        var p = [Model.plural(root.keys.length, "key")]
+        if (root.reply.keys > root.keys.length) p[0] = "First " + root.keys.length + " of " + root.reply.keys + " keys"
+        else if (root.reply.truncated) p[0] += ", long values shortened"
+        if (root.reply.size) p.push(Model.formatBytes(root.reply.size))
+        return p.join("  ·  ")
+      }
+      readonly property string fullText: root.reply && root.reply.path ? shortText + "  ·  " + root.reply.path : shortText
+      // the file's path is the first thing to go when the line is short
+      text: footMetrics.advanceWidth <= footBox.width ? fullText : shortText
+      TextMetrics { id: footMetrics; font: footLine.font; text: footLine.fullText }
+      size: "caption"; tone: "faint"; elide: Text.ElideRight
+      horizontalAlignment: Text.AlignRight
     }
-    readonly property string fullText: root.reply && root.reply.path ? shortText + "  ·  " + root.reply.path : shortText
-    // the file's path is the first thing to go when the line is short
-    text: footMetrics.advanceWidth <= width ? fullText : shortText
-    TextMetrics { id: footMetrics; font: footLine.font; text: footLine.fullText }
-    size: "caption"; tone: "faint"; elide: Text.ElideRight
-    horizontalAlignment: Text.AlignRight
   }
 
   // ---- a quiet strip with a warn glyph on its title's first line, an optional action and a close button

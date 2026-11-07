@@ -45,7 +45,8 @@ Item {
     logLoading = true
     var want = keyOf(b)
     svc.loadBuildLog(b, function(ok, d) {
-      if (keyOf(root.selected) !== want) return
+      // root is null when the tab was destroyed while the log loaded (a page load started over)
+      if (!root || keyOf(root.selected) !== want) return
       root.logLoading = false
       if (!ok) { root.logError = d; return }
       root.logText = String(d.text || "")
