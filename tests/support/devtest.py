@@ -2,8 +2,8 @@
 
     cd tests && PYTHONPATH=../helper:. ~/pymobile3-venv/bin/python -m unittest $(ls helper/test_dev_*.py | sed 's#/#.#;s#\.py$##')
 
-Call `isolate()` at import time: under pytest conftest.py has already pointed XDG_* and IOSSTUDIO_RUNTIME_DIR at a
-temp folder (nothing changes); under plain unittest it does the same, so no test touches the user's live daemon
+Call `isolate()` at import time: under pytest conftest.py has already pointed XDG_* and IOSSTUDIO_RUNTIME_DIR at
+pytest's temp folder (nothing changes); under plain unittest it does the same, so no test touches the user's live daemon
 socket, config or caches.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ _VARS = ("XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
 
 
 def isolate() -> None:
-    if os.environ.get("IOSSTUDIO_RUNTIME_DIR", "").startswith(tempfile.gettempdir()):
+    if os.environ.get("IOSSTUDIO_TESTS_TMP"):   # set by tests/conftest.py under pytest
         return
     tmp = Path(tempfile.mkdtemp(prefix="ios-studio-devtests-"))
     atexit.register(shutil.rmtree, tmp, ignore_errors=True)

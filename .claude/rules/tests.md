@@ -32,7 +32,8 @@ Reference: [docs/development.md#tests](../../docs/development.md#tests).
 
 ## Isolation
 
-- `tests/conftest.py` points every `XDG_*` and `IOSSTUDIO_RUNTIME_DIR` at a temp folder, sets
+- `tests/conftest.py` points every `XDG_*`, `IOSSTUDIO_RUNTIME_DIR` and `TMPDIR` into pytest's rotated temp
+  folder (it keeps the last 3 runs; never write loose folders in /tmp), sets
   `IOSSTUDIO_DEMO_DELAY=0`, removes `IOSSTUDIO_DEMO`, and restores `os.environ` and the machine-wide
   device state files after each test. Don't undo it, and never read the real home folder or live socket.
 - Patch a shared folder where the code reads it: `mock.patch.object(appdirs, "STATE_DIR", tmp)`.
