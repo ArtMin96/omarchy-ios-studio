@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // Files › Photos & videos: the iPhone's camera roll as a lazy thumbnail grid. Click to select
@@ -18,13 +19,30 @@ ColumnLayout {
 
   readonly property int pageSize: 120
   readonly property bool narrow: width > 0 && width < Style.space(720)
-  property var items: []
-  property int total: 0
-  property int photos: 0
-  property int videos: 0
   property string kind: ""                  // "" | photo | video
-  property string status: "unknown"         // unknown | loading | ready | error
-  property var error: null
+  // The first page of the camera roll, read the first time the tab shows with the iPhone connected (and
+  // again after a failed read when it reconnects); Reload and the kind switch read it again. "Show more"
+  // appends pages to it (loadMore).
+  Resource {
+    id: media
+    active: root.active && root.svc.connected
+    autoLoad: true
+    ttl: 2147483647                         // never stale by age
+    initial: ({ items: [], total: 0, photos: 0, videos: 0 })
+    fetch: function(done, fail) {
+      var args = { offset: 0, limit: root.pageSize, refresh: media.loaded }
+      if (root.kind) args.kind = root.kind
+      root.svc.fetch("media.list", args, done, fail, 120000)
+    }
+    onSucceeded: { root.selected = ({}); root.anchorIndex = -1 }
+  }
+  readonly property var items: media.data.items
+  readonly property int total: media.data.total
+  readonly property int photos: media.data.photos
+  readonly property int videos: media.data.videos
+  readonly property var error: media.error
+  // loading: a read runs (what's shown stays) · error: the last read failed
+  readonly property string status: media.busy ? "loading" : media.error ? "error" : media.loaded ? "ready" : "unknown"
   property bool loadingMore: false
   property var selected: ({})               // id -> true
   readonly property int selCount: Object.keys(selected).length
@@ -36,60 +54,63 @@ ColumnLayout {
   readonly property string dest: app.setting("mediaImportDir", "") || defaultDest
   readonly property bool convertHeic: app.setting("mediaConvertHeic", true) !== false
 
-  // thumbnails: id -> local file, filled by a small request queue (4 at a time)
+  // thumbnails: id -> local file ("" = failed), filled by a small request queue (4 at a time) for the
+  // tiles that exist (the grid only creates the ones near the viewport). _thumbRev bumps on each one.
   property var _thumbCache: ({})
+  property int _thumbRev: 0
   property var _thumbQueue: []
   property int _thumbBusy: 0
 
   spacing: Style.spacing.xl
 
-  onActiveChanged: if (active && status === "unknown" && svc.connected) load(true)
   Connections {
     target: root.svc
-    function onConnStateChanged() { if (root.active && root.svc.connected && root.status !== "ready") root.load(true) }
     function onDaemonEvent(name, data) {
       if (name === "transfer" && data && data.id === root.transferId && data.state === "running") root.transfer = data
     }
   }
 
-  function load(reset) {
-    if (reset) { root.status = root.items.length ? root.status : "loading"; root.error = null }
-    else root.loadingMore = true
-    var off = reset ? 0 : root.items.length
-    var args = { offset: off, limit: root.pageSize, refresh: !!reset && root.status === "ready" }
+  function load() { media.load(true) }
+  // the next page, appended; dropped when the list was read again meanwhile
+  function loadMore() {
+    if (root.loadingMore || media.busy) return
+    var before = media.data
+    var args = { offset: before.items.length, limit: root.pageSize, refresh: false }
     if (root.kind) args.kind = root.kind
-    root.svc.request("media.list", args, function(ok, d) {
+    root.loadingMore = true
+    root.svc.fetch("media.list", args, function(d) {
       root.loadingMore = false
-      if (!ok) { root.error = d; if (reset || !root.items.length) root.status = "error"; else root.app.toast(Model.errorMessage(d), "error"); return }
-      root.items = reset ? d.items : root.items.concat(d.items)
-      root.total = d.total; root.photos = d.photos; root.videos = d.videos
-      root.status = "ready"
-      if (reset) { root.selected = ({}); root.anchorIndex = -1 }
+      if (media.data !== before) return
+      media.set({ items: before.items.concat(d.items), total: d.total, photos: d.photos, videos: d.videos })
+    }, function(e) {
+      root.loadingMore = false
+      root.app.toastError(e)
     }, 120000)
   }
 
-  function setKind(k) { if (k === root.kind) return; root.kind = k; root.items = []; root.status = "loading"; load(true) }
+  function setKind(k) { if (k === root.kind) return; root.kind = k; media.reset(); media.load(true) }
 
-  function thumbFor(item, cb) {
-    var c = root._thumbCache[item.id] || item.thumb
-    if (c) { cb(c); return }
-    root._thumbQueue.push({ id: item.id, cb: cb })
+  // A tile asks for its thumbnail when it's created and forgets it when it goes (scrolled away).
+  function wantThumb(id) {
+    if (root._thumbCache[id] !== undefined || root._thumbQueue.indexOf(id) >= 0) return
+    root._thumbQueue.push(id)
     _pump()
   }
   function _pump() {
     while (root._thumbBusy < 4 && root._thumbQueue.length) {
-      var job = root._thumbQueue.shift()
+      var id = root._thumbQueue.shift()
       root._thumbBusy++
-      root.svc.request("media.thumb", { id: job.id }, (function(j) {
+      root.svc.request("media.thumb", { id: id }, (function(j) {
         return function(ok, d) {
           root._thumbBusy--
-          if (ok) { root._thumbCache[j.id] = d.path; j.cb(d.path) } else j.cb("")
+          root._thumbCache[j] = ok ? d.path : ""
+          root._thumbRev++
           root._pump()
         }
-      })(job), 60000)
+      })(id), 60000)
     }
   }
-  function forget(id) { root._thumbQueue = root._thumbQueue.filter(function(j) { return j.id !== id }) }
+  function forget(id) { var i = root._thumbQueue.indexOf(id); if (i >= 0) root._thumbQueue.splice(i, 1) }
 
   function toggle(index, shift) {
     var s = Object.assign({}, root.selected)
@@ -113,7 +134,7 @@ ColumnLayout {
     root.svc.request("media.pull", { ids: ids, dest: root.dest, convertHeic: root.convertHeic, transferId: root.transferId }, function(ok, d) {
       root.transfer = null
       if (!ok) {
-        if (d.code !== "cancelled") root.app.toast(Model.errorMessage(d), "error")
+        if (d.code !== "cancelled") root.app.toastError(d)
         else root.app.toast("Import stopped", "info")
         return
       }
@@ -138,7 +159,7 @@ ColumnLayout {
   FolderDialog {
     id: destDialog
     title: "Import photos and videos to…"
-    currentFolder: "file://" + root.dest
+    currentFolder: Util.fileUrl(root.dest)
     onAccepted: root.app.setSetting("mediaImportDir", decodeURIComponent(String(selectedFolder).replace(/^file:\/\//, "")))
   }
 
@@ -157,7 +178,7 @@ ColumnLayout {
       value: root.kind
       onPicked: function(v) { root.setKind(v) }
     }
-    IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload the camera roll"; busy: root.status === "loading"; enabled: root.svc.connected; onClicked: root.load(true) }
+    IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload the camera roll"; busy: root.status === "loading"; enabled: root.svc.connected; onClicked: root.load() }
   }
 
   // ---- import bar
@@ -236,7 +257,7 @@ ColumnLayout {
     app: root.app
     error: root.error
     title: "Couldn't read the camera roll"
-    onRetry: root.load(true)
+    onRetry: root.load()
   }
   EmptyState {
     Layout.fillWidth: true
@@ -250,28 +271,39 @@ ColumnLayout {
   }
 
   // ---- grid
-  Flow {
-    id: grid
+  // A GridView placed against the page (PageViewport): only the tiles near the viewport exist, so only
+  // they ask for thumbnails. Its cells are a tile plus the gap, so it is one gap wider than its slot.
+  Item {
+    id: gridSlot
     Layout.fillWidth: true
+    implicitHeight: grid.rows > 0 ? grid.rows * grid.cellHeight - grid.spacing : 0
     visible: root.items.length > 0 && root.status !== "error"
-    spacing: Style.spacing.sm
-    readonly property real tile: {
-      var w = width > 0 ? width : Style.space(600)
-      var n = Math.max(3, Math.floor((w + spacing) / (Style.space(116) + spacing)))
-      return Math.floor((w - (n - 1) * spacing) / n)
-    }
-    Repeater {
+    GridView {
+      id: grid
+      width: gridSlot.width + spacing
+      height: gridSlot.height + spacing
+      interactive: false
+      readonly property real spacing: Style.spacing.sm
+      readonly property int columns: Math.max(3, Math.floor(((gridSlot.width > 0 ? gridSlot.width : Style.space(600)) + spacing) / (Style.space(116) + spacing)))
+      readonly property real tile: Math.floor(((gridSlot.width > 0 ? gridSlot.width : Style.space(600)) - (columns - 1) * spacing) / columns)
+      readonly property int rows: Math.ceil(count / columns)
+      cellWidth: tile + spacing
+      cellHeight: tile + spacing
       model: root.items
+      PageViewport { id: viewport; view: grid }
+      displayMarginBeginning: viewport.marginBeginning
+      displayMarginEnd: viewport.marginEnd
       delegate: Item {
         id: tile
         required property var modelData
         required property int index
         readonly property bool sel: !!root.selected[modelData.id]
-        property string src: ""
-        property bool failed: false
+        readonly property var cached: (root._thumbRev, root._thumbCache[modelData.id])
+        readonly property string src: cached || modelData.thumb || ""
+        readonly property bool failed: cached === ""
         width: grid.tile; height: grid.tile
 
-        Component.onCompleted: root.thumbFor(modelData, function(p) { if (tile) { tile.src = p; tile.failed = p === "" } })
+        Component.onCompleted: if (!modelData.thumb) root.wantThumb(modelData.id)
         Component.onDestruction: root.forget(modelData.id)
 
         Rectangle {
@@ -288,7 +320,7 @@ ColumnLayout {
           Image {
             id: img
             anchors.fill: parent
-            source: tile.src ? "file://" + tile.src : ""
+            source: Util.fileUrl(tile.src)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true; smooth: true; cache: true
             sourceSize.width: grid.tile * 2; sourceSize.height: grid.tile * 2
@@ -310,10 +342,7 @@ ColumnLayout {
               Icon { glyph: Model.Glyph.play; size: Style.font.caption; color: "white" }
               AppText {
                 size: "caption"; tone: "inherit"; color: "white"
-                text: {
-                  var s = Math.round(tile.modelData.duration || 0)
-                  return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
-                }
+                text: Model.clock(Math.round(tile.modelData.duration || 0))
               }
             }
           }
@@ -353,7 +382,7 @@ ColumnLayout {
     text: "Show " + Math.min(root.pageSize, root.total - root.items.length) + " more  (" + (root.total - root.items.length) + " left)"
     glyph: Model.Glyph.chevronDown; kind: "ghost"
     busy: root.loadingMore
-    onClicked: root.load(false)
+    onClicked: root.loadMore()
   }
 
   AppText {

@@ -239,29 +239,25 @@ ColumnLayout {
         Rectangle {
           Layout.fillWidth: true
           visible: !!root.plan && root.plan.items && root.plan.items.length > 0
-          implicitHeight: Math.min(items.implicitHeight, Style.space(240)) + Style.normalBorderWidth * 2
+          implicitHeight: Math.min(items.contentHeight, Style.space(240)) + Style.normalBorderWidth * 2
           radius: Style.cornerRadius
           color: "transparent"
           border.width: Style.normalBorderWidth
           border.color: Theme.hairline
           clip: true
-          Flickable {
-            id: itemsFlick
+          // up to RESET_ITEMS (200) rows: a ListView, so only the ones in the box exist
+          ListView {
+            id: items
             anchors.fill: parent
             anchors.margins: Style.normalBorderWidth
-            contentHeight: items.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
             clip: true
-            ScrollBar.vertical: ScrollBar { policy: itemsFlick.contentHeight > itemsFlick.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
-            Column {
-              id: items
-              width: itemsFlick.width
-              Repeater {
-                model: root.plan && root.plan.items ? root.plan.items : []
+            ScrollBar.vertical: ScrollBar { policy: items.contentHeight > items.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
+            model: root.plan && root.plan.items ? root.plan.items : []
                 delegate: Rectangle {
                   required property var modelData
                   required property int index
-                  width: items.width
+                  width: ListView.view.width
                   implicitHeight: itemRow.implicitHeight + Style.spacing.sm * 2
                   color: index % 2 === 1 ? Theme.surface : "transparent"
                   RowLayout {
@@ -288,8 +284,6 @@ ColumnLayout {
                     }
                   }
                 }
-              }
-            }
           }
         }
         AppText {

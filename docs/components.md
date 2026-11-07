@@ -163,8 +163,14 @@ StateView {
 StateView: `phase` is `"loading" | "error" | "empty" | "ready"`; data already loaded stays on screen while it
 reloads. Retry calls `retry()` when set, else `resource.load(true)`. Other properties: `compact` (empty state,
 default true), `errorCompact`, `emptyActionText`/`emptyActionGlyph` + `onEmptyAction`, `skeletonGap`.
-First users: DeviceNetworkView (condition list), DeviceService `profilesResource` (provisioning profiles;
-`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it). Tests: `tests/qml/tst_resource.qml`
+Users: DeviceNetworkView (condition list), DeviceService `profilesResource` (provisioning profiles;
+`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it) and `appsResource` (the app list;
+`apps`/`appsStatus`/`appsError` likewise), DeviceAppsView (StateView), and the view-local reads of
+DeviceAppDataDefaults, DeviceAppDataStores (stores + a table page), DeviceContainerView (the open folder) and
+DeviceMediaView (the first page of the camera roll). Those panes keep a `status` string derived from the Resource
+(`busy` → loading, `error` → error, `loaded` → ready) because their layouts dim the old data while reading and hide
+it after a failed read; panes that read once per app use `autoLoad` with an effectively infinite `ttl`, and
+`invalidate()` (DeviceAppDataView's Reset `done()`) to read again on the next show. Tests: `tests/qml/tst_resource.qml`
 (`qmltestrunner`, run by pytest).
 
 ## Shared helpers
@@ -615,7 +621,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ```
 - **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
   QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view
-  leaves the preview out.
+  leaves the preview out. It pauses while hidden and resumes when shown again.
 - **SettingRow**: preference row with `title`, `description`, `glyph`, `note` + `noteLevel` (a coloured line
   under the description) and `separator`. Its children are the control on the right.
   ```qml
@@ -893,11 +899,14 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   (the FilterField), `shown` (the filtered, sorted apps); `current()`; signals `cursorMoved(index)` and
   `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor; cursor moves scroll
   the page to the row. The rows are a ListView inside the page's scroll: only the rows near the viewport exist, and
-  `shown` changes only with the list, the filter or the sort. Each row reads its icon and size from
+  `shown` changes only with the list, the filter or the sort. The loading / error / empty states are a StateView on
+  `app.device.appsResource` (outside the list, which places itself against the page). Each row reads its icon and size from
   `app.device.appIcons` / `app.device.appSizes` (bundle id → path / bytes), so a batch of icons rebinds images, not
   rows.
-  DeviceService keeps the app list cheap: `apps` is reassigned only when the list itself changes (the `apps.list`
-  reply, the daemon's `apps` event, launch/stop/remove); icons (`appIcons` events, or per-app `appIcon` from older
+  DeviceService keeps the app list cheap: `apps` (a read-only view of `appsResource.data`) changes only when the
+  list itself does (the `apps.list` reply, the daemon's `apps` event, launch/stop/remove; `_setApps` hands back the
+  same array otherwise, which doesn't notify); one `apps.list` runs at a time, and calls meanwhile are merged into
+  the next one; icons (`appIcons` events, or per-app `appIcon` from older
   daemons, merged every 50 ms) and sizes (`appSizes`) go into those maps and are also written into the app objects
   in place, so `a.icon` / `a.size` reads elsewhere see them on their next evaluation. `refreshApps(force)` (the
   Reload buttons pass `true`), `wantAppSizes()` (one `sizes: true` call per device per 10 minutes), `appsStale` /
@@ -925,7 +934,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
     the header already names the app), the Whole container / Documents only pill and reload (`showReload`) on one
     line, Add files (file dialog), New folder,
     Save to… (folder dialog), Delete (through `app.confirm`), and a `DropArea` that copies files dropped from
-    the desktop into the open folder. A push that would overwrite asks first.
+    the desktop into the open folder. A push that would overwrite asks first. The entries are a ListView placed
+    against the page (PageViewport), so a folder with thousands of files only creates the rows on screen; `open(p)`
+    while a read runs reads `p` right after it.
   - **DeviceAppDataView**: the saved data of `fixedApp`, one of your own builds (`appdata.*`, see
     [features/app-data.md](features/app-data.md)): shows `pane` (`defaults`|`stores`|`reset`, picked in the
     details' switch). Public `stopApp()`, `reload()`, `waitLeft()` (ms until 10 s after the app was last seen
@@ -1008,12 +1019,22 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   first show), `section` (`media`, `camera`; remembered in the `filesSection` setting); `show(section)`. Deep
   link: `nav("device:files:camera")`. It holds the two parts below, each with the same `app` and `active` props:
   - **DeviceMediaView**: the camera roll as a thumbnail grid (`media.list` in pages of 120, `media.thumb`
-    four at a time), click and Shift+click selection, and import (`media.pull`) to the `mediaImportDir`
+    four at a time, only for the tiles that exist: the grid is a GridView placed against the page with
+    PageViewport, so only tiles near the viewport are created; Show more appends pages), click and Shift+click selection, and import (`media.pull`) to the `mediaImportDir`
     setting (default `~/Pictures/iPhone`) with the `mediaConvertHeic` switch.
   - **DeviceCameraTestView**: the camera test form and run (`cameratest.run`): app, test files (file dialog
     or drop), launch arguments, environment and timeout (settings `cameraTestApp`, `cameraTestInputs`,
     `cameraTestArgs`, `cameraTestEnv`, `cameraTestTimeout`), live steps, then `done.json`, output images,
     the app's log and a crash banner.
+- **PageViewport** (components/device/): virtualizes a ListView / GridView that is as tall as its content inside
+  the page's Flickable (negative display margins: only rows within a screen of the viewport exist). Props: `view`;
+  read-only `marginBeginning`, `marginEnd`; `reveal(y0, y1)` scrolls the page to a band of the view. Users:
+  DeviceAppsView, DeviceContainerView, DeviceMediaView.
+  ```qml
+  ListView { id: list; height: contentHeight; interactive: false
+             PageViewport { id: viewport; view: list }
+             displayMarginBeginning: viewport.marginBeginning; displayMarginEnd: viewport.marginEnd }
+  ```
 - **DeviceTransferBar**: progress of one daemon `transfer` (file, n of m, bytes) with a Cancel button.
   Props: `transfer` (the event data or null; hidden when null), `verb`; signal `cancel()`.
   ```qml

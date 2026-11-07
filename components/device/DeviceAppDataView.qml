@@ -92,7 +92,7 @@ ColumnLayout {
   }
   DeviceAppDataReset {
     Layout.fillWidth: true
-    onDone: { defaultsPane.loadedFor = ""; storesPane.loadedFor = "" }
+    onDone: { defaultsPane.invalidate(); storesPane.invalidate() }
     visible: root.pane === "reset" && !!root.current
     view: root
   }
