@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // "Build settings" sheet for one project (projects slice): the prebuild command, extra environment
@@ -17,10 +18,17 @@ Sheet {
   property var app: null
   property var svc: null
   property var project: ({})
-  property bool loading: false
   property bool working: false
-  property var error: null
-  property var loaded: null              // the helper's answer: { settings, suggested, openFilesError }
+  property var saveError: null
+  // The helper's answer: { settings, suggested, openFilesError }; fills the form when it lands.
+  Resource {
+    id: settingsRes
+    fetch: (done, fail) => root.svc.loadBuildSettings(root.project, done, fail)
+    onSucceeded: function(d) { root.fill(d.settings) }
+  }
+  readonly property var loaded: settingsRes.data
+  readonly property bool loading: settingsRes.busy
+  readonly property var error: root.saveError || settingsRes.error
   property var envRows: []               // [{ key, value }], edited in place
   property bool allowGenerated: false
 
@@ -53,17 +61,9 @@ Sheet {
   }
 
   function load() {
-    root.loading = true
-    root.error = null
-    root.loaded = null
-    svc.loadBuildSettings(root.project, function(d) {
-      root.loading = false
-      root.loaded = d
-      root.fill(d.settings)
-    }, function(e) {
-      root.loading = false
-      root.error = e
-    })
+    root.saveError = null
+    settingsRes.reset()
+    settingsRes.load()
   }
 
   // Suggestions only fill the form; nothing is saved until Save.
@@ -95,7 +95,7 @@ Sheet {
       if (k !== "") env[k] = root.envRows[i].value
     }
     root.working = true
-    root.error = null
+    root.saveError = null
     svc.saveBuildSettings(root.project, {
       prebuild: prebuildField.text.trim(),
       env: env,
@@ -106,7 +106,7 @@ Sheet {
       root.close()
     }, function(e) {
       root.working = false
-      root.error = e
+      root.saveError = e
     })
   }
 

@@ -141,7 +141,7 @@ BorderSurface {
           id: iconImg
           anchors.fill: parent
           visible: status === Image.Ready
-          source: root.project.icon ? "file://" + root.project.icon : ""
+          source: Util.fileUrl(root.project.icon)
           sourceSize.width: Style.space(96)
           sourceSize.height: Style.space(96)
           fillMode: Image.PreserveAspectCrop

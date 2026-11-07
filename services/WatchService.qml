@@ -100,7 +100,7 @@ Item {
     }, function(e) {
       root.busy = ""
       root._userStop = false
-      app.toast(Model.errorMessage(e), "error")
+      app.toastError(e)
     }, { timeout: 20000 })
   }
 
@@ -117,7 +117,7 @@ Item {
     app.cli.call(argv, "", function(d) {
       root._onSnapshot(d, false)
       app.toast(on ? "Runs " + w.name + " on your iPhone after each clean compile" : "Watching " + w.name + " without running it", "ok")
-    }, function(e) { app.toast(Model.errorMessage(e), "error") }, { timeout: 20000 })
+    }, function(e) { app.toastError(e) }, { timeout: 20000 })
   }
 
   function _nameOf(path) { var pr = app.projects ? app.projects.projectByPath(path) : null; return pr ? pr.name : String(path).split("/").pop() }
@@ -135,7 +135,7 @@ Item {
       if (!ok && error && error.code !== "cancelled") {
         root.busy = ""
         root.lastError = error
-        app.toast("Couldn't watch for changes: " + Model.errorMessage(error), "error")
+        app.toastError(error, "Couldn't watch for changes")
       }
       if (ok && data && data.state) root._onSnapshot(data, true)
     }
@@ -179,7 +179,7 @@ Item {
       var c = root.current
       if (d && d.watching === false && c && !stream.running)
         root._onSnapshot(Object.assign({}, d, { state: "stopped", path: c.path, pid: c.pid, seq: (c.seq || 0) + 1 }), false)
-    }, function(e) {}, { timeout: 10000 })
+    }, null, { timeout: 10000 })
   }
 
   property string _shownBuild: ""       // lastBuild.id already sent to the build panel

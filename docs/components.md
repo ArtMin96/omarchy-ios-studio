@@ -178,6 +178,9 @@ read-only views of their Resources the same way: AccountService (`account status
 page has set `diskWanted`), SetupService (`setup check` → `raw`/`checking`/`checkedAt`/`loaded`/`error`) and
 LogService (`crashResource`, crash.list while the phone is connected → `crashes`/`crashStatus`/`crashError`).
 SettingsPage (`app status`, `app about`) and AgentsSection (`agents list`) hold view-local Resources.
+Projects: ProjectService (`listResource`, `templatesResource`, `historyResource`, `autorenewResource`,
+`editorInfoResource`; `status`, `items`, `history`, `editorInfo`… are read-only views) and the projects sheets
+(packages list, run presets, build settings, the format dry run).
 Device tool views: ScreenshotCompareView (baselines), DeviceDebugView (`debug check`; a `ready: false` reply fails with its
 error) and DeviceInspectView (`ui.tree`, `ui.audit`, read on demand). For "the last attempt's outcome" (an error
 banner that goes away when the next read starts) derive it: `busy ? "loading" : status === "idle" ? "idle" :
@@ -715,6 +718,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   See [features/project-check.md](features/project-check.md).
 - **ProjectNewSheet**: the New app sheet (name, template, location, bundle id). Props: `app`, `svc`,
   `template` (default `swiftui-app`); `open()`, `reset()`; signal `created(project)`.
+- **SheetGlyphRow** (components/projects/): a status line on a sheet's glyph column. Props: `glyphWidth` (the Sheet
+  header glyph's width), `glyph`, `glyphColor`, `glyphSize`, `spinner` (a running Spinner instead), `title`,
+  `titleStrong`, `titleTone`, `titleWraps` (else elides), `trailingAlignment`; children go under the title and
+  `trailing` items end the row. The glyph is centred on the title's first line, so the title starts on the sheet
+  title's edge. Used by ProjectPackagesSheet.
 - **ProjectBuildSettingsSheet**: a project's Build settings sheet (prebuild command, environment variable rows,
   open-file limit, Build generated project, and the project scripts' suggestions). Props: `app`, `svc`;
   `openFor(project)`. Loads and saves through `svc.loadBuildSettings` / `svc.saveBuildSettings`. See
@@ -760,8 +768,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   and for a cut diff "Showing the start of a long diff." with the full diff's path and Open. Nothing to change:
   EmptyState "Already formatted". Footer: Cancel (Close when already formatted) and primary Apply to N files,
   `disabled` with `applyBlocker` as its tooltip while loading, after an error or with nothing to change. Apply
-  calls `svc.formatApply` and closes on success; a failed apply shows a banner above the diff. Answers for an
-  earlier open are dropped (`_ticket`).
+  calls `svc.formatApply` and closes on success; a failed apply shows a banner above the diff. The dry run is a
+  Resource (`preview`; `result`/`error` read it, reset on each open, so an earlier open's answer is dropped);
+  `phase` is `applying` while Apply runs, else the Resource's status.
 - **ProjectPackagesSheet**: "Packages · <name>" (`app`, `svc`; `openFor(project)` opens and lists through
   `svc.packagesList`; signal `checkBuild(project)`, the page starts a compile-only build). One sheet, `view`:
   - One column system for every view: block content (fields, diffs, banners) spans the body; glyphs sit in the
@@ -769,7 +778,10 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
     (`textX` = `glyphW` + `xxl`); buttons end on the body's right edge, and compact ghost buttons get an `xs` right
     margin so their label ends where an IconButton's glyph does (the header ×, the rows' bin). Rows and status
     lines have no fill or border of their own, so nothing is inset from an edge the header doesn't have.
-  - `list`: LoadingState, ErrorState (retry) or EmptyState "No packages yet" (Add package…). Otherwise "N packages"
+  - `list`: the `packages list` answer is a Resource (`listRes`, reset when another project opens; a `load()` while
+    one runs loads again after it). LoadingState, ErrorState (retry) or EmptyState "No packages yet" (Add package…).
+    Its status lines (update/resolve running, the finished notice, unresolved packages) and the Added/Remove headlines
+    are SheetGlyphRows. Otherwise "N packages"
     with ghost Update all and Add package…, then one row per package, hairlines between rows from the text edge:
     the name (bold, keeps its whole width and elides first) with a `local` Badge; the URL or path dim and
     middle-elided; "Used by <targets> · <products>" faint (amber "Not linked to a target yet"). Like ListRow, the
@@ -860,8 +872,19 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   target, onDone, onFail)` and `packagesChanged(p)` (runs the card's settings check and the editor status again after
   Package.swift changed). add, update and resolve stream (JSON lines, cancel with `{cancel: true}` on stdin);
   ProjectPackagesSheet runs them with its own Stream.
+- **PathResults** (services/PathResults.qml): one helper answer per project path, `byPath` = `{path: {state:
+  "loading" | "ready" | "error", result, error, at}}` (reassigned, so bindings through `get(p)` update). Props: `cli`,
+  `argv` (path → helper argv), `timeout`, `rejects(answer)` (an error object for an `{ok: false}` answer), `timeOf(answer)`,
+  `freshMs`. `run(p, onDone?, onFail?)` asks now and keeps the old result while it runs; `soon(p)` queues it (one at a
+  time, skipped while loading or answered within `freshMs`); `put(path, fields)` merges. ProjectService keeps
+  `checks`, `editors` and `lints` in three of them. Tests: `tests/qml/tst_path_results.qml`.
+- **ProjectService project list** (`app.projects`): `listResource` holds `projects list`; `status` (`unknown`,
+  `loading`, `ready`, `needs-setup` when xtool is missing, `error` only with no list yet), `error`, `loadedOnce`,
+  `items`, `convertible`, `missing`, `roots`, `defaultRoots` and `defaultDir` read it. A failed reload keeps the
+  list and sets `error`. `refresh()` reloads it (a refresh asked while one runs reloads again after it, as that one
+  may predate the change) with the build history and auto-renew status; templates load once.
 - **ProjectService project checks** (`app.projects`): `checks` maps a project path to `{state: "loading" | "ready"
-  | "error", result, error, at}`; `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
+  | "error", result, error, at}` (a PathResults); `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
   `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`
   queues every project. The Projects page calls `checkAll()` when it opens, and a finished build calls `check()`
   for its project.
