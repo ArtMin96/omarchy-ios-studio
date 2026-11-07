@@ -236,6 +236,49 @@ async def forget_container(s, bid: str, docs: bool):
     await s.forget_service(f"files.ha:{bid}:{int(docs)}")
 
 
+def _afc_failure(exc: BaseException) -> bool:
+    """An error from the container connection itself (dropped, or AFC/house_arrest refusing a request)."""
+    return is_connection_error(exc) or isinstance(
+        exc, (AfcException, AfcFileNotFoundError, AppNotInstalledError, PyMobileDevice3Exception))
+
+
+async def on_container(s, bid: str, docs: bool, fn):
+    """`await fn(afc)` on the app's cached container connection. A connection that was already open can go
+    stale (the app was reinstalled, crashed or relaunched; AFC then answers "not found" even for the root):
+    on any AFC or connection error it is closed and `fn` runs once more on a fresh one, so only an error from
+    a fresh connection reaches the caller. Errors raised by `fn` itself (DeviceError) are never retried."""
+    key = f"files.ha:{bid}:{int(docs)}"
+    for attempt in (0, 1):
+        reused = key in (getattr(s, "services", None) or {})
+        try:
+            afc = await cached_container(s, bid, docs)
+            return await fn(afc)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            if not _afc_failure(exc):
+                raise
+            retry = reused and attempt == 0
+            if retry or is_connection_error(exc):   # a fresh one that answers "not found" is kept
+                await forget_container(s, bid, docs)
+            if not retry:
+                raise
+            dlog(f"files: cached container of {bid} failed ({exc!r}); retrying on a fresh connection")
+
+
+class Containers:
+    """Provided as "containers": other features (apps) drop an app's cached container connections and
+    file-sharing info when the app is launched, killed, installed or removed."""
+
+    async def forget(self, s, *bundle_ids: str) -> None:
+        cache = s.tunnel_data.get("files.apps") or {}
+        for bid in {b for b in bundle_ids if b}:
+            cache.pop(bid, None)
+            for docs in (False, True):
+                with contextlib.suppress(Exception):
+                    await forget_container(s, bid, docs)
+
+
 # ---------------------------------------------------------------- camera roll index
 
 async def dcim_listing(afc) -> list[str]:
@@ -370,6 +413,7 @@ async def make_thumb(d, s, path: str, item: dict | None) -> dict:
 def register(reg):
     tr = df.Transfers()
     reg.provide("transfers", tr)
+    reg.provide("containers", Containers())
 
     # ------------------------------------------------ camera roll
     @reg.command("media.list")
@@ -484,14 +528,14 @@ def register(reg):
             path = df.clean_phone_path(a.get("path") or root, root)
         except df.PathError as exc:
             raise err("bad-args", str(exc))
-        try:
-            afc = await cached_container(s, info["bundleId"], docs)
+        async def listing(afc):
             names = await afc.listdir(path)
             paths = [posixpath.join(path, n) for n in names]
-            stats = await stat_many(afc, paths)
+            return paths, await stat_many(afc, paths)
+
+        try:
+            paths, stats = await on_container(s, info["bundleId"], docs, listing)
         except BaseException as exc:
-            if is_connection_error(exc) or isinstance(exc, (AfcException, PyMobileDevice3Exception)):
-                await forget_container(s, info["bundleId"], docs)
             raise afc_error(exc, "this folder")
         items = [entry(p, st) for p, st in zip(paths, stats)]
         items = [x for x in items if not (path == "/" and x["name"] in ("SystemData",) and x.get("denied"))]
@@ -588,14 +632,14 @@ def register(reg):
             raise err("bad-args", str(exc))
         if path == root:
             raise err("bad-args", "Name the new folder.")
-        try:
-            afc = await cached_container(s, info["bundleId"], docs)
+        async def mkdir(afc):
             if await afc.exists(path):
                 raise err("exists", "A file or folder with that name already exists.")
             await afc.makedirs(path)
+
+        try:
+            await on_container(s, info["bundleId"], docs, mkdir)
         except BaseException as exc:
-            if is_connection_error(exc):
-                await forget_container(s, info["bundleId"], docs)
             raise afc_error(exc, "that folder")
         return {"path": path}
 
@@ -609,18 +653,20 @@ def register(reg):
             raise err("bad-args", str(exc))
         if not paths or any(p in ("/", root) for p in paths):
             raise err("bad-args", "Pick the files or folders to delete (not the whole container).")
-        deleted, failed = [], []
-        try:
-            afc = await cached_container(s, info["bundleId"], docs)
+        async def delete(afc):
+            await afc.stat(root)   # a stale connection answers "not found" for everything, which rm takes as gone
+            deleted, failed = [], []
             for p in paths:
                 try:
                     left = await afc.rm(p, force=True)
                 except AfcFileNotFoundError:
                     left = []
                 (failed if left else deleted).append(p)
+            return deleted, failed
+
+        try:
+            deleted, failed = await on_container(s, info["bundleId"], docs, delete)
         except BaseException as exc:
-            if is_connection_error(exc):
-                await forget_container(s, info["bundleId"], docs)
             raise afc_error(exc, "that file")
         return {"deleted": deleted, "failed": failed}
 

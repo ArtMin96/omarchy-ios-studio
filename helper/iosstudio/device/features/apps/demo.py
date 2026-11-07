@@ -1,4 +1,5 @@
 """Demo: apps.list, app.launch, app.kill, app.uninstall, app.install, processes.list.
+app.launch and app.kill send `apps` with the new running state, like the real daemon.
 
 apps.list follows the real daemon's contract (features/app_index.py does the caching): served
 from the cache with `stale`/`fetchedAt`, refreshed in the background (`apps` event when it changed),
@@ -89,6 +90,14 @@ async def apps_list(a: dict) -> dict:
     return {"apps": out, "stale": stale, "fetchedAt": round(fetched_at, 3)}
 
 
+def announce_running() -> None:
+    """After app.launch / app.kill: `apps` with the cached list and the new running state (as the real daemon)."""
+    apps = INDEX.peek(UDID, "User")
+    if apps is not None:
+        event("apps", {"udid": UDID, "system": False,
+                       "apps": compose(apps, _running(), INDEX.sizes(UDID, "User"), _icon_path)})
+
+
 def register(reg):
     @reg.command("apps.list")
     async def list_apps(ctx, a):
@@ -104,11 +113,13 @@ def register(reg):
             return await ctx.registry.lookup("console.launch")(ctx, a)
         running.add(a.get("bundleId"))
         pids[a.get("bundleId")] = 812
+        announce_running()
         return {"bundleId": a.get("bundleId"), "pid": 812}
 
     @reg.command("app.kill")
     def kill(ctx, a):
         running.discard(a.get("bundleId"))
+        announce_running()
         return {"bundleId": a.get("bundleId"), "killed": [812]}
 
     @reg.command("app.uninstall")

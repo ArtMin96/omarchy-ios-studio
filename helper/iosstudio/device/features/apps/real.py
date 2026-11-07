@@ -1,4 +1,5 @@
-"""apps.list (+ apps / appIcons / appSizes events), app.launch, app.kill, processes.list; register() also adds
+"""apps.list (+ apps / appIcons / appSizes events), app.launch, app.kill (both send `apps` with the new
+running state), processes.list; register() also adds
 app.install / app.uninstall (install.py) and the app list cache's hooks (index.py).
 
 The app list itself is cached per device in index.py (INDEX); this module adds
@@ -17,6 +18,7 @@ import uuid
 from iosstudio.device import link
 from iosstudio.device.features.apps import index, install
 from iosstudio.device.features.apps.index import INDEX, bundle_dir, compose, device_fetcher, fetch_icons, size_fetcher
+from iosstudio.device.features.apps.install import forget_containers
 from iosstudio.device.features.apps.lookup import exe_path
 from iosstudio.device.real import core
 from iosstudio.device.real.core import dlog, emit, err, icon_path, is_connection_error, write_bytes
@@ -102,6 +104,25 @@ async def _catch_up(d, s, kind: str, sent_apps: list[dict], sent_running: dict[s
                       "apps": compose(apps, running, INDEX.sizes(s.udid, kind), lambda bid: icon_path(s.udid, bid))})
 
 
+def announce_running(s, bundle_id: str, pid: int | None) -> None:
+    """After app.launch / app.kill: update the last-seen running state and send `apps` with the cached
+    user app list (no phone round trip), so every client sees Running change, whoever started or stopped
+    the app. Nothing is sent when that list isn't cached yet or doesn't hold the app."""
+    apps = INDEX.peek(s.udid, "User")
+    hit = next((e for e in apps or () if e["bundleId"] == bundle_id), None)
+    if hit is None or not hit.get("path"):
+        return
+    running = dict(s.data.get(RUNNING) or {})
+    if pid is None:
+        running.pop(bundle_dir(hit["path"]), None)
+    else:
+        running[bundle_dir(hit["path"])] = int(pid)
+    s.data[RUNNING] = running
+    udid = s.udid
+    emit("apps", {"udid": udid, "system": False,
+                  "apps": compose(apps, running, INDEX.sizes(udid, "User"), lambda bid: icon_path(udid, bid))})
+
+
 def register(reg):
     index.register(reg)      # the cache's reconnect / device switch / shutdown hooks
     install.register(reg)    # app.install, app.uninstall
@@ -182,6 +203,9 @@ def register(reg):
         with contextlib.suppress(Exception):
             tok = res.get("processToken") if isinstance(res, dict) else None
             pid = (tok or {}).get("processIdentifier")
+        await forget_containers(d, s, bid)
+        if pid is not None:
+            announce_running(s, bid, pid)
         return {"bundleId": bid, "pid": pid}
 
     @reg.command("app.kill")
@@ -196,6 +220,8 @@ def register(reg):
                 await svc.send_signal_to_process(pid, int(signal.SIGKILL))
         if pids:    # app data waits for cfprefsd to save a just-killed app's settings (features/appdata.py)
             s.tunnel_data.setdefault("app.killed", {})[bid] = time.monotonic()
+            await forget_containers(d, s, bid)
+        announce_running(s, bid, None)
         return {"bundleId": bid, "killed": pids}
 
     @reg.command("processes.list")

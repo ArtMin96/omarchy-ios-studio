@@ -1,4 +1,5 @@
-"""app.install (installProgress events), app.uninstall. Both invalidate the app list cache (index.INDEX)."""
+"""app.install (installProgress events), app.uninstall. Both invalidate the app list cache (index.INDEX)
+and the files feature's cached container connections of that app."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +10,14 @@ from pathlib import Path
 from iosstudio.device import link
 from iosstudio.device.features.apps.index import INDEX, bundle_matches, device_fetcher
 from iosstudio.device.real.core import classify, emit, err, icon_path
+
+
+async def forget_containers(d, s, *bundle_ids: str) -> None:
+    """Drop the files feature's cached container connections and file-sharing info of these apps: they go
+    stale when the app is relaunched, killed, reinstalled or removed."""
+    containers = d.registry.provided.get("containers")
+    if containers is not None:
+        await containers.forget(s, *bundle_ids)
 
 
 def register(reg):
@@ -46,10 +55,13 @@ def register(reg):
                 raise
             raise link.install_error(exc, classify)
         INDEX.invalidate(s.udid)
+        await forget_containers(d, s, bid)
         installed = None
         with contextlib.suppress(Exception):   # refills the app list cache with the new app in it
             apps, _, _ = await INDEX.list(s.udid, "User", device_fetcher(d.pmd3, rsd), sync=True)
             installed = next((k for k in sorted(e["bundleId"] for e in apps) if bundle_matches(k, bid)), None)
+        if installed and installed != bid:
+            await forget_containers(d, s, installed)
         emit("installProgress", {"path": sp, "percent": 100, "status": "done"})
         with contextlib.suppress(OSError):
             if installed:
@@ -66,6 +78,7 @@ def register(reg):
         async with d.pmd3.InstallationProxyService(lockdown=rsd) as ip:
             await ip.uninstall(bid)
         INDEX.invalidate(s.udid)
+        await forget_containers(d, s, bid)
         with contextlib.suppress(OSError):
             icon_path(s.udid, bid).unlink()
         return {"bundleId": bid}

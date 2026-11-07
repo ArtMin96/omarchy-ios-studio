@@ -226,7 +226,7 @@ the tunnel is up.
 | `syslog` | `[SyslogEntry…]` (array!) | batched, see Syslog |
 | `syslogState` | `{running, udid, filters, dropped, reconnecting, error?}` | stream state change |
 | `pair` | Pair (below) | pairing flow progress |
-| `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list (or, after a reply sent while the tunnel was coming up, the running apps) changed |
+| `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list (or, after a reply sent while the tunnel was coming up, the running apps) changed; also after every `app.launch` (with a pid) and `app.kill`, from any client, with the cached user app list (`system: false`) and the new `running`/`pid` (no phone round trip; not sent when no user list is cached or the app isn't in it) |
 | `appIcons` | `{udid, icons: {bundleId: path}}` | icons fetched in the background after `apps.list`, batched (at most every 250 ms or 10 icons) |
 | `installProgress` | `{path, percent, status}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing`, `done` (100) |
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list {sizes: true}` (sizes are slow to compute) |
@@ -1037,6 +1037,12 @@ Containers (house_arrest):
   `overwrite`; nothing is copied then. Pulls never overwrite local files (`name (2).ext`).
 - Error codes besides the common ones: `no-file-sharing`, `denied` (the phone refused this path),
   `exists`, `no-space`, `not-found`.
+- `container.list`, `container.mkdir` and `container.delete` reuse one house_arrest connection per app
+  (and mode) until the tunnel drops. A kept connection goes stale when the app is relaunched, crashes or
+  is reinstalled (AFC then answers "not found" even for the root), so on an AFC or connection error a
+  kept connection is closed and the command runs once more on a fresh one; only an error from a fresh
+  connection is reported (a path that really is missing is still `not-found`). `app.launch`, `app.kill`,
+  `app.install` and `app.uninstall` also drop that app's kept connections and its cached file-sharing info.
 
 Transfer event (`transfer`):
 
