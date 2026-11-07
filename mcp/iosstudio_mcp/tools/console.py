@@ -1,6 +1,6 @@
 """App console: an app's stdout and stderr (Swift print()) for apps launched with the console on.
 
-The device daemon keeps one ring buffer per launch (helper/app_console.py: 10,000 lines / 2 MB, lines
+The device daemon keeps one ring buffer per launch (helper/iosstudio/device/app_console.py: 10,000 lines / 2 MB, lines
 cut at 8 KB, at most 2,000 lines a second). An app launched by ios_app_launch(console=true),
 ios_app_run_and_capture or ios_run has one; ios_app_console_read pages through it with a cursor.
 Pure helpers (fmt_line, select_lines, page) are used by tests and by ios_app_run_and_capture.

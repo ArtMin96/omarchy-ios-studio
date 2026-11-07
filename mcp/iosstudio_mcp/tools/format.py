@@ -1,6 +1,6 @@
 """Format and lint: ios_format shows (dry run) or applies swift-format's changes to a project's Swift files as a
 bounded unified diff; ios_format_lint lists swift-format's (and SwiftLint's, when it runs) style findings.
-The work happens in helper/format.py (`projects format` / `projects format-lint`)."""
+The work happens in helper/iosstudio/features/format.py (`projects format` / `projects format-lint`)."""
 from __future__ import annotations
 
 import json

@@ -25,7 +25,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 import re
 import shutil
 import struct
@@ -38,6 +37,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ResourceLink
 from pydantic import BaseModel, PrivateAttr
 
+from .. import helper
+
 DEFAULT_BYTES = 12_000      # default result size (~3k tokens)
 MAX_BYTES = 48_000          # what max_bytes may raise it to
 LINE_CUT = 300              # default characters per log line
@@ -48,7 +49,7 @@ MAX_PATTERN = 200           # grep pattern length
 RESERVE = 1_000             # bytes kept for the other fields of a result (per copy)
 ERROR_CUT = 300             # characters of error detail
 
-CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ios-studio" / "mcp"
+CACHE = helper.appdirs.cache_dir() / "mcp"   # ~/.cache/ios-studio/mcp (XDG): spilled outputs
 
 
 def nbytes(s: str) -> int:
@@ -237,8 +238,7 @@ def rel_path(path: str, root: str | None) -> str:
         r = str(root).rstrip("/") + "/"
         if p.startswith(r):
             return p[len(r):]
-    home = str(Path.home())
-    return "~" + p[len(home):] if p == home or p.startswith(home + "/") else p
+    return helper.appdirs.tilde(p)
 
 
 DIAG_DETAILS = 8            # detail lines per diagnostic group (symbols of a linker block, …)

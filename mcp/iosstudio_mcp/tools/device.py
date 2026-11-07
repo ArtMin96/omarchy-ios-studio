@@ -1,4 +1,4 @@
-"""iPhone and app tools, through the shared device daemon (helper/device_client.py).
+"""iPhone and app tools, through the shared device daemon (helper/iosstudio/device/device_client.py).
 
 The MCP server is one more client of the per-user device broker that the iOS Studio window also
 uses, so both share one tunnel to the phone. On startup this module fills
@@ -38,6 +38,8 @@ from ..backends.device import (
 )
 from ..backends.projects import merge_launch, resolve_preset
 from ..core import budget as B
+from ..core.job_status import job_result, settle, shared_job
+from ..core.jobs import Job
 from ..core.params import BundleId, PresetName, Udid
 from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import (
@@ -56,9 +58,7 @@ from ..models import (
 )
 from ..state import AppState, get_state
 
-# ddi.mount downloads the image from Apple; the iPhone service keeps going when a call gives up waiting
-MOUNT_HINTS = {"timeout": "The disk image is still downloading and mounting. Call ios_device_prepare again in a "
-                          "minute; it reports ddi_mounted=true once it's done."}
+MOUNT_TIMEOUT = 300   # ddi.mount downloads the image from Apple: a job (kind 'ddi-mount') that later calls join
 
 log = logging.getLogger("iosstudio.device")
 
@@ -198,6 +198,7 @@ def register(mcp: MCPServer) -> None:
         developer-mode-off or ddi, or before the first run on a new iPhone."""
         state = get_state(ctx)
         actions, human, nxt = [], [], []
+        job_id = None
         dm = (await dcall(state, "devmode.status", udid=udid, timeout=30) or {}).get("enabled")
         if dm is False and reveal_developer_mode:
             try:
@@ -213,16 +214,27 @@ def register(mcp: MCPServer) -> None:
         if dm is not False:
             ddi = (await dcall(state, "ddi.status", udid=udid, timeout=30) or {}).get("mounted")
             if ddi is False and mount:
-                await ctx.report_progress(10, 100, message="Mounting the developer disk image")
-                ddi = bool((await dcall(state, "ddi.mount", udid=udid, timeout=MAX_WAIT, hints=MOUNT_HINTS) or {}).get("mounted"))
-                actions.append("Mounted the developer disk image." if ddi else "Tried to mount the disk image.")
+                async def do_mount(job: Job) -> dict:
+                    job.report(None, "downloading and mounting the developer disk image")
+                    return await dcall(state, "ddi.mount", udid=udid, timeout=MOUNT_TIMEOUT) or {}
+                job = shared_job(state, "ddi-mount", udid or "", do_mount, title="Mount the developer disk image",
+                                 reuse_seconds=60)
+                await settle(state, ctx, job)
+                if not job.finished:
+                    ddi, job_id = None, job.id
+                    actions.append("Mounting the developer disk image (downloading it from Apple)…")
+                    nxt.append("The mount keeps going: call ios_device_prepare again in a minute; it reports "
+                               "ddi_mounted=true once it's done.")
+                else:
+                    ddi = bool(job_result(job).get("mounted"))
+                    actions.append("Mounted the developer disk image." if ddi else "Tried to mount the disk image.")
             elif ddi is False:
                 nxt.append("Call again with mount=true to mount the developer disk image (needs internet).")
         ready = dm is True and ddi is True
         if ready:
             nxt.append("Ready: ios_app_launch, ios_app_run_and_capture and ios_logs_start will work.")
-        return DevicePrepare(ready=ready, developer_mode=dm, ddi_mounted=ddi, actions=actions, human_steps=human,
-                             next_steps=nxt)
+        return DevicePrepare(ready=ready, developer_mode=dm, ddi_mounted=ddi, mount_job_id=job_id, actions=actions,
+                             human_steps=human, next_steps=nxt)
 
     # -------------------------------------------------------------- apps
 

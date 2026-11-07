@@ -1,6 +1,6 @@
 """LLDB on the user's own apps: a one-shot backtrace (a job) and interactive breakpoint sessions.
 
-Both run `iosstudio-helper debug backtrace|session` (helper/debugger.py), which asks the device
+Both run `iosstudio-helper debug backtrace|session` (helper/iosstudio/features/debugger.py), which asks the device
 daemon to forward the phone's debugserver over its tunnel and drives the toolchain's lldb. A
 session is one helper process per session id; its JSON events are folded into a small record that
 ios_debug_session_wait / _command read. Attaching pauses the app, so the backtrace needs confirm=true,

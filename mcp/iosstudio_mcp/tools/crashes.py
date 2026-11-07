@@ -35,7 +35,7 @@ def capped(p: Path, tool_hint: str) -> str:
 
 
 def _crash_dirs() -> list[Path]:
-    dirs = [Path.home() / ".cache/ios-studio/crashes"]
+    dirs = [helper.appdirs.cache_dir() / "crashes"]   # where the device daemon keeps pulled reports
     if helper.demo_mode():
         try:
             import importlib.util

@@ -1,4 +1,4 @@
-"""Screenshot baselines, visual diffs and screenshot sets over launch configs (helper/screenshots.py).
+"""Screenshot baselines, visual diffs and screenshot sets over launch configs (helper/iosstudio/features/screenshots.py).
 
 ios_screenshot_compare captures the iPhone's screen through the device daemon (as ios_screenshot does) and saves it
 as a screen's baseline or compares it with the saved one: diff %, verdict, the changed regions and image paths. The

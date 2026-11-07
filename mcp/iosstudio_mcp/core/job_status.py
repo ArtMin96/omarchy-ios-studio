@@ -6,10 +6,14 @@
     follow_job(...)     a feature job by id (of one kind), long-polled with progress
     job_result(job)     a finished job's result, or its error raised as a ToolError
     still_running(job)  the next step of a feature job that is still running
+    shared_job(...)     the job doing one piece of work (by key): the running one, or a new one
+    settle(...)         wait for a job: up to wait_seconds in a tool call, to the end in a background job
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any
 
 from mcp.server.mcpserver import Context
@@ -28,7 +32,8 @@ from ..models import (
 )
 from ..state import AppState
 from . import budget as B
-from .jobs import Job
+from . import deadline
+from .jobs import Job, JobFn
 from .registry import MAX_WAIT
 
 
@@ -230,3 +235,25 @@ async def start_and_wait(state: AppState, ctx: Context | None, *, kind: str, gro
                                  project_path=project_path, project=project, finisher=finisher)
     await wait_with_progress(state, job, wait_seconds, ctx)
     return job_status(job)
+
+
+def shared_job(state: AppState, kind: str, key: str, fn: JobFn, *, title: str, tool: str | None = None,
+               reuse_seconds: float = 0.0, data: dict | None = None) -> Job:
+    """The job of `kind` doing the work named `key`: one still running (or one that succeeded within the last
+    reuse_seconds), else a new one running `fn`. A call that runs out of time leaves the work running; the
+    next call for the same thing joins it instead of asking the iPhone a second time."""
+    now = time.time()
+    for j in reversed(list(state.jobs.jobs.values())):
+        if j.kind == kind and j.data.get("key") == key and (
+                not j.finished or (j.state == "succeeded" and now - (j.ended or 0) <= reuse_seconds)):
+            return j
+    return state.jobs.run(fn, kind, title=title, tool=tool, data={**(data or {}), "key": key})
+
+
+async def settle(state: AppState, ctx: Context | None, job: Job, wait_seconds: float = MAX_WAIT) -> Job:
+    """Wait for `job`: inside a tool call up to wait_seconds (cut to the call's budget); outside one (a
+    background job that needs the result) until it ends."""
+    if deadline.remaining() is None and job.task is not None:
+        await asyncio.wait({job.task})
+        return job
+    return await wait_with_progress(state, job, wait_seconds, ctx)

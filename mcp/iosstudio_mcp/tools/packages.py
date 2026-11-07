@@ -1,5 +1,5 @@
 """Swift package dependencies: ios_package_list, ios_package_add, ios_package_update, ios_package_resolve and
-ios_package_remove. The work happens in helper/packages.py (`packages <action>`); add, update and resolve fetch
+ios_package_remove. The work happens in helper/iosstudio/features/packages.py (`packages <action>`); add, update and resolve fetch
 from the network and run as jobs (state='running' + job_id; call the same tool again with job_id; cancel with
 ios_job_cancel(job_id), which puts Package.swift and Package.resolved back)."""
 from __future__ import annotations
@@ -153,7 +153,7 @@ class PackageResult(B.Budgeted, Out):
 # ------------------------------------------------------------------ helpers
 
 def identity_of(location: str) -> str:
-    """SwiftPM's identity of a URL or path (helper/package_manifest.py identity_of)."""
+    """SwiftPM's identity of a URL or path (helper/iosstudio/features/package_manifest.py identity_of)."""
     s = str(location or "").strip().rstrip("/")
     if s.endswith(".git"):
         s = s[:-4]

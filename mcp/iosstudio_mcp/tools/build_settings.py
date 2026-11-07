@@ -1,6 +1,6 @@
 """Per-project build settings: ios_project_build_settings views and changes a project's prebuild command,
 extra environment variables, open-file limit and whether a generated xtool.yml may be built (stored by the
-helper in projects.json; see helper/build_settings.py)."""
+helper in projects.json; see helper/iosstudio/features/build_settings.py)."""
 from __future__ import annotations
 
 import json

@@ -2,7 +2,7 @@
 machine (the editor's Swift support; Neovim's config), and optionally writes one project's missing files
 (.bsp/xtool.json, and .vscode/ when VS Code is the preferred editor). Projects otherwise get those files by
 themselves after a successful build and on create/convert; ios_project_info's `editor` field shows a
-project's state. See helper/editor_setup.py.
+project's state. See helper/iosstudio/features/editor_setup.py.
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Watch mode (compile on save): ios_watch_start / ios_watch_stop / ios_watch_status.
 
-The watcher is one helper process per user (`watch serve`, see helper/watch.py and
+The watcher is one helper process per user (`watch serve`, see helper/iosstudio/features/watch.py and
 docs/features/watch-mode.md), shared with the app: whoever starts it, both see its status and either can stop
 it. A watcher this server starts (or joins) lists this server's pid as an owner, so it stops by itself once
 this server exits and the app isn't using it either. Each compile is a normal `build compile` (build history,
@@ -19,12 +19,15 @@ from .. import helper
 from ..backends.projects import resolve_project
 from ..core import budget as B
 from ..core import deadline
+from ..core.job_status import job_result, settle, shared_job
+from ..core.jobs import Job
 from ..core.params import ProjectPath
 from ..core.registry import MAX_WAIT, tool
 from ..models import Out, iso
 from ..state import get_state
 
 FIRST_ERRORS = 5
+START_TIMEOUT = 40      # `watch run`: stopping another project's watcher (≤ 15 s) + starting this one (≤ 8 s)
 MESSAGE_CUT = 200
 
 
@@ -56,7 +59,7 @@ class WatchRun(Out):
 class WatchStatus(B.Budgeted, Out):
     watching: bool = Field(description="True while the watcher runs")
     state: str = Field(description="watching (idle), changed (waiting for the debounce), compiling, ok, failed, "
-                                   "stopped, or off (no watcher)")
+                                   "stopped, off (no watcher), or starting (call ios_watch_start again)")
     message: str | None = None
     project: str | None = None
     project_path: str | None = None
@@ -207,7 +210,17 @@ def register(mcp: MCPServer) -> None:
             flags["auto_run"] = "true" if auto_run else "false"
         if debounce_ms is not None:
             flags["debounce_ms"] = debounce_ms
-        data = await helper.call("watch", "run", flags, timeout=MAX_WAIT)
+        async def start(job: Job) -> Any:
+            job.report(None, "starting the watcher")
+            return await helper.call("watch", "run", flags, timeout=START_TIMEOUT)
+        job = shared_job(state, "watch-start", p["path"], start, title=f"Start watch mode for {p.get('name') or p['path']}")
+        await settle(state, ctx, job)
+        if not job.finished:     # stopping another project's watcher first can take ~15 s
+            return WatchStatus(watching=False, state="starting", project=p.get("name"),
+                               project_path=helper.tilde(p["path"]), message="Starting the watcher…",
+                               next_steps=[f"Call ios_watch_start(project_path='{helper.tilde(p['path'])}') again "
+                                           "in a few seconds: it joins the start that is running."])
+        data = job_result(job)
         state.extras["watch.path"] = p["path"]
         return to_status(data or {}, p["path"]).with_budget(None)
 

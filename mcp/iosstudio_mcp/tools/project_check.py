@@ -1,6 +1,6 @@
 """Project check: ios_project_check lists config mistakes in a project before a build (misspelled xtool.yml
 keys, missing NS*UsageDescription keys, a bad icon, entitlements a free account can't use, bundle id and
-version fields). Read-only and fast; see helper/project_check.py for the checks themselves."""
+version fields). Read-only and fast; see helper/iosstudio/features/project_check.py for the checks themselves."""
 from __future__ import annotations
 
 from pathlib import Path

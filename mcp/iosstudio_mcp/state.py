@@ -9,7 +9,7 @@ Device integration (filled in by backends/device.py attach(), called from tools/
 the client connects lazily on the first device tool call, so agents that never touch the phone open no
 tunnel; tools call the phone with `backends.device.dcall(state, cmd, args)`, which maps DeviceError to a
 ToolError naming the next tool):
-    state.device          the device client object (helper/device_client.py), or None until first use
+    state.device          the device client object (helper/iosstudio/device/device_client.py), or None until first use
     state.install_app     async (udid, ipa_path, job) -> dict      used by ios_run after a Wi-Fi build
     state.launch_app      async (udid, bundle_id, args=None, env=None) -> dict   used by ios_run after install
     state.device_udid     async () -> str | None                    the active iPhone's udid
