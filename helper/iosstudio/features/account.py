@@ -720,9 +720,7 @@ class Login:
         argv = [xtool_path(), "auth", "login", "-m", self.mode]
         if self.mode == "password":
             argv += ["-u", self.email]
-        env = os.environ.copy()
-        env["PATH"] = f"{appdirs.LOCAL_BIN}:{env.get('PATH', '/usr/bin')}"
-        env.update(xtool_env())
+        env = subproc.tool_env("plain", xtool_env())
         output.step("start", "Starting sign-in", "running")
         try:
             self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

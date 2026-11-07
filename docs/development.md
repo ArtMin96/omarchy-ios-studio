@@ -37,7 +37,7 @@ helper/
     __main__.py, cli.py   `python -m iosstudio <group> <action>`: group name -> features/ module (imported lazily)
     core/            shared by everything; each module is used qualified (`output.ok(…)`, `appdirs.STATE_DIR`) so tests can patch it
       output.py      the output protocol: ok()/fail()/event()/step()/done()/prompt(), HelperError, fix()
-      subproc.py     run_cmd(), stream_cmd(), run_group(), kill_proc(), wait_or_kill(), which(), pymd3_python(), demo_delay()
+      subproc.py     tool_env(kind), run_cmd(check=), run_group(), Runner (streaming: lines, prompts, cancel, timeout, group kill), stream_cmd(), kill_group(), start_reaper(), which(), pymd3_python(), demo_delay()
       fileio.py      atomic_write(), load_json()/save_json(), tail_text(), dir_size(), prune()
       appdirs.py     XDG folders read at call time (config_home()/state_dir()/…; CONFIG_DIR/STATE_DIR/… are import-time snapshots), sdk_bundle(), tilde(), REPO, settings(), project roots, cache_get()/cache_put()
       flags.py       parse_flags(): --key value / --flag -> dict

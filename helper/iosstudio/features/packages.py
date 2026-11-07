@@ -40,15 +40,11 @@ Errors are {code, message, hint?, diagnostics?, …}; diagnostics have the build
 """
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import re
-import select
 import shutil
-import signal
 import subprocess
-import sys
 import tempfile
 import time
 from contextlib import ExitStack, contextmanager
@@ -71,7 +67,7 @@ DUMP_TIMEOUT = 120
 QUICK_TIMEOUT = 60
 LS_REMOTE_TIMEOUT = 45
 EXIT_GRACE = 60          # seconds swift may linger after closing its output
-MAX_LINE = 64 * 1024     # longest output line kept whole
+SWIFT_LINES = 5000       # output lines of one swift command kept for errors
 RULES = ("from", "upToNextMinor", "exact", "branch", "revision")
 TARGET_TYPES_FIRST = ("executable", "regular")
 
@@ -88,8 +84,7 @@ HINT_BUILD_AFTER = "Check build compiles the app with the new package."
 HINT_BUILD_REMOVED = "Check build shows any code that still imports the removed package."
 
 
-class Cancelled(Exception):
-    pass
+Cancelled = subproc.Cancelled
 
 
 # ================================================================ swift
@@ -106,191 +101,51 @@ def find_swift() -> str:
     raise HelperError("missing-swift", "Swift isn't installed yet.", output.fix("Open Setup", "setup", step="swift"))
 
 
-def swift_env() -> dict:
-    env = os.environ.copy()
-    env["PATH"] = f"{appdirs.LOCAL_BIN}:{env.get('PATH', '/usr/bin:/bin')}"
-    env["NO_COLOR"] = "1"
-    env["TERM"] = "dumb"
-    env["GIT_TERMINAL_PROMPT"] = "0"          # a private repository fails instead of waiting for a password
-    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-    return env
-
-
-def _pdeathsig() -> None:  # pragma: no cover - runs in the child
-    try:
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)
-    except Exception:
-        pass
-
-
 def run_swift(args: list[str], cwd: Path | str, timeout: float = QUICK_TIMEOUT,
               stdout_only: bool = False) -> subprocess.CompletedProcess:
     """`swift <args>` captured (own process group; killed whole on timeout)."""
     argv = [find_swift(), *args]
     try:
-        proc = subprocess.Popen(argv, cwd=str(cwd), env=swift_env(), stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(argv, cwd=str(cwd), env=subproc.tool_env("swift"), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                start_new_session=True, preexec_fn=_pdeathsig)
+                                start_new_session=True, preexec_fn=subproc.pdeathsig_term)
     except FileNotFoundError:
         raise HelperError("missing-swift", "Swift isn't installed yet.", output.fix("Open Setup", "setup", step="swift"))
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        _kill_group(proc.pid)
+        subproc.kill_group(proc.pid)
         subproc.kill_proc(proc)
         raise HelperError("timeout", f"swift {args[-1] if args else ''} took longer than {int(timeout)} s.")
     except BaseException:
-        _kill_group(proc.pid)
+        subproc.kill_group(proc.pid)
         subproc.kill_proc(proc)
         raise
     return subprocess.CompletedProcess(argv, proc.returncode, out, "" if stdout_only else err)
 
 
-def _kill_group(pgid: int, grace: float = 2.0) -> None:
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return
-    end = time.time() + grace
-    while time.time() < end:
-        try:
-            os.killpg(pgid, 0)
-        except (ProcessLookupError, PermissionError):
-            return
-        time.sleep(0.05)
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-
-
-class Runner:
+class Runner(subproc.Runner):
     """Runs swift commands for a streaming command: forwards each output line, and stops (killing swift's whole
-    process group) on {"cancel": true} on stdin or SIGTERM/SIGINT/SIGHUP."""
+    process group) on {"cancel": true} on stdin or, inside its with-block, SIGTERM/SIGINT/SIGHUP."""
 
     def __init__(self) -> None:
-        self.stdin_open = True
-        self.stdin_buf = b""
-        self._old: dict = {}
-
-    def __enter__(self) -> "Runner":
-        def on_signal(_signum, _frame):
-            raise Cancelled()
-        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            self._old[s] = signal.signal(s, on_signal)
-        return self
-
-    def __exit__(self, *exc) -> None:
-        for s, h in self._old.items():
-            try:
-                signal.signal(s, h)
-            except (ValueError, TypeError):
-                pass
-        self._old = {}
-
-    def quiet(self) -> None:
-        """Ignore further stop signals while files are put back (__exit__ restores the old handlers)."""
-        for s in self._old:
-            try:
-                signal.signal(s, signal.SIG_IGN)
-            except (ValueError, TypeError):
-                pass
+        super().__init__(watch_stdin=True, tail_lines=SWIFT_LINES)
 
     def poll_cancel(self) -> None:
         """Read pending stdin without blocking; raise Cancelled on a cancel message."""
-        if not self.stdin_open:
-            return
-        try:
-            fd = sys.stdin.fileno()
-            while True:
-                ready, _, _ = select.select([fd], [], [], 0)
-                if not ready:
-                    return
-                self._read_stdin(fd)
-                if not self.stdin_open:
-                    return
-        except (OSError, ValueError):
-            self.stdin_open = False
+        self.poll()
 
-    def _read_stdin(self, fd: int) -> None:
-        chunk = os.read(fd, 4096)
-        if not chunk:
-            self.stdin_open = False
-            return
-        self.stdin_buf += chunk
-        while b"\n" in self.stdin_buf:
-            ln, self.stdin_buf = self.stdin_buf.split(b"\n", 1)
-            try:
-                msg = json.loads(ln.decode() or "{}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if isinstance(msg, dict) and msg.get("cancel"):
-                raise Cancelled()
-
-    def run(self, args: list[str], cwd: Path, on_line: Callable[[str], None]) -> tuple[int, list[str]]:
-        argv = [find_swift(), *args]
+    def swift(self, args: list[str], cwd: Path, on_line: Callable[[str], None]) -> tuple[int, list[str]]:
+        """`swift <args>` streamed to on_line; (exit code, its last SWIFT_LINES lines)."""
+        self.on_line = on_line
+        self.tail.clear()
         try:
-            proc = subprocess.Popen(argv, cwd=str(cwd), env=swift_env(), stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
-                                    start_new_session=True, preexec_fn=_pdeathsig)
+            rc = self.run([find_swift(), *args], cwd=cwd, env=subproc.tool_env("swift"),
+                          preexec_fn=subproc.pdeathsig_term, exit_grace=EXIT_GRACE, kill_grace=2.0)
         except FileNotFoundError:
             raise HelperError("missing-swift", "Swift isn't installed yet.",
                               output.fix("Open Setup", "setup", step="swift"))
-        assert proc.stdout is not None
-        out_fd = proc.stdout.fileno()
-        lines: list[str] = []
-        buf = b""
-        try:
-            while True:
-                fds = [out_fd]
-                in_fd = -1
-                if self.stdin_open:
-                    try:
-                        in_fd = sys.stdin.fileno()
-                        fds.append(in_fd)
-                    except (OSError, ValueError):
-                        self.stdin_open = False
-                try:
-                    ready, _, _ = select.select(fds, [], [], 0.5)
-                except InterruptedError:
-                    continue
-                if in_fd in ready:
-                    try:
-                        self._read_stdin(in_fd)
-                    except OSError:
-                        self.stdin_open = False
-                if out_fd in ready:
-                    chunk = os.read(out_fd, 65536)
-                    if not chunk:
-                        break
-                    buf += chunk
-                    parts = re.split(rb"\r\n|\r|\n", buf)
-                    buf = parts.pop()
-                    if len(buf) > MAX_LINE:     # a newline-less flood: pass it on in pieces
-                        parts.append(buf[:MAX_LINE])
-                        buf = buf[MAX_LINE:]
-                    for p in parts:
-                        text = p.decode(errors="replace")
-                        lines.append(text)
-                        on_line(text)
-            if buf:
-                text = buf.decode(errors="replace")
-                lines.append(text)
-                on_line(text)
-            try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
-                rc = proc.wait(timeout=EXIT_GRACE)
-            except subprocess.TimeoutExpired:
-                raise HelperError("timeout", f"swift {args[0] if args else ''} closed its output but didn't exit.")
-        except BaseException:
-            _kill_group(proc.pid)
-            subproc.kill_proc(proc)
-            raise
-        finally:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)     # anything it left behind
-            except (ProcessLookupError, PermissionError):
-                pass
-        return rc, lines
+        return rc, list(self.tail)
 
 
 # ================================================================ project files
@@ -899,18 +754,18 @@ def latest_version(url: str) -> str | None:
     # Own session, killed whole on timeout (git-remote-https / ssh children too); never prompts for a password.
     try:
         proc = subprocess.Popen([git, "ls-remote", "--tags", "--refs", url], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env={**swift_env(), "GIT_TERMINAL_PROMPT": "0"},
+                                stderr=subprocess.PIPE, text=True, env={**subproc.tool_env("swift"), "GIT_TERMINAL_PROMPT": "0"},
                                 stdin=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return None
     try:
         out, err = proc.communicate(timeout=LS_REMOTE_TIMEOUT)
     except subprocess.TimeoutExpired:
-        _kill_group(proc.pid, grace=0.5)
+        subproc.kill_group(proc.pid, grace=0.5)
         subproc.kill_proc(proc)
         return None
     except BaseException:
-        _kill_group(proc.pid, grace=0.5)
+        subproc.kill_group(proc.pid, grace=0.5)
         subproc.kill_proc(proc)
         raise
     r = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
@@ -1062,7 +917,7 @@ def _add(flags: dict, root: Path, stream: Stream, runner: Runner) -> int:
         else:
             args += {"from": ["--from"], "upToNextMinor": ["--up-to-next-minor-from"], "exact": ["--exact"],
                      "branch": ["--branch"], "revision": ["--revision"]}[rule] + [str(version)]
-        rc, lines = runner.run(args, root, output.log)
+        rc, lines = runner.swift(args, root, output.log)
         if rc != 0:
             raise swift_failure(lines, "Couldn't add the package to Package.swift")
         _forget_dump(root)
@@ -1075,7 +930,7 @@ def _add(flags: dict, root: Path, stream: Stream, runner: Runner) -> int:
             fetched[0] += 1 if pd[2] else 0
             stream.detail(pd[0], round(0.15 + 0.6 * (1 - 0.8 ** fetched[0]), 3))
 
-        rc, lines = runner.run(["package", "resolve"], root, LineSink(on_progress))
+        rc, lines = runner.swift(["package", "resolve"], root, LineSink(on_progress))
         if rc != 0:
             raise swift_failure(lines, f"Couldn't fetch {ident}")
         stream.finish("fetch")
@@ -1099,7 +954,7 @@ def _add(flags: dict, root: Path, stream: Stream, runner: Runner) -> int:
         if chosen:
             stream.start("link", f"Linking {', '.join(chosen)} to {target}", fraction=0.88)
             added = _link(root, dump_package(root, use_cache=False), ident, chosen, target,
-                          run=lambda a: runner.run(a, root, output.log))
+                          run=lambda a: runner.swift(a, root, output.log))
             _forget_dump(root)
             stream.finish("link")
         else:
@@ -1254,7 +1109,7 @@ def _resolve_like(flags: dict, action: str) -> int:
                 stream.detail(pd[0], round(min(0.9, 0.05 + 0.85 * len(seen) / total), 3))
 
             try:
-                rc, lines = runner.run(args, root, LineSink(on_progress))
+                rc, lines = runner.swift(args, root, LineSink(on_progress))
                 if rc != 0:
                     raise swift_failure(lines, "Updating failed" if action == "update" else "Resolving failed")
             except BaseException:
