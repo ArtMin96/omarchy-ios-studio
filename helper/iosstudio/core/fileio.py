@@ -1,21 +1,29 @@
-"""Files for the helper (stdlib only): atomic writes, JSON load/save, tails of big logs, pruning old outputs."""
+"""Files for the helper (stdlib only): atomic writes, file locks, JSON load/save, tails of big logs, pruning
+old outputs."""
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
+import secrets
 import shutil
-import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
-def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
+@contextmanager
+def replacing(path: Path, mode: int | None = None) -> Iterator[Path]:
+    """A fresh temp path next to `path` (not created yet) for the block to write; when the block ends without
+    an exception it atomically replaces `path` (chmod'ed to `mode` first, if given), else it's removed. For
+    writers that need a path (a symlink, Pillow, a streamed copy); plain data goes through atomic_write."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
     try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-        os.chmod(tmp, mode)
+        yield tmp
+        if mode is not None:
+            os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -25,10 +33,35 @@ def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
         raise
 
 
+def atomic_write(path: Path, data: str | bytes, mode: int = 0o644, fsync: bool = False) -> None:
+    """Write text or bytes to `path` through a temp file and a rename, so readers see the old or the new file."""
+    with replacing(path, mode) as tmp:
+        with open(tmp, "xb" if isinstance(data, bytes) else "x") as fh:
+            fh.write(data)
+            if fsync:
+                fh.flush()
+                os.fsync(fh.fileno())
+
+
+@contextmanager
+def lock(path: Path, blocking: bool = True) -> Iterator[None]:
+    """Hold an exclusive flock on `path` (created, never truncated) for the block. Non-blocking: raises
+    BlockingIOError at once when another process holds it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
+def path_key(path: Path | str) -> str:
+    """A short stable file-name key for a path (a project's lock, its cached lint, a pulled store)."""
+    return hashlib.sha1(str(path).encode()).hexdigest()[:16]
+
+
 def load_json(path: Path, default: Any = None) -> Any:
     try:
         return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return default
 
 

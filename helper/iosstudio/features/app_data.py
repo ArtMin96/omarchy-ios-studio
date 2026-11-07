@@ -23,7 +23,6 @@ import base64
 import binascii
 import contextlib
 import datetime as dt
-import hashlib
 import json
 import math
 import os
@@ -643,13 +642,9 @@ def app_cache(bid: str) -> Path:
     return CACHE / re.sub(r"[^A-Za-z0-9._-]", "_", bid)[:200]
 
 
-def store_key(path: str) -> str:
-    return hashlib.sha1(path.encode()).hexdigest()[:16]
-
-
 def cached_store(bid: str, group: dict, stamp: dict) -> Path | None:
     """The checkpointed local copy of a store when its phone files still match `stamp` ({path: [size, mtime]})."""
-    d = app_cache(bid) / store_key(group["path"])
+    d = app_cache(bid) / fileio.path_key(group["path"])
     db = d / posixpath.basename(group["path"])
     try:
         man = json.loads((d / "manifest.json").read_text())
@@ -660,7 +655,7 @@ def cached_store(bid: str, group: dict, stamp: dict) -> Path | None:
 
 def any_cached(bid: str, path: str) -> Path | None:
     """The last copy of a store, whatever its stamp (appdata.rows after appdata.stores)."""
-    d = app_cache(bid) / store_key(path)
+    d = app_cache(bid) / fileio.path_key(path)
     db = d / posixpath.basename(path)
     return db if db.is_file() else None
 
@@ -679,7 +674,7 @@ def commit_pull(bid: str, group: dict, tmp: Path, stamp: dict) -> Path:
         checkpoint(db)
         (tmp / "manifest.json").write_text(json.dumps({"path": group["path"], "stamp": stamp,
                                                         "pulledAt": time.time()}))
-        final = app_cache(bid) / store_key(group["path"])
+        final = app_cache(bid) / fileio.path_key(group["path"])
         if final.exists():
             shutil.rmtree(final, ignore_errors=True)
         os.replace(tmp, final)
@@ -692,7 +687,7 @@ def commit_pull(bid: str, group: dict, tmp: Path, stamp: dict) -> Path:
 def prune_cache(bid: str, keep_paths: Iterable[str] = ()) -> None:
     """Drop copies of stores the app no longer has, stale temp pulls, and apps beyond the newest KEEP_APPS."""
     base = app_cache(bid)
-    keep = {store_key(p) for p in keep_paths}
+    keep = {fileio.path_key(p) for p in keep_paths}
     if base.is_dir():
         for d in base.iterdir():
             if d.name in ("backups", "writes.json"):

@@ -27,7 +27,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from iosstudio.core import appdirs, fileio, output, subproc
+from iosstudio.core import appdirs, fileio, jsonc, output, subproc
+from iosstudio.core.jsonc import JsoncError, Node
 from iosstudio.core.output import HelperError, ok
 
 SERVER = "iosstudio"
@@ -93,165 +94,9 @@ def _run(argv: list[str], timeout: float = 90) -> subprocess.CompletedProcess:
         raise HelperError("timeout", f"{Path(argv[0]).name} took too long to respond.")
 
 
-# ================================================================ JSON with comments, span-preserving
-# A small parser for JSON plus // and /* */ comments and trailing commas (Zed, opencode and Gemini accept
-# those). It records where every object member sits, so a change touches only that member's text and the
+# ================================================================ JSON with comments: span-preserving edits
+# core/jsonc records where every object member sits, so a change touches only that member's text and the
 # rest of the file (order, indentation, comments) stays byte for byte.
-
-class _Node:
-    __slots__ = ("kind", "start", "end", "value", "members")
-
-    def __init__(self, kind: str, start: int):
-        self.kind, self.start, self.end, self.value, self.members = kind, start, start, None, []
-
-
-class _Member:
-    __slots__ = ("key", "kstart", "node", "comma")
-
-    def __init__(self, key: str, kstart: int, node: _Node):
-        self.key, self.kstart, self.node, self.comma = key, kstart, node, -1
-
-
-class JsoncError(ValueError):
-    pass
-
-
-class _Parser:
-    def __init__(self, text: str):
-        self.t, self.i = text, 0
-
-    def ws(self) -> None:
-        t, n = self.t, len(self.t)
-        while self.i < n:
-            c = t[self.i]
-            if c in " \t\r\n﻿":
-                self.i += 1
-            elif t.startswith("//", self.i):
-                j = t.find("\n", self.i)
-                self.i = n if j < 0 else j + 1
-            elif t.startswith("/*", self.i):
-                j = t.find("*/", self.i + 2)
-                if j < 0:
-                    raise JsoncError("unterminated comment")
-                self.i = j + 2
-            else:
-                break
-
-    def err(self, what: str) -> JsoncError:
-        line = self.t.count("\n", 0, self.i) + 1
-        return JsoncError(f"{what} at line {line}")
-
-    def value(self) -> _Node:
-        self.ws()
-        if self.i >= len(self.t):
-            raise self.err("unexpected end")
-        c = self.t[self.i]
-        if c == "{":
-            return self.obj()
-        if c == "[":
-            return self.arr()
-        if c == '"':
-            return self.string()
-        return self.scalar()
-
-    def string(self) -> _Node:
-        node = _Node("str", self.i)
-        j = self.i + 1
-        t = self.t
-        while j < len(t):
-            if t[j] == "\\":
-                j += 2
-                continue
-            if t[j] == '"':
-                break
-            if t[j] == "\n":
-                raise self.err("newline in string")
-            j += 1
-        else:
-            raise self.err("unterminated string")
-        node.end = j + 1
-        try:
-            node.value = json.loads(t[self.i:node.end])
-        except json.JSONDecodeError as exc:
-            raise self.err(f"bad string ({exc.msg})")
-        self.i = node.end
-        return node
-
-    def scalar(self) -> _Node:
-        node = _Node("lit", self.i)
-        j = self.i
-        while j < len(self.t) and self.t[j] not in " \t\r\n,]}/":
-            j += 1
-        raw = self.t[self.i:j]
-        try:
-            node.value = json.loads(raw)
-        except json.JSONDecodeError:
-            raise self.err(f"unexpected '{raw[:20]}'")
-        node.end = self.i = j
-        return node
-
-    def obj(self) -> _Node:
-        node = _Node("obj", self.i)
-        node.value = {}
-        self.i += 1
-        while True:
-            self.ws()
-            if self.i < len(self.t) and self.t[self.i] == "}":
-                self.i += 1
-                node.end = self.i
-                return node
-            if self.i >= len(self.t) or self.t[self.i] != '"':
-                raise self.err("expected a key")
-            kstart = self.i
-            key = self.string().value
-            self.ws()
-            if self.i >= len(self.t) or self.t[self.i] != ":":
-                raise self.err("expected ':'")
-            self.i += 1
-            m = _Member(key, kstart, self.value())
-            node.members.append(m)
-            node.value[key] = m.node.value
-            self.ws()
-            if self.i < len(self.t) and self.t[self.i] == ",":
-                m.comma = self.i
-                self.i += 1
-            elif self.i < len(self.t) and self.t[self.i] == "}":
-                continue
-            else:
-                raise self.err("expected ',' or '}'")
-
-    def arr(self) -> _Node:
-        node = _Node("arr", self.i)
-        node.value = []
-        self.i += 1
-        while True:
-            self.ws()
-            if self.i < len(self.t) and self.t[self.i] == "]":
-                self.i += 1
-                node.end = self.i
-                return node
-            node.value.append(self.value().value)
-            self.ws()
-            if self.i < len(self.t) and self.t[self.i] == ",":
-                self.i += 1
-            elif self.i < len(self.t) and self.t[self.i] == "]":
-                continue
-            else:
-                raise self.err("expected ',' or ']'")
-
-
-def jsonc_parse(text: str) -> _Node:
-    p = _Parser(text)
-    root = p.value()
-    p.ws()
-    if p.i != len(text):
-        raise p.err("unexpected text after the end")
-    return root
-
-
-def jsonc_load(text: str) -> Any:
-    return jsonc_parse(text).value if text.strip() else {}
-
 
 def _line_indent(text: str, pos: int) -> tuple[str, bool]:
     """Indentation of the line holding pos, and whether only whitespace precedes pos on it."""
@@ -270,7 +115,7 @@ def _render(value: Any, indent: str, unit: str | None) -> str:
     return out.replace("\n", "\n" + indent)
 
 
-def _insert_member(text: str, obj: _Node, key: str, value: Any, unit_hint: str) -> str:
+def _insert_member(text: str, obj: Node, key: str, value: Any, unit_hint: str) -> str:
     """Add "key": value as the last member of obj, matching the surrounding layout."""
     k = json.dumps(key, ensure_ascii=False)
     base, _ = _line_indent(text, obj.start)
@@ -304,7 +149,7 @@ def _insert_member(text: str, obj: _Node, key: str, value: Any, unit_hint: str) 
     return text[:obj.start] + body + text[obj.end:]
 
 
-def _detect_unit(text: str, root: _Node) -> str:
+def _detect_unit(text: str, root: Node) -> str:
     if root.members:
         ind, own = _line_indent(text, root.members[0].kstart)
         base, _ = _line_indent(text, root.start)
@@ -320,7 +165,7 @@ def jsonc_set(text: str, path: list[str], value: Any) -> str:
         for k in reversed(path):
             out = {k: out}
         return json.dumps(out, indent=2, ensure_ascii=False) + "\n"
-    root = jsonc_parse(text)
+    root = jsonc.parse(text)
     if root.kind != "obj":
         raise JsoncError("the file isn't a JSON object")
     unit = _detect_unit(text, root)
@@ -347,7 +192,7 @@ def jsonc_remove(text: str, path: list[str]) -> str:
     """Remove the member at path. A parent object left empty by that goes too (not the root)."""
     if not text.strip():
         return text
-    root = jsonc_parse(text)
+    root = jsonc.parse(text)
     node = root
     for key in path[:-1]:
         m = next((m for m in node.members if m.key == key and m.node.kind == "obj"), None)
@@ -491,7 +336,7 @@ def _registration(c: dict) -> dict:
     entry: dict | None = None
     where = c["file"]
     if fmt == "json":
-        data = jsonc_load(_read(c["file"]))
+        data = jsonc.load(_read(c["file"]))
         node: Any = data
         for k in c["path"]:
             node = node.get(k) if isinstance(node, dict) else None
@@ -513,7 +358,7 @@ def _registration(c: dict) -> dict:
         if found:
             entry = found[-1]
         else:
-            data = jsonc_load(_read(c["json_file"])) if c["json_file"].exists() else {}
+            data = jsonc.load(_read(c["json_file"])) if c["json_file"].exists() else {}
             e = (data.get("mcp") or {}).get(SERVER) if isinstance(data, dict) else None
             if isinstance(e, dict):
                 entry = {"command": e.get("command"), "env": e.get("env") or {}}
@@ -651,7 +496,7 @@ def _json_plan(c: dict, connect: bool, demo: bool) -> tuple[Path, str, str, Any]
     keypath = c["path"] if c["format"] == "json" else ["mcp", SERVER]
     old = _read(path)
     try:
-        before = jsonc_load(old)
+        before = jsonc.load(old)
     except JsoncError as exc:
         raise HelperError("config-unreadable", f"{_tilde(path)} has a mistake in it ({exc}), so iOS Studio "
                           "won't touch it. Fix it by hand, or use Copy setup snippet.")
@@ -683,7 +528,7 @@ def _json_plan(c: dict, connect: bool, demo: bool) -> tuple[Path, str, str, Any]
 def _json_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
     path, old, new, expected = _json_plan(c, connect, demo)
     try:
-        got = jsonc_load(new)
+        got = jsonc.load(new)
     except JsoncError as exc:
         raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {_tilde(path)}.",
                           detail=str(exc))
@@ -695,7 +540,7 @@ def _json_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
         return plan
 
     def verify(text: str) -> None:
-        if jsonc_load(text) != expected:
+        if jsonc.load(text) != expected:
             raise HelperError("config-write", f"{_tilde(path)} didn't read back as expected, so it was restored.")
     plan.update(_commit(c["id"], path, old, new, verify))
     return plan

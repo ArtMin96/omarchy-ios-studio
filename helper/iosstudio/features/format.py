@@ -24,13 +24,11 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import difflib
-import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -338,19 +336,9 @@ def write_atomic(p: Path, data: bytes, expect: bytes) -> str | None:
         mode = p.stat().st_mode & 0o7777
     except OSError as exc:
         return f"Can't read it ({exc.strerror or exc})."
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".fmt")
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, p)
+        fileio.atomic_write(p, data, mode, fsync=True)
     except OSError as exc:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         return f"Couldn't write it ({exc.strerror or exc})."
     return None
 
@@ -616,7 +604,7 @@ def run_lint(root: Path, files: list[Path] | None = None, max_items: int = DEFAU
 
 
 def _lint_file(root: Path) -> Path:
-    return LINT_DIR / (hashlib.sha1(str(root).encode()).hexdigest()[:16] + ".json")
+    return LINT_DIR / (fileio.path_key(root) + ".json")
 
 
 def store_lint(root: Path, result: dict) -> None:

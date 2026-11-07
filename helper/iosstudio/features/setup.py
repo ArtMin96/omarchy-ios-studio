@@ -313,14 +313,8 @@ def do_symlink(target: Path, link: Path, step_id=None):
     if DRY:
         slog(step_id, f"would link {link} -> {target}")
         return
-    link.parent.mkdir(parents=True, exist_ok=True)
-    tmp = link.with_name(f".{link.name}.tmp{os.getpid()}")
-    try:
-        tmp.unlink()
-    except FileNotFoundError:
-        pass
-    os.symlink(target, tmp)
-    os.replace(tmp, link)
+    with fileio.replacing(link) as tmp:
+        os.symlink(target, tmp)
 
 
 ALLOWED_DELETE_ROOTS = (
@@ -1539,12 +1533,8 @@ def _install_tarball_binary(url, sha, member, dest: Path, step_id, label):
             except KeyError:
                 raise HelperError("bad-download", f"The {label} download doesn't contain the program.")
             f = tf.extractfile(m)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dest.with_name(f".{dest.name}.new")
-            with open(tmp, "wb") as out:
+            with fileio.replacing(dest, 0o755) as tmp, open(tmp, "xb") as out:
                 shutil.copyfileobj(f, out)
-            os.chmod(tmp, 0o755)
-            os.replace(tmp, dest)
     slog(step_id, f"installed {_tilde(dest)}")
 
 

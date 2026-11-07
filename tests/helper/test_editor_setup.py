@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from iosstudio.core import jsonc
 from iosstudio.features import editor_setup as E
 from support import ROOT
 
@@ -57,7 +58,7 @@ class MergeText(unittest.TestCase):
     WANT = {"swift.autoGenerateLaunchConfigurations": False, "files.watcherExclude": {"**/.build/**": True}}
 
     def parsed(self, text: str):
-        return E.parse_jsonc(text)[0].value
+        return jsonc.parse(text).value
 
     def test_empty_file_is_written_fresh(self):
         r = E.merge_text("", self.WANT)
@@ -302,7 +303,7 @@ class Machine(Base):
         self.assertEqual(acts[1]["scope"], "user")
         E._apply(acts, self.env())
         self.assertTrue(Path(acts[0]["path"]).read_text().startswith("// Zed settings"))
-        v = E.parse_jsonc(zs.read_text())[0].value
+        v = jsonc.parse(zs.read_text()).value
         self.assertEqual(v["theme"], "Omazed")
         self.assertEqual(v["lsp"]["sourcekit-lsp"]["binary"]["path"], str(tc / "sourcekit-lsp"))
         self.assertEqual(E.vscode_machine_actions(self.env())[-1]["keys"], ["swift.sourcekit-lsp.serverPath"])
