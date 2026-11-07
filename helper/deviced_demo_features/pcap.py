@@ -14,6 +14,7 @@ import time
 import device_network as net
 from common import HelperError
 from deviced_demo_core import APPS, DEVICE, DIR, event
+from deviced_features.app_index import bundle_matches
 
 KEY = "pcap"
 CAPTURE_DIR = DIR / "captures"
@@ -32,7 +33,7 @@ FLOWS = [
 
 def exe_for(bundle_id: str) -> tuple[str, str] | None:
     for name, bid, *_ in APPS:
-        if bid == bundle_id or bid.endswith("." + bundle_id):
+        if bundle_matches(bid, bundle_id):
             return name.replace(" ", ""), bid
     return None
 

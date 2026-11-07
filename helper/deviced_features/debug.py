@@ -31,7 +31,8 @@ from pymobiledevice3.services.remote_fetch_symbols import RemoteFetchSymbolsServ
 
 import common
 from common import fix
-from deviced_core import dlog, emit, err, installed_apps
+from deviced_core import dlog, emit, err
+from deviced_features.app_index import device_fetcher, entry
 
 DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
 FORWARD_TIMEOUT = 3600          # seconds a forward lives without a new debug.start
@@ -434,17 +435,17 @@ def register(reg):
         if launch not in ("attach", "suspended", "auto", "none"):   # none: the forward only (diagnostics)
             raise err("bad-args", "launch must be attach, suspended, auto or none.")
         s, rsd = await d.rsd(a)
-        apps = await installed_apps(d.pmd3, rsd,
-            application_type="Any", bundle_identifiers=[bid])
-        info = apps.get(bid)
+        # Always fresh (one bundle, limited attributes): the bundle path changes on every reinstall.
+        info = (await device_fetcher(d.pmd3, rsd)("Any", [bid])).get(bid)
         if not info:
             raise err("not-found", "That app isn't installed on your iPhone.")
-        signer = str(info.get("SignerIdentity") or "")
-        if info.get("ApplicationType") == "System" or (signer and not signer.startswith(("Apple Development", "iPhone Developer"))):
+        app = entry(bid, info)
+        signer = app["signer"]
+        if app["system"] or (signer and not signer.startswith(("Apple Development", "iPhone Developer"))):
             raise err("not-debuggable", "Only your own apps can be debugged: apps you built and signed for "
                       "development. App Store and system apps can't be.")
-        exe = info.get("CFBundleExecutable") or ""
-        remote = (info.get("Path") or "").rstrip("/") + ("/" + exe if exe else "")
+        exe = app["executable"]
+        remote = app["path"].rstrip("/") + ("/" + exe if exe else "")
         key = f"debug:{bid}"
         client = d.client()
         if d.resources.held(key) and not d.resources.holds(key, client):

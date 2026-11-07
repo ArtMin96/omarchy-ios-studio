@@ -14,6 +14,7 @@ import time
 import metrics_core
 from common import HelperError, demo_delay
 from deviced_demo_core import APPS, DIR, event, pids, running
+from deviced_features.app_index import bundle_matches
 
 SEED_S = 300
 
@@ -24,7 +25,7 @@ def _err(code, message, fix=None, detail=None):
 
 def _app(bid: str):
     for name, b, *_ in APPS:
-        if b == bid or b.endswith("." + bid) or name.lower() == str(bid).lower():
+        if bundle_matches(b, bid) or name.lower() == str(bid).lower():
             return name, b
     return None, None
 

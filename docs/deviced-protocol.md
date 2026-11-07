@@ -324,6 +324,10 @@ phone reconnected / the active device changed, the reply is the cached copy with
 daemon refreshes it in the background; it sends `apps` only if the list changed. `app.install` and
 `app.uninstall` drop the cache, so the next `apps.list` is fetched fresh. `fetchedAt` is when the
 list was read from the phone. In `--once` mode the list is always fetched (no background work).
+Features that need one app by bundle id (`pcap.start`, `metrics.*`, `ui.*`) use the same cache
+(helper/deviced_features/_app_lookup.py): a cached match, else a Lookup of just that bundle id, else
+the user app list (for a free team's `XTL-<TEAM>.` id); `debug.start` always looks its one bundle up
+fresh, because the bundle path changes on every reinstall. None of them reads the full app list.
 
 `size` (bytes, app + data) is `null` until sizes are known. `sizes: true` computes them in the
 background (one Lookup of just the size attributes, ~9 s over Wi-Fi) and sends `appSizes`; they are

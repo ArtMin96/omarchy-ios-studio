@@ -41,7 +41,9 @@ import common
 import device_crash
 import deviced_core as core
 import metrics_core
-from deviced_core import classify, dlog, emit, err, installed_apps, safe_name, write_bytes
+from deviced_core import classify, dlog, emit, err, safe_name, write_bytes
+from deviced_features._app_lookup import find_app
+from deviced_features.app_index import device_fetcher
 
 PROC_ATTRS = ["pid", "cpuUsage", "physFootprint", "memResidentSize", "threadCount", "memCompressed", "nfiles",
               "machPortCount", "wqBlockedThreads", "memAnonPeak", "powerScore",
@@ -797,11 +799,9 @@ class Backend:
 
     async def _exe(self, s, bid: str) -> tuple[str | None, str, str | None]:
         """(executable, installed bundle id, display name) of an installed app."""
-        rsd = await s.get_rsd()
-        apps = await installed_apps(s.pmd3, rsd, application_type="Any")
-        for k, v in apps.items():
-            if k == bid or k.endswith("." + bid):
-                return v.get("CFBundleExecutable") or None, k, v.get("CFBundleDisplayName") or v.get("CFBundleName")
+        app = await find_app(s.udid, bid, device_fetcher(s.pmd3, await s.get_rsd()))
+        if app:
+            return app.get("executable") or None, app["bundleId"], app.get("name")
         raise err("not-found", "That app isn't installed on your iPhone.")
 
     async def _pid_for(self, s, bid: str) -> int:
@@ -833,11 +833,14 @@ class Backend:
 
     async def detach(self, d, sess):
         hub = self.hub
-        t = sess.data.pop("follower", None)
-        if t:
-            t.cancel()
-            with contextlib.suppress(BaseException):
-                await t
+        tasks = [sess.data.pop("follower", None), *sess.data.pop("crashChecks", ())]
+        for t in tasks:
+            if t:
+                t.cancel()
+        for t in tasks:
+            if t:
+                with contextlib.suppress(BaseException):
+                    await t
         if hub is None:
             return
         hub.sessions.pop(sess.id, None)
@@ -884,7 +887,10 @@ class Backend:
             if old and not pid:
                 sess.add_event("exit", f"{sess.name} quit (pid {old}).")
                 if "events" in sess.sets:
-                    asyncio.create_task(self._crash_check(d, s, sess, time.time()))
+                    checks: set = sess.data.setdefault("crashChecks", set())
+                    task = asyncio.create_task(self._crash_check(d, s, sess, time.time()))
+                    checks.add(task)
+                    task.add_done_callback(checks.discard)
                 sess.set_status("waiting-app")
             elif pid:
                 sess.add_event("launch", f"{sess.name} {'relaunched' if old else 'started'} (pid {pid}).")
