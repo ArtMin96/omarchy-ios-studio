@@ -112,8 +112,8 @@ class Scheduler:
 def _next_build_number() -> int:
     """w-<n> ids keep counting across watchers: one more than the highest in the build history."""
     try:
-        from iosstudio.features import projects
-        hist = projects._history()
+        from iosstudio.features.projects.store import load_history
+        hist = load_history()
     except Exception:  # noqa: BLE001
         return 1
     best = 0

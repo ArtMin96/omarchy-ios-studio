@@ -227,8 +227,8 @@ class RunJob(threading.Thread):
             return
         auth = self.w.auth_check
         if auth is None:
-            from iosstudio.features import projects
-            auth = projects._auth_ok
+            from iosstudio.features.projects.build import auth_ok
+            auth = auth_ok
         if not auth():
             self.report("skipped", "Not run: sign in with your Apple ID first (Account page).")
             return
@@ -280,8 +280,8 @@ class RunJob(threading.Thread):
                 return
             bundle = (res.get("data") or {}).get("bundleId") or bundle
             try:
-                from iosstudio.features import projects
-                projects._record_signing(str(self.w.root), udid, bundle, "wifi", data.get("profile"))
+                from iosstudio.features.projects.store import record_signing
+                record_signing(str(self.w.root), udid, bundle, "wifi", data.get("profile"))
             except Exception:  # noqa: BLE001
                 pass
         self.phase = "launching"
@@ -297,8 +297,8 @@ class RunJob(threading.Thread):
 def _selected_preset(root: Path) -> str | None:
     """The run preset selected for the project in the app (what its Run button uses)."""
     try:
-        from iosstudio.features import projects
-        name = (projects._state()["meta"].get(str(root)) or {}).get("runPreset")
+        from iosstudio.features.projects.store import load_state
+        name = (load_state()["meta"].get(str(root)) or {}).get("runPreset")
     except Exception:  # noqa: BLE001
         return None
     return name if isinstance(name, str) and name.strip() else None

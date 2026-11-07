@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# iOS Studio: the root half of Setup. helper/setup.py runs this through `pkexec` exactly once per
+# iOS Studio: the root half of Setup. helper/iosstudio/features/setup/ runs this through `pkexec` exactly once per
 # install step (or once for "Install everything"), so the user sees one password prompt. Every task
 # is opt-in by flag and idempotent. It never touches anything outside the paths named below.
 #

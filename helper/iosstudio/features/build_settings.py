@@ -1,4 +1,4 @@
-"""Per-project build settings (stdlib only; used by projects.py).
+"""Per-project build settings (stdlib only; used by features/projects/).
 
 Some projects build through their own scripts: a script regenerates xtool.yml first, the build needs
 environment variables, or the SDK module build needs a higher open-file limit. These settings let

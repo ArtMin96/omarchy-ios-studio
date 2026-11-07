@@ -1,4 +1,4 @@
-"""Build output -> structured diagnostics (stdlib only; used by projects.py's BuildRunner).
+"""Build output -> structured diagnostics (stdlib only; used by features/projects/runner.py's BuildRunner).
 
 Compiler lines (`/abs/File.swift:12:5: error: msg`) become one diagnostic each, as before. Everything
 else that commonly breaks a build is folded into the same shape, so an agent never has to read a raw
@@ -94,6 +94,7 @@ HINTS = {
     "provisioning": "Provisioning failed: re-sign with ios_project_renew, and connect a new iPhone over USB once "
                     "(ios_run) so it gets registered.",
     "codesign": "Code signing failed: check ios_signing_status, then rebuild with ios_build_start(action='ipa').",
+    "unregistered-device": "Connect the iPhone with a USB cable once so xtool can register it, then build again.",
     "apple": "Apple's servers didn't answer: this is usually temporary, retry in a minute.",
     "developer-mode": "Developer Mode is off on the iPhone: turn it on in Settings › Privacy & Security "
                       "(ios_device_prepare explains the steps).",
@@ -111,6 +112,10 @@ HINTS = {
 
 # Location-less errors, first match wins: (pattern, category, hint key).
 RULES: list[tuple[re.Pattern, str, str | None]] = [(re.compile(p, re.I), c, h) for p, c, h in [
+    # Apple's 409 when the profile names an iPhone the team doesn't have (xtool registers it only over USB).
+    # First: xtool prints it as a Swift value full of words ("Schemas", "Profiles") other rules match.
+    (r"no current ios devices|devices on this team|status: \"409\"|\b409\b.*conflict|conflict\(developerapi",
+     "signing", "unregistered-device"),
     (r"app ?id limit|up to 10 app ids|maximum number of app ids|no more app ids|too many app ids", "signing",
      "app-id-limit"),
     (r"maximum number of (installed )?apps|free develop\w* (provisioning )?profile|0xe8008021", "signing",
@@ -122,13 +127,13 @@ RULES: list[tuple[re.Pattern, str, str | None]] = [(re.compile(p, re.I), c, h) f
      r"could not connect to (the )?device|usbmux|lockdown|deviceinfofetchfailed|installer\.error", "device",
      "device"),
     (r"certificate", "signing", "certificate"),
-    (r"provisioning|\bprofile\b|entitlement|0xe800801[25]|device.*not.*(included|registered)", "signing",
+    (r"provisioning|\bprofiles?\b|entitlement|0xe800801[25]|device.*not.*(included|registered)", "signing",
      "provisioning"),
     (r"code ?sign|signature|no signers found|signing error|signer", "signing", "codesign"),
     (r"anisette|gsa\.apple|developerservices|apple\.com", "signing", "apple"),
     (r"darwin sdk|swift ?sdk|could not find sdk|no sdk|unknown sdk|xtool setup|bad path for swift|"
      r"invalid sdk", "toolchain", "toolchain"),
-    (r"xtool\.yml|decodingerror|schema|orgid|bundleid|library products?|product name", "config", "xtool-yml"),
+    (r"xtool\.yml|decodingerror|\bschema\b|orgid|bundleid|library products?|product name", "config", "xtool-yml"),
     (r"info\.plist", "config", "info-plist"),
     (r"dependencies could not be resolved|could not resolve package|depends on .* \d", "package", "resolve"),
     (r"the package at .* cannot be accessed|doesn.t exist in file system", "package", "local-package"),
@@ -165,10 +170,33 @@ def _clean(msg: str) -> str:
     """Drops the parts of a tool message that only cost bytes (command lines, compiler arguments)."""
     # xtool prints Apple's errors as Swift values: apiError(code: 9401, reason: Optional("…")) -> "… (9401)"
     msg = re.sub(r'^apiError\(code: (-?\d+), reason: Optional\("(.*)"\)\)$', r"\2 (\1)", msg)
+    msg = _api_error(msg)
     msg = re.sub(r"\s*Command line:.*$", "", msg)
     msg = re.sub(r"\s*\(compiled with: \[.*$", "", msg)
     msg = re.sub(r"[;:,]\s*valid packages are:\s*$", "", msg)
     return msg.rstrip(" :;")
+
+
+def _api_error(msg: str) -> str:
+    """xtool's dump of an App Store Connect error response -> Apple's own explanation.
+
+    `Unexpected response, expected status code: created, response: conflict(DeveloperAPI.Operations.
+    ProfilesCreateInstance.Output.Conflict(… status: "409", code: "ENTITY_ERROR", title: "…", detail: "…" …))`
+    becomes `Apple refused ProfilesCreateInstance (409 ENTITY_ERROR): <detail>`; otherwise the clip would cut the
+    message long before the detail.
+    """
+    if not msg.startswith("Unexpected response"):
+        return msg
+    detail = re.search(r'\bdetail: (?:Optional\()?"((?:[^"\\]|\\.)*)"', msg) \
+        or re.search(r'\btitle: (?:Optional\()?"((?:[^"\\]|\\.)*)"', msg)
+    if not detail:
+        return msg
+    op = re.search(r"Operations\.(\w+)\.", msg)
+    status = re.search(r'\bstatus: (?:Optional\()?"(\d+)"', msg)
+    code = re.search(r'\bcode: (?:Optional\()?"([A-Z_]+)"', msg)
+    tag = " ".join(x.group(1) for x in (status, code) if x)
+    return (f"Apple refused {op.group(1) if op else 'the request'}" + (f" ({tag})" if tag else "")
+            + f": {detail.group(1)}")
 
 
 def _short(path: str) -> str:

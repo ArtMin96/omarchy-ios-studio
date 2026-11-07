@@ -57,7 +57,7 @@ def cmd_info(flags: dict) -> int:
     p = model.require_project(flags)
     info = model.project_info(p)
     info["suggestedBuildSettings"] = build_settings.suggest(p, info["buildSettings"])
-    try:   # editor support in this project (.bsp file, ready, hint); see editor_setup.py
+    try:   # editor support in this project (.bsp file, ready, hint); see features/editor_setup/
         from iosstudio.features import editor_setup
         info["editor"] = editor_setup.brief(p)
     except Exception:  # noqa: BLE001 - never let it break project info
