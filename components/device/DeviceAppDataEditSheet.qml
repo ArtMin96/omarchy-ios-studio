@@ -187,7 +187,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.replaces
       text: "“" + root.keyText + "” already exists. Saving replaces its value."
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
 
     AppText { text: "Type"; size: "small"; tone: "dim"; Layout.bottomMargin: Style.spacing.labelGap - Style.spacing.xl }
@@ -269,13 +269,13 @@ Sheet {
       Layout.fillWidth: true
       visible: !root.parsed.ok && root.valueText.trim() !== ""
       text: root.parsed.error || ""
-      size: "small"; tone: "error"; wrapMode: Text.WordWrap
+      size: "small"; tone: "error"; wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
       visible: root.kind === "date" && root.parsed.ok
       text: root.parsed.ok && root.kind === "date" ? "Your local time. Saved as " + root.parsed.value + " (UTC)." : ""
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -295,7 +295,7 @@ Sheet {
     Layout.fillWidth: true
     // two sentences on their own lines, so neither wraps mid-phrase in the sheet's width
     text: (root.deleting ? "Deleting" : "Saving") + " reinstalls the same build, so iOS drops its cached settings.\nThe app's data stays."
-    size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "small"; tone: "faint"; wrapMode: Text.Wrap
   }
 
   DeviceAppDataRunning {

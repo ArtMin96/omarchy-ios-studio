@@ -29,7 +29,7 @@ BorderSurface {
       Layout.fillWidth: true
       spacing: Style.spacing.lg
       Icon { glyph: Model.Glyph.warn; color: Theme.warn; size: Style.font.icon }
-      AppText { Layout.fillWidth: true; text: "Using this Apple ID on another computer?"; strong: true; wrapMode: Text.WordWrap }
+      AppText { Layout.fillWidth: true; text: "Using this Apple ID on another computer?"; strong: true; wrapMode: Text.Wrap }
       AppText {
         visible: root.compact
         text: root.expanded ? "Less" : "What happens"
@@ -42,14 +42,14 @@ BorderSurface {
       visible: root.expanded
       text: "Each computer needs its own signing certificate, and the secret part of it never leaves the computer that made it. "
           + "When you build on a new computer, iOS Studio asks before replacing the old certificate."
-      tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.15
+      tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.15
     }
     AppText {
       Layout.fillWidth: true
       visible: root.expanded
       text: "If you replace it, apps you installed from the other computer stop opening until you install them again from here. "
           + "If you're not sure, choose “Don't revoke”: nothing changes."
-      tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.15
+      tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.15
     }
   }
 }

@@ -20,7 +20,7 @@ Quickshell picks up new files in a `components/` folder automatically (no qmldir
 
 | Folder | What's in it |
 |---|---|
-| `components/common/` | widgets used by more than one area: everything documented below, plus `LogView`, `BuildDiagnosticRow`, `DiffView`, `StateView` |
+| `components/common/` | widgets used by more than one area: everything documented below, plus `LogView`, `BuildDiagnosticRow`, `DiffView`, `StateView`, `PageViewport` |
 | `components/device/` | the iPhone page: `DeviceHero`, the tab views (`Device*View`), app data, `Debug*`, `PerfChart`, `Screenshot*` |
 | `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `StyleWarningsSection`, its sheets |
 | `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
@@ -86,6 +86,7 @@ PageFrame {
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths |
+| `app.xdgRuntimeDir`, `app.runtimeDir` | The helper's runtime-folder rule (`helper/iosstudio/device/client.py` `runtime_base`: `$IOSSTUDIO_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR`, else `/run/user/<uid>`), in one place. Daemon paths use `app.device.runtimeDir` / `app.device.logPath`: what the daemon's `ready` event reports (`runtimeDir`, `log`), falling back to `app.runtimeDir` until then. WatchService reads `watch.json` there. |
 | `app.refreshAll()`, `app.refreshCurrent()` | |
 
 ## Cli (one-shot helper calls), `core/Cli.qml`
@@ -155,7 +156,7 @@ StateView {
 |---|---|
 | `status` | `"idle"` (nothing yet) · `"loading"` (first load) · `"ready"` · `"error"` (failed with no data) |
 | `data`, `error`, `loadedAt`, `busy`, `loaded` | A reload keeps `status: "ready"` and the old data and sets `busy`; a failed reload keeps the data and sets `error`. |
-| `load(force)` | Fetches unless inactive, already loading (de-dup) or loaded within `ttl` (skipped with `force`). Returns whether it started. |
+| `load(force)` | Fetches unless inactive, already loading (de-dup) or loaded within `ttl` (skipped with `force`). Returns whether it started. `load(true)` while a fetch runs queues exactly one more fetch after it settles (the running one may predate the change that asked; `reset()` drops it), so "refresh after an action" never needs its own re-run flag. |
 | `invalidate()`, `set(data)`, `reset()` | Next `load()` fetches (loads now with `autoLoad`) · replace the data locally · forget everything; a reply still in flight is dropped (device switched). |
 | `fetch` | Any `function(done(data), fail(error))`. Adapters: `app.device.fetcher(cmd, args?, timeoutMs?)`, `app.cli.fetcher(argv, stdin?, opts?)`; `args`/`argv` may be functions, read at each load. `app.device.fetch(cmd, args, done, fail)` is `request()` with that callback shape. |
 | signals | `succeeded(data)`, `failed(error)` |
@@ -185,7 +186,7 @@ Device tool views: ScreenshotCompareView (baselines), DeviceDebugView (`debug ch
 error) and DeviceInspectView (`ui.tree`, `ui.audit`, read on demand). For "the last attempt's outcome" (an error
 banner that goes away when the next read starts) derive it: `busy ? "loading" : status === "idle" ? "idle" :
 error ? "error" : "ready"` (DeviceInspectView `treeStatus`/`auditStatus`). Tests: `tests/qml/tst_resource.qml`,
-`tests/qml/tst_resource_last_outcome.qml` (`qmltestrunner`, run by pytest).
+`tests/qml/tst_resource_last_outcome.qml`, `tests/qml/tst_resource_reload_queue.qml` (`qmltestrunner`, run by pytest).
 
 ## Shared helpers
 
@@ -217,7 +218,7 @@ Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minu
 `plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
-Run presets (mirroring `helper/run_presets.py`, so the editor can preview and validate as you type; the helper
+Run presets (mirroring `helper/iosstudio/features/run_presets.py`, so the editor can preview and validate as you type; the helper
 still checks on save): `PRESET_LANGUAGES` (`{value, label, region}` for the language list: en, de, fr, es, it,
 pt-BR, nl, ru, ja, ko, zh-Hans, ar, he), `PRESET_MAX_NAME` (40), `PRESET_LANGUAGE_RE`, `PRESET_REGION_RE`,
 `ENV_NAME_RE`; `languageLabel(code)` → "German" (the code itself when it isn't in the list);
@@ -252,6 +253,11 @@ Themed text. `size`: `caption | small | body | subtitle | title | heading | disp
 ```qml
 AppText { text: "Signed in as you@…"; tone: "dim"; size: "small"; elide: Text.ElideRight; Layout.fillWidth: true }
 ```
+Wrapping text uses `wrapMode: Text.Wrap`, never `Text.WordWrap`: the two break normal text the same way, but
+`Wrap` also breaks a word wider than the line (a long path, bundle id or error token) instead of running it past
+its neighbours and off the panel. In a RowLayout next to buttons give the filling text `Layout.preferredWidth: 0`
+so a long line never widens the row; ActionButton and IconButton set `Layout.minimumWidth: implicitWidth`, so they
+are never squeezed under the text.
 
 ## Icon
 
@@ -409,7 +415,8 @@ object `{code, message, fix?: {label, page, step?, action?, url?}, detail?}`), o
 `compact`, `banner` (slim inline strip), `showRetry`, `retryText`; signals `retry()`, `fixed(fix)`.
 The fix button opens `fix.url` externally when present, else calls `app.nav(fix.page, fix)`.
 "Show details" reveals `detail`, selectable. Fills and borders use `Theme.errorTint`. In a banner the error glyph
-sits on the message's first line when the message wraps (everything is centred when it's one line).
+sits on the message's first line when the message wraps (everything is centred when it's one line); the message
+takes the width the buttons leave and wraps anywhere, so a long unbroken error never runs under the button.
 ```qml
 ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; visible: svc.status === "error"; onRetry: svc.refresh() }
 ErrorState { Layout.fillWidth: true; app: page.app; error: svc.error; banner: true }
@@ -464,7 +471,8 @@ Props: `follow`, `paused`, `wrap`, `showToolbar` (filter field, All/Warnings/Err
 clear), `toolbarExtra` (your own toolbar items), `showMeta` (left column from `meta`, e.g. the process
 name), `filter`, `levelFilter` (`""|"info"|"warn"|"error"` = minimum level), `emptyText`; read-only
 `count`, `shownCount`; `text()`, `copyAll()`, `scrollToEnd()`; signals `lineCopied(text)` (on a
-double-click), `copiedAll(n)`. The level is guessed from the text when omitted.
+double-click), `copiedAll(n)`. The level is guessed from the text when omitted. Its buffers are appended and
+trimmed in place (never copied per flush), like LogSyslogView's.
 ```qml
 LogView { id: log; Layout.fillWidth: true; Layout.fillHeight: true; onCopiedAll: function(n) { app.toast("Copied " + n + " lines") } }
 Connections { target: app.device; function onDaemonEvent(name, data) { if (name === "syslog") log.append(data.message, data.level, data.process) } }
@@ -535,8 +543,8 @@ the first line rather than centred on the block.
   argument through, so `ios-studio crashes` opens Logs → Crashes. Pages read the tab from `params.tab`.
   A third segment is the action: `device:screen:mirror` opens the Screen tab and starts the live view.
 - **Demo mode** (`ios-studio --demo[=ready|expiring|fresh]`, env `IOSSTUDIO_DEMO`): the helper answers from
-  `helper/demo.py` and the daemon is `helper/deviced_demo.py` (a made-up iPhone, account and projects; no side
-  effects). AppState then uses `$XDG_RUNTIME_DIR/ios-studio-demo/` for settings, state and cache. Use it for
+  `helper/iosstudio/demo/demo.py` and the daemon is `helper/iosstudio/device/demo/daemon.py` (a made-up iPhone, account and projects; no side
+  effects). AppState then uses `app.demoDir` (`$XDG_RUNTIME_DIR/ios-studio-demo/`, else `/run/user/<uid>/…`) for settings, state and cache. Use it for
   screenshots so no personal data shows.
 - **PerfChart**: one metric over time (Performance tab). `title`, `unit`, `note`, `series: [{key, label, color?,
   dashed?}]`, `stacked` (areas in categorical colours from `categorical(i)`: fixed OKLCH hues at a lightness for the
@@ -688,7 +696,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   (level colour, `Theme.dim` for info, spinner glyph for busy) that elides and is clickable (underlined on hover,
   `PanelToolTip` with the detail). Props: `info` (`{level, glyph, text, tip}` from `app.watch.label(w)`); signal
   `clicked()`.
-- **WatchService** (`app.watch`, `services/WatchService.qml`): watch mode (compile on save, `helper/watch.py`). One
+- **WatchService** (`app.watch`, `services/WatchService.qml`): watch mode (compile on save, `helper/iosstudio/features/watch/`). One
   watcher per user. The service follows `<runtime dir>/watch.json` with a FileView (re-read every 2 s while the
   window is focused; `watch status` every 15 s only to catch a crashed watcher), so a watch an agent started shows
   too, and runs `watch run --project P [--auto-run]` as a Stream for a watch it starts (the stream keeps the watcher
@@ -834,7 +842,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   +/- marks and file paths stay in place while it scrolls sideways (the font is monospace, so widths come from one
   character's advance).
 - **BuildDiagnosticRow**: one build diagnostic. Props: `diag` (`{severity, message, category?, file?, line?, col?,
-  hint?, details?}`, see `helper/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
+  hint?, details?}`, see `helper/iosstudio/features/diagnostics.py`), `projectPath`, `hasCursor`; signals `clicked()` (opens the file at
   the line; only for diagnostics with a file), `hovered(bool)`. `category` is one of `compiler`, `linker`,
   `package`, `signing`, `device`, `toolchain`, `config`, `other` (a row with a file and no category counts as
   `compiler`). Non-compiler rows show their category label, up to three `details` lines and the `hint` (what to do).
@@ -859,7 +867,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   runs, and `configCount` counts the pre-build check warnings among them (BuildPanel's banner says "N in project
   settings"); `diagnosticAdded(d)` fires per new one. Bind a Repeater/ListView to `diagnostics` and read
   `svc.diagnostic(model.n)` in the delegate.
-- **ProjectService format and lint** (`app.projects`, `format` / `format-lint`, helper/format.py):
+- **ProjectService format and lint** (`app.projects`, `format` / `format-lint`, helper/iosstudio/features/format.py):
   `formatPreview(p, onDone, onFail)` (dry run) and `formatApply(p, onDone, onFail)` (writes, toasts "Formatted N
   files in <name>", lints again when that project has a lint result). `lints` maps a project path to `{state,
   result, error, at}` (`at` in ms, from the result's `at`); `lintFor(p)`, `lint(p, onDone?, onFail?)` (keeps the
@@ -867,7 +875,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ignored). `lintFocus` is the project the drawer shows style warnings for instead of the build; `showLint(p)` sets
   it (or clears it when the drawer already shows that project's build) and lints; a build starting or a compile on
   save shown clears it. Errors arrive as the helper's error object, with `hint`.
-- **ProjectService packages** (`app.projects`, `packages`, helper/packages.py): `packagesList(p, onDone, onFail)`,
+- **ProjectService packages** (`app.projects`, `packages`, helper/iosstudio/features/packages/): `packagesList(p, onDone, onFail)`,
   `packagesRemove(p, id, confirm, onDone, onFail)` (a dry run unless `confirm`), `packagesAddProduct(p, id, products,
   target, onDone, onFail)` and `packagesChanged(p)` (runs the card's settings check and the editor status again after
   Package.swift changed). add, update and resolve stream (JSON lines, cancel with `{cancel: true}` on stdin);
@@ -882,7 +890,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `loading`, `ready`, `needs-setup` when xtool is missing, `error` only with no list yet), `error`, `loadedOnce`,
   `items`, `convertible`, `missing`, `roots`, `defaultRoots` and `defaultDir` read it. A failed reload keeps the
   list and sets `error`. `refresh()` reloads it (a refresh asked while one runs reloads again after it, as that one
-  may predate the change) with the build history and auto-renew status; templates load once.
+  may predate the change: Resource's queued `load(true)`) with the build history and auto-renew status; templates load once.
 - **ProjectService project checks** (`app.projects`): `checks` maps a project path to `{state: "loading" | "ready"
   | "error", result, error, at}` (a PathResults); `checkFor(p)` reads one. `check(p, onDone?, onFail?)` runs `projects check` now,
   `checkSoon(p)` queues it (one at a time, skipped while loading or checked in the last minute) and `checkAll()`
@@ -1063,7 +1071,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
     or drop), launch arguments, environment and timeout (settings `cameraTestApp`, `cameraTestInputs`,
     `cameraTestArgs`, `cameraTestEnv`, `cameraTestTimeout`), live steps, then `done.json`, output images,
     the app's log and a crash banner.
-- **PageViewport** (components/device/): virtualizes a ListView / GridView that is as tall as its content inside
+- **PageViewport** (components/common/): virtualizes a ListView / GridView that is as tall as its content inside
   the page's Flickable (negative display margins: only rows within a screen of the viewport exist). Props: `view`;
   read-only `marginBeginning`, `marginEnd`; `reveal(y0, y1)` scrolls the page to a band of the view. Users:
   DeviceAppsView, DeviceContainerView, DeviceMediaView.

@@ -221,7 +221,7 @@ Item {
           text: root.placeholder
           size: "small"; tone: "faint"
           horizontalAlignment: Text.AlignHCenter
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
         }
       }
 

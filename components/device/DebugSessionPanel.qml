@@ -196,7 +196,7 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: !root.hasLocalBuild && !root.live   // while live, the helper's own notice says it
     text: "No build of this app was found on this computer, so file:line breakpoints won't resolve and your own frames show as addresses. Run it once from Projects first."
-    size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+    size: "small"; tone: "warn"; wrapMode: Text.Wrap
   }
 
   // ---------------------------------------------------------------- start / controls
@@ -223,7 +223,7 @@ ColumnLayout {
     text: root.launchMode === "attach"
           ? "The app pauses while the debugger attaches (about 30 s over Wi-Fi), then runs until a breakpoint."
           : "The app is closed and started again, paused until the debugger is ready, so breakpoints in startup code hit too."
-    size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "small"; tone: "faint"; wrapMode: Text.Wrap
   }
 
   LoadingState {
@@ -261,7 +261,7 @@ ColumnLayout {
       required property var modelData
       Layout.fillWidth: true
       text: modelData.message
-      size: "small"; tone: modelData.level === "warn" ? "warn" : "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: modelData.level === "warn" ? "warn" : "dim"; wrapMode: Text.Wrap
     }
   }
 
@@ -307,7 +307,7 @@ ColumnLayout {
       Layout.fillWidth: true
       visible: !!(root.stop && root.stop.reason === "exception" && root.stop.description)
       text: root.stop ? (root.stop.description || "") : ""
-      size: "small"; tone: "error"; wrapMode: Text.WordWrap
+      size: "small"; tone: "error"; wrapMode: Text.Wrap
     }
 
     SectionHeader { Layout.fillWidth: true; text: "Thread " + (root.stop && root.stop.thread ? root.stop.thread.index : ""); detail: root.stop && root.stop.thread ? root.stop.thread.numFrames + " frames" : "" }

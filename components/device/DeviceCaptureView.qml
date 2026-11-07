@@ -89,7 +89,7 @@ ColumnLayout {
     AppText { text: "Packet capture"; size: "heading"; strong: true }
     AppText {
       Layout.fillWidth: true
-      wrapMode: Text.WordWrap; tone: "dim"
+      wrapMode: Text.Wrap; tone: "dim"
       text: "Record what an app sends and receives, and see which servers it talks to. The recording is a standard file you can open in Wireshark. The summary below reads only the packet headers, never their contents."
     }
   }
@@ -174,7 +174,7 @@ ColumnLayout {
     AppText {
       Layout.fillWidth: true; visible: (root.cap.packets || 0) === 0
       text: "Nothing yet. Use the app now so it goes online."
-      tone: "faint"; size: "small"; wrapMode: Text.WordWrap
+      tone: "faint"; size: "small"; wrapMode: Text.Wrap
     }
   }
 
@@ -276,7 +276,7 @@ ColumnLayout {
       Layout.fillWidth: true
       visible: !!root.summary && root.summary.excludedTunnelPackets > 0
       text: "Left out: " + (root.summary ? root.summary.excludedTunnelPackets : 0) + " packets of iOS Studio's own connection to the phone."
-      tone: "faint"; size: "small"; wrapMode: Text.WordWrap
+      tone: "faint"; size: "small"; wrapMode: Text.Wrap
     }
   }
 }

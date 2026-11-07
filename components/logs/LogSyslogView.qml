@@ -359,7 +359,7 @@ Rectangle {
     AppText {
       Layout.fillWidth: true
       horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
       visible: text !== ""
       text: root.count > 0 ? root.count + " lines are hidden by the search or level filter." : root.emptyText
       size: "small"; tone: "faint"

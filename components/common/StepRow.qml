@@ -121,8 +121,8 @@ BorderSurface {
           AppText { visible: root.meta !== "" && !root.narrow; text: root.meta; size: "small"; tone: "faint" }
         }
         AppText { visible: root.meta !== "" && root.narrow; text: root.meta; size: "small"; tone: "faint" }
-        AppText { Layout.fillWidth: true; visible: root.description !== ""; text: root.description; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
-        AppText { Layout.fillWidth: true; visible: root._failed && root.errorText !== ""; text: root.errorText; tone: "error"; wrapMode: Text.WordWrap }
+        AppText { Layout.fillWidth: true; visible: root.description !== ""; text: root.description; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2 }
+        AppText { Layout.fillWidth: true; visible: root._failed && root.errorText !== ""; text: root.errorText; tone: "error"; wrapMode: Text.Wrap }
         ColumnLayout { id: extraSlot; Layout.fillWidth: true; visible: children.length > 0; spacing: Style.spacing.md }
         ActionButton {
           Layout.topMargin: Style.spacing.sm

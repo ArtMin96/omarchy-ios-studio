@@ -126,8 +126,8 @@ ColumnLayout {
         Layout.row: 0; Layout.column: 1
         Layout.fillWidth: true
         spacing: Style.spacing.xs
-        AppText { id: cardTitle; Layout.fillWidth: true; text: card.title; strong: true; wrapMode: Text.WordWrap }
-        AppText { Layout.fillWidth: true; text: card.text; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+        AppText { id: cardTitle; Layout.fillWidth: true; text: card.title; strong: true; wrapMode: Text.Wrap }
+        AppText { Layout.fillWidth: true; text: card.text; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
       }
       ActionButton {
         id: cardButton
@@ -161,7 +161,7 @@ ColumnLayout {
   AppText {
     Layout.fillWidth: true
     text: "Both show what would be removed first. Nothing is deleted until you confirm."
-    size: "caption"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "caption"; tone: "faint"; wrapMode: Text.Wrap
     horizontalAlignment: Text.AlignRight
   }
 
@@ -200,7 +200,7 @@ ColumnLayout {
         // the dry run's own answer counts too: an app started outside this window (an agent) isn't in the list yet
         visible: (root.view.running || (!!root.plan && !!root.plan.running)) && (root.phase === "ready" || root.phase === "running")
         text: root.appName + " is running, so it's stopped first."
-        size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+        size: "small"; tone: "warn"; wrapMode: Text.Wrap
       }
 
       ErrorState {
@@ -227,7 +227,7 @@ ColumnLayout {
         spacing: Style.spacing.lg
         AppText {
           Layout.fillWidth: true
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
           text: {
             var p = root.plan
             if (!p) return ""
@@ -291,13 +291,13 @@ ColumnLayout {
           visible: !!root.plan
           text: !root.plan ? "" : root.mode === "reinstall" ? "Then installs " + (root.plan.project ? "the last build of " + root.plan.project : "your last build") + " again."
                 : "Then installs the same build over it, so iOS drops its cached settings."
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
         }
         AppText {
           Layout.fillWidth: true
           visible: !!root.plan && !!root.plan.truncated
           text: root.plan ? "The first " + (root.plan.items || []).length + " are listed; all " + root.plan.count + " go." : ""
-          size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+          size: "small"; tone: "faint"; wrapMode: Text.Wrap
         }
       }
 

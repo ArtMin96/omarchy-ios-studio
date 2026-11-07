@@ -134,7 +134,7 @@ ColumnLayout {
     spacing: Style.spacing.lg
     AppText {
       Layout.fillWidth: true
-      wrapMode: Text.WordWrap; tone: "dim"
+      wrapMode: Text.Wrap; tone: "dim"
       text: "Feed your app's camera code with images and videos from this computer instead of the camera, and get its results back. The app needs a small test hook."
     }
     ActionButton { text: "How to add the hook"; glyph: Model.Glyph.help; kind: "ghost"; compact: true; onClicked: root.docs() }
@@ -309,7 +309,7 @@ ColumnLayout {
       }
       AppText {
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         text: {
           var r = root.result
           if (!r) return ""

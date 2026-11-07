@@ -108,8 +108,8 @@ Item {
           ColumnLayout {
             Layout.fillWidth: true
             spacing: Style.spacing.xs
-            AppText { Layout.fillWidth: true; text: root.title; size: "heading"; strong: true; wrapMode: Text.WordWrap }
-            AppText { Layout.fillWidth: true; visible: root.subtitle !== ""; text: root.subtitle; tone: "dim"; wrapMode: Text.WordWrap }
+            AppText { Layout.fillWidth: true; text: root.title; size: "heading"; strong: true; wrapMode: Text.Wrap }
+            AppText { Layout.fillWidth: true; visible: root.subtitle !== ""; text: root.subtitle; tone: "dim"; wrapMode: Text.Wrap }
           }
           IconButton { Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.close; tooltip: "Close (Esc)"; visible: root.dismissible; enabled: !root.busy; onClicked: root.dismiss() }
         }

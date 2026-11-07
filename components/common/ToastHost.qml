@@ -74,7 +74,7 @@ Item {
             Layout.preferredHeight: toastMetrics.height
             Icon { id: toastIcon; anchors.centerIn: parent; glyph: Model.levelGlyph(toast.level); color: toast.tint; size: Style.font.icon }
           }
-          AppText { id: toastText; Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; text: toast.text; wrapMode: Text.WordWrap }
+          AppText { id: toastText; Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; text: toast.text; wrapMode: Text.Wrap }
         }
         FontMetrics { id: toastMetrics; font: toastText.font }
         HoverHandler { id: th }

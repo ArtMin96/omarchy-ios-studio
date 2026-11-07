@@ -249,7 +249,7 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: root.status === "loading" && root.items.length === 0
     text: "Reading the camera roll. The first time takes a few seconds while the photo library index is copied."
-    size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "small"; tone: "faint"; wrapMode: Text.Wrap
   }
   ErrorState {
     Layout.fillWidth: true

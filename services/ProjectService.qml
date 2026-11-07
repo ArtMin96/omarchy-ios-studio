@@ -26,7 +26,7 @@ import "../lib/Model.js" as Model
 //     loadPresets(p, onDone, onFail) · savePreset(p, preset, renameFrom, onDone, onFail)
 //     deletePreset(p, name, onDone, onFail) (asks first) · selectPreset(p, name|"", onDone, onFail)
 //     Run passes the selected one (--preset); build.preset is its name, for the run step and toast.
-//   editor setup (`editor status|setup`, helper/iosstudio/features/editor_setup.py), machine-wide: editorInfo, editorInfoError,
+//   editor setup (`editor status|setup`, helper/iosstudio/features/editor_setup/), machine-wide: editorInfo, editorInfoError,
 //     editorInfoLoading (editorInfoResource), loadEditors(), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
 //     (dry run unless confirm). Per project: editors: { path: {state, result: {bsp, ready, hint}, error, at} }
 //     editorFor(p) · editorStatus(p, …) (now) · editorStatusSoon(p) (queued, skipped when fresh)
@@ -39,7 +39,7 @@ import "../lib/Model.js" as Model
 //     lintLastSoon(p) (the saved result, `format-lint --last`, once per path) · lintFocus: a project whose style
 //     warnings the build panel shows instead of the last build ("" = the build's own project); showLint(p) sets it.
 //     Style warnings never count as build problems (errorCount/warningCount leave them out).
-//   Swift packages (`packages`, helper/iosstudio/features/packages.py): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
+//   Swift packages (`packages`, helper/iosstudio/features/packages/): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
 //     onDone, onFail) (dry run unless confirm) · packagesAddProduct(p, id, products, target, onDone, onFail) ·
 //     packagesChanged(p) (re-checks the card and the editor status after Package.swift changed). add, update and
 //     resolve stream; ProjectPackagesSheet runs them.
@@ -132,18 +132,14 @@ Item {
   signal diagnosticAdded(var d)
   signal watchBuildShown(bool ok)
 
-  // A reload asked while one is in flight runs again after it: the one running may predate the change.
-  property bool _listAgain: false
+  // A refresh while a list load runs gets one more load after it (Resource.load(true) queues it).
   function refresh() {
-    if (!listResource.load(true)) root._listAgain = true
+    listResource.load(true)
     loadHistory()
     loadAutoRenew()
     if (!templatesResource.loaded) templatesResource.load()
   }
-  function _listSettled() {
-    root._updateSummary()
-    if (root._listAgain) { root._listAgain = false; Qt.callLater(function() { root.listResource.load(true) }) }
-  }
+  function _listSettled() { root._updateSummary() }
 
   function loadHistory() { historyResource.load(true) }
   function loadAutoRenew() { autorenewResource.load(true) }
@@ -713,7 +709,7 @@ Item {
   function checkSoon(p) { checkResults.soon(p) }
   function checkAll() { for (var i = 0; i < root.items.length; i++) checkSoon(root.items[i]) }
 
-  // ------------------------------------------------------------ editor setup (helper/iosstudio/features/editor_setup.py)
+  // ------------------------------------------------------------ editor setup (helper/iosstudio/features/editor_setup/)
   // Machine-wide: which editors (VS Code, Zed, Neovim) are installed and set up for Swift through
   // SourceKit-LSP (Settings › Code editor). Per project: whether completion works there yet (the build
   // server file), shown as a quiet hint on the card.
@@ -808,7 +804,7 @@ Item {
     }, onFail, { timeout: 120000 })
   }
 
-  // ------------------------------------------------------------ Swift packages (`packages`, helper/iosstudio/features/packages.py)
+  // ------------------------------------------------------------ Swift packages (`packages`, helper/iosstudio/features/packages/)
   // One-shot calls; the long ones (add, update, resolve) stream and live in ProjectPackagesSheet.
   function packagesList(p, onDone, onFail) {
     var path = _path(p)

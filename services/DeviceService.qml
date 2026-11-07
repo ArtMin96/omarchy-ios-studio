@@ -40,8 +40,6 @@ Item {
   property Resource appsResource: Resource {
     initial: []
     fetch: root._fetchApps
-    onSucceeded: root._appsSettled()
-    onFailed: root._appsSettled()
   }
   readonly property var apps: appsResource.data
   readonly property string appsStatus: appsResource.status === "idle" ? "unknown" : appsResource.status
@@ -209,9 +207,12 @@ Item {
     }
   }
 
-  // Unix runtime dir as bin/iosstudio-deviced picks it (IOSSTUDIO_RUNTIME_DIR, else XDG_RUNTIME_DIR).
-  readonly property string logPath: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") || "/tmp")
-                                    + (root.app.demo !== "" ? "/ios-studio-demo" : "/ios-studio") + "/deviced.log"
+  // The daemon's runtime folder and log, as its `ready` event reports them; until then (or when it dies
+  // before it's ready) the app's copy of the rule (AppState.runtimeDir).
+  property string _reportedRuntimeDir: ""
+  property string _reportedLog: ""
+  readonly property string runtimeDir: _reportedRuntimeDir || root.app.runtimeDir
+  readonly property string logPath: _reportedLog || runtimeDir + "/deviced.log"
   readonly property int maxFailedStarts: 4
   property int _failedStarts: 0
   property bool _readySinceStart: false
@@ -253,6 +254,8 @@ Item {
   function _onEvent(name, data) {
     switch (name) {
     case "ready":
+      if (data && data.runtimeDir) root._reportedRuntimeDir = data.runtimeDir
+      if (data && data.log) root._reportedLog = data.log
       if (data && data.error) { _needsSetup(data.error.detail || data.error.message); break }
       root.daemonReady = true
       root._readySinceStart = true
@@ -370,7 +373,7 @@ Item {
     for (var i = 0; i < root.devices.length; i++) if (root.devices[i].active) cur = root.devices[i]
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
-      root.info = ({}); root.appsResource.reset(); root._appsQueued = null; root._appsGen++; root.profilesResource.reset()
+      root.info = ({}); root.appsResource.reset(); root._appsArgs = ({}); root._appsGen++; root.profilesResource.reset()
       root.appIcons = ({}); root.appSizes = ({}); root._appsKey = ""; root._sizesAskedAt = 0; root.appsStale = false
       root._iconQueue = ({})
       root.lastShot = ""; root.framePath = ""; root.location = null
@@ -535,27 +538,19 @@ Item {
     _listApps({ icons: true, sizes: true })
   }
 
-  // One apps.list at a time (appsResource); a call while one runs is merged into the next request.
+  // One apps.list at a time (appsResource). Calls are merged into the args of the next request; a call
+  // while one runs gets one more request after it (Resource.load(true) queues it).
   property var _appsArgs: ({})
-  property var _appsQueued: null
   property int _appsGen: 0                 // bumped on a device switch: an older reply is dropped
   function _listApps(args) {
-    if (root.appsResource.busy) {
-      var q = root._appsQueued || {}
-      for (var k in args) q[k] = q[k] || args[k]
-      root._appsQueued = q
-      return
-    }
-    root._appsArgs = args
+    var next = root._appsArgs
+    for (var k in args) next[k] = next[k] || args[k]
+    root._appsArgs = next
     root.appsResource.load(true)
-  }
-  function _appsSettled() {
-    var q = root._appsQueued
-    root._appsQueued = null
-    if (q) _listApps(q)
   }
   function _fetchApps(done, fail) {
     var args = root._appsArgs, gen = root._appsGen
+    root._appsArgs = ({})
     root.fetch("apps.list", args, function(d) {
       if (gen !== root._appsGen) return        // the other iPhone's list (appsResource dropped it too)
       // {apps, stale, fetchedAt}; older daemons answer with the bare list

@@ -143,9 +143,9 @@ Sheet {
       ColumnLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.xxs
-        AppText { Layout.fillWidth: true; strong: true; wrapMode: Text.WordWrap; text: "This project's own scripts set things up for its build" }
+        AppText { Layout.fillWidth: true; strong: true; wrapMode: Text.Wrap; text: "This project's own scripts set things up for its build" }
         AppText {
-          Layout.fillWidth: true; tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+          Layout.fillWidth: true; tone: "dim"; size: "small"; wrapMode: Text.Wrap
           text: root.suggested ? (root.suggested.reasons || []).join(" · ") : ""
         }
       }
@@ -168,7 +168,7 @@ Sheet {
     AppText {
       Layout.fillWidth: true
       text: "Runs in the project folder before every build, re-signing included, as its first step; its output goes to the build log. It runs without a shell: quotes work, but not |, && or $VARIABLES. Leave it empty for none."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -186,7 +186,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.envRows.length === 0
       text: "None. The prebuild command and xtool get your normal environment."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
     Repeater {
       model: root.envRows.length
@@ -216,7 +216,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.badKeys.length > 0
       text: "Names use letters, digits and _, and don't start with a digit: " + root.badKeys.map(function(r) { return r.key }).join(", ")
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
   }
 

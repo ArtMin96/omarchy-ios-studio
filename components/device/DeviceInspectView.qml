@@ -493,7 +493,7 @@ ColumnLayout {
         visible: root.noPositions
         text: "This iOS version doesn't report element positions, so rows aren't outlined on the phone. Audit issues are."
         size: "caption"; tone: "faint"
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
       }
     }
   }
@@ -721,14 +721,14 @@ ColumnLayout {
           text: note.title !== "" ? note.title : note.text
           tone: note.title !== "" ? "primary" : "faint"
           size: note.title !== "" ? "body" : "small"
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
         }
         AppText {
           Layout.fillWidth: true
           visible: note.title !== "" && note.text !== ""
           text: note.text
           size: "small"; tone: "dim"
-          wrapMode: Text.WordWrap; maximumLineCount: 4; elide: Text.ElideRight
+          wrapMode: Text.Wrap; maximumLineCount: 4; elide: Text.ElideRight
         }
       }
       // Centred on the first line like the glyph (the button is taller than the line).

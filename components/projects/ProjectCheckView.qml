@@ -90,7 +90,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.xxs
         AppText { Layout.fillWidth: true; text: root.headline(); strong: root.total > 0 || root.failed; elide: Text.ElideRight }
-        AppText { Layout.fillWidth: true; visible: text !== ""; text: root.detail(); tone: root.failed ? "error" : "dim"; size: "small"; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
+        AppText { Layout.fillWidth: true; visible: text !== ""; text: root.detail(); tone: root.failed ? "error" : "dim"; size: "small"; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
       }
       ActionButton {
         Layout.alignment: Qt.AlignVCenter
@@ -135,6 +135,6 @@ ColumnLayout {
     text: "Showing " + root.issues.length + " of " + root.total + ". Fix these and check again to see the rest."
     tone: "faint"
     size: "small"
-    wrapMode: Text.WordWrap
+    wrapMode: Text.Wrap
   }
 }

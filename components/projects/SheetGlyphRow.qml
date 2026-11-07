@@ -50,7 +50,7 @@ RowLayout {
       text: row.title
       strong: row.titleStrong
       tone: row.titleTone
-      wrapMode: row.titleWraps ? Text.WordWrap : Text.NoWrap
+      wrapMode: row.titleWraps ? Text.Wrap : Text.NoWrap
       elide: row.titleWraps ? Text.ElideNone : Text.ElideRight
     }
   }

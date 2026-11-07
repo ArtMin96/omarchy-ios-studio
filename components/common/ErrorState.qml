@@ -59,11 +59,21 @@ Item {
       FontMetrics { id: bannerMetrics; font: bannerText.font }
       Item {
         Layout.alignment: bannerText.lineCount > 1 ? Qt.AlignTop : Qt.AlignVCenter
+        Layout.minimumWidth: implicitWidth
         implicitWidth: bannerIcon.implicitWidth
         implicitHeight: bannerMetrics.height
         Icon { id: bannerIcon; anchors.centerIn: parent; glyph: Model.Glyph.error; color: Commons.Color.urgent }
       }
-      AppText { id: bannerText; Layout.fillWidth: true; Layout.alignment: lineCount > 1 ? Qt.AlignTop : Qt.AlignVCenter; text: root.message; wrapMode: Text.WordWrap }
+      // The message takes what the buttons leave (preferredWidth 0: a long unbroken path or id never
+      // pushes the row wider) and wraps anywhere when a word doesn't fit; the buttons never shrink (ActionButton's minimumWidth).
+      AppText {
+        id: bannerText
+        Layout.fillWidth: true
+        Layout.preferredWidth: 0
+        Layout.alignment: lineCount > 1 ? Qt.AlignTop : Qt.AlignVCenter
+        text: root.message
+        wrapMode: Text.Wrap
+      }
       ActionButton { visible: !!root.fix; text: root.fix ? root.fix.label : ""; kind: "primary"; compact: true; onClicked: root.runFix() }
       ActionButton { visible: root.showRetry && !root.fix; text: root.retryText; glyph: Model.Glyph.refresh; kind: "ghost"; compact: true; onClicked: root.retry() }
     }
@@ -88,8 +98,8 @@ Item {
       border.color: Util.alpha(Theme.errorTint, 0.45)
       Icon { anchors.centerIn: parent; glyph: Model.Glyph.warn; size: root.compact ? Style.font.display : Style.font.displayLarge; color: Commons.Color.urgent }
     }
-    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.title; size: root.compact ? "title" : "heading"; strong: true; wrapMode: Text.WordWrap }
-    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.message; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.25 }
+    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.title; size: root.compact ? "title" : "heading"; strong: true; wrapMode: Text.Wrap }
+    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.message; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.25 }
     Row {
       Layout.alignment: Qt.AlignHCenter
       Layout.topMargin: Style.spacing.md

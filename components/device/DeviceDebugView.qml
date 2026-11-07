@@ -220,7 +220,7 @@ ColumnLayout {
     AppText {
       Layout.fillWidth: true
       text: "Only your own apps are listed: iOS lets a debugger attach only to apps built and signed for development, so App Store and system apps can't be debugged."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -233,7 +233,7 @@ ColumnLayout {
     AppText {
       Layout.fillWidth: true
       text: "Attaching may take minutes until the debug symbols are " + (root.symState === "incomplete" ? "unpacked again." : "updated.") + " The app stays paused meanwhile."
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
     ActionButton {
       text: root.symFix === "unpack" ? "Unpack again" : "Update symbols"; glyph: root.symFix === "unpack" ? Model.Glyph.refresh : Model.Glyph.download
@@ -275,7 +275,7 @@ ColumnLayout {
         text: root.current && root.current.running
               ? "See what every thread of " + root.current.name + " is doing right now, for a hang or a spinner that never ends."
               : (root.current ? root.current.name + " isn't running. Open it on the iPhone first." : "")
-        tone: "dim"; wrapMode: Text.WordWrap
+        tone: "dim"; wrapMode: Text.Wrap
       }
       ActionButton {
         text: "Capture backtrace"; glyph: Model.Glyph.bug
@@ -295,7 +295,7 @@ ColumnLayout {
       delegate: AppText {
         required property var modelData
         Layout.fillWidth: true
-        text: modelData.message; size: "small"; wrapMode: Text.WordWrap
+        text: modelData.message; size: "small"; wrapMode: Text.Wrap
         tone: modelData.level === "warn" ? "warn" : "dim"
       }
     }
@@ -357,32 +357,32 @@ ColumnLayout {
       Layout.fillWidth: true
       visible: root.symState === "ready"
       text: "lldb uses them by itself for this iOS version. A phone on another iOS version needs its own download."
-      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: "dim"; wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
       visible: root.symState === "missing"
       text: "Optional, once per iOS version. Without them, backtraces and breakpoints still work, but Swift values such as String and Array can read wrong, system frames show only library names and attaching is slow."
-      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: "dim"; wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
       visible: root.symNeedsUpdate
       text: (root.symbols && root.symbols.update && root.symbols.update.reason ? root.symbols.update.reason : "")
             + (root.symCanUnpack ? " The download is kept, so unpacking again takes about a minute." : " Updating downloads them again; the ones you have keep working meanwhile.")
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
       visible: !root.symDownloading && !!root.symbols && !!root.symbols.error
       text: root.symbols && root.symbols.error ? root.symbols.error.message : ""
-      size: "small"; tone: "error"; wrapMode: Text.WordWrap
+      size: "small"; tone: "error"; wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
       visible: !!(root.symP && root.symP.phase === "cancelled") && !root.symDownloading
       text: root.symP ? (root.symP.message || "") : ""
-      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: "dim"; wrapMode: Text.Wrap
     }
 
     ProgressTrack {
@@ -399,7 +399,7 @@ ColumnLayout {
       Layout.fillWidth: true
       visible: root.symFix !== "" && root.symFix !== "unpack" && !root.symEnough
       text: "Needs about " + Model.formatBytes(root.symbols ? root.symbols.estimatedBytes : 0) + " free; this computer has " + Model.formatBytes(root.symbols ? root.symbols.freeBytes : 0) + "."
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
     ErrorState {
       Layout.fillWidth: true
@@ -468,7 +468,7 @@ ColumnLayout {
           return "Keep the download so symbols can be unpacked again without downloading"
                  + (kept ? " · " + Model.formatBytes(kept) + " kept" : " · about " + Model.formatBytes(s.estimatedBytes || 0))
         }
-        size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+        size: "small"; tone: "dim"; wrapMode: Text.Wrap
         TapHandler { onTapped: if (!root.symBusy) root.setKeepDownload(!(root.symbols && root.symbols.keepDownload)) }
       }
     }

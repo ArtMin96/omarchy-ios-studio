@@ -127,7 +127,7 @@ PageFrame {
       Layout.fillWidth: true
       Layout.topMargin: Style.spacing.md
       visible: !!page.svc.sdks.caches && page.svc.sdks.caches.length > 0
-      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: "dim"; wrapMode: Text.Wrap
       text: {
         var c = page.svc.sdks.caches || []
         var spare = c.filter(function(x) { return x.current && x.complete }).map(function(x) { return "iOS " + x.ios })
@@ -279,7 +279,7 @@ PageFrame {
               Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
             }
           }
-          AppText { Layout.fillWidth: true; text: drow.modelData.note; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: drow.modelData.note; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
           AppText {
             Layout.fillWidth: true
             visible: drow.hot && drow.modelData.paths.length > 0
@@ -324,7 +324,7 @@ PageFrame {
           AppText {
             Layout.fillWidth: true
             text: "Uninstalls Swift, xtool, the iOS SDK and all caches (about " + (page.svc.disk ? Model.formatBytes(page.svc.disk.total - (page.diskRows.filter(function(i) { return i.id === "project-builds" || i.id === "xip" }).reduce(function(a, i) { return a + i.size }, 0))) : "20 GB") + "). Your projects, your Xcode download and your iPhone pairing stay. You can set everything up again from Setup."
-            tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2
+            tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2
           }
         }
         ActionButton {

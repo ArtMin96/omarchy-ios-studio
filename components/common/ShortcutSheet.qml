@@ -64,7 +64,7 @@ Item {
                   required property var modelData
                   spacing: Style.spacing.xl
                   AppText { text: modelData.keys; tone: "accent"; Layout.preferredWidth: Style.space(84); Layout.alignment: Qt.AlignTop }
-                  AppText { text: modelData.text; tone: "dim"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                  AppText { text: modelData.text; tone: "dim"; Layout.fillWidth: true; wrapMode: Text.Wrap }
                 }
               }
             }

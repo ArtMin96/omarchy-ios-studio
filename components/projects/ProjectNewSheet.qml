@@ -83,7 +83,7 @@ Sheet {
       onAccepted: root.submit()
       onTextChanged: if (!root.bundleEdited) bundleField.text = ""
     }
-    AppText { Layout.fillWidth: true; text: root.nameHint; size: "small"; tone: root.cleanName !== "" && !root.nameValid ? "warn" : "faint"; wrapMode: Text.WordWrap }
+    AppText { Layout.fillWidth: true; text: root.nameHint; size: "small"; tone: root.cleanName !== "" && !root.nameValid ? "warn" : "faint"; wrapMode: Text.Wrap }
   }
 
   // ---------------------------------------------------------------- templates
@@ -126,7 +126,7 @@ Sheet {
               Icon { visible: tile.selected; glyph: Model.Glyph.checkCircle; size: Style.font.icon; color: Commons.Color.accent }
             }
             AppText { Layout.fillWidth: true; text: tile.modelData.title; strong: true; elide: Text.ElideRight }
-            AppText { Layout.fillWidth: true; text: tile.modelData.description; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+            AppText { Layout.fillWidth: true; text: tile.modelData.description; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
             Item { Layout.fillHeight: true }
           }
           HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
@@ -168,7 +168,7 @@ Sheet {
     AppText {
       Layout.fillWidth: true
       text: "Identifies the app on your iPhone. Free Apple IDs can register up to 10 new IDs a week, so keep the one you pick."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 

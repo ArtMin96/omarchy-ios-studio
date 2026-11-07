@@ -168,7 +168,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.mode === "key"
       spacing: Style.spacing.sm
-      AppText { Layout.fillWidth: true; text: "Create a key in App Store Connect › Users and Access › Integrations, then download the .p8 file."; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+      AppText { Layout.fillWidth: true; text: "Create a key in App Store Connect › Users and Access › Integrations, then download the .p8 file."; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
       AppText { Layout.topMargin: Style.spacing.sm; text: "Key ID"; size: "small"; tone: "dim" }
       TextField { id: keyIdField; Layout.fillWidth: true; placeholderText: "2X9R4HXF34"; onAccepted: issuerField.forceActiveFocus() }
       AppText { text: "Issuer ID"; size: "small"; tone: "dim" }
@@ -177,7 +177,7 @@ Sheet {
       TextField { id: keyPathField; Layout.fillWidth: true; placeholderText: "~/Downloads/AuthKey_2X9R4HXF34.p8"; onAccepted: root.submit() }
     }
 
-    AppText { id: localError; Layout.fillWidth: true; visible: text !== ""; tone: "error"; size: "small"; wrapMode: Text.WordWrap }
+    AppText { id: localError; Layout.fillWidth: true; visible: text !== ""; tone: "error"; size: "small"; wrapMode: Text.Wrap }
 
     // reassurance, kept short
     RowLayout {
@@ -189,7 +189,7 @@ Sheet {
       AppText {
         Layout.fillWidth: true
         text: "Apple will send a 6-digit code to your other devices. Apps you install stay signed for 7 days on a free account, and iOS Studio can renew them."
-        size: "small"; tone: "faint"; wrapMode: Text.WordWrap; lineHeight: 1.15
+        size: "small"; tone: "faint"; wrapMode: Text.Wrap; lineHeight: 1.15
       }
     }
 
@@ -223,7 +223,7 @@ Sheet {
       Layout.fillWidth: true
       text: (root.prompt && root.prompt.attempt > 1 ? "That code didn't work. " : "")
           + "Enter the 6-digit code Apple just sent to your iPhone, iPad or Mac."
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
     }
 
     // six boxes over one hidden field: typing, paste and backspace all just work
@@ -286,11 +286,11 @@ Sheet {
         anchors.fill: parent
         anchors.margins: Style.spacing.lg
         spacing: Style.spacing.sm
-        AppText { Layout.fillWidth: true; text: root.flow.manualCode ? "Apple couldn't send the code automatically" : "Get a code yourself"; strong: true; wrapMode: Text.WordWrap }
+        AppText { Layout.fillWidth: true; text: root.flow.manualCode ? "Apple couldn't send the code automatically" : "Get a code yourself"; strong: true; wrapMode: Text.Wrap }
         AppText {
           Layout.fillWidth: true
           text: "On a trusted iPhone or iPad open Settings › [your name] › Sign-In & Security › Two-Factor Authentication › Get Verification Code. On a Mac: System Settings › [your name] › Sign-In & Security."
-          size: "small"; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.15
+          size: "small"; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.15
         }
       }
     }
@@ -313,7 +313,7 @@ Sheet {
     Layout.fillWidth: true
     visible: root.view === "team"
     spacing: Style.spacing.sm
-    AppText { Layout.fillWidth: true; text: "This Apple ID belongs to more than one developer team. Apps you build will be signed with the one you pick."; tone: "dim"; wrapMode: Text.WordWrap }
+    AppText { Layout.fillWidth: true; text: "This Apple ID belongs to more than one developer team. Apps you build will be signed with the one you pick."; tone: "dim"; wrapMode: Text.Wrap }
     Repeater {
       model: root.prompt && root.prompt.options ? root.prompt.options : []
       delegate: ListRow {
@@ -365,7 +365,7 @@ Sheet {
     AppText {
       Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
       text: "iOS Studio can now sign apps for your iPhone."
-      tone: "dim"; wrapMode: Text.WordWrap
+      tone: "dim"; wrapMode: Text.Wrap
     }
     Item { implicitHeight: Style.spacing.md }
   }

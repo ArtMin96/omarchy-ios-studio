@@ -46,7 +46,7 @@ ColumnLayout {
       }
       AppText {
         Layout.fillWidth: true
-        tone: "dim"; wrapMode: Text.WordWrap
+        tone: "dim"; wrapMode: Text.Wrap
         text: root.svc.location
               ? root.svc.location.lat.toFixed(4) + ", " + root.svc.location.lon.toFixed(4) + " — every app on the iPhone sees this until you restore it or restart the phone."
               : "Apps see where the iPhone really is. Pick a place to make them think it's somewhere else."
@@ -107,11 +107,11 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: (latField.text !== "" || lonField.text !== "") && !root.valid
     text: "Latitude goes from -90 to 90 and longitude from -180 to 180, e.g. 51.5074 and -0.1278."
-    size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+    size: "small"; tone: "warn"; wrapMode: Text.Wrap
   }
   AppText {
     Layout.fillWidth: true
     text: "Tip: in Google Maps, right-click a place and click the numbers to copy them."
-    size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "small"; tone: "faint"; wrapMode: Text.Wrap
   }
 }

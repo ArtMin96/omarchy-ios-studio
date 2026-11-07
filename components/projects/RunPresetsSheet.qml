@@ -292,7 +292,7 @@ Sheet {
       Layout.fillWidth: true
       visible: text !== ""
       text: (root.nameTouched || root.saveTried) ? root.nameProblem : ""
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
   }
 
@@ -332,7 +332,7 @@ Sheet {
       AppText {
         Layout.fillWidth: true
         text: root.languageProblem !== "" ? root.languageProblem : "The language the app's text shows in, for this launch only."
-        size: "small"; tone: root.languageProblem !== "" ? "warn" : "faint"; wrapMode: Text.WordWrap
+        size: "small"; tone: root.languageProblem !== "" ? "warn" : "faint"; wrapMode: Text.Wrap
       }
     }
 
@@ -362,7 +362,7 @@ Sheet {
       AppText {
         Layout.fillWidth: true
         text: root.regionProblem !== "" ? root.regionProblem : "Formats dates, numbers and currency. Empty keeps the iPhone's region."
-        size: "small"; tone: root.regionProblem !== "" ? "warn" : "faint"; wrapMode: Text.WordWrap
+        size: "small"; tone: root.regionProblem !== "" ? "warn" : "faint"; wrapMode: Text.Wrap
       }
     }
   }
@@ -382,7 +382,7 @@ Sheet {
       text: root.argRows.length === 0
             ? "None. One argument per row, passed as-is: the app reads them from ProcessInfo.arguments, and -Key value pairs from UserDefaults."
             : "One argument per row, passed as-is (no shell quoting needed)."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
     Repeater {
       id: argRepeater
@@ -420,7 +420,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.envRows.length === 0
       text: "None. The app reads them with ProcessInfo.processInfo.environment."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
     Repeater {
       model: root.envRows.length
@@ -453,7 +453,7 @@ Sheet {
       Layout.fillWidth: true
       visible: root.envProblem !== ""
       text: root.envProblem
-      size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+      size: "small"; tone: "warn"; wrapMode: Text.Wrap
     }
   }
 
@@ -494,7 +494,7 @@ Sheet {
         Layout.fillWidth: true
         visible: root.previewArgs.length === 0 && root.previewEnv.length === 0
         text: "Nothing extra yet: a plain launch, like Default."
-        tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+        tone: "dim"; size: "small"; wrapMode: Text.Wrap
       }
 
       GridLayout {

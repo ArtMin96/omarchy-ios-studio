@@ -112,7 +112,7 @@ RowLayout {
       visible: root.online && (root.info.developerMode === false || root.info.ddiMounted === false)
       AppText {
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         size: "small"; tone: "dim"
         text: root.info.developerMode === false
               ? "Developer Mode is needed to run your own apps."
@@ -138,7 +138,7 @@ RowLayout {
       visible: !root.online && root.st !== "connecting" && root.st !== "searching"
       AppText {
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         size: "small"; tone: "dim"
         text: root.st === "untrusted" ? "Unlock your iPhone and tap “Trust”, or pair it again."
             : root.st === "not-paired" ? "This iPhone isn't paired with this computer yet."

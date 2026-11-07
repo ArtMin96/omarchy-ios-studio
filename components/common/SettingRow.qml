@@ -51,9 +51,9 @@ Item {
     ColumnLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.xs
-      AppText { Layout.fillWidth: true; text: root.title; size: "subtitle"; wrapMode: Text.WordWrap }
-      AppText { Layout.fillWidth: true; visible: root.description !== ""; text: root.description; size: "small"; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
-      AppText { Layout.fillWidth: true; visible: root.note !== ""; text: root.note; size: "small"; tone: root.noteLevel === "info" ? "accent" : root.noteLevel; wrapMode: Text.WordWrap }
+      AppText { Layout.fillWidth: true; text: root.title; size: "subtitle"; wrapMode: Text.Wrap }
+      AppText { Layout.fillWidth: true; visible: root.description !== ""; text: root.description; size: "small"; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2 }
+      AppText { Layout.fillWidth: true; visible: root.note !== ""; text: root.note; size: "small"; tone: root.noteLevel === "info" ? "accent" : root.noteLevel; wrapMode: Text.Wrap }
     }
     // A switch keeps clear space around its track for the keyboard-cursor ring; pull it out
     // so the track lines up with the fields and buttons in the rows around it.

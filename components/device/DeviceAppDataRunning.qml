@@ -38,8 +38,8 @@ Rectangle {
       Layout.fillWidth: true
       Layout.alignment: Qt.AlignVCenter
       spacing: Style.spacing.xxs
-      AppText { id: title; Layout.fillWidth: true; text: root.view.appName + " is running"; strong: true; wrapMode: Text.WordWrap }
-      AppText { Layout.fillWidth: true; visible: root.text !== ""; text: root.text; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+      AppText { id: title; Layout.fillWidth: true; text: root.view.appName + " is running"; strong: true; wrapMode: Text.Wrap }
+      AppText { Layout.fillWidth: true; visible: root.text !== ""; text: root.text; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
     }
     ActionButton {
       Layout.alignment: Qt.AlignVCenter

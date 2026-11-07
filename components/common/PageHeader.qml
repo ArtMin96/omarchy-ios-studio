@@ -51,7 +51,7 @@ Item {
         text: root.subtitle
         tone: "dim"
         size: "subtitle"
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         maximumLineCount: 2
         elide: Text.ElideRight
       }

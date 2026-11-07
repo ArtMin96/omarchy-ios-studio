@@ -334,7 +334,7 @@ PageFrame {
         AppText {
           Layout.fillWidth: true
           text: "Removes the launcher entry, the ios-studio command and iOS Studio's Hyprland rules, then quits. Your projects, settings and the iOS toolchain stay."
-          tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2
+          tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2
         }
         ActionButton {
           Layout.topMargin: Style.spacing.sm

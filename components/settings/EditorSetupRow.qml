@@ -108,7 +108,7 @@ Item {
           Layout.fillWidth: true
           visible: root.noteText !== ""
           text: root.noteText
-          size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+          size: "small"; tone: "dim"; wrapMode: Text.Wrap
         }
         Repeater {
           model: root.edState === "partial" && !root.manualNvim ? root.notes : []
@@ -116,7 +116,7 @@ Item {
             required property var modelData
             Layout.fillWidth: true
             text: root.section ? root.section.tidy(modelData) : String(modelData)
-            size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+            size: "small"; tone: "warn"; wrapMode: Text.Wrap
           }
         }
       }
@@ -190,7 +190,7 @@ Item {
                 Layout.fillWidth: true
                 visible: !!act.modelData.detail
                 text: root.section ? root.section.tidy(act.modelData.detail) : String(act.modelData.detail || "")
-                size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+                size: "small"; tone: "faint"; wrapMode: Text.Wrap
               }
               Repeater {
                 model: act.modelData.kept || []
@@ -198,7 +198,7 @@ Item {
                   required property var modelData
                   Layout.fillWidth: true
                   text: "Keeps your " + modelData.key + ": " + JSON.stringify(modelData.yours) + " (iOS Studio would use " + JSON.stringify(modelData.ours) + ")"
-                  size: "small"; tone: "faint"; wrapMode: Text.WordWrap; elide: Text.ElideRight; maximumLineCount: 2
+                  size: "small"; tone: "faint"; wrapMode: Text.Wrap; elide: Text.ElideRight; maximumLineCount: 2
                 }
               }
             }
@@ -212,7 +212,7 @@ Item {
         visible: !root.done && root.userChanges.length > 0
         text: "Changes your " + root.displayName + " config for every project."
               + (root.backups.length ? " A copy of the current file is saved first." : "")
-        size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+        size: "small"; tone: "warn"; wrapMode: Text.Wrap
       }
       AppText {
         Layout.fillWidth: true
@@ -224,13 +224,13 @@ Item {
         Layout.fillWidth: true
         visible: root.planState === "error"
         text: root.plan && root.plan.error ? Model.errorMessage(root.plan.error) : ""
-        size: "small"; tone: "error"; wrapMode: Text.WordWrap
+        size: "small"; tone: "error"; wrapMode: Text.Wrap
       }
       AppText {
         Layout.fillWidth: true
         visible: root.done && root.nextText !== ""
         text: "Next: " + (root.section ? root.section.tidy(root.nextText) : root.nextText)
-        size: "small"; wrapMode: Text.WordWrap
+        size: "small"; wrapMode: Text.Wrap
       }
 
       Row {

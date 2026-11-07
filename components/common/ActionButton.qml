@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -35,6 +36,8 @@ Item {
   readonly property bool _primary: kind === "primary"
 
   implicitWidth: btn.implicitWidth
+  // In a RowLayout next to a filling text, never squeezed below its label (the text wraps instead).
+  Layout.minimumWidth: root.implicitWidth
   // Always as tall as a button with a glyph (the glyph line is taller than the label's), so a
   // text-only "Cancel" next to an icon button in a Row has the same height and text baseline.
   implicitHeight: Math.max(btn.implicitHeight, glyphProbe.implicitHeight + btn.verticalPadding * 2
