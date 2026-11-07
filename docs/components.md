@@ -164,7 +164,13 @@ StateView: `phase` is `"loading" | "error" | "empty" | "ready"`; data already lo
 reloads. Retry calls `retry()` when set, else `resource.load(true)`. Other properties: `compact` (empty state,
 default true), `errorCompact`, `emptyActionText`/`emptyActionGlyph` + `onEmptyAction`, `skeletonGap`.
 First users: DeviceNetworkView (condition list), DeviceService `profilesResource` (provisioning profiles;
-`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it). Tests: `tests/qml/tst_resource.qml`
+`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it). Services keep their public names as
+read-only views of their Resources the same way: AccountService (`account status` → `auth`/`status`/`error`;
+`account details` → `details`/`detailsLoading`/`detailsError`, seeded from `--cached`), ToolchainService
+(`infoResource` → `items`/`sdks`/`status`/`summary`; `diskResource` → `disk`, fetched only once the Toolchain
+page has set `diskWanted`), SetupService (`setup check` → `raw`/`checking`/`checkedAt`/`loaded`/`error`) and
+LogService (`crashResource`, crash.list while the phone is connected → `crashes`/`crashStatus`/`crashError`).
+SettingsPage (`app status`, `app about`) and AgentsSection (`agents list`) hold view-local Resources. Tests: `tests/qml/tst_resource.qml`
 (`qmltestrunner`, run by pytest).
 
 ## Shared helpers
@@ -857,7 +863,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   daemon's `app.launch`.
 - **LogDeviceTab / LogSyslogView**: the Logs page's Device log tab (`app`) and its live list.
   LogSyslogView takes SyslogEntry batches with `push(batch)` (batched every 80 ms, the last `maxLines`, default
-  5000) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,
+  5000; the buffer is appended and trimmed in place, never copied per batch) and filters on `minLevel`, `processes` and `query` (highlighted). Props: `follow`, `paused`,
   `emptyTitle`, `emptyText`, `selectedSeq`; read-only `count`, `shownCount`, `pendingCount`, `selectedRow`;
   `clear()`, `select(row)`, `selectNext(d)`, `deselect()`, `selectedText()`, `visibleText()`, `jumpToLatest()`;
   signal `copyRequested()`.

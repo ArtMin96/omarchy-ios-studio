@@ -16,7 +16,7 @@ PageFrame {
   title: "Toolchain"
   subtitle: "Versions, the iOS SDK, disk usage and cleanup."
   actions: [
-    IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; busy: page.svc.status === "loading" || page.svc.diskStatus === "loading"; onClicked: page.svc.refresh() },
+    IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; busy: page.svc.infoResource.busy || page.svc.diskResource.busy; onClicked: page.svc.refresh() },
     ActionButton { text: "Open Setup"; glyph: Model.Glyph.rocket; kind: "ghost"; onClicked: page.app.nav("setup") }
   ]
 
@@ -24,6 +24,7 @@ PageFrame {
   property bool removeAuth: false
 
   function refresh() { page.svc.refresh() }
+  Component.onCompleted: page.svc.diskWanted = true      // disk usage (du over the toolchain) only once this page is open
   // ios-studio toolchain / nav("toolchain", { action: "remove-all" }) from Settings › Uninstall
   function activated(params) {
     if (params && params.action === "remove-all") Qt.callLater(function() { page.scrollToItem(dangerZone) })
@@ -69,15 +70,18 @@ PageFrame {
     })
   }
 
-  // ------------------------------------------------------------ loading / error
-  Skeleton { Layout.fillWidth: true; visible: page.svc.status === "loading" && page.svc.items.length === 0; lines: 6; rowHeight: Style.space(40) }
-  ErrorState { Layout.fillWidth: true; visible: page.svc.status === "error" && page.svc.items.length === 0; app: page.app; error: page.svc.error; onRetry: page.svc.refresh() }
-
   // ------------------------------------------------------------ versions
-  ColumnLayout {
+  StateView {
     Layout.fillWidth: true
-    visible: page.svc.items.length > 0
-    spacing: Style.spacing.md
+    app: page.app
+    resource: page.svc.infoResource
+    isEmpty: function(d) { return !d || !d.items || d.items.length === 0 }
+    skeletonLines: 6
+    skeletonRowHeight: Style.space(40)
+    skeletonGap: Style.spacing.lg
+    emptyGlyph: Model.Glyph.toolbox
+    emptyTitle: "Nothing to show yet"
+    contentSpacing: Style.spacing.md
 
     SectionHeader {
       Layout.fillWidth: true
@@ -145,8 +149,8 @@ PageFrame {
       detail: page.svc.disk ? Model.formatBytes(page.svc.disk.total) + (page.svc.diskStale ? " · updating…" : "") : ""
     }
 
-    Skeleton { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskStatus === "loading"; lines: 4; rowHeight: Style.space(28) }
-    ErrorState { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskStatus === "error"; banner: true; app: page.app; error: page.svc.diskError; onRetry: page.svc.refreshDisk() }
+    Skeleton { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskResource.status !== "error"; lines: 4; rowHeight: Style.space(28) }
+    ErrorState { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskResource.status === "error"; banner: true; app: page.app; error: page.svc.diskResource.error; onRetry: page.svc.refreshDisk() }
 
     // headline + one stacked bar for the whole toolchain
     ColumnLayout {

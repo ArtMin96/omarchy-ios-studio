@@ -135,7 +135,7 @@ Item {
         AppText { text: String(root.shown.length); size: "small"; tone: "faint" }
         IconButton {
           glyph: Model.Glyph.refresh; tooltip: "Check for new reports"
-          busy: svc.crashStatus === "loading"
+          busy: svc.crashResource.busy
           enabled: svc.deviceConnected
           onClicked: svc.refreshCrashes()
         }

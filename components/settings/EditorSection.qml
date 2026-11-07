@@ -63,7 +63,7 @@ Card {
   }
 
   // The editor docs (setup by hand, per editor), in the browser or the default viewer.
-  function openDocs(anchor) { Util.execArgv(["xdg-open", root.app.repoPath + "/docs/features/editor-setup.md"]) }
+  function openDocs(anchor) { root.app.openPath(root.app.repoPath + "/docs/features/editor-setup.md") }
 
   // ---------------------------------------------------------------- wording
   function shortPath(p) {

@@ -26,7 +26,7 @@ Rectangle {
   property string emptyTitle: "Waiting for log lines…"
   property string emptyText: ""
 
-  readonly property int count: _all.length
+  readonly property int count: _count
   readonly property int shownCount: rowModel.count
   readonly property int pendingCount: _pendingCount
   readonly property int selectedRow: _rowOf(selectedSeq)
@@ -34,8 +34,12 @@ Rectangle {
 
   signal copyRequested()
 
+  // The buffers are changed in place (push / splice), never copied per batch: at the phone's
+  // ~2000 lines/s a copy of the 5000-line buffer every 80 ms is real work. Their lengths are
+  // mirrored into _count / _pendingCount for bindings.
   property var _all: []
   property var _pending: []
+  property int _count: 0
   property int _pendingCount: 0
   property int _seq: 0
 
@@ -63,14 +67,15 @@ Rectangle {
 
   function push(batch) {
     if (!batch || !batch.length) return
-    for (var i = 0; i < batch.length; i++) root._pending.push(_norm(batch[i]))
-    if (root._pending.length > root.maxLines) root._pending = root._pending.slice(root._pending.length - root.maxLines)
-    root._pendingCount = root._pending.length
+    var pending = root._pending
+    for (var i = 0; i < batch.length; i++) pending.push(_norm(batch[i]))
+    if (pending.length > root.maxLines) pending.splice(0, pending.length - root.maxLines)
+    root._pendingCount = pending.length
     if (!flushTimer.running && !root.paused) flushTimer.start()
   }
 
   function clear() {
-    root._all = []; root._pending = []; root._pendingCount = 0
+    root._all = []; root._pending = []; root._count = 0; root._pendingCount = 0
     root.selectedSeq = -1
     rowModel.clear()
   }
@@ -89,17 +94,18 @@ Rectangle {
     if (root.paused || root._pending.length === 0) return
     var batch = root._pending
     root._pending = []; root._pendingCount = 0
-    var all = root._all.concat(batch)
+    var all = root._all
+    for (var j = 0; j < batch.length; j++) all.push(batch[j])
     var drop = all.length - root.maxLines
     if (drop > 0) {
       var cut = all[drop - 1].seq
-      all = all.slice(drop)
+      all.splice(0, drop)
       // drop rows that left the buffer from the front of the display model
       var n = 0
       while (n < rowModel.count && rowModel.get(n).seq <= cut) n++
       if (n > 0) rowModel.remove(0, n)
     }
-    root._all = all
+    root._count = all.length
     var add = []
     for (var i = 0; i < batch.length; i++) if (_passes(batch[i])) add.push(batch[i])
     if (add.length) rowModel.append(add)
