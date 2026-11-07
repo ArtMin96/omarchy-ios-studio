@@ -221,7 +221,7 @@ class Streaming(Base):
 
 
 class SetupRunStream(Base):
-    """setup.run_stream on the Runner: heartbeat progress while silent, tail, [n/m] progress, kill on interrupt."""
+    """setup runtime.run_stream on the Runner: heartbeat progress while silent, tail, [n/m] progress, kill on interrupt."""
 
     def capture(self):
         from iosstudio.core import output
@@ -232,7 +232,7 @@ class SetupRunStream(Base):
         return events
 
     def test_heartbeat_tail_and_progress(self):
-        from iosstudio.features import setup
+        from iosstudio.features.setup import runtime as setup
         events = self.capture()
         exe = self.exe("slow", "#!/bin/sh\necho '[1/2] one'\nsleep 2.3\nprintf '\\n\\n[2/2] two'\n")
         tail: list[str] = []
@@ -244,7 +244,7 @@ class SetupRunStream(Base):
     def test_interrupt_kills_the_command(self):
         """run_stream keeps the command in our process group (pkexec keeps its session), so it is the command
         itself that is killed."""
-        from iosstudio.features import setup
+        from iosstudio.features.setup import runtime as setup
         self.capture()
         exe = self.exe("self", f"#!/bin/sh\necho $$ > {self.tmp / 'pid'}\necho started\nexec sleep 30\n")
 
