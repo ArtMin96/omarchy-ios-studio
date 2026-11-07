@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from iosstudio.features import package_manifest as M
+from iosstudio.features.packages import manifest as M
 from support import FIXTURES, HELPER
 from support.projects import package_project as make_project
 
