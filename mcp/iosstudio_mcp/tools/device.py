@@ -1,4 +1,4 @@
-"""iPhone and app tools, through the shared device daemon (helper/iosstudio/device/device_client.py).
+"""iPhone and app tools, through the shared device daemon (helper/iosstudio/device/client.py).
 
 The MCP server is one more client of the per-user device broker that the iOS Studio window also
 uses, so both share one tunnel to the phone. On startup this module fills

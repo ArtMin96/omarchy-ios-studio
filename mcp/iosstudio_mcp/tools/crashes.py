@@ -14,6 +14,7 @@ from .. import helper
 from ..backends.crashes import Section, crash_detail
 from ..backends.device import apps, dcall, match_app
 from ..core import budget as B
+from ..core import deadline
 from ..core.params import MaxBytes, Udid
 from ..core.registry import MAX_WAIT, page_of, tool
 from ..models import CrashBrief, CrashDetail, CrashList
@@ -136,7 +137,8 @@ def register(mcp: MCPServer) -> None:
             return text
         state = get_state(ctx)
         try:
-            det = await crash_detail(state, file)
+            with deadline.call_budget():     # a resource read answers in time too; a long pull keeps going
+                det = await crash_detail(state, file)
         except ToolError as exc:
             raise ResourceError(B.clip_error(str(exc)))
         try:

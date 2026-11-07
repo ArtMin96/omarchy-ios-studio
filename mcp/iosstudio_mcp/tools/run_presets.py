@@ -1,5 +1,5 @@
 """Run presets: named launch arguments, environment, language/region and a UI-test-mode flag saved per project
-(stored by the helper in projects.json; see helper/iosstudio/features/projects.py `projects presets`). ios_project_presets lists
+(stored by the helper in projects.json; see helper/iosstudio/features/projects/ `projects presets`). ios_project_presets lists
 them (read-only); ios_project_preset_set saves, deletes (dry run unless confirm=true) and selects them; ios_run, ios_app_launch and
 ios_app_run_and_capture take `preset=<name>` and launch with its resolved arguments (resolve_preset below).
 """

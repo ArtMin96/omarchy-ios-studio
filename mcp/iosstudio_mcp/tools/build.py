@@ -33,7 +33,7 @@ from ..state import AppState, get_state
 Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="auto: USB if plugged in, else Wi-Fi")]
 Config = Annotated[Literal["debug", "release"], Field(description="Build configuration")]
 
-# The helper's build logs (helper/iosstudio/features/projects.py BUILD_LOGS); ios_build_log reads them directly.
+# The helper's build logs (helper/iosstudio/features/projects/store.py BUILD_LOGS); ios_build_log reads them directly.
 BUILD_LOGS = helper.appdirs.state_dir() / "build-logs"
 MAX_LOG_READ = 32 * 1024 * 1024    # a bigger log is read from its tail; line numbers stay those of the file
 

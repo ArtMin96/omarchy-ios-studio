@@ -1,6 +1,6 @@
 """Watch mode (compile on save): ios_watch_start / ios_watch_stop / ios_watch_status.
 
-The watcher is one helper process per user (`watch serve`, see helper/iosstudio/features/watch.py and
+The watcher is one helper process per user (`watch serve`, see helper/iosstudio/features/watch/ and
 docs/features/watch-mode.md), shared with the app: whoever starts it, both see its status and either can stop
 it. A watcher this server starts (or joins) lists this server's pid as an owner, so it stops by itself once
 this server exits and the app isn't using it either. Each compile is a normal `build compile` (build history,
