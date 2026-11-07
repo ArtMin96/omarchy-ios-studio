@@ -102,6 +102,7 @@ SHOT_FPS = (0.2, 8.0)           # screenshot mode: as fast as the capture RPC al
 STREAM_FPS = (0.2, 30.0)        # stream mode: frame events to the UI, at most 30/s
 REC_SHOT_FPS = 8.0              # screenshot mode captures at least this fast while recording
 REC_MAX_S = 300
+REC_FIRST_WAIT_S = 3.0         # a recording stopped before its first picture waits this long for one
 REC_MAX_FRAMES = int(REC_MAX_S * 60) + 600   # hard cap on a recording's pictures (times/files lists)
 STALL_S = 5.0                   # stream: no picture for this long -> restart the stream
 MAX_RESTARTS = 3
@@ -967,6 +968,7 @@ class Recorder:
         self.result: dict | None = None
         self.task: asyncio.Task | None = None
         self.stop_reason = ""
+        self.first = threading.Event()   # set with the first picture kept
 
     @property
     def seconds(self) -> float:
@@ -988,6 +990,7 @@ class Recorder:
             self.times.append(t)
             self.frames += 1
             self.bytes += len(annexb)
+            self.first.set()
 
     def add_frame(self, data: bytes, ext: str, t: float) -> None:
         with self.lock:
@@ -1000,6 +1003,7 @@ class Recorder:
             self.frames += 1
             self.bytes += len(data)
             self.last_frame = data
+            self.first.set()
 
     def snapshot(self) -> dict:
         out = {"state": self.state, "mode": self.mode, "seconds": self.seconds if self.state == "recording"
@@ -1390,16 +1394,20 @@ class Mirror:
             return None
         if rec.task is None:
             rec.stop_reason = rec.stop_reason or reason
-            rec._close_input()
-            thumb = None
-            eng = self.engine
-            if rec.mode == "stream" and isinstance(eng, StreamEngine) and eng.decoder is not None:
-                with contextlib.suppress(Exception):
-                    thumb = eng.decoder.thumbnail()
-            rec.task = asyncio.ensure_future(self._finish(rec, thumb))
+            rec.task = asyncio.ensure_future(self._finish(rec))
         return rec.task
 
-    async def _finish(self, rec: Recorder, thumb_img) -> dict:
+    async def _finish(self, rec: Recorder) -> dict:
+        if not rec.first.is_set() and self.running():
+            # Stopped very early: the first picture (stream: the keyframe asked for at start;
+            # screenshots: the next shot) may still be on its way. Wait for it, bounded.
+            await asyncio.to_thread(rec.first.wait, REC_FIRST_WAIT_S)
+        rec._close_input()
+        thumb_img = None
+        eng = self.engine
+        if rec.mode == "stream" and isinstance(eng, StreamEngine) and eng.decoder is not None:
+            with contextlib.suppress(Exception):
+                thumb_img = eng.decoder.thumbnail()
         emit("record", rec.snapshot())
         try:
             result = await asyncio.to_thread(rec.finalize, thumb_img)

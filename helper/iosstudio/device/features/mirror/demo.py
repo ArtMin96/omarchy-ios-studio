@@ -31,6 +31,7 @@ MEDIA_BUSY = bool(os.environ.get("IOSSTUDIO_DEMO_MEDIA_BUSY"))
 NOTICE_BUSY = ("Screen streaming isn't available while the camera or microphone is in use, so "
                "mirroring at a lower frame rate.")
 RATE = {"stream": 24.0, "screenshot": 3.0}
+REC_FIRST_WAIT_S = 15.0             # painting the first frame takes a few seconds on a cold cache
 
 
 class Frames:
@@ -40,6 +41,7 @@ class Frames:
         self.ready: list = []
         self.lock = threading.Lock()
         self.thread: threading.Thread | None = None
+        self.any = threading.Event()     # at least one frame is ready
 
     def ensure(self):
         with self.lock:
@@ -58,6 +60,13 @@ class Frames:
                 os.replace(tmp, p)
             with self.lock:
                 self.ready.append(p)
+            self.any.set()
+
+    def first(self, timeout: float):
+        """A frame, waiting up to `timeout` s for the first one to be painted (None if none by then)."""
+        self.ensure()
+        self.any.wait(timeout)
+        return self.pick(0)
 
     def pick(self, n: int):
         with self.lock:
@@ -214,6 +223,14 @@ class Mirror:
             rec.done.wait(60)
             return self.last_record
         rec.claimed = True
+        if not rec.files:
+            # Stopped before the loop kept a picture (very short, or the frames are still being
+            # painted): record the current screen once, as the phone would have shown it.
+            src = self.frames.first(REC_FIRST_WAIT_S)
+            if src is not None:
+                with rec.lock:
+                    rec.files.append(src)
+                    rec.times.append(time.monotonic())
         event("record", rec.snapshot())
         result = rec.finalize()
         fileio.prune((DIR / "recordings").glob("rec-*.mp4"), 20, 2 << 30, also=(".png",))   # as the real daemon

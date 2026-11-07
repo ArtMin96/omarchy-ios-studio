@@ -97,12 +97,17 @@ class Backend:
         return broker.current_client()
 
     # -- requests
+    async def settle(self, cmd: str) -> None:
+        """Wait until the backend can answer `cmd` (the real daemon: its first device discovery pass).
+        dispatch() calls it; so does the broker before syslog.start."""
+
     async def dispatch(self, cmd: str, args: dict):
         """Run a command's handler: `async def` handlers are awaited, plain ones run in a worker thread
         (they may block, e.g. the demo's sleeps), so neither ever stalls the event loop."""
         fn = self.registry.lookup(cmd)
         if fn is None:
             raise unknown_command(cmd)
+        await self.settle(cmd)
         args = args if isinstance(args, dict) else {}
         if inspect.iscoroutinefunction(fn):
             return await fn(self, args)

@@ -24,8 +24,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-import errno
-import fcntl
 import json
 import os
 import queue
@@ -38,6 +36,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from iosstudio.core import fileio
 from iosstudio.device import kit, protocol
 from iosstudio.device.backend import Backend, TaskSet
 from iosstudio.device.client import runtime_dir, socket_path_error
@@ -339,6 +338,7 @@ class SyslogHub:
 
     # -- commands
     async def start(self, client: "Client", args: dict) -> dict:
+        await self.b.backend.settle("syslog.start")
         self.udid = self.b.backend.syslog_target(args)
         old = self.subs.pop(client, None)
         if old:
@@ -536,7 +536,7 @@ class Broker:
         self._stopping: asyncio.Event | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
         self._server: asyncio.AbstractServer | None = None
-        self._lock_fd: int | None = None
+        self._lock: contextlib.ExitStack | None = None   # holds the lock file's flock while we serve
         self._log_redirected = False
         self._bg = TaskSet(log)               # fire-and-forget work, cancelled at shutdown
 
@@ -556,24 +556,21 @@ class Broker:
         if bad is not None:   # clients check this too and report it; never serve a socket that can't exist
             log(f"{bad.message} ({bad.detail})")
             return False
-        _prepare_dir(self.p["dir"])
-        fd = os.open(self.p["lock"], os.O_RDWR | os.O_CREAT, 0o600)
+        _prepare_dir(self.p["dir"])   # private (0700), so the lock file needs no mode of its own
         deadline = time.monotonic() + wait
         while True:
+            held = contextlib.ExitStack()
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.enter_context(fileio.lock(self.p["lock"], blocking=False))
                 break
-            except OSError as exc:
-                if exc.errno not in (errno.EAGAIN, errno.EACCES):
-                    raise
+            except BlockingIOError:
+                held.close()
             # Held: either a live daemon (socket answers) or one starting / shutting down.
             if socket_alive(self.p["sock"]) or time.monotonic() > deadline:
-                os.close(fd)
                 return False
             time.sleep(0.2)
-        os.ftruncate(fd, 0)
-        os.write(fd, f"{os.getpid()}\n".encode())
-        self._lock_fd = fd
+        self._lock = held             # kept (never closed) until the process exits
+        self.p["lock"].write_text(f"{os.getpid()}\n")   # informational; a second open keeps our flock
         return True
 
     def redirect_stderr(self) -> None:

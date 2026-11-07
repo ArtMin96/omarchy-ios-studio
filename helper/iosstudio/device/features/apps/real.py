@@ -2,7 +2,9 @@
 app.install / app.uninstall (install.py) and the app list cache's hooks (index.py).
 
 The app list itself is cached per device in index.py (INDEX); this module adds
-what changes all the time (running/pid) or lives elsewhere (icon files, sizes) to each reply."""
+what changes all the time (running/pid) or lives elsewhere (icon files, sizes) to each reply.
+While the tunnel is (re)connecting a cached list answers at once (stale, running as last seen) and
+an `apps` event follows once the phone is reachable (_catch_up)."""
 from __future__ import annotations
 
 import asyncio
@@ -84,25 +86,52 @@ async def app_pids(d, s, rsd, bundle_id: str) -> list[int]:
     return sorted(set(pids))
 
 
+RUNNING = "apps.running"   # s.data key: {bundle dir: pid} as last seen (survives reconnects)
+
+
+async def _catch_up(d, s, kind: str, sent_apps: list[dict], sent_running: dict[str, int]):
+    """After a reply served from the cache while the tunnel was down: once the phone is reachable,
+    let the list refresh finish, read the running apps and send `apps` if either changed."""
+    rsd = await s.get_rsd()
+    await INDEX.settled(s.udid, kind)
+    apps = INDEX.peek(s.udid, kind) or sent_apps
+    running = await running_pids(d, rsd)
+    s.data[RUNNING] = running
+    if apps != sent_apps or running != sent_running:
+        emit("apps", {"udid": s.udid, "system": kind == "Any",
+                      "apps": compose(apps, running, INDEX.sizes(s.udid, kind), lambda bid: icon_path(s.udid, bid))})
+
+
 def register(reg):
     index.register(reg)      # the cache's reconnect / device switch / shutdown hooks
     install.register(reg)    # app.install, app.uninstall
 
     @reg.command("apps.list")
     async def c_apps_list(d, a):
-        s, rsd = await d.rsd(a)
+        s = d.need_session(a)
         udid = s.udid
         kind = "Any" if a.get("system") else "User"
         fetch = _lazy_fetcher(d, s)
 
         async def changed(_udid, k, apps):
             running = await running_pids(d, await s.get_rsd())
+            s.data[RUNNING] = running
             emit("apps", {"udid": udid, "system": k == "Any",
                           "apps": compose(apps, running, INDEX.sizes(udid, k), lambda bid: icon_path(udid, bid))})
 
-        (apps, stale, fetched_at), running = await asyncio.gather(
-            INDEX.list(udid, kind, fetch, force=bool(a.get("force")), sync=core.ONCE, on_change=changed),
-            running_pids(d, rsd))
+        if s.rsd is None and not core.ONCE and INDEX.peek(udid, kind) is not None:
+            # Tunnel still (re)connecting: answer from the cache now, never wait for the phone. The
+            # list refreshes in the background; _catch_up sends `apps` with live running state.
+            apps, _, fetched_at = await INDEX.list(udid, kind, fetch, force=True)
+            stale = True
+            running = dict(s.data.get(RUNNING) or {})
+            INDEX.start(udid, f"catch-up:{kind}", _catch_up(d, s, kind, apps, running))
+        else:
+            rsd = await s.get_rsd()
+            (apps, stale, fetched_at), running = await asyncio.gather(
+                INDEX.list(udid, kind, fetch, force=bool(a.get("force")), sync=core.ONCE, on_change=changed),
+                running_pids(d, rsd))
+            s.data[RUNNING] = running
         sizes = INDEX.sizes(udid, kind)
         if a.get("sizes") and sizes is None:
             if core.ONCE:     # no background work in --once mode: the reply waits
