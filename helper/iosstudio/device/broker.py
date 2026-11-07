@@ -45,6 +45,8 @@ VERSION = "1"
 IDLE_DEFAULT_S = 120.0
 MAX_LINE = protocol.MAX_LINE
 CLIENT_BUFFER_MAX = 32 * 1024 * 1024   # a client that stops reading is disconnected
+CLIENT_CLOSE_GRACE_S = 2.0              # a closing client's last replies get this long to flush
+STALLED_CLOSE_GRACE_S = 0.1             # ... and one already CLIENT_BUFFER_MAX behind only this long
 LOG_MAX = 4 * 1024 * 1024               # deviced.log (tmpfs, so RAM) moves to deviced.log.1 past this
 LOG_CHECK_S = 30.0
 
@@ -472,6 +474,12 @@ class SyslogHub:
 
 # ====================================================================== clients
 
+def _abort(transport) -> None:
+    """Drop what is still buffered and close the socket (a no-op once it is closed)."""
+    with contextlib.suppress(Exception):
+        transport.abort()
+
+
 class Client:
     _ids = 0
 
@@ -495,15 +503,23 @@ class Client:
             self.w.write(protocol.encode(obj))
             if self.w.transport.get_write_buffer_size() > CLIENT_BUFFER_MAX:
                 log(f"{self.name} isn't reading; disconnecting it")
-                self.close()
+                self.close(grace=STALLED_CLOSE_GRACE_S)
         except (ConnectionError, RuntimeError, OSError):
             self.close()
 
-    def close(self) -> None:
-        if not self.closed:
-            self.closed = True
-            with contextlib.suppress(Exception):
-                self.w.close()
+    def close(self, grace: float = CLIENT_CLOSE_GRACE_S) -> None:
+        """Stop talking to the client. writer.close() only closes the socket once the write buffer
+        drains, which never happens for a client that stopped reading, so whatever is still buffered
+        after `grace` seconds is dropped and the socket aborted. That ends the read loop in
+        _serve_client, which releases the client's resources and lets the daemon idle out."""
+        if self.closed:
+            return
+        self.closed = True
+        with contextlib.suppress(Exception):
+            self.w.close()
+            t = self.w.transport
+            if t.get_write_buffer_size():
+                (self.b.loop or asyncio.get_running_loop()).call_later(grace, _abort, t)
 
     def describe(self) -> dict:
         b = self.b

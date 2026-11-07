@@ -260,6 +260,12 @@ class RealPairing(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await settle(lambda: self.pair_events()[-1]["phase"] == "cancelled"))
 
 
+    async def test_cancel_before_the_flow_runs_still_reports_cancelled(self):
+        await self.d.dispatch("pair.start", {"method": "wifi"})     # task created, not yet run
+        self.assertEqual(await self.d.dispatch("pair.cancel", {}), {})
+        self.assertEqual([e["phase"] for e in self.pair_events()], ["cancelled"])
+        self.assertEqual(self.pair_events()[-1]["method"], "wifi")
+
 class DemoPairing(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from iosstudio.device.demo.daemon import DemoBackend
@@ -272,19 +278,15 @@ class DemoPairing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(out["records"][0]), {"udid", "wifi", "usb", "path"})
         self.assertEqual(await self.b.dispatch("pair.cancel", {}), {})
 
-    # BUG: features/pairing/demo.py answers pair.start with {"started": True}; the real daemon also says which
-    # method it picked ({"started": True, "method": "usb"|"wifi"}).
-    @unittest.expectedFailure
     async def test_start_names_the_method(self):
         out = await self.b.dispatch("pair.start", {"method": "wifi"})
         self.assertEqual(out, {"started": True, "method": "wifi"})
 
-    # BUG: features/pairing/demo.py accepts any pair.start method and any pair.code; the real daemon answers
-    # bad-args for a method other than usb/wifi and for a code nobody asked for.
-    @unittest.expectedFailure
     async def test_bad_args_like_real(self):
         with self.assertRaises(HelperError):
             await self.b.dispatch("pair.start", {"method": "bluetooth"})
+        with self.assertRaises(HelperError):
+            await self.b.dispatch("pair.code", {"code": "123456"})
 
 
 if __name__ == "__main__":

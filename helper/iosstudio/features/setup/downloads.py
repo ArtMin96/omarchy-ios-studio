@@ -128,7 +128,7 @@ def srcinfo(dir_: Path) -> dict[str, list[str]]:
 
 def strip_ver(dep: str) -> str:
     """'foo>=1.2' -> 'foo'."""
-    return re.split(r"[<>=]", dep, 1)[0]
+    return re.split(r"[<>=]", dep, maxsplit=1)[0]
 
 
 def prefetch_swift_sources(d: Path, step_id: str) -> None:

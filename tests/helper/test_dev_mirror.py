@@ -242,9 +242,8 @@ class Clamp(unittest.TestCase):
         self.assertEqual(M.clamp(float("inf"), 1, 300, 60.0), 300)
         self.assertEqual(MD._clamp(float("-inf"), 1, 300, 60.0), 1)
 
-    @unittest.expectedFailure
     def test_nan_gives_the_default(self):
-        # BUG: features/mirror/real.py clamp() (and demo _clamp): float("nan") passes float() and min(hi, nan)
+        # Was a bug: features/mirror/real.py clamp() (and demo _clamp): float("nan") passes float() and min(hi, nan)
         # returns hi, so {"maxSeconds": NaN} (Python's json accepts NaN) records the full 300 s, not the default.
         self.assertEqual(M.clamp(float("nan"), 1, 300, 60.0), 60.0)
 
@@ -405,9 +404,8 @@ class Commands(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.real.dispatch("mirror.ack", {"seq": 3}), {})
         self.assertEqual(await code_of(self.real.dispatch("mirror.ack", {"seq": "x"})), "bad-args")
 
-    @unittest.expectedFailure
     async def test_ack_with_a_bad_seq_parity(self):
-        # BUG: features/mirror/demo.py mirror_ack does int(a.get("seq")) unguarded: a bad seq is a "failed"
+        # Was a bug: features/mirror/demo.py mirror_ack does int(a.get("seq")) unguarded: a bad seq is a "failed"
         # (crash) reply in demo mode where the real daemon answers bad-args.
         self.assertEqual(await code_of(self.demo.dispatch("mirror.ack", {"seq": "x"})), "bad-args")
 

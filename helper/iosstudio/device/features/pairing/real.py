@@ -63,8 +63,7 @@ async def pair_usb(d, udid: str):
         await d.select(udid)
         d.session.reconnect_now()
     except asyncio.CancelledError:
-        _event("cancelled", m, "Pairing cancelled.")
-        raise
+        raise   # _start reports it (also when cancelled before the flow ran)
     except BaseException as exc:  # noqa: BLE001
         e = classify(exc)
         msg = e.message
@@ -103,8 +102,7 @@ async def pair_wifi(d, timeout: float):
             await d.select(udid)
             d.session.reconnect_now()
     except asyncio.CancelledError:
-        _event("cancelled", m, "Pairing cancelled.")
-        raise
+        raise   # _start reports it (also when cancelled before the flow ran)
     except (asyncio.TimeoutError, TimeoutError):
         _event("failed", m, "No iPhone started pairing. Open Settings › Developer › Paired Macs on "
                "the iPhone while this window waits (both on the same Wi-Fi).")
@@ -112,6 +110,17 @@ async def pair_wifi(d, timeout: float):
         e = classify(exc)
         _event("failed", m, e.message if e.code != "failed" else "Pairing didn't finish. Try again.",
                detail=e.detail or repr(exc))
+
+
+def _start(coro, method: str) -> asyncio.Task:
+    """Run a pairing flow; a cancel reports `cancelled` even when it lands before the flow's first
+    step (a task cancelled before it starts never runs its own except clauses)."""
+    def done(t: asyncio.Task):
+        if t.cancelled():
+            _event("cancelled", method, "Pairing cancelled.")
+    t = asyncio.create_task(coro)
+    t.add_done_callback(done)
+    return t
 
 
 def register(reg):
@@ -136,9 +145,9 @@ def register(reg):
             udid = a.get("udid") or (sorted(d.usb)[0] if d.usb else None)
             if not udid or udid not in d.usb:
                 raise err("unreachable", "Plug your iPhone in with a USB cable and unlock it, then try again.")
-            st["task"] = asyncio.create_task(pair_usb(d, udid))
+            st["task"] = _start(pair_usb(d, udid), method)
         else:
-            st["task"] = asyncio.create_task(pair_wifi(d, float(a.get("timeout", 300))))
+            st["task"] = _start(pair_wifi(d, float(a.get("timeout", 300))), method)
         return {"started": True, "method": method}
 
     @reg.command("pair.code")
