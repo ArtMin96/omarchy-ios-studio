@@ -326,5 +326,6 @@ def test_logout_drops_the_cache(fake, capsys):
 
 
 def test_login_rejects_bad_mode(capsys):
-    assert account.cmd_login({"mode": "magic"}) == 1
-    assert lines(capsys)[0]["error"]["code"] == "usage"
+    assert account.cmd_login({"mode": "magic"}) == 2
+    ev = lines(capsys)[0]      # a streaming command: the error is its done event
+    assert ev["event"] == "done" and ev["ok"] is False and ev["error"]["code"] == "usage"

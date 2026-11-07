@@ -83,6 +83,8 @@ def _write_block(path: Path, start: str, end: str, body: str | None) -> None:
     """body=None removes the block; otherwise inserts/replaces it at the end of the file."""
     if path.is_symlink():
         raise HelperError("unsafe-file", f"{path.name} is a symlink; iOS Studio won't edit it.")
+    if body is None and not path.exists():
+        return    # nothing to remove: don't create the file or reload Hyprland
     text = _read(path)
     new = _block_re(start, end).sub("\n", text).rstrip("\n") + "\n"
     if body is not None:

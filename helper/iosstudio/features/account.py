@@ -813,7 +813,8 @@ class Login:
 def cmd_login(flags: dict) -> int:
     mode = str(flags.get("mode") or "password")
     if mode not in ("password", "key"):
-        return output.fail("usage", "mode must be password or key") or 2
+        output.done(False, error=HelperError("usage", "mode must be password or key"))   # streaming command
+        return output.EXIT_USAGE
     email = str(flags.get("email") or "").strip()
     try:
         if mode == "password" and not email:

@@ -76,14 +76,16 @@ def test_stream_events(capsys):
     assert output.done(True) == 0
     assert output.done(False) == 1
     assert output.done(False, error=HelperError("x", "X")) == 1
-    st, pr, lg, lg2, d1, d2, d3 = lines(capsys)
+    assert output.done(False, {"failed": ["a"]}, HelperError("x", "X")) == 1
+    st, pr, lg, lg2, d1, d2, d3, d4 = lines(capsys)
     assert st == {"event": "step", "id": "s1", "title": "Title", "state": "running", "detail": "d"}
     assert pr == {"event": "progress", "fraction": 0.5, "detail": "half", "eta": 3.0}
     assert lg == {"event": "log", "text": "line"}
     assert len(lg2["text"]) == 4000
     assert d1 == {"event": "done", "ok": True, "data": {}}
     assert d2["error"]["code"] == "failed"
-    assert d3["error"] == {"code": "x", "message": "X"}
+    assert d3["error"] == {"code": "x", "message": "X"} and "data" not in d3   # no data: JSON unchanged
+    assert d4 == {"event": "done", "ok": False, "error": {"code": "x", "message": "X"}, "data": {"failed": ["a"]}}
 
 
 def test_prompt_skips_noise_and_other_ids(monkeypatch, capsys):
@@ -154,8 +156,8 @@ def fake_group(monkeypatch):
 
 
 def test_usage_when_too_few_args(capsys):
-    assert cli.main([]) == 1                        # fail() returns 1, so `or 2` never applies
-    assert cli.main(["setup"]) == 1
+    assert cli.main([]) == output.EXIT_USAGE == 2
+    assert cli.main(["setup"]) == 2
     for ev in lines(capsys):
         assert ev["error"]["code"] == "usage" and "groups:" in ev["error"]["message"]
 

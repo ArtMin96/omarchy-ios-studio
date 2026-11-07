@@ -43,6 +43,8 @@ def fix(label: str, page: str, step: str | None = None, action: str | None = Non
 
 # ---------------------------------------------------------------- output
 
+EXIT_USAGE = 2   # bad command line; callers read the JSON, the exit code is for shells and journals
+
 _write_lock = threading.Lock()
 
 
@@ -81,10 +83,12 @@ def log(text: str) -> None:
 
 
 def done(ok_: bool = True, data: Any = None, error: HelperError | None = None) -> int:
+    """Final stream event. A failed run may still carry data (e.g. what a batch did before failing)."""
     if ok_:
         event("done", ok=True, data=data if data is not None else {})
         return 0
-    event("done", ok=False, error=(error or HelperError("failed", "Something went wrong.")).to_json())
+    extra = {"data": data} if data is not None else {}
+    event("done", ok=False, error=(error or HelperError("failed", "Something went wrong.")).to_json(), **extra)
     return 1
 
 

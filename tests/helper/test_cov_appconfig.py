@@ -104,11 +104,12 @@ def test_no_change_writes_nothing(hypr):
     assert ac.BINDINGS.stat().st_mtime_ns == before and not ac.BACKUPS.exists()
 
 
-@pytest.mark.xfail(strict=True, reason="appconfig._write_block: removing a block from a missing file writes a "
-                   "one-newline file (\"\" -> \"\\n\"), creating bindings.lua/hyprland.lua and reloading Hyprland")
-def test_turning_off_on_a_missing_file_creates_nothing(hypr):
+def test_turning_off_on_a_missing_file_creates_nothing(hypr, monkeypatch):
+    tools = install(monkeypatch, FakeTools())
     ac.keybinding({"enabled": "off"})
-    assert not ac.BINDINGS.exists()
+    ac.window_rule({"mode": "tile"})
+    ac.opacity({"opaque": "off"})
+    assert not ac.BINDINGS.exists() and not ac.HYPRLAND.exists() and tools.calls == []
 
 
 def test_hyprland_errors_restore_the_backup(hypr, monkeypatch):
