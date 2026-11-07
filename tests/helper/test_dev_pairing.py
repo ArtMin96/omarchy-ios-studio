@@ -260,6 +260,12 @@ class RealPairing(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await settle(lambda: self.pair_events()[-1]["phase"] == "cancelled"))
 
 
+    async def test_cancel_before_the_flow_runs_still_reports_cancelled(self):
+        await self.d.dispatch("pair.start", {"method": "wifi"})     # task created, not yet run
+        self.assertEqual(await self.d.dispatch("pair.cancel", {}), {})
+        self.assertEqual([e["phase"] for e in self.pair_events()], ["cancelled"])
+        self.assertEqual(self.pair_events()[-1]["method"], "wifi")
+
 class DemoPairing(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from iosstudio.device.demo.daemon import DemoBackend

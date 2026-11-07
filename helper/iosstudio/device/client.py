@@ -184,17 +184,27 @@ def deviced_path() -> Path:
     return Path(__file__).resolve().parents[3] / "bin" / "iosstudio-deviced"   # helper/iosstudio/device/ -> the checkout
 
 
+_END = object()   # queued by _Sub.end() to wake an iterator waiting on a closed stream
+
+
 class _Sub:
     def __init__(self, names: Iterable[str] | None, cb: Callable | None = None, maxsize: int = 1000):
         self.names = set(names) if names is not None else None
         self.cb = cb
         self.q: asyncio.Queue | None = None if cb else asyncio.Queue(maxsize)
+        self.ended = False
 
     def wants(self, name: str) -> bool:
         return self.names is None or name in self.names
 
+    def end(self):
+        """No more items: a waiting (or later) __anext__ stops instead of blocking forever."""
+        if not self.ended:
+            self.ended = True
+            self.put(_END)
+
     def put(self, item):
-        if self.q is None:
+        if self.q is None or (self.ended and item is not _END):
             return
         while True:
             try:
@@ -218,14 +228,18 @@ class _EventStream:
     def close(self):
         with contextlib.suppress(ValueError):
             self._c._subs.remove(self._sub)
+        self._sub.end()
 
     def __aiter__(self) -> AsyncIterator[tuple[str, Any]]:
         return self
 
     async def __anext__(self) -> tuple[str, Any]:
-        if self._sub not in self._c._subs:
+        if self._sub.ended:
             raise StopAsyncIteration
-        return await self._sub.q.get()
+        item = await self._sub.q.get()
+        if item is _END:
+            raise StopAsyncIteration
+        return item
 
 
 class DeviceClient:
@@ -288,6 +302,9 @@ class DeviceClient:
             with contextlib.suppress(BaseException):
                 await self._read_task
         self._fail_pending(DeviceError("disconnected", "The client was closed."))
+        for sub in [x for x in self._subs if x.q is not None]:   # end every events() iterator
+            self._subs.remove(sub)
+            sub.end()
 
     async def _try_connect(self) -> bool:
         try:

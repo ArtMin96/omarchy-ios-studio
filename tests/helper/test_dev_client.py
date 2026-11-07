@@ -401,10 +401,7 @@ class Events(ClientCase):
         self.assertEqual(async_got, [1, 2])
         self.assertTrue(dev.connected)                      # the failing callback didn't kill the reader
 
-    # BUG: an iterator blocked in `async for` never ends when its stream is closed (or the client is
-    # closed): _EventStream.__anext__ (client.py:225-228) only checks membership before awaiting the
-    # queue, and close() (client.py:218-220) doesn't wake it, so the consumer task hangs forever.
-    @unittest.expectedFailure
+    # An iterator blocked in `async for` ends when its stream (or the client) is closed.
     async def test_closing_a_stream_ends_a_waiting_iterator(self):
         dev = self.client()
         await dev.connect()
@@ -421,6 +418,23 @@ class Events(ClientCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+
+    async def test_closing_the_client_ends_waiting_iterators(self):
+        dev = self.client()
+        await dev.connect()
+        streams = [dev.events(["never"]), dev.events(["nor-this"])]
+
+        async def consume(stream):
+            return [item async for item in stream]
+        tasks = [asyncio.create_task(consume(s)) for s in streams]
+        await asyncio.sleep(0)
+        await dev.close()
+        try:
+            self.assertEqual(await asyncio.wait_for(asyncio.gather(*tasks), 0.5), [[], []])
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 # ---------------------------------------------------------------- starting the daemon
 

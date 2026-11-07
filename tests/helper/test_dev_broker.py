@@ -394,12 +394,9 @@ class SlowClients(BrokerCase):
             self.assertEqual(stalled.w.transport.get_write_buffer_size(), before)
             self.assertTrue((await fast.call("hello"))["ok"])
 
-    # BUG: Client.close() (broker.py:502-506) calls writer.close(), which waits for the write buffer to
-    # flush before closing the socket. A client that stopped reading never lets it flush, so the
-    # connection is never closed: the client stays in broker.clients with ~CLIENT_BUFFER_MAX of buffered
-    # bytes, its resources (mirror, forwards) are never released, and the daemon never idles out.
-    # Fix: transport.abort() when giving up on a client that isn't reading.
-    @unittest.expectedFailure
+    # writer.close() waits for the write buffer to flush, which a client that stopped reading never
+    # lets happen: the broker aborts it instead, so it leaves broker.clients, its resources are
+    # released and the daemon can idle out.
     async def test_stalled_reader_is_disconnected_and_released(self):
         with mock.patch.object(B, "CLIENT_BUFFER_MAX", 256 * 1024):
             await self.stall()
