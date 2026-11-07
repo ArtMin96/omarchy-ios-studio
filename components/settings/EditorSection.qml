@@ -7,7 +7,7 @@ import "../common"
 import "../../lib/Model.js" as Model
 
 // Settings › Code editor: which editor "Open in editor" uses, and Swift completion and inline errors
-// (SourceKit-LSP) set up once per computer for VS Code, Zed and Neovim (helper/editor_setup.py,
+// (SourceKit-LSP) set up once per computer for VS Code, Zed and Neovim (helper/iosstudio/features/editor_setup.py,
 // `editor status` / `editor setup --editor X [--confirm]`, through app.projects).
 //   EditorSection { Layout.fillWidth: true; app: page.app }
 // Set up first shows the dry run under the row (Create / Update / Keep / Back up) and only Apply

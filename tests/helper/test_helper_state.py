@@ -1,4 +1,4 @@
-"""Helper state files (helper/projects.py): build-log pruning, projects.json locking, template ids and
+"""Helper state files (helper/iosstudio/features/projects.py): build-log pruning, projects.json locking, template ids and
 provisioning-profile dates. Stdlib only:
     python -m pytest tests/helper/test_helper_state.py
 """
@@ -16,9 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-import common
-import projects
-from common import HelperError
+from iosstudio.core import appdirs
+from iosstudio.core.output import HelperError
+from iosstudio.features import projects
 from support import ROOT
 
 _TMP = tempfile.mkdtemp(prefix="ios-studio-tests-")   # XDG dirs are isolated by tests/conftest.py
@@ -30,7 +30,7 @@ class _Sandbox(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="state-", dir=_TMP))
         patches = {
-            (common, "STATE_DIR"): self.dir,
+            (appdirs, "STATE_DIR"): self.dir,
             (projects, "PROJECTS_FILE"): self.dir / "projects.json",
             (projects, "BUILDS_FILE"): self.dir / "builds.json",
             (projects, "RENEWALS_FILE"): self.dir / "renewals.json",
@@ -69,7 +69,7 @@ class BuildLogPruning(_Sandbox):
 
 
 def _add_many(state_dir: str, start: int, n: int) -> None:
-    common.STATE_DIR = Path(state_dir)
+    appdirs.STATE_DIR = Path(state_dir)
     projects.PROJECTS_FILE = Path(state_dir) / "projects.json"
     for i in range(start, start + n):
         with projects._edit_state() as st:
@@ -112,7 +112,7 @@ class TemplateIds(_Sandbox):
     def test_listing_hides_the_folder(self):
         for t in projects._templates():
             self.assertIn("id", t)
-        out = subprocess.run([sys.executable, "-c", "import json,sys,projects; projects.cmd_templates({})"],
+        out = subprocess.run([sys.executable, "-c", "import json,sys; from iosstudio.features import projects; projects.cmd_templates({})"],
                              cwd=ROOT / "helper", capture_output=True, text=True, timeout=30,
                              env={**os.environ, "PYTHONPATH": str(ROOT / "helper")})
         self.assertNotIn("_dir", out.stdout)
@@ -129,7 +129,7 @@ class ProfileDates(unittest.TestCase):
     def test_expiry_is_utc_in_any_timezone(self):
         when = datetime(2026, 3, 1, 12, 0, 0)          # plists store UTC
         want = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
-        code = ("import sys; sys.path.insert(0, %r); import projects, datetime; "
+        code = ("import sys; sys.path.insert(0, %r); import datetime; from iosstudio.features import projects; "
                 "print(projects._profile_from_bytes(%r)['expires'])") % (str(ROOT / "helper"), _profile(when))
         for tz in ("America/Los_Angeles", "Asia/Tokyo", "UTC"):
             out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30,

@@ -1,4 +1,4 @@
-"""Format and lint (helper/format.py): parsing `swift-format lint` output and SwiftLint's JSON (captured in
+"""Format and lint (helper/iosstudio/features/format.py): parsing `swift-format lint` output and SwiftLint's JSON (captured in
 tests/fixtures/format/), diff bounding at hunk and file boundaries, file discovery (.build/, hidden and xtool
 folders skipped, symlinks out of the project ignored, --file outside the project refused), .swift-format detection
 (project, parent folder, nested, invalid JSON), apply writing only changed files atomically, the stored lint result,
@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import common
-import format as F
+from iosstudio.core import output
+from iosstudio.features import format as F
 from support import ROOT
 from support.projects import project_with_files as make_project
 from support.swift_format import TempHome
@@ -157,7 +157,7 @@ class Discovery(TempHome):
         self.assertEqual(F.find_config(root)[0], ".swift-format")
         F.check_config(root, ".swift-format")
         (root / ".swift-format").write_text("{nope")
-        with self.assertRaises(common.HelperError) as cm:
+        with self.assertRaises(output.HelperError) as cm:
             F.check_config(root, ".swift-format")
         self.assertEqual(cm.exception.code, "bad-config")
         self.assertTrue(cm.exception.hint)
@@ -232,7 +232,7 @@ class FormatRuns(TempHome):
     def test_missing_tool(self):
         root = self.project()
         with mock.patch.object(F, "find_swift_format", return_value=None):
-            with self.assertRaises(common.HelperError) as cm:
+            with self.assertRaises(output.HelperError) as cm:
                 F.run_format(root)
         self.assertEqual(cm.exception.code, "missing-swift-format")
         self.assertIn("Setup", cm.exception.hint)

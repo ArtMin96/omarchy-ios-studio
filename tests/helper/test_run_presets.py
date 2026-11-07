@@ -1,4 +1,4 @@
-"""Run presets (helper/run_presets.py and `projects presets` / `build run --preset` in helper/projects.py):
+"""Run presets (helper/iosstudio/features/run_presets.py and `projects presets` / `build run --preset` in helper/iosstudio/features/projects.py):
 argument building, validation and the list logic. Storage, the fail-fast check before a build and demo mode
 through the helper are in tests/cli/test_run_presets_cli.py. Stdlib only:
     python -m pytest tests/helper/test_run_presets.py
@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 import unittest
 
-import run_presets as R
-from common import HelperError
+from iosstudio.core.output import HelperError
+from iosstudio.features import run_presets as R
 
 GERMAN = {"name": "German", "language": "de", "region": "de_DE"}
 DEBUG = {"name": "Debug flags", "args": ["-ShowDebugMenu", "YES"], "env": {"LOG_LEVEL": "debug"}}

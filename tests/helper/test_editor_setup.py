@@ -1,4 +1,4 @@
-"""Editor setup (helper/editor_setup.py): the JSONC merge (new file, extra keys kept byte for byte, a
+"""Editor setup (helper/iosstudio/features/editor_setup.py): the JSONC merge (new file, extra keys kept byte for byte, a
 conflicting value kept and reported, comments and trailing commas, invalid JSON skipped, never overwriting),
 the build server file, the machine-wide part per editor (Zed and VS Code extension detection, LazyVim extra
 with a backup, the plugin file when there's no extra, non-LazyVim left alone, sourcekit-lsp off PATH), the
@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import editor_setup as E
+from iosstudio.features import editor_setup as E
 from support import ROOT
 
 FIX = ROOT / "tests/fixtures/editor-setup"

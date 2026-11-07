@@ -9,7 +9,7 @@ import "../../lib/Model.js" as Model
 // "Run presets" sheet for one project (projects slice): saved launch arguments, environment variables,
 // app language, region and a UI test mode switch that Run can launch the app with. Two views in one
 // sheet: the list (use for Run, edit, delete, new) and the editor for one preset, with a live preview
-// of what the app gets. Stored per project by the helper (`projects presets`, helper/run_presets.py);
+// of what the app gets. Stored per project by the helper (`projects presets`, helper/iosstudio/features/run_presets.py);
 // the rules below mirror the helper's, which still checks everything on save.
 //   RunPresetsSheet { id: presetsSheet; app: page.app; svc: page.svc }
 //   presetsSheet.openFor(project)            // the list

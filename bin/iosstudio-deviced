@@ -8,22 +8,22 @@
 #   iosstudio-deviced                    bridge stdio to the live daemon (starting one if needed)
 #   iosstudio-deviced --serve            be the daemon (detached; normally started by the bridge)
 #   iosstudio-deviced --once <cmd> '{}'  one request: via the live daemon, else standalone
-# The daemon runs under the pymobiledevice3 venv python (common.pymd3_python() order); the bridge
-# is stdlib-only system python so it starts fast.
+# The daemon runs under the pymobiledevice3 venv python (subproc.pymd3_python() order); the bridge
+# is stdlib-only system python so it starts fast. helper/run.py starts a module of the iosstudio package.
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 self="$here/iosstudio-deviced"
 helper="$(cd "$here/../helper" && pwd)"
 if [[ -n ${IOSSTUDIO_DEMO:-} ]]; then
   # Demo mode (screenshots, MCP evaluations): a fake iPhone, stdlib only, never touches a real device.
   py=/usr/bin/python3
-  server="$helper/deviced_demo.py"
+  server=iosstudio.device.deviced_demo
 else
   py=""
   # Ours first, then ~/pymobile3-venv (omarchy-apple-dev's own venv path).
   for cand in "${XDG_DATA_HOME:-$HOME/.local/share}/ios-studio/venv/bin/python" "$HOME/pymobile3-venv/bin/python"; do
     if [[ -x "$cand" ]]; then py="$cand"; break; fi
   done
-  server="$helper/deviced.py"
+  server=iosstudio.device.deviced
   if [[ -z "$py" ]]; then
     printf '%s\n' '{"event":"ready","data":{"version":"1","pymobiledevice3":null,"error":{"code":"needs-setup","message":"The iPhone tools (pymobiledevice3) aren'"'"'t installed yet.","fix":{"label":"Install","page":"setup","step":"pymobiledevice3"}}}}'
     exit 3
@@ -31,5 +31,5 @@ else
 fi
 # Compiled modules go to the user's cache, not the repo (-I ignores PYTHON* variables, hence -X).
 pycache="${XDG_CACHE_HOME:-$HOME/.cache}/ios-studio/pycache"
-if [[ ${1:-} == --serve ]]; then exec "$py" -I -X pycache_prefix="$pycache" "$server" --serve; fi
-exec /usr/bin/python3 -I -X pycache_prefix="$pycache" "$helper/device_broker.py" launch "$self" "$py" "$server" "$@"
+if [[ ${1:-} == --serve ]]; then exec "$py" -I -X pycache_prefix="$pycache" "$helper/run.py" "$server" --serve; fi
+exec /usr/bin/python3 -I -X pycache_prefix="$pycache" "$helper/run.py" iosstudio.device.device_broker launch "$self" "$py" "$server" "$@"

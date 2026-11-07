@@ -8,7 +8,7 @@ import "../../lib/Model.js" as Model
 
 // Project settings check on a ProjectCard (projects slice): config mistakes xtool only reports late
 // or never (misspelled xtool.yml keys, missing usage descriptions, icon, entitlements, bundle id,
-// version), from `projects check` (helper/project_check.py) via ProjectService.check/checkFor.
+// version), from `projects check` (helper/iosstudio/features/project_check.py) via ProjectService.check/checkFor.
 //   ProjectCheckView { project: root.project; svc: root.svc; showClean: root.expanded }
 // A one-line summary ("2 settings warnings"), expanding to the issues (BuildDiagnosticRow; a click
 // opens the file at its line) with "Check again". Loading, error and "No problems found" states.

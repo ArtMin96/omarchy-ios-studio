@@ -52,7 +52,7 @@ Rectangle {
     var v = row[c]
     return v !== undefined ? v : row[root.columns[c].name]
   }
-  // cells as helper/app_data.py's cell() sends them: plain values, or {"$type": blob|text|date|float, …}
+  // cells as helper/iosstudio/features/app_data.py's cell() sends them: plain values, or {"$type": blob|text|date|float, …}
   function cellText(v) {
     if (v === null || v === undefined) return "NULL"
     if (typeof v === "object") {

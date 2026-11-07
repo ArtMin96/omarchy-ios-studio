@@ -9,7 +9,7 @@ import "../../lib/Model.js" as Model
 // Compiler problems have a file:line, and a click opens it in the editor. Linker, package, signing,
 // device, toolchain and config problems may have no location: they show their category and a hint.
 // Issues from the pre-build project check (category "config" with a `check` id, see
-// helper/project_check.py) carry a "Pre-build check" chip, so they read apart from xtool's output.
+// helper/iosstudio/features/project_check.py) carry a "Pre-build check" chip, so they read apart from xtool's output.
 // Also used by ProjectCheckView, where every row is such an issue (showChip: false there).
 // Style warnings (category "style", from `format-lint`: swift-format and SwiftLint) read as
 // "Style · <rule> · file:line" with a dim glyph (amber only for a rule set to error), so they never

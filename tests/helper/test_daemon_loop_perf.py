@@ -1,5 +1,5 @@
-"""Device daemon event-loop hygiene (helper/deviced_core.py, device_link.py, device_broker.py,
-deviced_features/syslog.py and mirror.py): tracked background tasks, mtime caches, the tmpfs frame
+"""Device daemon event-loop hygiene (helper/iosstudio/device/deviced_core.py, device_link.py, device_broker.py,
+features/syslog.py and mirror.py): tracked background tasks, mtime caches, the tmpfs frame
 folder, syslog parsing and filtering on the worker thread, and the mirror's pure stream parts.
 
     python -m pytest tests/helper/test_daemon_loop_perf.py
@@ -7,6 +7,7 @@ folder, syslog parsing and filtering on the worker thread, and the mirror's pure
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import struct
 import time
@@ -14,12 +15,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import common
-import device_broker as B
-import device_link as link
-import deviced_core as core
-from deviced_features import mirror as M
-from deviced_features import syslog as SL
+from iosstudio.core import appdirs
+from iosstudio.device import device_broker as B
+from iosstudio.device import device_link as link
+from iosstudio.device import deviced_core as core
+from iosstudio.device.features import mirror as M
+from iosstudio.device.features import syslog as SL
 
 # ---------------------------------------------------------------- tasks and caches
 
@@ -81,7 +82,7 @@ class MtimeFileTests(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "x"
             p.write_text("{")
-            f = core.MtimeFile(p, lambda q: common.json.loads(q.read_text()), {})
+            f = core.MtimeFile(p, lambda q: json.loads(q.read_text()), {})
             self.assertEqual(f.get(), {})
 
 
@@ -126,8 +127,8 @@ class FramesDirTests(unittest.TestCase):
     def test_frames_go_to_the_runtime_dir_not_the_cache(self):
         d = core.frames_dir()
         self.assertEqual(d, Path(os.environ["IOSSTUDIO_RUNTIME_DIR"]) / "ios-studio" / "screens")
-        self.assertFalse(str(d).startswith(str(common.CACHE_DIR)))
-        self.assertEqual(core.SCREENS_DIR, common.CACHE_DIR / "screens")   # screenshots stay in the cache
+        self.assertFalse(str(d).startswith(str(appdirs.CACHE_DIR)))
+        self.assertEqual(core.SCREENS_DIR, appdirs.CACHE_DIR / "screens")   # screenshots stay in the cache
 
     def test_sink_writes_rotating_files_there(self):
         with TemporaryDirectory() as d:

@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from deviced_features import app_index as AI
-from deviced_features import apps as A
-from deviced_features import syslog as S
+from iosstudio.device.features import app_index as AI
+from iosstudio.device.features import apps as A
+from iosstudio.device.features import syslog as S
 
 UDID = "00008150-SYSLOG"
 APP_DIR = "/private/var/containers/Bundle/Application/AAAA/Habits.app"

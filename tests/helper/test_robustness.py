@@ -17,12 +17,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import common
-import packages
-import projects
-import setup
-import watch
-from common import HelperError
+from iosstudio.core import fileio, output, subproc
+from iosstudio.core.output import HelperError
+from iosstudio.features import packages, projects, setup, watch
 from support import write_exe
 
 # A fake tool that starts a long-lived grandchild (its pid goes to $1), prints one line, then hangs.
@@ -74,16 +71,16 @@ class Tmp(unittest.TestCase):
 
 
 class Captured:
-    """Collect common._write output instead of printing it."""
+    """Collect output._write output instead of printing it."""
 
     def __enter__(self):
         self.events: list[dict] = []
-        self._old = common._write
-        common._write = self.events.append
+        self._old = output._write
+        output._write = self.events.append
         return self.events
 
     def __exit__(self, *exc):
-        common._write = self._old
+        output._write = self._old
 
 
 class Timeouts(Tmp):
@@ -93,7 +90,7 @@ class Timeouts(Tmp):
         gc = self.grandchild()
         t0 = time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired):
-            common.wait_or_kill(p, 0.3)
+            subproc.wait_or_kill(p, 0.3)
         self.assertLess(time.monotonic() - t0, 3)
         self.assertIsNotNone(p.returncode)
         self.assertTrue(gone_soon(gc))
@@ -102,7 +99,7 @@ class Timeouts(Tmp):
         lines: list[str] = []
         t0 = time.monotonic()
         with self.assertRaises(HelperError) as cm:
-            common.stream_cmd([self.exe("hang", HANGS), str(self.tmp / "pid")], on_line=lines.append, timeout=0.5)
+            subproc.stream_cmd([self.exe("hang", HANGS), str(self.tmp / "pid")], on_line=lines.append, timeout=0.5)
         self.assertEqual(cm.exception.code, "timeout")
         self.assertLess(time.monotonic() - t0, 5)
         self.assertEqual(lines, ["started"])
@@ -112,22 +109,22 @@ class Timeouts(Tmp):
         def on_line(_line):
             raise KeyboardInterrupt
         with self.assertRaises(KeyboardInterrupt):
-            common.stream_cmd([self.exe("hang", HANGS), str(self.tmp / "pid")], on_line=on_line)
+            subproc.stream_cmd([self.exe("hang", HANGS), str(self.tmp / "pid")], on_line=on_line)
         self.assertTrue(gone_soon(self.grandchild()))
 
     def test_stream_cmd_normal_exit(self):
         lines: list[str] = []
-        rc = common.stream_cmd([self.exe("ok", "#!/bin/sh\necho a\necho b\nexit 3\n")], on_line=lines.append,
+        rc = subproc.stream_cmd([self.exe("ok", "#!/bin/sh\necho a\necho b\nexit 3\n")], on_line=lines.append,
                                timeout=10)
         self.assertEqual((rc, lines), (3, ["a", "b"]))
 
     def test_run_group_timeout_kills_grandchild(self):
         with self.assertRaises(subprocess.TimeoutExpired):
-            common.run_group([self.exe("hang", HANGS), str(self.tmp / "pid")], 0.5)
+            subproc.run_group([self.exe("hang", HANGS), str(self.tmp / "pid")], 0.5)
         self.assertTrue(gone_soon(self.grandchild()))
 
     def test_run_group_captures(self):
-        r = common.run_group([self.exe("cat", "#!/bin/sh\ncat; echo err >&2\n")], 5, input="hi\n")
+        r = subproc.run_group([self.exe("cat", "#!/bin/sh\ncat; echo err >&2\n")], 5, input="hi\n")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "hi\n", "err\n"))
 
     def test_setup_run_stream_lingering_child(self):
@@ -227,10 +224,10 @@ class Tails(Tmp):
                 fh.read = read
             return fh
         with mock.patch("builtins.open", spy_open):
-            self.assertEqual(common.tail_text(log, 7), "THE END")
+            self.assertEqual(fileio.tail_text(log, 7), "THE END")
         self.assertEqual(sizes, [7])
-        self.assertEqual(common.tail_text(log, 10_000_000)[-7:], "THE END")
-        self.assertEqual(common.tail_text(self.tmp / "missing.log", 100), "")
+        self.assertEqual(fileio.tail_text(log, 10_000_000)[-7:], "THE END")
+        self.assertEqual(fileio.tail_text(self.tmp / "missing.log", 100), "")
 
     def test_watch_log_is_trimmed(self):
         log = self.tmp / "watch.log"
@@ -264,7 +261,7 @@ class Locks(Tmp):
 
 class Output(unittest.TestCase):
     def test_setup_does_not_patch_write(self):
-        self.assertIs(common._write.__module__, "common")
+        self.assertEqual(output._write.__module__, "iosstudio.core.output")
         self.assertFalse(hasattr(setup, "_locked_write"))
 
     def test_write_is_thread_safe(self):
@@ -284,7 +281,7 @@ class Output(unittest.TestCase):
                 pass
 
         with mock.patch.object(sys, "stdout", Slow()):
-            threads = [threading.Thread(target=lambda i=i: [common.event("log", text=f"{i}-{n}" * 20)
+            threads = [threading.Thread(target=lambda i=i: [output.event("log", text=f"{i}-{n}" * 20)
                                                              for n in range(50)]) for i in range(8)]
             for t in threads:
                 t.start()
