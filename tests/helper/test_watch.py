@@ -1,4 +1,4 @@
-"""Watch mode (helper/iosstudio/features/watch.py): the debounce/supersede scheduler on a fake clock, which files count as a change,
+"""Watch mode (helper/iosstudio/features/watch/): the debounce/supersede scheduler on a fake clock, which files count as a change,
 atomic saves seen through real inotify in a temp folder, the polling fallback, the watcher loop with fake builds
 (supersede, busy retry, auto-run skips), the lock and stale-lock detection and owners. The CLI, demo mode and
 compiles through the real `build compile` with a fake xtool are in tests/cli/test_watch_cli.py. Stdlib only:
@@ -15,7 +15,10 @@ import time
 import unittest
 from pathlib import Path
 
-from iosstudio.features import watch as W
+from iosstudio.features.watch import builds as B
+from iosstudio.features.watch import fswatch as FS
+from iosstudio.features.watch import runtime as RT
+from iosstudio.features.watch import watcher as WT
 from support.projects import app_project as make_project
 from support.projects import atomic_save
 
@@ -37,7 +40,7 @@ class FakeClock:
 
 class SchedulerTests(unittest.TestCase):
     def test_rapid_saves_make_one_build(self):
-        s = W.Scheduler(0.6)
+        s = WT.Scheduler(0.6)
         t = 0.0
         for i in range(5):
             self.assertFalse(s.changed([f"Sources/A/F{i}.swift"], t))
@@ -51,7 +54,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertIsNone(s.tick(t + 10))        # nothing pending
 
     def test_saves_that_never_pause_still_compile(self):
-        s = W.Scheduler(0.6, max_delay=2.0)
+        s = WT.Scheduler(0.6, max_delay=2.0)
         t = 0.0
         started = None
         while t < 3:
@@ -64,7 +67,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertLessEqual(started, 2.21)   # by the first tick after 2 s
 
     def test_change_during_build_supersedes_once_then_builds_again(self):
-        s = W.Scheduler(0.5)
+        s = WT.Scheduler(0.5)
         s.changed(["Sources/A/F.swift"], 0)
         self.assertEqual(s.tick(0.5), ["Sources/A/F.swift"])
         self.assertTrue(s.changed(["Sources/A/G.swift"], 1.0))    # cancel the running build
@@ -78,7 +81,7 @@ class SchedulerTests(unittest.TestCase):
 
     def test_endless_saves_still_give_a_result(self):
         """After 2 builds in a row were cancelled by saves, the next one finishes; then one more follows."""
-        s = W.Scheduler(0.5)
+        s = WT.Scheduler(0.5)
         t = 0.0
         s.changed(["F"], t)
         results = []
@@ -99,7 +102,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(s.streak, 1)                          # the counting starts over
 
     def test_protected_build_ignores_saves_and_resets(self):
-        s = W.Scheduler(0.5, supersede_limit=2)
+        s = WT.Scheduler(0.5, supersede_limit=2)
         s.streak = 2
         s.changed(["F"], 0)
         s.tick(1)
@@ -112,7 +115,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(s.protected)
 
     def test_request_builds_without_a_change(self):
-        s = W.Scheduler(0.6)
+        s = WT.Scheduler(0.6)
         s.request(10.0)
         self.assertEqual(s.tick(10.0), [])
         s.finished()
@@ -127,7 +130,7 @@ class IgnoreTests(unittest.TestCase):
     def test_relevant_files(self):
         for rel in ("Package.swift", "xtool.yml", "Info.plist", "App.entitlements", "Sources/A/ContentView.swift",
                     "Sources/A/Assets.xcassets/Icon.png", "Sources/A/sub/deep/Model.swift"):
-            self.assertTrue(W.relevant(rel), rel)
+            self.assertTrue(FS.relevant(rel), rel)
 
     def test_ignored_files(self):
         for rel in ("Package.resolved", "README.md", "Tests/AppTests/T.swift", ".build/debug/x.o",
@@ -136,13 +139,13 @@ class IgnoreTests(unittest.TestCase):
                     "Sources/A/F.swift___jb_tmp___", "Sources/A/#F.swift#", "Sources/A/.#F.swift",
                     "Sources/.hidden/F.swift", "Sources/A/.build/x.swift", "xtool/App.app/Info.plist",
                     ".bsp/xtool.json", "Sources/A/F.swp", "Sources/A/F.swift.crswap"):
-            self.assertFalse(W.relevant(rel), rel)
+            self.assertFalse(FS.relevant(rel), rel)
 
     def test_same_content_is_not_a_change(self):
         with tempfile.TemporaryDirectory() as d:
             p = make_project(Path(d))
             f = "Sources/App/ContentView.swift"
-            flt = W.ContentFilter(p)
+            flt = FS.ContentFilter(p)
             flt.prime()
             atomic_save(p / f, (p / f).read_text())          # :w without edits
             self.assertEqual(flt.changed([f]), [])
@@ -169,7 +172,7 @@ class InotifyTests(unittest.TestCase):
         self.d = tempfile.TemporaryDirectory()
         self.p = make_project(Path(self.d.name))
         try:
-            self.w = W.InotifyWatcher(self.p)
+            self.w = FS.InotifyWatcher(self.p)
         except OSError as exc:
             self.skipTest(f"inotify not available: {exc}")
 
@@ -212,7 +215,7 @@ class InotifyTests(unittest.TestCase):
             p = Path(d) / "Bare"
             p.mkdir()
             (p / "Package.swift").write_text("// x\n")
-            w = W.InotifyWatcher(p)
+            w = FS.InotifyWatcher(p)
             try:
                 (p / "Sources/Bare").mkdir(parents=True)
                 drain(w, 0.3)
@@ -227,7 +230,7 @@ class PollTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = make_project(Path(d))
             clock = FakeClock()
-            w = W.PollWatcher(p, interval=1.0, clock=clock)
+            w = FS.PollWatcher(p, interval=1.0, clock=clock)
             f = p / "Sources/App/ContentView.swift"
             atomic_save(f, "let x = 22\n")
             st = f.stat()
@@ -247,7 +250,7 @@ class PollTests(unittest.TestCase):
             p = make_project(Path(d))
             os.environ["IOSSTUDIO_WATCH_POLL"] = "1"
             try:
-                w, why = W.make_watcher(p)
+                w, why = FS.make_watcher(p)
             finally:
                 os.environ.pop("IOSSTUDIO_WATCH_POLL")
             self.assertEqual((w.mode, why), ("poll", "forced"))
@@ -323,8 +326,12 @@ class LoopTests(unittest.TestCase):
         self.builds: list[FakeBuild] = []
         self.next_done = None
         self.seconds = 5.0
+        self.watchers: list[WT.Watcher] = []
 
     def tearDown(self):
+        for w in self.watchers:   # joins the auto-run threads: none may still write into the folder removed below
+            w.shutdown()
+            self.assertEqual([j for j in w.run_jobs if j.alive()], [])
         os.environ["IOSSTUDIO_RUNTIME_DIR"] = _RT
         self.d.cleanup()
 
@@ -333,9 +340,10 @@ class LoopTests(unittest.TestCase):
         self.builds.append(b)
         return b
 
-    def watcher(self, **kw) -> W.Watcher:
-        w = W.Watcher(self.p, debounce_ms=600, build_factory=self.factory, watcher=self.fw, clock=self.clock,
+    def watcher(self, **kw) -> WT.Watcher:
+        w = WT.Watcher(self.p, debounce_ms=600, build_factory=self.factory, watcher=self.fw, clock=self.clock,
                       owner_check=False, **kw)
+        self.watchers.append(w)
         w.setup()
         return w
 
@@ -361,7 +369,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(w.snap["state"], "changed")
         self.run_for(w, 7)
         self.assertEqual(len(self.builds), 2)
-        st = json.loads(W.status_path().read_text())
+        st = json.loads(RT.status_path().read_text())
         self.assertEqual((st["state"], st["lastBuild"]["id"]), ("ok", self.builds[1].build_id))
         self.assertTrue(self.builds[1].build_id.startswith("w-"))
 
@@ -458,9 +466,10 @@ class LoopTests(unittest.TestCase):
             self.builds.append(b)
             return b
 
-        w = W.Watcher(self.p, debounce_ms=600, build_factory=factory, watcher=self.fw, clock=self.clock,
+        w = WT.Watcher(self.p, debounce_ms=600, build_factory=factory, watcher=self.fw, clock=self.clock,
                       owner_check=False, auto_run=True, device_check=lambda: ("U1", None), auth_check=lambda: True,
                       run_steps=Steps())
+        self.watchers.append(w)
         w.setup()
         self.run_for(w, 3)
         deadline = time.monotonic() + 5
@@ -488,8 +497,9 @@ class LoopTests(unittest.TestCase):
             self.builds.append(b)
             return b
 
-        w = W.Watcher(self.p, debounce_ms=600, build_factory=factory, watcher=self.fw, clock=self.clock,
+        w = WT.Watcher(self.p, debounce_ms=600, build_factory=factory, watcher=self.fw, clock=self.clock,
                       owner_check=False, auto_run=True, device_check=lambda: ("U1", None), auth_check=lambda: True)
+        self.watchers.append(w)
         w.setup()
         self.run_for(w, 2)
         deadline = time.monotonic() + 3
@@ -510,8 +520,36 @@ class LoopTests(unittest.TestCase):
         w.stop_reason = "stopped"
         w.shutdown()
         self.assertTrue(self.builds[0].cancelled)
-        st = json.loads(W.status_path().read_text())
+        st = json.loads(RT.status_path().read_text())
         self.assertEqual((st["state"], st["stopReason"]), ("stopped", "stopped"))
+
+    def test_shutdown_joins_every_auto_run_thread(self):
+        """An older auto-run can still be reporting while a newer one runs: shutdown waits for both, so nothing
+        writes into the runtime dir after it returns (and the last snapshot is the `stopped` one)."""
+        import threading
+        gate = threading.Event()
+        calls = []
+
+        def device_check():
+            calls.append(1)
+            if len(calls) == 1:     # the older run is slow to answer; the newer one ends at once
+                gate.wait(5)
+            return None, "no iPhone"
+
+        w = self.watcher(initial_build=False, auto_run=True, auth_check=lambda: True, device_check=device_check)
+        w.maybe_run("w-1")
+        w.maybe_run("w-2")
+        jobs = list(w.run_jobs)
+        self.assertEqual(len(jobs), 2)
+        self.assertTrue(jobs[0].alive())
+        threading.Timer(0.3, gate.set).start()
+        w.shutdown()
+        self.assertFalse(any(j.alive() for j in jobs))
+        events = [json.loads(ln) for ln in RT.events_path().read_text().splitlines()]
+        skipped = {e["run"]["forBuild"] for e in events if e.get("reason") == "run" and e["run"]["state"] == "skipped"}
+        self.assertEqual(skipped, {"w-1", "w-2"})       # both finished reporting ...
+        self.assertEqual(events[-1]["reason"], "stopped")   # ... before the final snapshot
+
 
 
 # ---------------------------------------------------------------- lock, owners, CLI
@@ -522,17 +560,17 @@ class LockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.environ["IOSSTUDIO_RUNTIME_DIR"] = d
             try:
-                self.assertIsNone(W.watcher_pid())
+                self.assertIsNone(RT.watcher_pid())
                 code = ("import fcntl,os,sys,time; f=open(sys.argv[1],'a+'); fcntl.flock(f, fcntl.LOCK_EX); "
                         "f.seek(0); f.truncate(); f.write(str(os.getpid())); f.flush(); print('x', flush=True); "
                         "time.sleep(60)")
-                p = subprocess.Popen([sys.executable, "-c", code, str(W.lock_path())], stdout=subprocess.PIPE)
+                p = subprocess.Popen([sys.executable, "-c", code, str(RT.lock_path())], stdout=subprocess.PIPE)
                 p.stdout.readline()
-                self.assertEqual(W.watcher_pid(), p.pid)
+                self.assertEqual(RT.watcher_pid(), p.pid)
                 p.kill()
                 p.wait()
                 p.stdout.close()
-                self.assertIsNone(W.watcher_pid())
+                self.assertIsNone(RT.watcher_pid())
             finally:
                 os.environ["IOSSTUDIO_RUNTIME_DIR"] = _RT
 
@@ -541,17 +579,17 @@ class LockTests(unittest.TestCase):
             os.environ["IOSSTUDIO_RUNTIME_DIR"] = d
             try:
                 p = subprocess.Popen(["sleep", "60"])
-                W.add_owner(os.getpid())
-                W.add_owner(p.pid)
-                self.assertEqual(set(W.live_owners()), {str(os.getpid()), str(p.pid)})
+                RT.add_owner(os.getpid())
+                RT.add_owner(p.pid)
+                self.assertEqual(set(RT.live_owners()), {str(os.getpid()), str(p.pid)})
                 p.kill()
                 p.wait()
-                self.assertEqual(set(W.live_owners()), {str(os.getpid())})
-                W.remove_owner(os.getpid())
-                self.assertEqual(W.live_owners(), {})
-                o = W.read_owners()
+                self.assertEqual(set(RT.live_owners()), {str(os.getpid())})
+                RT.remove_owner(os.getpid())
+                self.assertEqual(RT.live_owners(), {})
+                o = RT.read_owners()
                 o["999999"] = "1"                   # a pid that's gone (or reused with another start time)
-                self.assertFalse(W.pid_alive(999999, "1"))
+                self.assertFalse(RT.pid_alive(999999, "1"))
             finally:
                 os.environ["IOSSTUDIO_RUNTIME_DIR"] = _RT
 
@@ -596,24 +634,24 @@ class RuntimeDirTests(unittest.TestCase):
         from unittest import mock
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.env, clear=True), \
                 mock.patch.object(self.dc, "xdg_runtime_dir", return_value=d):
-            self.assertEqual(W.runtime_dir(), Path(d) / "ios-studio")
+            self.assertEqual(RT.runtime_dir(), Path(d) / "ios-studio")
             self.assertEqual(self.dc.runtime_dir(False), Path(d) / "ios-studio")
 
 
 class SummaryTests(unittest.TestCase):
     def test_summarize_failed_and_ok(self):
-        s = W.summarize(FAILED, "w-3", "/l.log")
+        s = B.summarize(FAILED, "w-3", "/l.log")
         self.assertEqual((s["result"], s["errors"], s["warnings"], s["logFile"]), ("failed", 1, 0, "/l.log"))
         self.assertEqual(s["diagnostics"][0]["message"], "cannot find 'Txt' in scope")
         many = {"event": "done", "ok": True, "data": {"diagnostics": [
             {"severity": "warning", "message": f"w{i}"} for i in range(9)]}}
-        s = W.summarize(many, "w-4", None)
+        s = B.summarize(many, "w-4", None)
         self.assertEqual((s["result"], s["warnings"], len(s["diagnostics"])), ("ok", 9, 5))
 
     def test_debounce_bounds(self):
-        self.assertEqual(W.clamp_debounce("5"), W.MIN_DEBOUNCE_MS)
-        self.assertEqual(W.clamp_debounce(99999), W.MAX_DEBOUNCE_MS)
-        self.assertEqual(W.clamp_debounce("600"), 600)
+        self.assertEqual(RT.clamp_debounce("5"), RT.MIN_DEBOUNCE_MS)
+        self.assertEqual(RT.clamp_debounce(99999), RT.MAX_DEBOUNCE_MS)
+        self.assertEqual(RT.clamp_debounce("600"), 600)
 
 
 if __name__ == "__main__":

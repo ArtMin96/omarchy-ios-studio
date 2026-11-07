@@ -19,7 +19,8 @@ from unittest import mock
 
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError
-from iosstudio.features import packages, projects, setup, watch
+from iosstudio.features import packages, projects, setup
+from iosstudio.features.watch import fswatch, lifecycle
 from support import write_exe
 
 # A fake tool that starts a long-lived grandchild (its pid goes to $1), prints one line, then hangs.
@@ -231,13 +232,13 @@ class Tails(Tmp):
 
     def test_watch_log_is_trimmed(self):
         log = self.tmp / "watch.log"
-        log.write_bytes(b"x" * (watch.WATCH_LOG_MAX + 10) + b"\nlast line\n")
-        watch._trim_log(log, keep=1000)
+        log.write_bytes(b"x" * (lifecycle.WATCH_LOG_MAX + 10) + b"\nlast line\n")
+        lifecycle._trim_log(log, keep=1000)
         self.assertEqual(log.stat().st_size, 1000)
         self.assertTrue(log.read_text().endswith("last line\n"))
         small = self.tmp / "small.log"
         small.write_text("keep me\n")
-        watch._trim_log(small)
+        lifecycle._trim_log(small)
         self.assertEqual(small.read_text(), "keep me\n")
 
 
@@ -300,8 +301,8 @@ class PollCap(Tmp):
         src.mkdir(parents=True)
         for i in range(30):
             (src / f"F{i}.swift").write_text("")
-        with mock.patch.object(watch, "POLL_MAX_FILES", 10):
-            w = watch.PollWatcher(self.tmp)
+        with mock.patch.object(fswatch, "POLL_MAX_FILES", 10):
+            w = fswatch.PollWatcher(self.tmp)
         self.assertLessEqual(len(w.snap), 10)
 
 
