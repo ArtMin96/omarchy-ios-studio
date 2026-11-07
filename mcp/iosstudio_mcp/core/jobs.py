@@ -1,13 +1,24 @@
-"""Background jobs: long helper streams (builds, toolchain installs, renewals) that outlive one tool call.
+"""Background jobs: work that outlives one tool call, in one registry for every tool.
 
-A job owns one `iosstudio-helper` process in its own process group and folds its JSON-lines events
-(build, step, progress, log, notice, diagnostic, prompt, done) into a bounded record. Tools read it
-with `wait()` (long-poll), answer prompts with `respond()`, and stop it with `cancel()`.
-`shutdown()` kills every running job; the lifespan calls it when the server exits.
+Two kinds of runner share the same Job record, ids, states, long-poll, cancel and retention:
 
-A job may carry a `finisher` coroutine that runs after the helper reports success and before the job
-is marked finished (ios_run uses it to install and launch the app through the device client). It runs as
-its own task: cancel() cancels it, and a finisher calls job.check_cancel() between its steps. A job
+- helper streams (`start()`): one `iosstudio-helper` process in its own process group whose JSON-lines
+  events (build, step, progress, log, notice, diagnostic, prompt, done) fold into the job. Builds,
+  toolchain installs, renewals, package changes, debugger captures.
+- in-process coroutines (`run(fn, kind, ...)`): `fn(job)` runs as a task of this server; what it returns
+  becomes job.result, an exception fails the job. It reports with job.report(fraction, detail) and can
+  ask the human with `await job.ask(prompt)`. Installs, file copies, camera tests, app data changes,
+  profiles, screenshot matrices, screen recordings, project creation.
+
+State is running | needs_input | succeeded | failed | cancelled. Tools read a job with `wait()`
+(long-poll), answer prompts with `respond()` and stop it with `cancel()`, which kills the helper or
+cancels the task (after the job's on_cancel hook, e.g. telling the daemon to stop a copy). Finished jobs
+are kept for a while: the newest KEEP_PER_KIND of each kind, none older than FINISHED_TTL. `shutdown()`
+stops every running job; the lifespan calls it when the server exits.
+
+A helper job may carry a `finisher` coroutine that runs after the helper reports success and before the
+job is marked finished (ios_run uses it to install and launch the app through the device client). It runs
+as its own task: cancel() cancels it, and a finisher calls job.check_cancel() between its steps. A job
 reaches a terminal state only after its helper and its finisher have both stopped.
 
 Malformed helper output never kills the pump: unknown or ill-typed fields are ignored, an over-long line
@@ -28,19 +39,22 @@ from typing import Any, Awaitable, Callable
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import helper
+from .. import helper
 
 log = logging.getLogger("iosstudio.jobs")
 
 MAX_LOG_LINES = 20_000       # ring buffer; older lines stay in the helper's log file
 MAX_LINE_CHARS = 4_000
 MAX_DIAGNOSTICS = 1_000
-MAX_FINISHED_JOBS = 50
+KEEP_PER_KIND = 25           # finished jobs kept per kind…
+FINISHED_TTL = 4 * 3600      # …and none longer than this (seconds after they ended)
 FINISHED_LINES = 2_000       # a finished job keeps only its newest lines in memory (the rest: log file)
 CANCEL_SETTLE = 15.0         # seconds cancel() waits for the helper and finisher to stop
+SHUTDOWN_SETTLE = 10.0       # seconds shutdown() gives coroutine jobs to clean up (e.g. put an app back)
 TERMINAL = ("succeeded", "failed", "cancelled")
 
 Finisher = Callable[["Job"], Awaitable[None]]
+JobFn = Callable[["Job"], Awaitable[Any]]
 
 
 class JobCancelled(Exception):
@@ -50,8 +64,8 @@ class JobCancelled(Exception):
 @dataclass
 class Job:
     id: str
-    kind: str                       # build | toolchain-install | renew
-    action: str                     # compile | ipa | install | run | renew | all | <setup step>
+    kind: str                       # build | toolchain-install | renew | packages | debug | install | transfer | …
+    action: str                     # compile | ipa | install | run | renew | all | <setup step> | <feature action>
     title: str
     project_path: str | None = None
     project: str | None = None
@@ -73,6 +87,11 @@ class Job:
     result: dict | None = None
     error: dict | None = None
     next_steps: list[str] = field(default_factory=list)
+    stream: bool = True             # a helper stream (start()); False: an in-process coroutine (run())
+    tool: str | None = None         # the feature tool that shows this job's full result (called with job_id)
+    data: dict = field(default_factory=dict)        # a feature's own state (coroutine jobs)
+    exc: BaseException | None = None                # the exception a coroutine job failed with
+    on_cancel: Callable[["Job"], Awaitable[None]] | None = None   # coroutine jobs: ask the work to stop first
     finisher: Finisher | None = None
     proc: asyncio.subprocess.Process | None = None
     _changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -81,6 +100,12 @@ class Job:
     poll_mark: tuple[int, int, int] | None = None   # (line_count, errors, warnings) at the last status
     _task: asyncio.Task | None = None
     _finisher_task: asyncio.Task | None = None
+    _answer: asyncio.Future | None = None           # coroutine jobs: the pending ask()
+
+    @property
+    def task(self) -> asyncio.Task | None:
+        """The task running this job (the pump of a helper job, the coroutine of a run() job)."""
+        return self._task
 
     # ---------------------------------------------------------------- derived
     @property
@@ -114,6 +139,33 @@ class Job:
         self._progress_seq += 1
         self._changed.set()
 
+    def report(self, fraction: float | None = None, detail: str | None = None) -> None:
+        """Coroutine jobs: progress (0..1) and a short line saying what it is doing."""
+        if fraction is not None:
+            f = _number(fraction)
+            if f is not None:
+                self.progress = min(1.0, max(0.0, f))
+        if detail is not None:
+            self.progress_detail = str(detail)[:MAX_LINE_CHARS]
+        self.touch()
+
+    async def ask(self, prompt: dict) -> str:
+        """Coroutine jobs: wait for the human. `prompt` is {id, title?, message, options: [{value, label,
+        destructive?}], default?}; the job is needs_input until respond() answers, which returns the value."""
+        loop = asyncio.get_running_loop()
+        self._answer = loop.create_future()
+        prompt = dict(prompt)
+        if not isinstance(prompt.get("options", []), list):
+            prompt["options"] = []
+        self.pending_prompt = prompt
+        self.state = "needs_input"
+        self.add_line(f"[prompt {prompt.get('id')}] {prompt.get('title') or ''} {prompt.get('message', '')}".strip())
+        self.touch()
+        try:
+            return await self._answer
+        finally:
+            self._answer = None
+
     def set_step(self, step_id: str, title: str | None, state: str, **extra: Any) -> None:
         st = self.steps.setdefault(step_id, {"id": step_id, "title": title or step_id})
         if title:
@@ -132,14 +184,23 @@ class JobManager:
         self._ids = itertools.count(1)
 
     # ---------------------------------------------------------------- lookup
-    def get(self, job_id: str) -> Job:
-        job = self.jobs.get(job_id.strip())
+    def get(self, job_id: str, kind: str | tuple[str, ...] | None = None) -> Job:
+        """The job with this id; with `kind`, only a job of that kind (or kinds)."""
+        kinds = (kind,) if isinstance(kind, str) else kind
+        job = self.jobs.get(str(job_id).strip())
         if job is None:
-            known = ", ".join(list(self.jobs)[-5:]) or "none yet"
-            raise ToolError(f"Unknown build_id '{job_id}'. Jobs live only while this MCP server runs (recent: "
+            known = ", ".join([k for k, j in self.jobs.items() if not kinds or j.kind in kinds][-5:]) or "none yet"
+            raise ToolError(f"Unknown job_id '{job_id}'. Jobs live only while this MCP server runs (recent: "
                             f"{known}). For older builds use ios_build_history, ios_build_log(project_path=...) "
                             "or ios_build_diagnostics(project_path=...).")
+        if kinds and job.kind not in kinds:
+            raise ToolError(f"Job {job.id} is a {job.kind} job ({job.title}), not {' or '.join(kinds)}. "
+                            + (f"Read it with {job.tool}(job_id='{job.id}') or " if job.tool else "Read it with ")
+                            + f"ios_job_status(job_id='{job.id}').")
         return job
+
+    def running(self, kind: str | None = None) -> list[Job]:
+        return [j for j in self.jobs.values() if not j.finished and (kind is None or j.kind == kind)]
 
     def running_for(self, project_path: str) -> Job | None:
         for j in self.jobs.values():
@@ -157,7 +218,7 @@ class JobManager:
     async def start(self, kind: str, group: str, action: str, flags: dict, *, title: str,
                     prefix: str = "b", project_path: str | None = None, project: str | None = None,
                     finisher: Finisher | None = None) -> Job:
-        self._prune()
+        self.prune()
         job = Job(id=f"{prefix}-{next(self._ids)}", kind=kind, action=action, title=title,
                   project_path=project_path, project=project, finisher=finisher)
         job.proc = await helper.spawn_stream(group, action, flags)
@@ -165,10 +226,63 @@ class JobManager:
         job._task = asyncio.create_task(self._pump(job), name=f"job-{job.id}")
         return job
 
-    def _prune(self) -> None:
-        done = [j for j in self.jobs.values() if j.finished]
-        for j in done[:-MAX_FINISHED_JOBS]:
-            self.jobs.pop(j.id, None)
+    def run(self, fn: JobFn, kind: str, *, title: str, action: str = "", prefix: str | None = None,
+            tool: str | None = None, project_path: str | None = None, project: str | None = None,
+            data: dict | None = None, on_cancel: Callable[[Job], Awaitable[None]] | None = None) -> Job:
+        """Run `await fn(job)` as a background task of this server. Its return value becomes job.result
+        (succeeded); a ToolError or other exception fails the job with its message (job.exc keeps it);
+        cancel() cancels the task after awaiting `on_cancel(job)`. Ids are '<prefix or kind>-<n>'."""
+        self.prune()
+        job = Job(id=f"{prefix or kind}-{next(self._ids)}", kind=kind, action=action or kind, title=title,
+                  project_path=project_path, project=project, stream=False, tool=tool, data=dict(data or {}),
+                  on_cancel=on_cancel)
+        self.jobs[job.id] = job
+        job._task = asyncio.create_task(self._run_task(job, fn), name=f"job-{job.id}")
+        job._task.add_done_callback(lambda t: self._settle(job, t))
+        return job
+
+    def _settle(self, job: Job, task: asyncio.Task) -> None:
+        """A task cancelled before its first step never ran _run_task: still end its job."""
+        if not job.finished:
+            job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
+            self._finish(job, "cancelled" if task.cancelled() or job.cancel_requested else "failed")
+
+    async def _run_task(self, job: Job, fn: JobFn) -> None:
+        try:
+            res = await fn(job)
+        except (asyncio.CancelledError, JobCancelled):
+            job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
+            self._finish(job, "cancelled")
+        except Exception as exc:  # noqa: BLE001  any failure ends the job, with its message
+            job.exc = exc
+            if job.cancel_requested:
+                job.error = {"code": "cancelled", "message": "Cancelled."}
+                self._finish(job, "cancelled")
+            else:
+                code = getattr(exc, "code", None)
+                job.error = {"code": code if isinstance(code, str) and code else
+                             ("failed" if isinstance(exc, ToolError) else "internal"),
+                             "message": str(exc) or type(exc).__name__}
+                if not isinstance(exc, ToolError):
+                    log.debug("job %s failed", job.id, exc_info=exc)
+                self._finish(job, "failed")
+        else:
+            if not job.finished:
+                job.result = res
+                if job.cancel_requested:      # the work stopped early on on_cancel: cancelled, result kept
+                    job.error = {"code": "cancelled", "message": "Stopped early; what it did so far is in the result."}
+                self._finish(job, "cancelled" if job.cancel_requested else "succeeded")
+
+    def prune(self, now: float | None = None) -> None:
+        """Forget finished jobs older than FINISHED_TTL, and all but the newest KEEP_PER_KIND per kind."""
+        now = time.time() if now is None else now
+        per_kind: dict[str, int] = {}
+        for j in reversed(list(self.jobs.values())):
+            if not j.finished:
+                continue
+            per_kind[j.kind] = per_kind.get(j.kind, 0) + 1
+            if per_kind[j.kind] > KEEP_PER_KIND or (j.ended and now - j.ended > FINISHED_TTL):
+                self.jobs.pop(j.id, None)
 
     # ---------------------------------------------------------------- event pump
     async def _pump(self, job: Job) -> None:
@@ -340,6 +454,8 @@ class JobManager:
         job.state = state
         job.ended = time.time()
         job.pending_prompt = None
+        if job._answer is not None and not job._answer.done():
+            job._answer.cancel()
         if job.proc and job.proc.stdin and not job.proc.stdin.is_closing():
             try:
                 job.proc.stdin.close()
@@ -357,7 +473,7 @@ class JobManager:
         if len(job.lines) > FINISHED_LINES:
             if not job.info.get("logFile") and not job.info.get("spillFile"):
                 try:
-                    from .core import budget as B
+                    from . import budget as B
                     path, _, _ = B.spill("\n".join(job.lines), "build-logs", f"{job.id}.log")
                     job.info["spillFile"] = path
                     job.info["spillFirstLine"] = job.first_line
@@ -365,6 +481,7 @@ class JobManager:
                     pass
             job.lines = deque(list(job.lines)[-FINISHED_LINES:], maxlen=FINISHED_LINES)
         job.finisher = None
+        job.on_cancel = None
         if job.proc is not None and job.proc.returncode is not None:
             job.proc = None
 
@@ -396,8 +513,13 @@ class JobManager:
         if not p:
             raise ToolError(f"Job {job.id} isn't waiting for an answer right now (state {job.state}).")
         if str(p.get("id")) != prompt_id:
-            raise ToolError(f"The pending prompt is '{p.get('id')}', not '{prompt_id}'. Call ios_build_status first.")
-        await self._write(job, {"prompt": prompt_id, "value": value})
+            raise ToolError(f"The pending prompt is '{p.get('id')}', not '{prompt_id}'. Call ios_job_status first.")
+        if job.stream:
+            await self._write(job, {"prompt": prompt_id, "value": value})
+        elif job._answer is not None and not job._answer.done():
+            job._answer.set_result(value)
+        else:
+            raise ToolError(f"Job {job.id} can't receive input anymore.")
         job.answered.append({"id": prompt_id, "value": value})
         job.pending_prompt = None
         job.state = "running"
@@ -421,6 +543,8 @@ class JobManager:
             return job
         job.cancel_requested = True
         job.add_line("[cancel requested]")
+        if not job.stream:
+            return await self._cancel_task(job)
         ft = job._finisher_task
         if ft is not None and not ft.done():
             ft.cancel()
@@ -435,6 +559,25 @@ class JobManager:
         pump = job._task
         if pump is not None and not pump.done():
             await asyncio.wait({pump}, timeout=CANCEL_SETTLE)
+        if not job.finished:
+            job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
+            self._finish(job, "cancelled")
+        return job
+
+    async def _cancel_task(self, job: Job) -> Job:
+        """A coroutine job: its on_cancel hook first (the work may stop cleanly, e.g. the daemon ends a copy),
+        then cancel the task and wait for it."""
+        task = job._task
+        if job.on_cancel is not None:
+            try:
+                await asyncio.wait_for(job.on_cancel(job), 10)
+            except Exception:  # noqa: BLE001  best effort; the task is cancelled below anyway
+                log.debug("on_cancel of %s failed", job.id, exc_info=True)
+            if task is not None and not task.done():
+                await asyncio.wait({task}, timeout=5)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait({task}, timeout=CANCEL_SETTLE)
         if not job.finished:
             job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
             self._finish(job, "cancelled")
@@ -469,12 +612,19 @@ class JobManager:
         running = [j for j in self.jobs.values() if not j.finished]
         if running:
             log.info("stopping %d running job(s)", len(running))
-        await asyncio.gather(*(self._kill(j, graceful=False) for j in running), return_exceptions=True)
+        for j in running:
+            j.cancel_requested = True
+        streams = [j for j in running if j.stream]
+        await asyncio.gather(*(self._kill(j, graceful=False) for j in streams), return_exceptions=True)
+        tasks = []
         for j in running:
             if j._task and not j._task.done():
                 j._task.cancel()
+                tasks.append(j._task)
             if j.proc:
                 helper.kill_group(j.proc.pid)
+        if tasks:
+            await asyncio.wait(tasks, timeout=SHUTDOWN_SETTLE)
 
 
 # ---------------------------------------------------------------- refusals as diagnostics

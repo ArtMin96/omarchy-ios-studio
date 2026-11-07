@@ -1,8 +1,9 @@
 """Build tools (job pattern): start a build, poll it, read diagnostics and logs, answer prompts, cancel.
 
 Builds take 30 s to 10 min, longer than many clients' tool timeouts, so ios_build_start returns a
-build_id at once and ios_build_status long-polls (≤25 s per call). The same ids cover toolchain
-installs (t-N) and renewals (r-N).
+job_id at once and ios_job_status (tools/jobs.py) long-polls it (≤25 s per call); ios_job_respond and
+ios_job_cancel answer and stop it. The same tools cover every other job (toolchain installs t-N,
+renewals r-N, …).
 """
 from __future__ import annotations
 
@@ -22,15 +23,13 @@ from .. import helper
 from ..backends.builds import history, make_installer
 from ..backends.projects import resolve_project
 from ..core import budget as B
-from ..core.job_status import job_status, start_and_wait, wait_with_progress
+from ..core.job_status import start_and_wait
+from ..core.jobs import Job
 from ..core.params import MaxBytes, ProjectPath, Udid, WaitSeconds
 from ..core.registry import dry_run, page_of, tool
-from ..jobs import Job
-from ..models import ActionResult, BuildHistory, BuildStatus, DiagGroup, DiagnosticsPage, HistoryEntry, LogPage
+from ..models import ActionResult, BuildHistory, DiagGroup, DiagnosticsPage, HistoryEntry, JobStatus, LogPage
 from ..state import AppState, get_state
 
-BuildId = Annotated[str, Field(description="Id from ios_build_start / ios_run / ios_project_renew / "
-                                           "ios_toolchain_install, e.g. 'b-1'")]
 Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="How to install: auto prefers the USB cable "
                                                                   "when plugged in, else Wi-Fi")]
 Config = Annotated[Literal["debug", "release"], Field(description="Build configuration")]
@@ -44,13 +43,13 @@ LEVEL_RX = {"error": re.compile(r"\berror\b|\bfatal\b|\bfailed\b|\bfailure\b", r
 
 
 async def start_build(state: AppState, ctx: Context, project_path: str, action: str, config: str,
-                      udid: str | None, via: str, wait_seconds: int, preset: str | None = None) -> BuildStatus:
+                      udid: str | None, via: str, wait_seconds: int, preset: str | None = None) -> JobStatus:
     p = await resolve_project(state, project_path)
     path = p["path"]
     busy = state.jobs.running_for(path)
     if busy:
         raise ToolError(f"{p.get('name')} already has a running job {busy.id} ({busy.title}). Poll it with "
-                        f"ios_build_status('{busy.id}') or stop it with ios_build_cancel.")
+                        f"ios_job_status(job_id='{busy.id}') or stop it with ios_job_cancel.")
     flags: dict = {"path": path, "config": config}
     if preset and action == "run":
         # An unknown name fails here, listing the project's presets, instead of as a failed job.
@@ -262,10 +261,10 @@ def register(mcp: MCPServer) -> None:
         udid: Udid = None,
         via: Via = "auto",
         wait_seconds: WaitSeconds = 0,
-    ) -> BuildStatus:
-        """Start a build in the background and return its build_id immediately (or after wait_seconds).
+    ) -> JobStatus:
+        """Start a build in the background and return its job_id immediately (or after wait_seconds).
 
-        Then poll ios_build_status(build_id, wait_seconds=20) until state is succeeded/failed; on failure
+        Then poll ios_job_status(job_id, wait_seconds=20) until state is succeeded/failed; on failure
         read ios_build_diagnostics (compiler, linker, package, signing and device errors with fix hints) and,
         only if that isn't enough, ios_build_log. A first build resolves packages
         and can take several minutes; later ones are much faster. ipa/install/run sign with the user's
@@ -286,11 +285,11 @@ def register(mcp: MCPServer) -> None:
         preset: Annotated[str | None, Field(description="Launch with this run preset of the project (saved launch "
                                                         "args, env, language; see ios_project_presets), e.g. "
                                                         "'German'")] = None,
-    ) -> BuildStatus:
+    ) -> JobStatus:
         """Build, sign, install and launch the app on the iPhone in one call: the "run it" button.
 
-        Waits up to wait_seconds; if the build is still going it returns state='running' with the build_id,
-        so keep polling ios_build_status. Over USB xtool installs the app; over Wi-Fi the server installs
+        Waits up to wait_seconds; if the build is still going it returns state='running' with the job_id,
+        so keep polling ios_job_status. Over USB xtool installs the app; over Wi-Fi the server installs
         the signed .ipa through the device tools. Either way the server then launches it (xtool doesn't).
         When it can't install, `result.needs_install` is true and next_steps says what to do. Needs a
         signed-in Apple ID and a connected iPhone (check ios_status first). preset='<name>' launches with
@@ -301,32 +300,10 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds, preset)
 
-    @tool(mcp, "Build status", kind="read")
-    async def ios_build_status(
-        ctx: Context,
-        build_id: BuildId,
-        wait_seconds: WaitSeconds = 20,
-        verbose: Annotated[bool, Field(description="Full view (steps, diagnostics) even while running")] = False,
-    ) -> BuildStatus:
-        """State of a build or other job: running / needs_input / succeeded / failed / cancelled.
-
-        While running it returns a small delta (view='delta'): step, progress, ETA, error and warning counts,
-        and what is new since your last poll (new_log_lines, new_errors). When the job finishes or needs
-        input, or with verbose=true, it returns the full view: steps, the top 5 grouped diagnostics, any
-        prompt for the human, the result (ipa path, installed, launched) and next_steps.
-
-        Long-polls: returns early when the job finishes or needs input, else after wait_seconds (≤25).
-        If state is needs_input, show pending_prompt to the user and answer with ios_build_respond.
-        """
-        state = get_state(ctx)
-        job = state.jobs.get(build_id)
-        await wait_with_progress(state, job, wait_seconds, ctx)
-        return job_status(job, verbose=verbose)
-
     @tool(mcp, "Build diagnostics", kind="read")
     async def ios_build_diagnostics(
         ctx: Context,
-        build_id: Annotated[str | None, Field(description="A job from this session, or a watch build 'w-N' "
+        job_id: Annotated[str | None, Field(description="A build job from this session, or a watch build 'w-N' "
                                                           "(ios_watch_status); omit to use project_path")] = None,
         project_path: Annotated[str | None, Field(description="Use the latest build of this project (live or "
                                                               "from history)")] = None,
@@ -348,7 +325,7 @@ def register(mcp: MCPServer) -> None:
         ios_project_check). `categories` counts entries per category. Paginated with
         offset/next_offset; notes are left out unless include_notes=true.
 
-        Pass build_id for a build started in this session, or project_path for that project's latest
+        Pass job_id for a build started in this session, or project_path for that project's latest
         build (also from earlier sessions, builds done in the app or watch mode's, whichever is newest). Fix the files, then rebuild with
         ios_build_start(action='compile').
         """
@@ -357,12 +334,12 @@ def register(mcp: MCPServer) -> None:
         result = project = root = None
         h: dict | None = None             # the history entry, when the diagnostics come from there
         job = None
-        if build_id and build_id.strip().startswith("w-") and build_id.strip() not in state.jobs.jobs:
-            h = await _watch_build(build_id.strip())     # watch mode's builds live in the build history
-            diags, source, project, result, root = h.get("diagnostics") or [], f"history (watch build {build_id})", \
+        if job_id and job_id.strip().startswith("w-") and job_id.strip() not in state.jobs.jobs:
+            h = await _watch_build(job_id.strip())     # watch mode's builds live in the build history
+            diags, source, project, result, root = h.get("diagnostics") or [], f"history (watch build {job_id})", \
                 h.get("project"), h.get("result"), h.get("path")
-        elif build_id:
-            job = state.jobs.get(build_id)
+        elif job_id:
+            job = state.jobs.get(job_id)
             diags, source, project, result, root = job.diagnostics, f"build {job.id}", job.project, job.state, \
                 job.project_path
         elif project_path:
@@ -387,7 +364,7 @@ def register(mcp: MCPServer) -> None:
         else:
             jobs = [j for j in state.jobs.jobs.values() if j.kind == "build"]
             if not jobs:
-                raise ToolError("Pass build_id or project_path.")
+                raise ToolError("Pass job_id or project_path.")
             job = jobs[-1]
             diags, source, project, result, root = job.diagnostics, f"build {job.id}", job.project, job.state, \
                 job.project_path
@@ -446,7 +423,7 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Build log", kind="read")
     async def ios_build_log(
         ctx: Context,
-        build_id: Annotated[str | None, Field(description="A job from this session (live output)")] = None,
+        job_id: Annotated[str | None, Field(description="A build job from this session (live output)")] = None,
         project_path: Annotated[str | None, Field(description="Latest build log of this project")] = None,
         log_file: Annotated[str | None, Field(description="A log_file from ios_build_history")] = None,
         grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Case-insensitive regex; only "
@@ -479,13 +456,13 @@ def register(mcp: MCPServer) -> None:
         first = 0
         job = None
         from_disk = False
-        if not build_id and not log_file and project_path:
+        if not job_id and not log_file and project_path:
             proj = await resolve_project(state, project_path)
             live = state.jobs.latest_for(proj["path"])
             if live:
-                build_id = live.id
-        if build_id:
-            job = state.jobs.get(build_id)
+                job_id = live.id
+        if job_id:
+            job = state.jobs.get(job_id)
             lfile = job.info.get("logFile")
             disk = lfile if job.finished and job.first_line > 0 and isinstance(lfile, str) else None
             loaded = await asyncio.to_thread(read_log, Path(disk)) if disk else None
@@ -508,7 +485,7 @@ def register(mcp: MCPServer) -> None:
                 if not want:
                     raise ToolError(f"{p.get('name')} has no build logs yet. Start a build with ios_build_start.")
             else:
-                raise ToolError("Pass build_id, project_path or log_file.")
+                raise ToolError("Pass job_id, project_path or log_file.")
             path = build_log_path(want)
             loaded = await asyncio.to_thread(read_log, path) if path else None
             if loaded is not None:
@@ -545,48 +522,6 @@ def register(mcp: MCPServer) -> None:
                        truncated=bool(note), omitted=max(0, candidates - r["returned_lines"]), note=note,
                        full_output_path=full).with_budget(max_bytes, links)
 
-    @tool(mcp, "Answer build prompt", kind="destructive", open_world=True)
-    async def ios_build_respond(
-        ctx: Context,
-        build_id: BuildId,
-        prompt_id: Annotated[str, Field(description="pending_prompt.id from ios_build_status, e.g. 'p1'")],
-        value: Annotated[str, Field(description="One of pending_prompt.options[].value, e.g. 'no'")],
-        confirm: Annotated[bool, Field(description="Required (true) for a destructive option, only after the user "
-                                                   "explicitly chose it")] = False,
-    ) -> BuildStatus:
-        """Answer a question a running job is waiting on (state needs_input), e.g. "Replace your signing
-        certificate?" during a build or "Install everything?" during a toolchain install.
-
-        Always show the prompt to the user and send THEIR answer; never decide for them. Options marked
-        destructive (like revoking a certificate, which stops apps signed elsewhere from opening) also
-        need confirm=true. Returns the job status after the answer.
-        """
-        state = get_state(ctx)
-        job = state.jobs.get(build_id)
-        p = job.pending_prompt or {}
-        opts = [o for o in p.get("options") or [] if isinstance(o, dict)]
-        chosen = next((o for o in opts if str(o.get("value")) == value), None)
-        if opts and chosen is None:
-            vals = ", ".join(repr(str(o.get("value"))) for o in opts)
-            raise ToolError(f"'{value}' isn't an option. Valid values: {vals}.")
-        if chosen and chosen.get("destructive") and not confirm:
-            raise ToolError(f"Not sent: '{chosen.get('label') or value}' is destructive. Show the user the prompt "
-                            f"message and options; only if they explicitly choose it, call again with "
-                            f"confirm=true. The job keeps waiting meanwhile.")
-        await state.jobs.respond(job, prompt_id, value)
-        await wait_with_progress(state, job, 2, ctx)
-        return job_status(job)
-
-    @tool(mcp, "Cancel build", kind="write", idempotent=True)
-    async def ios_build_cancel(ctx: Context, build_id: BuildId) -> BuildStatus:
-        """Stop a running build or job and everything it started (xtool, swift-build), and wait until it
-        has stopped. Cancelled before the install step, nothing is installed or launched; cancelled while
-        an ios_run is installing over Wi-Fi, the iPhone may still finish that install but the app isn't
-        launched (the status `error` says which). Returns the final status."""
-        state = get_state(ctx)
-        job = await state.jobs.cancel(state.jobs.get(build_id))
-        return job_status(job)
-
     @tool(mcp, "Build history", kind="read")
     async def ios_build_history(
         ctx: Context,
@@ -619,7 +554,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         if state.jobs.running_for(p["path"]):
-            raise ToolError("A build of this project is running; cancel it first (ios_build_cancel).")
+            raise ToolError("A build of this project is running; cancel it first (ios_job_cancel).")
         targets = [f"{p['path']}/.build", f"{p['path']}/xtool"]
         if not confirm:
             return dry_run(f"This would delete the build folders of {p.get('name')}.",

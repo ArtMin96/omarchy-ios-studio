@@ -11,7 +11,7 @@ import unittest
 from iosstudio.features import diagnostics as D
 from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.core.job_status import job_next_steps
-from iosstudio_mcp.jobs import Job
+from iosstudio_mcp.core.jobs import Job
 from iosstudio_mcp.models import DiagGroup, DiagnosticsPage
 from support import ROOT
 

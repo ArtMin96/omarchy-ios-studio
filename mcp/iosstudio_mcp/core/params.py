@@ -23,3 +23,7 @@ WaitSeconds = Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: re
 PresetName = Annotated[str | None, Field(description="A run preset saved for the app's project (see "
                                                      "ios_project_presets), e.g. 'German'. Its launch arguments come "
                                                      "first, then `args`; `env` overrides its environment")]
+JobId = Annotated[str, Field(description="A job id from a tool that started a background job (e.g. 'b-1' from "
+                                         "ios_build_start, 'install-3' from ios_app_install)")]
+OptJobId = Annotated[str | None, Field(description="Keep waiting for a job this tool started earlier (its job_id) "
+                                                   "instead of starting one")]

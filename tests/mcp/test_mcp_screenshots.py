@@ -254,7 +254,7 @@ class Matrix(Base):
         cfgs = [{"name": f"Config{i:02d}", "language": "de"} for i in range(12)]
         names = [f"Screen{i:02d}" for i in range(12)] [:11] + [{"name": "Settings", "press": "Settings"}]
         res = await self.start(configs=cfgs, names=names, wait_seconds=10)
-        self.assertEqual((res.state, res.total, res.captured), ("done", 144, 144))
+        self.assertEqual((res.state, res.total, res.captured), ("succeeded", 144, 144))
         r = T.to_result(res)
         self.assertLessEqual(size_of(r), B.DEFAULT_BYTES)
         self.assertLessEqual(len(res.shots), T.SHOTS_PAGE)
@@ -262,7 +262,7 @@ class Matrix(Base):
         self.assertTrue(res.full_output_path.endswith("manifest.json"))
         self.assertIn(("ui.press", {"label": "Settings", "match": "exact", "bundleId": "XTL-T.com.example.myapp"}),
                       self.dcalls)
-        page = await self.tools["ios_screenshot_matrix"](self.ctx, matrix_id=res.matrix_id, offset=140)
+        page = await self.tools["ios_screenshot_matrix"](self.ctx, job_id=res.job_id, offset=140)
         self.assertEqual((len(page.shots), page.next_offset), (4, None))
         self.assertEqual(self.dcalls[-1], ("app.kill", {"bundleId": "XTL-T.com.example.myapp"}))   # wasn't running
         self.assertEqual(self.finish(), {"project": PROJECT["path"], "set": "S1", "state": "done", "error": None,
@@ -274,15 +274,15 @@ class Matrix(Base):
         self.assertEqual(res.state, "running")
         self.assertEqual(res.shots, [])
         self.assertLess(size_of(T.to_result(res)), 1500)
-        done = await self.tools["ios_screenshot_matrix"](self.ctx, matrix_id=res.matrix_id, wait_seconds=10)
-        self.assertEqual((done.state, done.captured), ("done", 2))
+        done = await self.tools["ios_screenshot_matrix"](self.ctx, job_id=res.job_id, wait_seconds=10)
+        self.assertEqual((done.state, done.captured), ("succeeded", 2))
         self.assertEqual([c for c in done.configs], ["German", "French"])
 
     async def test_launch_failure_is_recorded_and_app_relaunched(self):
         self.running = True
         self.fail_launch = {"-A"}
         res = await self.start(configs=[{"name": "A"}], names=["Home", "Settings"], wait_seconds=10)
-        self.assertEqual((res.state, res.captured, res.failed), ("done", 0, 2))
+        self.assertEqual((res.state, res.captured, res.failed), ("succeeded", 0, 2))
         self.assertTrue(all("Launch failed" in s.error for s in res.shots))
         self.assertEqual(self.dcalls[-1], ("app.launch", {"bundleId": "XTL-T.com.example.myapp"}))
         self.assertIn("relaunched", res.app_restored)
@@ -291,7 +291,9 @@ class Matrix(Base):
         self.slow = 0.3
         res = await self.start(configs=[{"name": f"C{i}"} for i in range(6)], names=["Home"], wait_seconds=0.5)
         self.assertEqual(res.state, "running")
-        res = await self.tools["ios_screenshot_matrix"](self.ctx, matrix_id=res.matrix_id, cancel=True)
+        job = await self.state.jobs.cancel(self.state.jobs.get(res.job_id))     # ios_job_cancel
+        self.assertEqual(job.state, "cancelled")
+        res = await self.tools["ios_screenshot_matrix"](self.ctx, job_id=res.job_id)
         self.assertEqual(res.state, "cancelled")
         self.assertLess(res.captured, 6)
         self.assertEqual(len(res.shots), res.captured + res.failed)
@@ -312,17 +314,15 @@ class Matrix(Base):
 
     async def test_errors(self):
         with self.assertRaises(ToolError):
-            await self.tools["ios_screenshot_matrix"](self.ctx, matrix_id="matrix-99")
-        with self.assertRaises(ToolError):
-            await self.tools["ios_screenshot_matrix"](self.ctx, cancel=True)
+            await self.tools["ios_screenshot_matrix"](self.ctx, job_id="matrix-99")
         with self.assertRaises(ToolError):
             await self.tools["ios_screenshot_matrix"](self.ctx)
 
     async def test_shutdown_cancels(self):
         self.slow = 1.0
         res = await self.start(configs=[{"name": f"C{i}"} for i in range(5)], wait_seconds=0)
-        await T.on_shutdown(self.state)
-        job = T._hub(self.state)["jobs"][res.matrix_id]
+        await self.state.jobs.shutdown()
+        job = self.state.jobs.get(res.job_id)
         self.assertEqual(job.state, "cancelled")
         await asyncio.sleep(0.05)              # cancelled before its first step: the manifest is finished too
         self.assertEqual(self.finish()["state"], "cancelled")

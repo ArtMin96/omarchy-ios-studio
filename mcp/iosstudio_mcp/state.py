@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable
 from mcp.server.mcpserver import Context
 
 from . import helper
-from .jobs import Job, JobManager
+from .core.jobs import Job, JobManager
 
 DEVICE_STATE = Path.home() / ".local/state/ios-studio/device.json"
 

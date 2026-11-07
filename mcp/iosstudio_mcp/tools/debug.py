@@ -33,9 +33,9 @@ from .. import helper
 from ..backends.device import dcall, resolve_app
 from ..core import budget as B
 from ..core.job_status import wait_with_progress
+from ..core.jobs import Job
 from ..core.params import BundleId, Udid
 from ..core.registry import MAX_WAIT, tool
-from ..jobs import Job
 from ..models import ActionResult, ErrorInfo, Out
 from ..state import AppState, get_state
 

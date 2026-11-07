@@ -5,9 +5,9 @@ as a screen's baseline or compares it with the saved one: diff %, verdict, the c
 status bar is masked. Image bytes only with include_image=true (the diff image, small).
 
 ios_screenshot_matrix launches the app once per launch config (run presets or inline language/region/args/env) and
-captures each named screen, saving one image per config x name into a set folder with a manifest. It's a background
-job inside this server: the first call starts it and waits up to wait_seconds; call again with matrix_id to wait
-more, page the shots, or cancel=true. Partial results stay on disk; at the end the app is put back the way it was
+captures each named screen, saving one image per config x name into a set folder with a manifest. It's a job of
+this server (core/jobs.py, kind 'matrix'): the first call starts it and waits up to wait_seconds; call again with
+job_id to wait more or page the shots; ios_job_cancel stops it. Partial results stay on disk; at the end the app is put back the way it was
 (relaunched plainly if it was running before, else stopped).
 
 ios_screenshot_baselines lists a project's baselines, or deletes one (dry run unless confirm=true).
@@ -17,10 +17,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import itertools
 import json
 import logging
-import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -33,6 +32,8 @@ from .. import helper
 from ..backends.device import apps, dcall, launch, match_app
 from ..backends.projects import resolve_project
 from ..core import budget as B
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import MaxBytes, ProjectPath, Udid
 from ..core.registry import MAX_WAIT, fit_page, to_result, tool
 from ..models import Out, iso
@@ -44,7 +45,6 @@ REGIONS_CAP = 10          # regions listed per compare (biggest first)
 IMAGE_DIM = 512           # include_image: long edge of the inline diff image
 IMAGE_BYTES = 80_000      # ... and its size cap
 SHOTS_PAGE = 20           # matrix shots per page
-KEEP_JOBS = 10            # finished matrix jobs remembered per server
 HELPER_TIMEOUT = 90       # a pure-Python compare of a full-size screenshot takes a few seconds
 
 ScreenName = Annotated[str, Field(min_length=1, max_length=60, description="Screen name the baseline is saved "
@@ -143,8 +143,8 @@ class MatrixShot(Out):
 
 
 class MatrixStatus(B.Budgeted, Out):
-    matrix_id: str
-    state: Literal["running", "done", "failed", "cancelled"]
+    job_id: str = Field(description="The matrix's job: call ios_screenshot_matrix(job_id=...) to wait or page")
+    state: Literal["running", "succeeded", "failed", "cancelled"]
     project: str
     bundle_id: str | None = None
     configs: list[str] = Field(default_factory=list, description="Config keys (folder names), in order")
@@ -232,38 +232,37 @@ def compare_model(d: dict, saved: bool = False) -> CompareResult:
 
 # ------------------------------------------------------------------ matrix job
 
-class MatrixJob:
-    def __init__(self, jid: str, plan: dict, project: str, bundle: str, udid: str | None, settle: float):
-        self.id = jid
-        self.plan = plan
-        self.project = project
-        self.bundle = bundle
-        self.udid = udid
-        self.settle = settle
-        self.state = "running"
-        self.current: str | None = None
-        self.shots: list[dict] = []
-        self.error: str | None = None
-        self.restored: str | None = None
-        self.t0 = time.monotonic()
-        self.t1: float | None = None
-        self.task: asyncio.Task | None = None
-
-    @property
-    def finished(self) -> bool:
-        return self.state != "running"
+@dataclass
+class Matrix:
+    """A matrix's own state, kept in its job's data["matrix"]."""
+    plan: dict
+    project: str
+    bundle: str
+    udid: str | None
+    settle: float
+    current: str | None = None
+    shots: list[dict] = field(default_factory=list)
+    restored: str | None = None
+    manifest_done: bool = False
 
     @property
     def total(self) -> int:
         return len(self.plan["configs"]) * len(self.plan["names"])
 
 
-def _hub(state: AppState) -> dict:
-    return state.extras.setdefault("screenshots.matrix", {"jobs": {}, "ids": itertools.count(1)})
+def _m(job: Job) -> Matrix:
+    return job.data["matrix"]
 
 
-async def _record(job: MatrixJob, cfg: str, name: str, shot: str | None = None, error: str | None = None) -> None:
-    flags: dict = {"project": job.plan["project"], "set": job.plan["set_id"], "config": cfg, "name": name}
+def _at(job: Job, current: str | None) -> None:
+    m = _m(job)
+    m.current = current
+    job.report(len(m.shots) / max(1, m.total), current)
+
+
+async def _record(job: Job, cfg: str, name: str, shot: str | None = None, error: str | None = None) -> None:
+    m = _m(job)
+    flags: dict = {"project": m.plan["project"], "set": m.plan["set_id"], "config": cfg, "name": name}
     if shot:
         flags["shot"] = shot
     else:
@@ -272,133 +271,128 @@ async def _record(job: MatrixJob, cfg: str, name: str, shot: str | None = None, 
         d = await helper.call("screenshots", "matrix-save", flags, timeout=HELPER_TIMEOUT) or {}
     except ToolError as exc:
         d = {"config": cfg, "name": name, "error": B.clip_error(str(exc))}
-    job.shots.append(d)
+    m.shots.append(d)
+    _at(job, m.current)
 
 
-async def _restore(state: AppState, job: MatrixJob, was_running: bool | None, app_id: str | None) -> None:
+async def _restore(state: AppState, m: Matrix, was_running: bool | None, app_id: str | None) -> None:
     """Put the app back: relaunched plainly (no matrix args) if it ran before the matrix, else stopped."""
     if not app_id:
-        job.restored = "not launched"
+        m.restored = "not launched"
         return
     try:
         if was_running:
-            await dcall(state, "app.launch", {"bundleId": app_id}, udid=job.udid, timeout=60)
-            job.restored = "relaunched without the matrix's launch arguments (it was running before)"
+            await dcall(state, "app.launch", {"bundleId": app_id}, udid=m.udid, timeout=60)
+            m.restored = "relaunched without the matrix's launch arguments (it was running before)"
         else:
-            await dcall(state, "app.kill", {"bundleId": app_id}, udid=job.udid, timeout=20)
-            job.restored = "stopped (it wasn't running before)"
+            await dcall(state, "app.kill", {"bundleId": app_id}, udid=m.udid, timeout=20)
+            m.restored = "stopped (it wasn't running before)"
     except (ToolError, Exception) as exc:  # noqa: BLE001
-        job.restored = f"couldn't be restored: {B.clip_error(str(exc))}"
+        m.restored = f"couldn't be restored: {B.clip_error(str(exc))}"
 
 
-async def _run(state: AppState, job: MatrixJob) -> None:
-    names = job.plan["names"]
+async def _run(state: AppState, job: Job) -> dict:
+    m = _m(job)
+    names = m.plan["names"]
     app_id, was_running = None, None
+    end_state, error = "failed", None
     try:
-        try:
-            items = await apps(state, job.udid)
-            a = match_app(items, job.bundle)
-            if a is None:
-                raise ToolError(f"No app '{job.bundle}' is installed on the iPhone. Install it with "
-                                "ios_run(project_path) first.")
-            app_id, was_running = a["bundleId"], bool(a.get("running"))
-        except ToolError as exc:
-            job.error = B.clip_error(str(exc))
-            job.state = "failed"
-            return
-        for cfg in job.plan["configs"]:
+        items = await apps(state, m.udid)
+        a = match_app(items, m.bundle)
+        if a is None:
+            raise ToolError(f"No app '{m.bundle}' is installed on the iPhone. Install it with "
+                            "ios_run(project_path) first.")
+        app_id, was_running = a["bundleId"], bool(a.get("running"))
+        for cfg in m.plan["configs"]:
             key = cfg["key"]
-            job.current = f"{key} (launching)"
+            _at(job, f"{key} (launching)")
             try:
-                await launch(state, job.udid, app_id, cfg.get("args") or None, cfg.get("env") or None)
+                await launch(state, m.udid, app_id, cfg.get("args") or None, cfg.get("env") or None)
             except ToolError as exc:
                 for n in names:
                     await _record(job, key, n["name"], error=f"Launch failed: {B.clip_error(str(exc))}")
                 continue
-            await asyncio.sleep(job.settle)
+            await asyncio.sleep(m.settle)
             for n in names:
-                job.current = f"{key}/{n['name']}"
+                _at(job, f"{key}/{n['name']}")
                 try:
                     if n.get("press"):
                         await dcall(state, "ui.press", {"label": n["press"], "match": "exact", "bundleId": app_id},
-                                    udid=job.udid, timeout=40)
+                                    udid=m.udid, timeout=40)
                     if n.get("wait"):
                         await asyncio.sleep(float(n["wait"]))
-                    shot = await _capture(state, job.udid)
+                    shot = await _capture(state, m.udid)
                 except ToolError as exc:
                     await _record(job, key, n["name"], error=B.clip_error(str(exc)))
                     continue
                 await _record(job, key, n["name"], shot=str(shot["path"]))
-        job.state = "done"
+        end_state = "done"
+        return {"set_dir": _t(m.plan.get("set_dir")), "captured": sum(1 for x in m.shots if x.get("path")),
+                "total": m.total}
     except asyncio.CancelledError:
-        job.state = "cancelled"
+        end_state = "cancelled"
         raise
-    except Exception as exc:  # noqa: BLE001
+    except ToolError as exc:
+        error = B.clip_error(str(exc))
+        raise
+    except Exception as exc:
         log.exception("screenshot matrix %s failed", job.id)
-        job.state, job.error = "failed", B.clip_error(str(exc) or exc.__class__.__name__)
+        error = B.clip_error(str(exc) or exc.__class__.__name__)
+        raise ToolError(error) from None
     finally:
-        job.current = None
-        await asyncio.shield(_restore(state, job, was_running, app_id))
-        job.t1 = time.monotonic()
-        await asyncio.shield(_finish(job))
+        m.current = None
+        await asyncio.shield(_restore(state, m, was_running, app_id))
+        await asyncio.shield(_finish(job, end_state, error))
 
 
-async def _finish(job: MatrixJob) -> None:
+async def _finish(job: Job, end_state: str, error: str | None) -> None:
     """Write how the matrix ended into its manifest (state, error, app_restored, finished)."""
-    flags = {"project": job.plan.get("project"), "set": job.plan.get("set_id"),
-             "state": job.state if job.state in ("done", "cancelled", "failed") else "failed",
-             "error": job.error, "restored": job.restored}
+    m = _m(job)
+    m.manifest_done = True
+    flags = {"project": m.plan.get("project"), "set": m.plan.get("set_id"), "state": end_state,
+             "error": error, "restored": m.restored}
     try:
         await helper.call("screenshots", "matrix-finish", flags, timeout=HELPER_TIMEOUT)
     except Exception as exc:  # noqa: BLE001  the shots are on disk either way
         log.warning("couldn't finish the manifest of %s: %s", job.id, exc)
 
 
-def _on_done(job: MatrixJob, task: asyncio.Task) -> None:
-    """A job cancelled before its first step never ran _run's finally: mark it and its manifest cancelled."""
-    if task.cancelled() and job.state == "running":
-        job.state, job.t1 = "cancelled", time.monotonic()
+def _on_done(job: Job, task: asyncio.Task) -> None:
+    """A job cancelled before its first step never ran _run's finally: finish its manifest as cancelled."""
+    if not _m(job).manifest_done:
         with contextlib.suppress(RuntimeError):
-            asyncio.get_running_loop().create_task(_finish(job))
+            asyncio.get_running_loop().create_task(_finish(job, "cancelled", None))
 
 
-def matrix_status(job: MatrixJob, offset: int = 0, limit: int = SHOTS_PAGE, max_bytes: int | None = None
+def matrix_status(job: Job, offset: int = 0, limit: int = SHOTS_PAGE, max_bytes: int | None = None
                   ) -> MatrixStatus:
-    ok = [s for s in job.shots if s.get("path")]
-    elapsed = round((job.t1 or time.monotonic()) - job.t0, 1)
+    mx = _m(job)
+    ok = [s for s in mx.shots if s.get("path")]
+    err = (job.error or {}).get("message") if job.state == "failed" else None
     m = MatrixStatus(
-        matrix_id=job.id, state=job.state, project=job.project, bundle_id=job.bundle,
-        configs=[c["key"] for c in job.plan["configs"]], names=[n["name"] for n in job.plan["names"]],
-        total=job.total, captured=len(ok), failed=len(job.shots) - len(ok), current=job.current,
-        elapsed_seconds=elapsed, set_dir=_t(job.plan.get("set_dir")), app_restored=job.restored, error=job.error,
-        full_output_path=_t(job.plan.get("manifest_path")))
+        job_id=job.id, state=job.state if job.state != "needs_input" else "running", project=mx.project,
+        bundle_id=mx.bundle, configs=[c["key"] for c in mx.plan["configs"]], names=[n["name"] for n in mx.plan["names"]],
+        total=mx.total, captured=len(ok), failed=len(mx.shots) - len(ok), current=mx.current,
+        elapsed_seconds=job.elapsed, set_dir=_t(mx.plan.get("set_dir")), app_restored=mx.restored,
+        error=B.clip_error(str(err)) if err else None, full_output_path=_t(mx.plan.get("manifest_path")))
     if not job.finished:
-        m.next_steps = [f"Running ({len(job.shots)}/{job.total}). Call ios_screenshot_matrix(matrix_id='{job.id}') "
-                        "to wait, or cancel=true."]
+        m.next_steps = [f"Running ({len(mx.shots)}/{mx.total}). " + still_running(job)]
         return m.with_budget(max_bytes)
-    page = job.shots[offset:offset + limit]
+    page = mx.shots[offset:offset + limit]
     m.shots = [MatrixShot(config=str(s.get("config")), name=str(s.get("name")), path=_t(s.get("path")),
                           width=s.get("width"), height=s.get("height"),
                           error=B.clip(s["error"], 200) if s.get("error") else None) for s in page]
     end = offset + len(page)
-    m.next_offset = end if end < len(job.shots) else None
+    m.next_offset = end if end < len(mx.shots) else None
     if m.next_offset is not None:
-        m.truncated, m.omitted = True, len(job.shots) - len(page)
-        m.note = (f"Shots {offset}-{end - 1} of {len(job.shots)}; call again with matrix_id and offset={end}, or read "
+        m.truncated, m.omitted = True, len(mx.shots) - len(page)
+        m.note = (f"Shots {offset}-{end - 1} of {len(mx.shots)}; call again with job_id and offset={end}, or read "
                   "the manifest at full_output_path.")
     m.next_steps = ["Compare one with ios_screenshot_compare(shot_path=<path>, name=...), or open set_dir."] \
         if ok and offset == 0 else []
     m.with_budget(max_bytes)
-    return fit_page(m, "shots", offset, lambda k, e: f"Shots {offset}-{e - 1} of {len(job.shots)}; call again "
+    return fit_page(m, "shots", offset, lambda k, e: f"Shots {offset}-{e - 1} of {len(mx.shots)}; call again "
                                                       f"with offset={e}, or read the manifest at full_output_path.")
-
-
-async def on_shutdown(state: AppState) -> None:
-    for job in list(_hub(state)["jobs"].values()):
-        if job.task is not None and not job.task.done():
-            job.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await asyncio.wait_for(job.task, 10)
 
 
 # ------------------------------------------------------------------ tools
@@ -527,7 +521,7 @@ def register(mcp: MCPServer) -> None:
     async def ios_screenshot_matrix(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Project folder or name (needed to start; not with "
-                                                              "matrix_id)")] = None,
+                                                              "job_id)")] = None,
         presets: Annotated[list[str] | None, Field(description="Run preset names of the project (ios_project_presets), "
                                                                "one launch each")] = None,
         configs: Annotated[list[ConfigIn] | None, Field(description="Inline launch configs, e.g. [{'name': 'French', "
@@ -538,8 +532,7 @@ def register(mcp: MCPServer) -> None:
         bundle_id: Annotated[str | None, Field(description="Default: the project's bundle id")] = None,
         settle_seconds: Annotated[float, Field(ge=0, le=30, description="Wait after each launch before the first "
                                                                         "capture")] = 3.0,
-        matrix_id: Annotated[str | None, Field(description="Follow up a matrix started earlier")] = None,
-        cancel: Annotated[bool, Field(description="With matrix_id: stop it; shots taken so far are kept")] = False,
+        job_id: Annotated[str | None, Field(description="Follow up a matrix started earlier (its job_id)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT)] = MAX_WAIT,
         offset: Annotated[int, Field(ge=0, description="Finished: first shot of the page")] = 0,
         udid: Udid = None,
@@ -551,26 +544,16 @@ def register(mcp: MCPServer) -> None:
         settle_seconds each name in `names` is captured in order; a name with press=<label> presses that
         element first (as ios_ui_press), so screens are reached by chaining presses from the launch screen.
         One PNG per config x name in a set folder plus manifest.json (full_output_path). At most 12 configs
-        and 12 names. A background job: returns state='running' and a matrix_id; call again with it to wait,
-        page shots with offset, or cancel=true. Partial results stay. At the end the app is relaunched
+        and 12 names. A background job: returns state='running' and a job_id; call again with it to wait or
+        page shots with offset; ios_job_cancel stops it. Partial results stay. At the end the app is relaunched
         plainly if it was running before, else stopped. Needs the app installed (ios_run) and the phone
         unlocked; it relaunches the app, so unsaved state in it is lost."""
         state = get_state(ctx)
-        hub = _hub(state)
-        if matrix_id:
-            job = hub["jobs"].get(matrix_id.strip())
-            if job is None:
-                raise ToolError(f"Unknown matrix_id '{matrix_id}' (this server keeps the last {KEEP_JOBS}). The "
-                                "screenshots are still in the set folder.")
-            if cancel and job.task is not None and not job.task.done():
-                job.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await asyncio.wait_for(asyncio.shield(job.task), 30)
+        if job_id:
+            job = state.jobs.get(job_id, "matrix")
         else:
-            if cancel:
-                raise ToolError("cancel=true needs matrix_id.")
             if not project_path:
-                raise ToolError("Pass project_path to start a matrix (or matrix_id to follow one).")
+                raise ToolError("Pass project_path to start a matrix (or job_id to follow one).")
             p = await resolve_project(state, project_path)
             bundle = bundle_id or p.get("bundleId")
             if not bundle:
@@ -581,17 +564,9 @@ def register(mcp: MCPServer) -> None:
             plan = await helper.call("screenshots", "matrix-plan", {
                 "project": p["path"], "configs": json.dumps(cfg, ensure_ascii=False) if cfg else None,
                 "names": json.dumps(nms, ensure_ascii=False) if nms else None, "bundle": bundle})
-            job = MatrixJob(f"matrix-{next(hub['ids'])}", plan or {}, str(p.get("name") or p["path"]), bundle, udid,
-                            settle_seconds)
-            job.task = asyncio.create_task(_run(state, job))
+            mx = Matrix(plan or {}, str(p.get("name") or p["path"]), bundle, udid, settle_seconds)
+            job = state.jobs.run(lambda j: _run(state, j), "matrix", title=f"Screenshot matrix of {mx.project}",
+                                 tool="ios_screenshot_matrix", data={"matrix": mx})
             job.task.add_done_callback(lambda t, j=job: _on_done(j, t))
-            hub["jobs"][job.id] = job
-            done_ids = [k for k, j in hub["jobs"].items() if j.finished]
-            for old in done_ids[:-KEEP_JOBS]:
-                hub["jobs"].pop(old, None)
-        if job.task is not None and not job.task.done() and wait_seconds > 0:
-            end = time.monotonic() + wait_seconds
-            while not job.task.done() and time.monotonic() < end:
-                await ctx.report_progress(len(job.shots), max(1, job.total), message=job.current or job.state)
-                await asyncio.wait({job.task}, timeout=min(1.0, max(0.05, end - time.monotonic())))
+        await wait_with_progress(state, job, wait_seconds, ctx)
         return matrix_status(job, offset, SHOTS_PAGE, max_bytes)

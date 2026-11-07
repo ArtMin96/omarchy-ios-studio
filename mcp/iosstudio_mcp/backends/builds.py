@@ -10,7 +10,7 @@ import asyncio
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .. import helper
-from ..jobs import Job
+from ..core.jobs import Job
 from ..state import AppState
 
 DEMO_INSTALL_SECONDS = 1.5

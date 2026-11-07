@@ -20,7 +20,7 @@ from iosstudio_mcp import helper as H
 from iosstudio_mcp.backends import device as BD
 from iosstudio_mcp.backends import projects as P
 from iosstudio_mcp.core import budget as B
-from iosstudio_mcp.jobs import Job
+from iosstudio_mcp.core.jobs import Job
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import build as BUILD
 from iosstudio_mcp.tools import device as D

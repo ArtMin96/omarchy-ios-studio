@@ -7,12 +7,12 @@ computes the stats, so the tools here stay small: a summary first (~1-2 KB), dow
 request with the full CSV saved to a file, and events by cursor.
 
 ios_launch_profile and ios_memory_leaks change the app's state (relaunch / brief pause), so they
-take confirm (dry run by default) and run as jobs: poll by calling again with job_id.
+take confirm (dry run by default) and run as jobs (core/jobs.py, kinds 'launch-profile' and 'memory-leaks'):
+poll by calling again with job_id.
 """
 from __future__ import annotations
 
 import asyncio
-import itertools
 import time
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
@@ -24,6 +24,8 @@ from pydantic import Field
 from ..backends.device import dcall, resolve_app
 from ..core import budget as B
 from ..core.budget import Budgeted
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import Udid
 from ..core.registry import MAX_WAIT, tool
 from ..models import Out
@@ -122,7 +124,7 @@ class MetricsEvents(Budgeted, Out):
 class ProfileJob(Out):
     job_id: str | None = None
     kind: str = Field(description="launch-profile | memory-leaks")
-    state: str = Field(description="dry_run | running | succeeded | failed")
+    state: str = Field(description="dry_run | running | succeeded | failed | cancelled")
     message: str
     would: list[str] = Field(default_factory=list)
     elapsed_seconds: float | None = None
@@ -179,66 +181,38 @@ def _summary(snap: dict, extra_steps: list[str] | None = None) -> MetricsSummary
         next_steps=steps)
 
 
-def _jobs(state: AppState) -> dict:
-    return state.extras.setdefault("metrics.jobs", {})
-
-
-_job_ids = itertools.count(1)
-
-
-def _job_view(j: dict, steps: list[str] | None = None) -> ProfileJob:
-    st = j["state"]
-    msg = {"running": "Still running on the iPhone.", "succeeded": "Done.", "failed": "Failed."}.get(st, st)
-    out = ProfileJob(job_id=j["id"], kind=j["kind"], state=st, message=msg,
-                     elapsed_seconds=round((j.get("ended") or time.time()) - j["started"], 1),
-                     result=B.clip_data(j.get("result")) if j.get("result") else None,
-                     error=j.get("error"), next_steps=steps or [])
+def _job_view(j: Job, steps: list[str] | None = None) -> ProfileJob:
+    st = j.state
+    msg = {"running": "Still running on the iPhone.", "succeeded": "Done.", "failed": "Failed.",
+           "cancelled": "Cancelled."}.get(st, st)
+    res = j.result if isinstance(j.result, dict) else None
+    err = (j.error or {}).get("message") if st in ("failed", "cancelled") else None
+    out = ProfileJob(job_id=j.id, kind=j.kind, state=st, message=msg, elapsed_seconds=j.elapsed,
+                     result=B.clip_data(res) if res else None, error=B.clip_error(str(err)) if err else None,
+                     next_steps=steps or [])
     if st == "running":
-        out.next_steps.append(f"Call {j['tool']}(job_id='{j['id']}', wait_seconds=20) again for the result.")
-    elif st == "succeeded" and j.get("result", {}).get("verdict"):
-        out.message = str(j["result"]["verdict"])
+        out.next_steps.append(still_running(j))
+    elif st == "succeeded" and res and res.get("verdict"):
+        out.message = str(res["verdict"])
     return out
 
 
 async def _run_job(state: AppState, ctx: Context, kind: str, tool_name: str, cmd: str, args: dict, wait: int,
                    timeout: float) -> ProfileJob:
-    for j in _jobs(state).values():
-        if j["kind"] == kind and j["state"] == "running":
-            raise ToolError(f"A {kind} job ({j['id']}) is already running. Poll it with {tool_name}(job_id='{j['id']}').")
-    j = {"id": f"p-{next(_job_ids)}", "kind": kind, "tool": tool_name, "state": "running", "started": time.time()}
+    for j in state.jobs.running(kind):
+        raise ToolError(f"A {kind} job ({j.id}) is already running. Poll it with {tool_name}(job_id='{j.id}').")
 
-    async def go():
-        try:
-            j["result"] = await dcall(state, cmd, args, timeout=timeout)
-            j["state"] = "succeeded"
-        except ToolError as exc:
-            j["state"], j["error"] = "failed", B.clip_error(str(exc))
-        except Exception as exc:  # noqa: BLE001
-            j["state"], j["error"] = "failed", B.clip_error(f"{type(exc).__name__}: {exc}")
-        j["ended"] = time.time()
+    async def go(job: Job) -> Any:
+        return await dcall(state, cmd, args, timeout=timeout)
 
-    j["task"] = asyncio.create_task(go())
-    _jobs(state)[j["id"]] = j
-    jobs = _jobs(state)
-    for old in [k for k, v in jobs.items() if v["state"] != "running"][:-10]:
-        jobs.pop(old, None)
-    return await _wait_job(j, wait)
+    j = state.jobs.run(go, kind, title=f"{kind.replace('-', ' ').capitalize()} of {args.get('bundleId')}",
+                       tool=tool_name, data={"bundle_id": args.get("bundleId")})
+    return await _wait_job(state, ctx, j, wait)
 
 
-async def _wait_job(j: dict, wait: int) -> ProfileJob:
-    if j["state"] == "running" and wait > 0:
-        try:
-            await asyncio.wait_for(asyncio.shield(j["task"]), min(wait, MAX_WAIT))
-        except asyncio.TimeoutError:
-            pass
+async def _wait_job(state: AppState, ctx: Context, j: Job, wait: int) -> ProfileJob:
+    await wait_with_progress(state, j, wait, ctx)
     return _job_view(j)
-
-
-def _get_job(state: AppState, job_id: str, kind: str) -> dict:
-    j = _jobs(state).get(job_id.strip())
-    if j is None or j["kind"] != kind:
-        raise ToolError(f"No {kind} job '{job_id}' (jobs live only while this MCP server runs).")
-    return j
 
 
 def _fmt_event(seq: int, e: dict) -> str:
@@ -412,7 +386,7 @@ def register(mcp: MCPServer) -> None:
         as a job: if state is 'running', call again with job_id."""
         state = get_state(ctx)
         if job_id:
-            return await _wait_job(_get_job(state, job_id, "launch-profile"), wait_seconds)
+            return await _wait_job(state, ctx, state.jobs.get(job_id, "launch-profile"), wait_seconds)
         if not bundle_id:
             raise ToolError("Pass bundle_id (or job_id to poll an earlier call).")
         app = await resolve_app(state, bundle_id, udid)
@@ -442,7 +416,7 @@ def register(mcp: MCPServer) -> None:
         it's scanned, so ask the user, then confirm=true. Runs as a job: poll with job_id."""
         state = get_state(ctx)
         if job_id:
-            return await _wait_job(_get_job(state, job_id, "memory-leaks"), wait_seconds)
+            return await _wait_job(state, ctx, state.jobs.get(job_id, "memory-leaks"), wait_seconds)
         if not bundle_id:
             raise ToolError("Pass bundle_id (or job_id to poll an earlier call).")
         app = await resolve_app(state, bundle_id, udid)
@@ -456,9 +430,3 @@ def register(mcp: MCPServer) -> None:
         a = {"bundleId": app["bundleId"], **({"udid": udid} if udid else {})}
         return await _run_job(state, ctx, "memory-leaks", "ios_memory_leaks", "metrics.leaks", a, wait_seconds, 240)
 
-
-async def on_shutdown(state: AppState) -> None:
-    for j in _jobs(state).values():
-        t = j.get("task")
-        if t and not t.done():
-            t.cancel()

@@ -204,7 +204,7 @@ def _shallow(schema: dict, owner: str) -> dict:
 
 
 # Tools whose output model is shared publish the full schema once, on the tool named here (else the first).
-CANONICAL = {"BuildStatus": "ios_build_status", "DeviceList": "ios_device_list"}
+CANONICAL = {"JobStatus": "ios_job_status", "DeviceList": "ios_device_list"}
 
 
 def slim_schemas(mcp: MCPServer) -> None:
