@@ -101,6 +101,10 @@ A snapshot (`watch` event, `watch.json`, `watch status` data):
 
 With `IOSSTUDIO_DEMO` set, `watch serve` watches nothing and builds nothing. It plays a loop: watching, a file changed, compiling, failed with one error (`cannot find 'habbits' in scope` at `Sources/<Project>/ContentView.swift:42:17`), changed, compiling, ok (with auto-run, "launched"), and again. Start, status and stop work as usual, in the demo runtime folder.
 
+## Code
+
+`helper/iosstudio/features/watch/`: `commands.py` (the `watch` group), `lifecycle.py` (start or join, stop, status, follow, `watch serve`), `watcher.py` (the watcher loop, its debounce/supersede scheduler and the demo watcher), `builds.py` (the `build compile|run` children and auto-run), `fswatch.py` (inotify, polling and what counts as a change), `runtime.py` (the runtime files, owners and process helpers). Stopping the watcher waits for every auto-run thread it started, so nothing writes to the runtime folder after it has stopped.
+
 ## Tests
 
 `tests/helper/test_watch.py`, `tests/cli/test_watch_cli.py` and `tests/mcp/test_mcp_watch.py`, see [development.md](../development.md#tests).
