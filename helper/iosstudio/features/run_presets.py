@@ -1,4 +1,4 @@
-"""Run presets: saved launch arguments, environment and language per project (stdlib only; used by projects.py).
+"""Run presets: saved launch arguments, environment and language per project (stdlib only; used by features/projects/).
 
 Like an Xcode scheme's Run options, a preset keeps what an app is launched with, so testing German text or a
 debug flag doesn't mean typing it again each time:

@@ -135,10 +135,10 @@ def _toolchain() -> Toolchain:
 
 def find_project(bundle_id: str) -> tuple[Path | None, dict | None]:
     """The scanned project whose bundle id the installed one is (XTL-<TEAM>.<id> or <id>)."""
-    from iosstudio.features import projects
-    found, _ = projects._scan()
+    from iosstudio.features.projects import model
+    found, _ = model.scan()
     for p in found:
-        info = projects._project_info(p)
+        info = model.project_info(p)
         b = info.get("bundleId")
         if b and (bundle_id == b or bundle_id.endswith("." + b)):
             return p, info
@@ -381,9 +381,8 @@ async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds:
             st = await dev.request("debug.start", {"bundleId": bid, "launch": launch, "udid": flags.get("udid") or None},
                                    timeout=90)
         except DeviceError as exc:
-            e = HelperError(exc.code, exc.message, exc.fix, exc.detail)
-            output.step("forward", "Starting the debugger on your iPhone", "failed", error=e.to_json())
-            return output.done(False, error=e)
+            output.step("forward", "Starting the debugger on your iPhone", "failed", error=exc.to_json())
+            return output.done(False, error=exc)
         output.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
         output.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable",
                                                         "ios", "build", "symbolsReady")},

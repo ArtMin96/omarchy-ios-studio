@@ -1,5 +1,5 @@
-"""The projects feature package (helper/iosstudio/features/projects/): its command table, the names other feature
-modules still read as `projects.<name>`, and that one-shot commands don't load the build machinery."""
+"""The projects feature package (helper/iosstudio/features/projects/): its command table, no old private aliases,
+and that one-shot commands don't load the build machinery."""
 from __future__ import annotations
 
 import os
@@ -20,18 +20,10 @@ class Package(unittest.TestCase):
         for action in ("run", "compile", "ipa", "install", "history", "log", "clean"):
             self.assertIn(action, projects.GROUPS["build"])
 
-    def test_names_used_by_other_feature_modules(self):
+    def test_no_private_aliases(self):
         from iosstudio.features import projects
-        from iosstudio.features.projects import build, model, store
-        self.assertIs(projects._state, store.load_state)
-        self.assertIs(projects._history, store.load_history)
-        self.assertIs(projects._record_signing, store.record_signing)
-        self.assertIs(projects._scan, model.scan)
-        self.assertIs(projects._project_info, model.project_info)
-        self.assertIs(projects._is_project, model.is_project)
-        self.assertIs(projects._auth_ok, build.auth_ok)
-        with self.assertRaises(AttributeError):
-            projects._no_such_name  # noqa: B018
+        for name in ("_state", "_history", "_record_signing", "_scan", "_project_info", "_is_project", "_auth_ok"):
+            self.assertFalse(hasattr(projects, name), name)
 
     def test_one_shot_commands_import_little(self):
         code = ("import sys; from iosstudio.features import projects; projects.GROUPS['projects']['list']; "

@@ -1,6 +1,6 @@
 """App data: an app's saved state on the iPhone (UserDefaults, SwiftData / Core Data stores) and resets.
 
-Pure logic shared by the real daemon feature (helper/iosstudio/device/features/appdata.py), its demo twin and the
+Pure logic shared by the real daemon feature (helper/iosstudio/device/features/appdata/), its demo twin and the
 tests. Stdlib only; never talks to a phone. See docs/features/app-data.md.
 
 UserDefaults: `Library/Preferences/<bundle id>.plist` (binary or XML) <-> JSON-safe values. Plist types
@@ -808,13 +808,13 @@ def find_build(bid: str, history: list | None = None) -> dict | None:
             if ipas:
                 return {"project": Path(path).name, "path": path, "artifact": str(ipas[0])}
     try:
-        from iosstudio.features import projects as P
-        found, _ = P._scan()
-        state = P._state()
+        from iosstudio.features.projects import model, store
+        found, _ = model.scan()
+        state = store.load_state()
         for p in list(found) + [Path(a) for a in state.get("added") or []]:
-            if not (p.is_dir() and P._is_project(p)):
+            if not (p.is_dir() and model.is_project(p)):
                 continue
-            info = P._project_info(p, [], {}, state)
+            info = model.project_info(p, [], {}, state)
             if _matches(bid, info.get("bundleId")) and info.get("ipa"):
                 return {"project": info.get("name"), "path": info.get("path"), "artifact": info["ipa"]}
     except Exception:  # noqa: BLE001 - the scan is a last resort

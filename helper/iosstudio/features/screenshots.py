@@ -751,8 +751,8 @@ def _project_presets(project: str) -> list[dict]:
     if os.environ.get("IOSSTUDIO_DEMO"):
         from iosstudio.demo import demo
         return demo._demo_presets(os.path.basename(project.rstrip("/")))[0]
-    from iosstudio.features import projects
-    return run_presets.stored(projects._state()["meta"].get(project))
+    from iosstudio.features.projects.store import load_state
+    return run_presets.stored(load_state()["meta"].get(project))
 
 
 def plan_configs(project: str, raw: Any) -> list[dict]:

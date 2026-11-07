@@ -48,7 +48,7 @@ Every new bundle ID registers an App ID with Apple. Free accounts get 10 new one
 
 ### "Signing failed" on a new iPhone
 
-A phone has to be registered with your account before apps can be signed for it. Connect it with a cable and press Run once. That registers it.
+A phone has to be registered with your account before apps can be signed for it. Connect it with a cable and press Run once. That registers it. xtool can't register a phone over Wi-Fi, so a phone that was only ever connected wirelessly fails with Apple's "There are no current iOS devices on this team" (HTTP 409); the build shows it as a signing problem with this fix.
 
 ### "Your iPhone doesn't trust this developer yet"
 

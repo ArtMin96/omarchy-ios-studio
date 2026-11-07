@@ -24,29 +24,6 @@ State (all under ~/.local/state/ios-studio/):
 """
 from __future__ import annotations
 
-import importlib
-from typing import Any
-
 from iosstudio.features.projects.commands import GROUPS
 
 __all__ = ["GROUPS"]
-
-# Names other feature modules (watch, debugger, screenshots, app_data) still use as `projects.<name>`:
-# resolved on first use, so importing this package doesn't load the build machinery.
-_COMPAT = {
-    "_state": ("store", "load_state"),
-    "_history": ("store", "load_history"),
-    "_record_signing": ("store", "record_signing"),
-    "_scan": ("model", "scan"),
-    "_project_info": ("model", "project_info"),
-    "_is_project": ("model", "is_project"),
-    "_auth_ok": ("build", "auth_ok"),
-}
-
-
-def __getattr__(name: str) -> Any:
-    try:
-        module, attr = _COMPAT[name]
-    except KeyError:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
-    return getattr(importlib.import_module(f"{__name__}.{module}"), attr)

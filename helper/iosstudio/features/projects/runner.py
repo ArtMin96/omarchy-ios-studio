@@ -449,6 +449,11 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
     if re.search(r"device not found|no devices|could not connect to (the )?device|usbmux|lockdown|pairing", low):
         return HelperError("device-unreachable", "Couldn't reach your iPhone. Unlock it, keep it nearby and check the cable.",
                            fix("Open iPhone", "device"), detail=text)
+    if re.search(r"no current ios devices|devices on this team", low):
+        return HelperError("signing-failed",
+                           "Apple has no iPhone registered on your account yet. Connect the iPhone with a USB cable "
+                           "once so xtool can register it, then build again.", fix("Open iPhone", "device"),
+                           detail=text)
     if re.search(r"provision|profile|entitlement|not registered|device.*not.*(included|registered)", low):
         return HelperError("signing-failed",
                            "Signing failed. If this is a new iPhone, connect it with a cable and choose Run once so it "

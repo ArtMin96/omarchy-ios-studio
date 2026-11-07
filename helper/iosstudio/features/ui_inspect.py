@@ -1,6 +1,6 @@
 """UI inspection logic (ui.tree / ui.press / ui.audit), with no device and no pymobiledevice3 import.
 
-The daemon feature (features/ui.py) walks the accessibility focus of the foreground app
+The daemon feature (device/features/ui/) walks the accessibility focus of the foreground app
 with pymobiledevice3's AccessibilityAudit service and hands each raw focus event here, already
 turned into plain JSON (`to_plain`). Everything that shapes the output lives in this module so it
 can be unit-tested against captured payloads (tests/fixtures/ui-inspect/):
