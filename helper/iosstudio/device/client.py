@@ -50,7 +50,10 @@ class DeviceClient(name="client", events=None, *, demo=None, spawn=True, reconne
   await request(cmd, args=None, timeout=60.0) -> data
                            one request. Raises DeviceError(code, message, fix, detail) for an error
                            reply, code "timeout" after `timeout` s, "disconnected" if the daemon went
-                           away mid-request. Connects (and spawns) on demand.
+                           away mid-request. Connects (and spawns) on demand. Sent once more, after
+                           reconnecting (spawning a fresh daemon if needed), when the daemon was
+                           shutting down (STOPPING: it never ran) or the connection dropped before the
+                           reply and the command is in SAFE_TO_RESEND or was never written.
   await subscribe(events)  replace this client's event subscription (None = all).
   events(names=None, maxsize=1000) -> async context manager + async iterator of (name, data);
                            oldest items are dropped when the consumer is slower than `maxsize`.
@@ -66,7 +69,8 @@ Synthetic events (generated locally, delivered to iterators/callbacks that want 
 
 class DeviceError (protocol.DeviceError; a core.output.HelperError inside the iosstudio package):
   .code .message .fix (dict | None) .detail (str | None); .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
-  "timeout", "disconnected", "daemon-unavailable", "socket-path-too-long".
+  "timeout", "disconnected", "daemon-unavailable", "socket-path-too-long", and STOPPING
+  ("daemon-stopping", only if the retry hit a stopping daemon again).
 
 socket_path(demo=None) -> pathlib.Path    <base>/ios-studio[-demo]/deviced.sock, where <base> is
                                            $IOSSTUDIO_RUNTIME_DIR if set, else $XDG_RUNTIME_DIR
@@ -110,9 +114,26 @@ def _load_protocol():
 proto = _load_protocol()
 DeviceError = proto.DeviceError
 
-__all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path", "runtime_dir"]
+__all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path", "runtime_dir", "STOPPING", "SAFE_TO_RESEND"]
 
 PROTOCOL_VERSION = "1"
+
+# Error code of a daemon that is shutting down: it refused the request without running it, so the
+# client may always send it again (to the next daemon).
+STOPPING = "daemon-stopping"
+
+# Commands that only read: resending one that may already have reached the daemon (the connection
+# dropped after it was written, before its reply) does no harm. Anything else (installs, launches,
+# deletes, starts/stops, settings) is resent only when it provably never left this client.
+SAFE_TO_RESEND = frozenset({
+    "hello", "subscribe", "daemon.ping", "daemon.clients", "daemon.features",
+    "devices.list", "device.info", "apps.list", "processes.list", "profiles.list",
+    "appdata.stores", "appdata.rows", "appdata.defaults",
+    "condition.list", "condition.status", "console.list", "console.read",
+    "container.list", "crash.list", "media.list", "media.thumb", "metrics.list", "metrics.read",
+    "metrics.series", "ddi.status", "devmode.status", "mirror.status", "pair.status", "pcap.status",
+    "record.status", "transfer.list", "screenshot", "ui.tree",
+})
 
 
 def _demo_flag(demo) -> str | None:
@@ -285,7 +306,14 @@ class DeviceClient:
         async with self._lock:
             if self.connected:
                 return
-            await self._open()
+            for attempt in range(3):
+                try:
+                    return await self._open()
+                except DeviceError as e:
+                    # A daemon that was going away as we attached (it refused `hello` or dropped the
+                    # connection): it removed its socket first, so the next try starts a new one.
+                    if attempt == 2 or e.code not in (STOPPING, "disconnected"):
+                        raise
 
     async def close(self) -> None:
         self._closed = True
@@ -372,6 +400,11 @@ class DeviceClient:
             self.hello = await self._request("hello", {"name": self.name, "events": self._events,
                                                        "version": PROTOCOL_VERSION}, 15)
         except DeviceError:
+            # Never connected: no "disconnected" event and no background reconnect for this one.
+            task, self._read_task = self._read_task, None
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
             w, self._writer = self._writer, None
             if w:
                 w.close()
@@ -382,13 +415,47 @@ class DeviceClient:
 
     # ------------------------------------------------------------ requests
     async def request(self, cmd: str, args: dict | None = None, timeout: float = 60.0) -> Any:
-        if not self.connected:
-            if self._closed:
-                raise DeviceError("disconnected", "The client was closed.")
-            await self.connect()
-        return await self._request(cmd, args or {}, timeout)
+        args = args or {}
+        for attempt in (0, 1):
+            if not self.connected:
+                if self._closed:
+                    raise DeviceError("disconnected", "The client was closed.")
+                await self.connect()
+            sent: list[bool] = [False]
+            try:
+                return await self._request(cmd, args, timeout, sent)
+            except DeviceError as e:
+                if attempt or self._closed or not self._may_resend(cmd, e, sent[0]):
+                    raise
+                await self._leave_dying_daemon()
 
-    async def _request(self, cmd: str, args: dict, timeout: float) -> Any:
+    async def _leave_dying_daemon(self, wait: float = 5.0) -> None:
+        """Before a retry: the daemon on this connection is going away (STOPPING: it closes the
+        connection right after its last replies). Let it, so replies still on the way arrive, then drop
+        the connection ourselves if that takes too long. A no-op once the connection is gone."""
+        task = self._read_task
+        if task is None or task.done():
+            return
+        done, _ = await asyncio.wait({task}, timeout=wait)
+        if done:
+            return
+        if self._writer is not None:
+            self._writer.close()   # the read loop sees the end and runs _on_lost
+        done, _ = await asyncio.wait({task}, timeout=2)
+        if not done:
+            task.cancel()
+            self._on_lost("the iPhone service is shutting down")
+
+    @staticmethod
+    def _may_resend(cmd: str, e: DeviceError, sent: bool) -> bool:
+        """Retry once? Never for a command that may have run, unless it only reads."""
+        if e.code == STOPPING:
+            return True   # refused by a daemon that is shutting down: it never ran
+        if e.code != "disconnected":
+            return False
+        return not sent or cmd in SAFE_TO_RESEND
+
+    async def _request(self, cmd: str, args: dict, timeout: float, sent: list[bool] | None = None) -> Any:
         rid = next(self._ids)
         fut = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
@@ -396,6 +463,8 @@ class DeviceClient:
             w = self._writer
             if w is None:
                 raise DeviceError("disconnected", "Not connected to the iPhone service.")
+            if sent is not None:
+                sent[0] = True   # from here on some bytes may have reached the daemon
             await proto.write_line_async(w, proto.request(rid, cmd, args))
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:

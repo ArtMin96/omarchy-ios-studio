@@ -39,7 +39,7 @@ from pathlib import Path
 from iosstudio.core import fileio
 from iosstudio.device import kit, protocol
 from iosstudio.device.backend import Backend, TaskSet
-from iosstudio.device.client import runtime_dir, socket_path_error
+from iosstudio.device.client import STOPPING, runtime_dir, socket_path_error
 
 VERSION = "1"
 IDLE_DEFAULT_S = 120.0
@@ -59,6 +59,8 @@ LEVELS = {"debug": 0, "info": 1, "default": 2, "error": 3, "fault": 4}
 
 # Events every client gets by default; `subscribe` narrows it. Per-client events are sent directly.
 PER_CLIENT_EVENTS = {"syslog", "syslogState"}
+
+STOPPING_ERROR = {"code": STOPPING, "message": "The iPhone service is restarting. Try again."}
 
 _current: contextvars.ContextVar = contextvars.ContextVar("deviced_client", default=None)
 
@@ -550,8 +552,10 @@ class Broker:
         self._thread = threading.get_ident()
         self._ready = asyncio.Event()
         self._stopping: asyncio.Event | None = None
+        self.draining = False                 # shutting down: no new connections, requests answer STOPPING
         self._idle_handle: asyncio.TimerHandle | None = None
         self._server: asyncio.AbstractServer | None = None
+        self._sock_ino: int | None = None      # inode of the socket file we created (begin_shutdown removes only that)
         self._lock: contextlib.ExitStack | None = None   # holds the lock file's flock while we serve
         self._log_redirected = False
         self._bg = TaskSet(log)               # fire-and-forget work, cancelled at shutdown
@@ -566,7 +570,7 @@ class Broker:
         return {"socket": str(self.p["sock"]), "runtimeDir": str(self.p["dir"]), "log": str(self.p["log"])}
 
     # -- single instance
-    def acquire(self, wait: float = 10.0) -> bool:
+    def acquire(self, wait: float = 25.0) -> bool:
         """Take the lock file. False when another live daemon owns it (caller should exit)."""
         bad = socket_path_error(self.p["sock"])
         if bad is not None:   # clients check this too and report it; never serve a socket that can't exist
@@ -581,10 +585,12 @@ class Broker:
                 break
             except BlockingIOError:
                 held.close()
-            # Held: either a live daemon (socket answers) or one starting / shutting down.
+            # Held: either a live daemon (socket answers) or one starting / shutting down. A dying
+            # daemon removed its socket first and keeps the lock until its process exits (tunnel and
+            # services closed), so wait for that: a client that spawned us is waiting for our socket.
             if socket_alive(self.p["sock"]) or time.monotonic() > deadline:
                 return False
-            time.sleep(0.2)
+            time.sleep(0.05)
         self._lock = held             # kept (never closed) until the process exits
         self.p["lock"].write_text(f"{os.getpid()}\n")   # informational; a second open keeps our flock
         return True
@@ -646,8 +652,25 @@ class Broker:
             self.stop()
 
     def stop(self):
+        self.begin_shutdown()
         if self._stopping is not None:
             self._stopping.set()
+
+    def begin_shutdown(self) -> None:
+        """The first step of every shutdown (daemon.shutdown all, idle exit, signals): stop accepting
+        connections and remove the socket, so a new client never attaches to a dying daemon; it finds no
+        socket and starts a fresh daemon, which waits for our lock. Requests that still arrive on open
+        connections answer STOPPING (retryable: the command never ran). Idempotent."""
+        if self.draining:
+            return
+        self.draining = True
+        if self._server is not None:
+            self._server.close()
+        sock = self.p["sock"]
+        with contextlib.suppress(OSError):
+            # only our own socket: never a newer daemon's (a stale path is unlinked by its starter)
+            if self._sock_ino is not None and sock.stat().st_ino == self._sock_ino:
+                sock.unlink()
 
     async def run(self, make_backend) -> int:
         """Listen, build the backend (`await make_backend(self)`), serve until idle/stop, shut down."""
@@ -663,6 +686,7 @@ class Broker:
         finally:
             os.umask(old)
         os.chmod(sock, 0o600)
+        self._sock_ino = sock.stat().st_ino
         log(f"listening on {sock} (pid {os.getpid()}, idle exit after {self.idle:g} s)")
         for sig in ("SIGTERM", "SIGINT", "SIGHUP"):
             with contextlib.suppress(NotImplementedError, AttributeError):
@@ -677,10 +701,7 @@ class Broker:
             if log_task is not None:
                 log_task.cancel()
             log("shutting down")
-            self._server.close()
-            with contextlib.suppress(FileNotFoundError):
-                if sock.exists():
-                    sock.unlink()
+            self.begin_shutdown()
             for c in list(self.clients):
                 c.close()
             if self.backend is not None:
@@ -694,6 +715,9 @@ class Broker:
 
     # -- connections
     async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        if self.draining:   # accepted just before the listener closed: drop it; the client starts a new daemon
+            _abort(writer.transport)
+            return
         c = Client(self, writer)
         self._connecting += 1
         try:
@@ -746,6 +770,9 @@ class Broker:
         rid = m.get("id")
         cmd = str(m.get("cmd") or "")
         args = m.get("args") if isinstance(m.get("args"), dict) else {}
+        if self.draining and cmd != "daemon.shutdown":
+            c.send(protocol.reply_error(rid, STOPPING_ERROR))
+            return
         try:
             c.send(protocol.reply_ok(rid, await self._command(c, cmd, args)))
         except asyncio.CancelledError:
@@ -773,6 +800,9 @@ class Broker:
             # Old single-client protocol: "I'm done". It only detaches this client; the daemon keeps
             # serving the others. {"all": true} stops the daemon for everyone.
             if a.get("all"):
+                # Listener closed and socket removed before the reply goes out: whoever asked can start a
+                # new daemon at once. The rest (clients, tunnel) stops a moment later, after the reply.
+                self.begin_shutdown()
                 self.loop.call_later(0.1, self.stop)
             return {}
         if cmd == "syslog.start":
@@ -862,16 +892,15 @@ def bridge(s: socket.socket) -> int:
     return 0 if stdin_eof.is_set() else 1
 
 
-def once_via_socket(s: socket.socket, cmd: str, raw_args: str) -> int:
-    """`--once` against the live daemon: same output contract as the standalone one-shot mode."""
-    def reply(obj: dict) -> int:
-        obj.pop("id", None)
-        protocol.write_line(sys.stdout.buffer, obj)
-        return 0 if obj.get("ok") else 1
-    try:
-        args = protocol.parse_args(raw_args)
-    except protocol.DeviceError as exc:
-        return reply(protocol.reply_error(None, exc))
+def print_reply(obj: dict) -> int:
+    """The one `--once` reply on stdout; exit code 0 for ok."""
+    obj.pop("id", None)
+    protocol.write_line(sys.stdout.buffer, obj)
+    return 0 if obj.get("ok") else 1
+
+
+def once_via_socket(s: socket.socket, cmd: str, args: dict) -> dict:
+    """`--once` against the live daemon -> the reply (same contract as the standalone one-shot mode)."""
     shown = ["connection", "installProgress", "pair"]
     f = s.makefile("rwb")
     protocol.write_line(f, protocol.request("h", "hello", {"name": "once", "events": shown}))
@@ -883,8 +912,8 @@ def once_via_socket(s: socket.socket, cmd: str, raw_args: str) -> int:
                       file=sys.stderr, flush=True)
             continue
         if m.get("id") == "r":
-            return reply(m)
-    return reply(protocol.reply_error(None, protocol.DeviceError("unreachable", "The iPhone service stopped before answering.")))
+            return m
+    return protocol.reply_error(None, protocol.DeviceError("unreachable", "The iPhone service stopped before answering."))
 
 
 def pycache_args() -> list[str]:
@@ -911,10 +940,22 @@ def launch(argv: list[str]) -> int:
         if len(rest) < 2:
             print("usage: iosstudio-deviced --once <cmd> '<json args>'", file=sys.stderr)
             return 2
+        try:
+            args = protocol.parse_args(rest[2] if len(rest) > 2 else "{}")
+        except protocol.DeviceError as exc:
+            return print_reply(protocol.reply_error(None, exc))
         s = _connect(p["sock"])
         if s is not None:
             with s:
-                return once_via_socket(s, rest[1], rest[2] if len(rest) > 2 else "{}")
+                out = once_via_socket(s, rest[1], args)
+            if (out.get("error") or {}).get("code") == STOPPING:
+                # The live daemon was shutting down and refused it (nothing ran): ask its successor.
+                # A standalone one-shot here would open a second tunnel while the old one closes.
+                s = connect_or_spawn(p["sock"], deviced)
+                if s is not None:
+                    with s:
+                        out = once_via_socket(s, rest[1], args)
+            return print_reply(out)
         os.execv(py, [py, "-I", *pycache_args(), str(RUN_PY), server, *rest])
     bad = socket_path_error(p["sock"])
     if bad is not None:
