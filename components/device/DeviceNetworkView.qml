@@ -158,7 +158,7 @@ ColumnLayout {
       text: "Make the iPhone act as if it's on a slow network, running hot or with a slow GPU. Pick one below; only one is on at a time, and it always switches itself off."
     }
     RowLayout {
-      Layout.topMargin: Style.spacing.sm
+      Layout.topMargin: Style.spacing.huge - parent.spacing   // a control row sits a section gap below the text
       spacing: Style.spacing.lg
       AppText { text: "Switch off after"; tone: "dim"; size: "small" }
       ButtonGroupLite {

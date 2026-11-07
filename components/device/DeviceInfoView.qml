@@ -17,6 +17,7 @@ ColumnLayout {
   readonly property var dev: svc.current || ({})
 
   function v(x) { return x === undefined || x === null || x === "" ? "—" : String(x) }
+  function has(x) { return !(x === undefined || x === null || x === "") }
   function copied(val) { root.app.toast("Copied " + (val.length > 40 ? val.substring(0, 40) + "…" : val)) }
 
   // groups sit apart like the page's own sections; a header sits close to its list
@@ -31,13 +32,13 @@ ColumnLayout {
       labelWidth: Style.space(170)
       onCopied: function(val) { root.copied(val) }
       rows: [
-        { label: "Name", value: root.v(root.d.name || root.dev.name), copy: true },
-        { label: "Model", value: root.v(root.d.model || root.dev.model) + (root.d.productType ? "  (" + root.d.productType + ")" : ""), copy: true },
-        { label: "iOS", value: root.v(root.d.ios || root.dev.ios) + (root.d.build ? "  (" + root.d.build + ")" : ""), copy: true },
-        { label: "UDID", value: root.v(root.d.udid || root.dev.udid), copy: true },
-        { label: "Serial number", value: root.v(root.d.serial), copy: true },
-        { label: "Hardware", value: root.v(root.d.hardwareModel) + (root.d.cpu ? " · " + root.d.cpu : ""), copy: true },
-        { label: "Time zone", value: root.v(root.d.timeZone), copy: true }
+        { label: "Name", value: root.v(root.d.name || root.dev.name), copy: root.has(root.d.name || root.dev.name) },
+        { label: "Model", value: root.v(root.d.model || root.dev.model) + (root.d.productType ? "  (" + root.d.productType + ")" : ""), copy: root.has(root.d.model || root.dev.model) },
+        { label: "iOS", value: root.v(root.d.ios || root.dev.ios) + (root.d.build ? "  (" + root.d.build + ")" : ""), copy: root.has(root.d.ios || root.dev.ios) },
+        { label: "UDID", value: root.v(root.d.udid || root.dev.udid), copy: root.has(root.d.udid || root.dev.udid) },
+        { label: "Serial number", value: root.v(root.d.serial), copy: root.has(root.d.serial) },
+        { label: "Hardware", value: root.v(root.d.hardwareModel) + (root.d.cpu ? " · " + root.d.cpu : ""), copy: root.has(root.d.hardwareModel) },
+        { label: "Time zone", value: root.v(root.d.timeZone), copy: root.has(root.d.timeZone) }
       ]
     }
   }
@@ -52,12 +53,12 @@ ColumnLayout {
       onCopied: function(val) { root.copied(val) }
       rows: [
         { label: "Connected", value: root.svc.connected ? (root.dev.transport === "usb" ? "USB cable" : "Wi-Fi") : (root.svc.connection.message || "No"), level: root.svc.connected ? "ok" : "warn" },
-        { label: "Address", value: root.v(root.d.address), copy: true },
-        { label: "Wi-Fi MAC", value: root.v(root.d.wifiAddress), copy: true },
-        { label: "Bluetooth MAC", value: root.v(root.d.bluetoothAddress), copy: true },
+        { label: "Address", value: root.v(root.d.address), copy: root.has(root.d.address) },
+        { label: "Wi-Fi MAC", value: root.v(root.d.wifiAddress), copy: root.has(root.d.wifiAddress) },
+        { label: "Bluetooth MAC", value: root.v(root.d.bluetoothAddress), copy: root.has(root.d.bluetoothAddress) },
         { label: "Paired for Wi-Fi", value: root.dev.wifiPaired ? "Yes" : "No", level: root.dev.wifiPaired ? "ok" : "warn" },
         { label: "Trusted over USB", value: root.dev.usbPaired ? "Yes" : "No" },
-        { label: "pymobiledevice3", value: root.v(root.svc.pmd3Version), copy: true }
+        { label: "pymobiledevice3", value: root.v(root.svc.pmd3Version), copy: root.has(root.svc.pmd3Version) }
       ]
     }
   }

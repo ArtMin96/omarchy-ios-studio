@@ -560,7 +560,9 @@ the first line rather than centred on the block.
 - **DevicePerformanceView**: the iPhone page's Performance tab (`app`, `active`). It keeps its own state (the `metrics.*`
   session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
   Its work (the app list, `metrics.list`, the clocks) starts when `active` turns true; hidden, the app picker
-  keeps its last list instead of re-sorting on every app change.
+  keeps its last list instead of re-sorting on every app change. Its Deeper checks (hitches, launch profile, leaks)
+  are three equal columns with their buttons on one line at the bottom; a button that can't run yet says why
+  beside it ("Start measuring first").
 - **DevicePhoneFrame**: a drawn iPhone that shows a screenshot or mirror frame. Props: `source` (file URL),
   `live` with `liveLabel` (the corner marker, e.g. `"REC 0:12"`), `dimmed`, `rotationSteps`, `glyph`,
   `placeholder`, `screenAspect` (default the iPhone 17 Pro's), `clickable` + `clicked()`, `mirrorService`
@@ -1045,7 +1047,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       `installProgress` (a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
       `warning`). Signal `done()`: the other panes reload on their next show.
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
-  copyable), Profiles tab (read-only, expired ones behind `showExpired`; a `StateView` on
+  copyable; no copy button on an empty "—" value), Profiles tab (read-only, expired ones behind `showExpired`; a `StateView` on
   `app.device.profilesResource`, nothing shown before the first load) and Location tab (a simulated GPS
   location from presets or latitude/longitude). Props: `app`.
 - **EditorSection**: Settings › Code editor (a Card). Props: `app` (uses `app.projects`: `editorInfo`,
@@ -1104,7 +1106,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   (`debug check`, `debug sources`, `debug.symbols`); hidden, it keeps its app list and starts nothing. It owns the
   backtrace stream; the breakpoint session is a `DebugSessionPanel`.
   Its Debug symbols card follows the status `state`: a StatusPill, the reason or error, one primary fix
-  (`symFix`: download, update, unpack or retry), Remove (confirmed) and the Keep the download switch.
+  (`symFix`: download, update, unpack or retry), Remove (a trash button beside the pill in the header,
+  confirmed) and the Keep the download switch. The body hangs under the title text, so every line of the
+  card starts at one left edge.
 - **DebugSessionPanel**: a breakpoint session on one app (helper `debug session` as a `Stream`; commands are
   written to its stdin). Props: `app`, `bundleId`, `appName`, `appRunning`, `sources` (`debug sources` files),
   `hasLocalBuild`, `blocked`; read-only `phase` (`idle|starting|running|stopped|ended|failed`) and `live`.
