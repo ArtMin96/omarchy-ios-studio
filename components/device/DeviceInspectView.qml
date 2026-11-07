@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // The Screen tab's Elements and Audit panes, beside the phone (DeviceScreenView picks the pane).
@@ -31,13 +32,30 @@ ColumnLayout {
                                   : (devModeOff ? "Reading the screen needs Developer Mode on the iPhone." : "")
 
   // ---------------------------------------------------------------- elements
-  property string treeStatus: "idle"      // idle | loading | ready | error
-  property var tree: null                 // last ui.tree result
-  property var treeError: null
+  // The last ui.tree result; read on demand (Read the screen, Refresh, after a press). No app in front
+  // reads as an empty screen.
+  Resource {
+    id: treeRes
+    fetch: function(done, fail) {
+      root.svc.request("ui.tree", {}, function(ok, d) {
+        if (ok) done(d)
+        else if (root.noApp(d)) done({ elements: [], count: 0 })
+        else fail(d)
+      })
+    }
+    onSucceeded: function(d) {
+      if (d.screen && d.screen.w > 0 && d.screen.h > 0) root.knownScreen = d.screen
+      root.cursor = Math.min(root.cursor, root.shown.length - 1)
+    }
+  }
+  // the last read's outcome: idle | loading (a read is on its way) | ready | error (the last one failed;
+  // the elements read before stay listed)
+  readonly property string treeStatus: treeRes.busy ? "loading" : treeRes.status === "idle" ? "idle" : treeRes.error ? "error" : "ready"
+  readonly property var tree: treeRes.data
+  readonly property var treeError: treeRes.error
   property int cursor: -1
   property real _since: 0                 // when the current read started (ms)
   property real _now: Date.now()
-  property int _gen: 0                    // drops answers to reads that a newer one replaced
   Timer { interval: 500; repeat: true; running: root.treeStatus === "loading" || root.auditStatus === "loading"; onTriggered: root._now = Date.now() }
   readonly property int waited: Math.max(0, Math.round((_now - _since) / 1000))
 
@@ -126,21 +144,10 @@ ColumnLayout {
   }
 
   function refresh() {
-    if (root.blocked !== "") return
-    var gen = ++root._gen
-    root.treeStatus = "loading"
-    root.treeError = null
+    if (root.blocked !== "" || treeRes.busy) return
     root._since = Date.now(); root._now = root._since
     root.shoot()
-    root.svc.request("ui.tree", {}, function(ok, d) {
-      if (gen !== root._gen) return
-      if (!ok && root.noApp(d)) { root.tree = { elements: [], count: 0 }; root.treeStatus = "ready"; return }
-      if (!ok) { root.treeError = d; root.treeStatus = "error"; return }
-      root.tree = d
-      if (d.screen && d.screen.w > 0 && d.screen.h > 0) root.knownScreen = d.screen
-      root.treeStatus = "ready"
-      root.cursor = Math.min(root.cursor, root.shown.length - 1)
-    })
+    treeRes.load(true)
   }
 
   // ---------------------------------------------------------------- press
@@ -186,9 +193,23 @@ ColumnLayout {
   }
 
   // ---------------------------------------------------------------- audit
-  property string auditStatus: "idle"
-  property var audit: null
-  property var auditError: null
+  // The last ui.audit result, run on demand; { noApp: true } when no app was in front.
+  Resource {
+    id: auditRes
+    fetch: function(done, fail) {
+      root.svc.request("ui.audit", {}, function(ok, d) {
+        if (ok) done(d)
+        else if (root.noApp(d)) done({ noApp: true })
+        else fail(d)
+      })
+    }
+    onSucceeded: root.auditCursor = -1
+  }
+  // idle | loading | ready | no-app | error (the last run failed)
+  readonly property string auditStatus: auditRes.busy ? "loading" : auditRes.status === "idle" ? "idle"
+                                      : auditRes.error ? "error" : (auditRes.data && auditRes.data.noApp ? "no-app" : "ready")
+  readonly property var audit: auditRes.data && !auditRes.data.noApp ? auditRes.data : null
+  readonly property var auditError: auditRes.error
   property int auditCursor: -1
   property real _auditSince: 0
   readonly property int auditWaited: Math.max(0, Math.round((_now - _auditSince) / 1000))
@@ -232,18 +253,10 @@ ColumnLayout {
   readonly property var unsupportedLabels: (audit && audit.unsupported ? audit.unsupported : []).map(function(t) { return root.typeLabel(t) })
 
   function runAudit() {
-    if (root.blocked !== "" || root.auditStatus === "loading") return
-    root.auditStatus = "loading"
-    root.auditError = null
+    if (root.blocked !== "" || auditRes.busy) return
     root._auditSince = Date.now(); root._now = root._auditSince
     root.shoot()
-    root.svc.request("ui.audit", {}, function(ok, d) {
-      if (!ok && root.noApp(d)) { root.audit = null; root.auditStatus = "no-app"; return }
-      if (!ok) { root.auditError = d; root.auditStatus = "error"; return }
-      root.audit = d
-      root.auditCursor = -1
-      root.auditStatus = "ready"
-    })
+    auditRes.load(true)
   }
 
   // ---------------------------------------------------------------- keys (DevicePage.handleKey)

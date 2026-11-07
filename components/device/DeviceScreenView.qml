@@ -65,18 +65,8 @@ GridLayout {
   Timer { interval: 250; repeat: true; running: root.recActive; onTriggered: root._now = Date.now() / 1000 }
   readonly property real recElapsed: !rec ? 0 : (rec.state === "recording" && rec.started
                                      ? Math.max(0, Math.min(rec.maxSeconds || 60, root._now - rec.started)) : (rec.seconds || 0))
-  function clock(s) {
-    s = Math.max(0, Math.floor(s))
-    return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
-  }
-  function showRecording() {
-    var p = root.rec.path
-    Util.execArgv(["xdg-open", p.slice(0, p.lastIndexOf("/"))])
-  }
-  function copyRecordingPath() {
-    Util.execArgv(["wl-copy", "--", root.rec.path])
-    root.app.toast("Copied the recording's path", "ok")
-  }
+  function showRecording() { root.app.showInFolder(root.rec.path) }
+  function copyRecordingPath() { root.app.copyText(root.rec.path, "the recording's path") }
 
   // ---------------------------------------------------------------- stills
   function saveShot() {
@@ -120,7 +110,7 @@ GridLayout {
     Layout.alignment: root.narrow ? (Qt.AlignTop | Qt.AlignHCenter) : Qt.AlignTop
     source: root.svc.screenSource
     live: root.svc.mirroring || root.recActive
-    liveLabel: root.recActive ? "REC " + root.clock(root.recElapsed) : "LIVE"
+    liveLabel: root.recActive ? "REC " + Model.clock(root.recElapsed) : "LIVE"
     dimmed: !root.svc.connected
     rotationSteps: root.rotationSteps
     glyph: Model.Glyph.camera
@@ -306,7 +296,7 @@ GridLayout {
         AppText {
           visible: root.recActive
           height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter
-          text: root.clock(root.recElapsed) + " / " + root.clock(root.rec ? (root.rec.maxSeconds || root.recLimit) : root.recLimit)
+          text: Model.clock(root.recElapsed) + " / " + Model.clock(root.rec ? (root.rec.maxSeconds || root.recLimit) : root.recLimit)
                 + (root.rec && root.rec.bytes ? "  ·  " + Model.formatBytes(root.rec.bytes) : "")
           tone: "dim"
         }
@@ -344,7 +334,7 @@ GridLayout {
           Layout.fillWidth: true
           wrapMode: Text.WordWrap
           text: !root.recDone ? "" : (root.recNow.placeholder ? (root.recNow.notice || "")
-                : "Saved a " + root.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
+                : "Saved a " + Model.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
                   + (root.recNow.mode === "stream" ? "smooth" : "from screenshots") + ")")
         }
         AppText {
@@ -368,7 +358,7 @@ GridLayout {
           active: root.recDone && !root.recNow.placeholder
           visible: status === Loader.Ready
           source: "DeviceRecordingPreview.qml"
-          onLoaded: item.source = Qt.binding(function() { return root.recDone ? "file://" + root.recNow.path : "" })
+          onLoaded: item.source = Qt.binding(function() { return root.recDone ? Util.fileUrl(root.recNow.path) : "" })
         }
       }
 

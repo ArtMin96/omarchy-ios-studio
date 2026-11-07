@@ -52,7 +52,7 @@ ColumnLayout {
       anchors.fill: parent
       anchors.margins: Style.spacing.md
       // waits for the layout, so a bounded decode never starts at full size
-      source: root.path !== "" && width > 0 && height > 0 ? "file://" + root.path + "?v=" + root.revision : ""
+      source: root.path !== "" && width > 0 && height > 0 ? Util.fileUrl(root.path) + "?v=" + root.revision : ""
       fillMode: Image.PreserveAspectFit
       // Decoded at about the cell's size, not the screenshot's (a 1206 × 2622 PNG is 12 MB as a bitmap).
       // Regions and maskedTop are in the file's pixels, so this needs imageSize; without it the
