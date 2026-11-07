@@ -34,7 +34,8 @@ ALIASES = {"format": ["projects", "format"], "format-lint": ["projects", "format
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        return output.fail("usage", "usage: iosstudio-helper <group> <action> [--flags]; groups: " + ", ".join(MODULES)) or 2
+        output.fail("usage", "usage: iosstudio-helper <group> <action> [--flags]; groups: " + ", ".join(MODULES))
+        return output.EXIT_USAGE
     if argv[0] in ALIASES:   # `format --project P` == `projects format --project P`
         argv = ALIASES[argv[0]] + argv[1:]
     group, action, rest = argv[0], argv[1], argv[2:]
@@ -47,7 +48,7 @@ def main(argv: list[str]) -> int:
     mod_name = MODULES.get(group)
     if not mod_name:
         output.fail("usage", f"Unknown command group '{group}'.")
-        return 2
+        return output.EXIT_USAGE
     try:
         mod = importlib.import_module(f"iosstudio.features.{mod_name}")
     except Exception as exc:  # broken/missing slice module
@@ -55,7 +56,7 @@ def main(argv: list[str]) -> int:
     handler = getattr(mod, "GROUPS", {}).get(group, {}).get(action)
     if handler is None:
         output.fail("usage", f"Unknown command '{group} {action}'.")
-        return 2
+        return output.EXIT_USAGE
     try:
         return int(handler(flags.parse_flags(rest)) or 0)
     except output.HelperError as exc:

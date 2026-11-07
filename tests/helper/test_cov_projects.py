@@ -306,14 +306,14 @@ def test_renew_due_exit_codes(state, tmp_path, monkeypatch, capsys, err_code, rc
     assert [n[2] for n in notes] == (["critical"] if rc == renew.EXIT_USER else [])
 
 
-@pytest.mark.xfail(strict=True, reason="renew.renew_due passes {renewed, failed} to output.done(False, ...), which "
-                   "drops data on failure: the journal never says which projects failed or were renewed")
 def test_renew_due_failure_reports_which_projects(state, tmp_path, monkeypatch, capsys):
     setup_renew(state, tmp_path, {"Soon": (True, "U1", 1)})
     monkeypatch.setattr(renew, "_notify", lambda *a: None)
     monkeypatch.setattr(renew.build, "do_build", lambda flags, kind, interactive: (1, None, HelperError("x", "X")))
     renew.renew_due(2, dry=False)
-    assert events(capsys)[-1]["data"]["failed"][0]["error"]["code"] == "x"
+    done = events(capsys)[-1]
+    assert done["ok"] is False and done["error"]["code"] == "x"
+    assert done["data"]["renewed"] == [] and done["data"]["failed"][0]["error"]["code"] == "x"
 
 
 def test_renew_due_installs_over_wifi_and_records(state, tmp_path, monkeypatch, capsys):
