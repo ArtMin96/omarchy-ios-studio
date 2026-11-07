@@ -62,7 +62,8 @@ def _r(v, nd=1):
 
 
 def _vals(samples, key):
-    return [(s["ts"], s[key]) for s in samples if isinstance(s.get(key), (int, float))]
+    return [(s["ts"], s[key]) for s in samples
+            if isinstance(s.get(key), (int, float)) and math.isfinite(s[key])]
 
 
 def pct(xs: list[float], p: float) -> float | None:
