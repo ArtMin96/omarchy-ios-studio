@@ -150,6 +150,7 @@ alignment, spacing). APIs: [docs/components.md](docs/components.md).
   [docs/features/](docs/features/README.md)).
 - Test on a real iPhone as well as in demo mode. Use the existing test app `~/Projects/CrashLab` for that;
   don't create new test apps.
+- When a convention changes, update `CLAUDE.md` and `.claude/rules/` in the same PR so AI agents follow it too.
 - In git worktrees, never use `git stash` (the stash is shared by every worktree); make a temporary commit instead.
 - Run `.venv/bin/pytest` and `.venv/bin/ruff check` before you push. CI also runs shellcheck and qmllint
   (see [docs/development.md](docs/development.md#ci)).

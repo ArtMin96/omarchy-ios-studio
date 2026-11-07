@@ -12,3 +12,6 @@ mcp/build/
 mcp/dist/
 # the dev venv (uv sync --group dev) floats like the MCP venv users get; no lock file
 uv.lock
+
+# personal Claude Code notes
+CLAUDE.local.md
