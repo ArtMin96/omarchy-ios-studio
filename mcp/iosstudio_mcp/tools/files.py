@@ -455,7 +455,8 @@ def register(mcp: MCPServer) -> None:
         bid = app["bundleId"]
         base: dict = {"bundleId": bid, "documentsOnly": documents_only}
         first = await dcall(state, "container.list", {**base, **({"path": path} if path else {})}, udid=udid,
-                            timeout=60) or {}
+                            timeout=60, hints={"not-found": "That folder doesn't exist. Call ios_files_list(bundle_id) "
+                                                            "without path to see the top level."}) or {}
         top = first.get("path") or "/"
         entries: list[FileEntry] = []
         counts = Counter()

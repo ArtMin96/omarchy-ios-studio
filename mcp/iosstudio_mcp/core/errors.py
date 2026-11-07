@@ -44,6 +44,11 @@ DEVICE_NEXT: dict[str, str] = {
     "disconnected": "The device service restarted. Retry the call.",
     "daemon-unavailable": "The iPhone service couldn't start. Run ios_toolchain_check (pymobiledevice3 step), "
                           "or ask the user to open iOS Studio: ios_open_app(page='device').",
+    # App containers (container.* in docs/deviced-protocol.md)
+    "no-file-sharing": "Only apps that share files can be browsed. Pick one of your own apps: "
+                       "ios_app_list(scope='own').",
+    "denied": "The iPhone refused that folder. List the app's top level with ios_files_list(bundle_id) and pick "
+              "a folder it shows.",
     "socket-path-too-long": "Set IOSSTUDIO_RUNTIME_DIR to a shorter folder (socket paths max out at 107 bytes), "
                             "then restart the MCP server.",
     # UI inspection (ui.* in docs/deviced-protocol.md)

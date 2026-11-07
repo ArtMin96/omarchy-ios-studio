@@ -210,16 +210,14 @@ class FilesList(FilesCase):
         self.assertIn("[unreachable]", text)
         self.assertIn("ios_device_reconnect", text)
 
-    @unittest.expectedFailure
     async def test_an_app_without_file_sharing_names_a_next_step(self):
-        # BUG: container.* codes (no-file-sharing, not-found, denied) have no entry in core/errors.py DEVICE_NEXT
-        # and files.py passes no hints, so the error has no "Next:" step (e.g. ios_app_list(scope='own')).
         self.daemon.replies["container.list"] = (0, err(
             "no-file-sharing", "This app doesn't share files. Your own apps (built here) always do; App Store apps "
             "only when they turn on file sharing.", detail="InstallationLookupFailed"))
         text = await self.error(FILES, "ios_files_list", bundle_id="com.store.reader")
         self.assertIn("[no-file-sharing]", text)
         self.assertIn("Next:", text)
+        self.assertIn("ios_app_list(scope='own')", text)
 
 
 class FilesPull(FilesCase):
