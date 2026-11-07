@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // App data › Stores: the app's SwiftData / Core Data / SQLite files, read-only. Pick a store and a
@@ -18,17 +19,37 @@ ColumnLayout {
   readonly property int pageSize: 50
 
   readonly property string bundleId: view.bundleId
-  property string status: "unknown"           // unknown | loading | ready | error
-  property var stores: []
-  property var error: null
-  property string loadedFor: ""
+  // The app's stores: read when the pane first shows an app, then on load() (Reload) or after
+  // invalidate() (a reset elsewhere) the next time it shows. "no-store" is an empty list.
+  Resource {
+    id: storesRes
+    active: root.active && root.bundleId !== ""
+    autoLoad: true
+    ttl: 2147483647                           // never stale by age
+    initial: []
+    fetch: function(done, fail) {
+      root.svc.fetch("appdata.stores", { bundleId: root.bundleId }, function(d) { done(root.view.norm(d.stores || [])) },
+                     function(e) { if (e && e.code === "no-store") done([]); else fail(e) }, 60000)
+    }
+    onSucceeded: root._storesLoaded()
+  }
+  readonly property var stores: storesRes.data || []
+  readonly property var error: storesRes.error
+  // loading: a read runs · error: the last read failed (the stores already shown are hidden)
+  readonly property string status: storesRes.busy ? "loading" : storesRes.error ? "error" : storesRes.loaded ? "ready" : "unknown"
   property string storePath: ""
   property string tableName: ""
   property bool showMeta: false
 
-  property string rowsStatus: "unknown"
-  property var page: null                     // appdata.rows reply
-  property var rowsError: null
+  // One page of the open table. A new table resets it; paging keeps the old page (dimmed) until the next.
+  property var _rowsArgs: ({})
+  Resource {
+    id: rowsRes
+    fetch: function(done, fail) { root.svc.fetch("appdata.rows", root._rowsArgs, function(d) { done(root.view.norm(d)) }, fail, 60000) }
+  }
+  readonly property var page: rowsRes.data    // appdata.rows reply
+  readonly property var rowsError: rowsRes.error
+  readonly property string rowsStatus: rowsRes.busy ? "loading" : rowsRes.error ? "error" : rowsRes.loaded ? "ready" : "unknown"
 
   readonly property var store: {
     for (var i = 0; i < stores.length; i++) if (stores[i].path === storePath) return stores[i]
@@ -45,58 +66,42 @@ ColumnLayout {
 
   spacing: Style.spacing.lg
 
-  onActiveChanged: if (active && loadedFor !== bundleId) load()
-  onBundleIdChanged: { stores = []; status = "unknown"; page = null; tableName = ""; storePath = ""; loadedFor = ""; if (active) load() }
+  onBundleIdChanged: { rowsRes.reset(); tableName = ""; storePath = ""; storesRes.reset(); storesRes.load() }
 
   function kindLabel(k) { return k === "swiftdata" ? "SwiftData" : k === "coredata" ? "Core Data" : "SQLite" }
   function tableTitle(t) { return t.entity || t.name }
 
-  function load() {
-    if (!root.bundleId) return
-    var bid = root.bundleId
-    root.status = "loading"
-    root.error = null
-    root.svc.request("appdata.stores", { bundleId: bid }, function(ok, d) {
-      if (bid !== root.bundleId) return
-      root.loadedFor = bid
-      if (ok) {
-        root.stores = root.view.norm(d.stores || [])
-        root.status = "ready"
-        if (!root.stores.some(function(s) { return s.path === root.storePath })) { root.storePath = root.stores.length ? root.stores[0].path : ""; root.tableName = "" }
-        // keep the open table when it's still there, else open the first one with rows
-        if (root.table) root.openTable(root.table.name, root.page ? root.page.offset : 0)
-        else root._openFirst()
-      } else if (d && d.code === "no-store") { root.stores = []; root.status = "ready" }
-      else { root.error = d; root.status = "error" }
-    }, 60000)
+  function load() { storesRes.load(true) }
+  function invalidate() { storesRes.invalidate() }
+  function _storesLoaded() {
+    if (!root.stores.some(function(s) { return s.path === root.storePath })) { root.storePath = root.stores.length ? root.stores[0].path : ""; root.tableName = "" }
+    // keep the open table when it's still there, else open the first one with rows
+    if (root.table) root.openTable(root.table.name, root.page ? root.page.offset : 0)
+    else root._openFirst()
   }
 
   function _openFirst() {
     var ts = root.tables
     var pick = ts.filter(function(t) { return t.rows > 0 })[0] || ts[0]
     if (pick) root.openTable(pick.name, 0)
-    else { root.tableName = ""; root.page = null }
+    else { root.tableName = ""; rowsRes.reset() }
   }
 
   function chooseStore(path) {
     root.storePath = path
     root.tableName = ""
-    root.page = null
+    rowsRes.reset()
     root._openFirst()
   }
 
+  // A different table (or store) drops the page and any read still running for the old one.
   function openTable(name, offset) {
     if (!root.store) return
-    var bid = root.bundleId, st = root.store.path
-    if (name !== root.tableName) root.page = null
+    var args = { bundleId: root.bundleId, store: root.store.path, table: name, offset: Math.max(0, offset), limit: root.pageSize }
+    if (name !== root.tableName || args.store !== root._rowsArgs.store) rowsRes.reset()
     root.tableName = name
-    root.rowsStatus = "loading"
-    root.rowsError = null
-    root.svc.request("appdata.rows", { bundleId: bid, store: st, table: name, offset: Math.max(0, offset), limit: root.pageSize }, function(ok, d) {
-      if (bid !== root.bundleId || name !== root.tableName) return
-      if (ok) { root.page = root.view.norm(d); root.rowsStatus = "ready" }
-      else { root.rowsError = d; root.rowsStatus = "error" }
-    }, 60000)
+    root._rowsArgs = args
+    rowsRes.load(true)
   }
 
   // ---- states

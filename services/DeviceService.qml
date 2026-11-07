@@ -35,11 +35,19 @@ Item {
   // icons and sizes arrive later in batches and land in their own maps so a batch doesn't rebuild every
   // view bound to `apps`. Their values are also written into the app objects in place (no change signal),
   // so code reading `a.icon` / `a.size` sees them on its next evaluation.
-  property var apps: []
+  // The list is appsResource (a Resource); apps / appsStatus ("unknown" | "loading" | "ready" | "error") /
+  // appsError are read-only views of it. refreshApps() / wantAppSizes() load it.
+  property Resource appsResource: Resource {
+    initial: []
+    fetch: root._fetchApps
+    onSucceeded: root._appsSettled()
+    onFailed: root._appsSettled()
+  }
+  readonly property var apps: appsResource.data
+  readonly property string appsStatus: appsResource.status === "idle" ? "unknown" : appsResource.status
+  readonly property var appsError: appsResource.error
   property var appIcons: ({})              // bundleId -> icon path (appIcons / appIcon events)
   property var appSizes: ({})              // bundleId -> bytes (appSizes, only after wantAppSizes())
-  property string appsStatus: "unknown"    // unknown | loading | ready | error
-  property var appsError: null
   property bool appsStale: false           // the reply came from the daemon's cache; it refreshes in the background
   property var appsFetchedAt: null         // when the daemon read the list from the iPhone (as the daemon sends it; null = unknown)
   property double _sizesAskedAt: 0         // wantAppSizes(): once per device per sizesTtl
@@ -70,7 +78,7 @@ Item {
   property bool shooting: false
   property var mirrorError: null
   readonly property string screenSource: framePath !== "" ? frameUrl
-                                       : (lastShot !== "" ? "file://" + lastShot : "")
+                                       : (lastShot !== "" ? Util.fileUrl(lastShot) : "")
   // mirror modes (deviced mirror.start {mode}): "auto" tries the smooth stream (iOS 27+), else screenshots
   property string mirrorMode: app.setting("mirrorMode", "auto")   // what the user picked: auto | screenshot
   property string mirrorActive: ""         // what runs now: stream | screenshot ("" = not running)
@@ -269,7 +277,7 @@ Item {
       }
       break
     case "frame":
-      if (root.mirroring && data) { root.frameSeq = data.seq; root.frameUrl = "file://" + data.path + "?" + data.seq; root.framePath = data.path }
+      if (root.mirroring && data) { root.frameSeq = data.seq; root.frameUrl = Util.fileUrl(data.path) + "?" + data.seq; root.framePath = data.path }
       break
     case "mirror":
       root.mirroring = !!(data && data.running)
@@ -287,11 +295,11 @@ Item {
         var was = root.recording ? root.recording.state : ""
         root.recording = data
         if (data.state === "done" && was !== "done" && !data.placeholder) root.app.notify("Screen recording saved", (data.seconds || 0).toFixed(0) + " s video", Model.Glyph.camera)
-        if (data.state === "failed" && was !== "failed" && data.error) root.app.toast(Model.errorMessage(data.error), "error")
+        if (data.state === "failed" && was !== "failed" && data.error) root.app.toastError(data.error)
       }
       break
     case "apps":                                // the cached list changed after a background refresh
-      if (data && data.apps && _isCurrent(data.udid)) { _setApps(data.apps); root.appsStale = false }
+      if (data && data.apps && _isCurrent(data.udid)) { root.appsResource.set(_setApps(data.apps)); root.appsStale = false }
       break
     case "appIcons":                            // batched: {udid, icons: {bundleId: path}}
       if (data && data.icons && _isCurrent(data.udid)) _queueIcons(data.icons)
@@ -362,7 +370,7 @@ Item {
     for (var i = 0; i < root.devices.length; i++) if (root.devices[i].active) cur = root.devices[i]
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
-      root.info = ({}); root.apps = []; root.appsStatus = "unknown"; root.profilesResource.reset()
+      root.info = ({}); root.appsResource.reset(); root._appsQueued = null; root._appsGen++; root.profilesResource.reset()
       root.appIcons = ({}); root.appSizes = ({}); root._appsKey = ""; root._sizesAskedAt = 0; root.appsStale = false
       root._iconQueue = ({})
       root.lastShot = ""; root.framePath = ""; root.location = null
@@ -379,7 +387,7 @@ Item {
       if (list[i].bundleId === bundleId) {
         var copy = list.slice()
         copy[i] = Object.assign({}, list[i], patch)
-        _setApps(copy)
+        root.appsResource.set(_setApps(copy))
         return
       }
     }
@@ -387,8 +395,9 @@ Item {
 
   function _isCurrent(udid) { return !udid || !root.current || udid === root.current.udid }
 
-  // A new list: keep the icons/sizes we know, take any the daemon put inline, and only reassign `apps`
-  // when something besides icon/size changed.
+  // A new list: keep the icons/sizes we know, take any the daemon put inline. Returns the list for
+  // appsResource: the current one (the same object, so nothing rebinds) unless something besides
+  // icon/size changed.
   function _setApps(items) {
     // plain JS objects (replies arrive as variant lists), so _writeInto can fill them in place
     var list = []
@@ -402,14 +411,14 @@ Item {
     if (icons) root.appIcons = Object.assign({}, root.appIcons, icons)
     if (sizes) root.appSizes = Object.assign({}, root.appSizes, sizes)
     var key = JSON.stringify(list, function(k, v) { return k === "icon" || k === "size" ? undefined : v })
-    if (key === root._appsKey) return
+    if (key === root._appsKey) return root.apps
     for (var j = 0; j < list.length; j++) {
       var b = list[j]
       if (!b.icon && root.appIcons[b.bundleId]) b.icon = root.appIcons[b.bundleId]
       if (!b.size && root.appSizes[b.bundleId]) b.size = root.appSizes[b.bundleId]
     }
     root._appsKey = key
-    root.apps = list
+    return list
   }
 
   function _writeInto(field, map) {
@@ -496,7 +505,7 @@ Item {
 
   function select(udid) {
     request("device.select", { udid: udid }, function(ok, d) {
-      if (!ok) root.app.toast(Model.errorMessage(d), "error")
+      if (!ok) root.app.toastError(d)
       else root.app.setSetting("defaultDevice", udid)
     })
   }
@@ -526,21 +535,37 @@ Item {
     _listApps({ icons: true, sizes: true })
   }
 
+  // One apps.list at a time (appsResource); a call while one runs is merged into the next request.
+  property var _appsArgs: ({})
+  property var _appsQueued: null
+  property int _appsGen: 0                 // bumped on a device switch: an older reply is dropped
   function _listApps(args) {
-    if (root.appsStatus !== "ready") root.appsStatus = "loading"
-    request("apps.list", args, function(ok, d) {
-      if (ok) {
-        // {apps, stale, fetchedAt}; older daemons answer with the bare list
-        var wrapped = !!d && d.apps !== undefined
-        root.appsStale = wrapped && !!d.stale
-        root.appsFetchedAt = wrapped && d.fetchedAt !== undefined ? d.fetchedAt : null
-        _setApps(wrapped ? d.apps : (d || []))
-        root.appsStatus = "ready"; root.appsError = null
-      } else {
-        root.appsError = d
-        if (root.appsStatus !== "ready") root.appsStatus = "error"
-        if (args.sizes) root._sizesAskedAt = 0
-      }
+    if (root.appsResource.busy) {
+      var q = root._appsQueued || {}
+      for (var k in args) q[k] = q[k] || args[k]
+      root._appsQueued = q
+      return
+    }
+    root._appsArgs = args
+    root.appsResource.load(true)
+  }
+  function _appsSettled() {
+    var q = root._appsQueued
+    root._appsQueued = null
+    if (q) _listApps(q)
+  }
+  function _fetchApps(done, fail) {
+    var args = root._appsArgs, gen = root._appsGen
+    root.fetch("apps.list", args, function(d) {
+      if (gen !== root._appsGen) return        // the other iPhone's list (appsResource dropped it too)
+      // {apps, stale, fetchedAt}; older daemons answer with the bare list
+      var wrapped = !!d && d.apps !== undefined
+      root.appsStale = wrapped && !!d.stale
+      root.appsFetchedAt = wrapped && d.fetchedAt !== undefined ? d.fetchedAt : null
+      done(root._setApps(wrapped ? d.apps : (d || [])))
+    }, function(e) {
+      if (args.sizes) root._sizesAskedAt = 0
+      fail(e)
     })
   }
 
@@ -562,7 +587,7 @@ Item {
     request("app.launch", { bundleId: a.bundleId }, function(ok, d) {
       _setBusy(a.bundleId, "")
       if (ok) { root.app.toast("Opened " + a.name, "ok"); _patchApp(a.bundleId, { running: true, pid: d.pid }) }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -571,7 +596,7 @@ Item {
     request("app.kill", { bundleId: a.bundleId }, function(ok, d) {
       _setBusy(a.bundleId, "")
       if (ok) { root.app.toast(d.killed.length ? "Stopped " + a.name : a.name + " wasn't running", "ok"); _patchApp(a.bundleId, { running: false, pid: null }) }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -585,9 +610,9 @@ Item {
         request("app.uninstall", { bundleId: a.bundleId }, function(ok, d) {
           _setBusy(a.bundleId, "")
           if (ok) {
-            _setApps(root.apps.filter(function(x) { return x.bundleId !== a.bundleId }))
+            root.appsResource.set(_setApps(root.apps.filter(function(x) { return x.bundleId !== a.bundleId })))
             root.app.toast("Removed " + a.name, "ok")
-          } else root.app.toast(Model.errorMessage(d), "error")
+          } else root.app.toastError(d)
         })
       }
     })
@@ -598,7 +623,7 @@ Item {
     request("screenshot", {}, function(ok, d) {
       root.shooting = false
       if (ok) root.lastShot = d.path
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
       if (callback) callback(ok, d)
     })
   }
@@ -616,7 +641,7 @@ Item {
     root.mirrorError = null
     request("mirror.start", _mirrorArgs(fps), function(ok, d) {
       if (ok) { root.mirroring = true; if (d.mode && d.mode !== "starting") root.mirrorActive = d.mode }
-      else { root.mirrorError = d; root.app.toast(Model.errorMessage(d), "error") }
+      else { root.mirrorError = d; root.app.toastError(d) }
     })
   }
 
@@ -646,7 +671,7 @@ Item {
     if (!root.mirroring) args.mode = root.mirrorMode
     request("record.start", args, function(ok, d) {
       if (ok) root.recording = d
-      else { root.recording = { state: "failed", error: d }; root.app.toast(Model.errorMessage(d), "error") }
+      else { root.recording = { state: "failed", error: d }; root.app.toastError(d) }
     }, 60000)
   }
 
@@ -697,7 +722,7 @@ Item {
     request("location.set", { lat: lat, lon: lon }, function(ok, d) {
       root.locating = false
       if (ok) { root.location = Object.assign({ label: label || "" }, d); root.app.toast("Your iPhone now thinks it's " + (label ? "in " + label : "at " + lat.toFixed(4) + ", " + lon.toFixed(4)), "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -706,7 +731,7 @@ Item {
     request("location.clear", {}, function(ok, d) {
       root.locating = false
       if (ok) { root.location = null; root.app.toast("Real location restored", "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -716,7 +741,7 @@ Item {
     request("ddi.mount", {}, function(ok, d) {
       root.mountingDdi = false
       if (ok) { root.info = Object.assign({}, root.info, { ddiMounted: true }); root.app.toast("Developer tools are ready on your iPhone", "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 

@@ -73,10 +73,7 @@ ColumnLayout {
     }
   }
 
-  function copyId() {
-    Util.execArgv(["wl-copy", root.shown.bundleId])
-    root.app.toast("Copied " + root.shown.bundleId)
-  }
+  function copyId() { root.app.copyText(root.shown.bundleId) }
 
   // ---- header: back, icon, name, bundle id and version, pills, the row's actions
   RowLayout {
@@ -112,7 +109,7 @@ ColumnLayout {
       Image {
         id: icon
         anchors.fill: parent
-        source: root.iconPath ? "file://" + root.iconPath : ""
+        source: Util.fileUrl(root.iconPath)
         sourceSize.width: width * 2; sourceSize.height: height * 2
         asynchronous: true; smooth: true; mipmap: true
         fillMode: Image.PreserveAspectFit

@@ -12,7 +12,7 @@ import "../../lib/Model.js" as Model
 // The rows are a ListView over `shown`, which changes only with the app list, the filter or the sort;
 // icons and sizes come from svc.appIcons / svc.appSizes, so a batch of icons only rebinds those images.
 // The page scrolls (PageFrame's Flickable), not the list: the list is as tall as its content and only
-// creates the rows inside the page's viewport (negative display margins), so long lists stay cheap.
+// creates the rows inside the page's viewport (PageViewport), so long lists stay cheap.
 ColumnLayout {
   id: root
   required property var app
@@ -56,26 +56,21 @@ ColumnLayout {
     IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload apps"; busy: root.svc.appsStatus === "loading"; onClicked: root.svc.refreshApps(true) }
   }
 
-  Skeleton { Layout.fillWidth: true; visible: root.svc.appsStatus === "loading" && root.svc.apps.length === 0; lines: 6; rowHeight: Style.space(40); gap: Style.spacing.md }
-
-  ErrorState {
+  // the list itself stays outside: its rows are placed against the page (PageViewport)
+  StateView {
     Layout.fillWidth: true
-    visible: root.svc.appsStatus === "error" && root.svc.apps.length === 0
+    visible: phase !== "ready"
     app: root.app
-    error: root.svc.appsError
-    title: "Couldn't list the apps"
-    onRetry: root.svc.refreshApps(true)
-  }
-
-  EmptyState {
-    Layout.fillWidth: true
-    visible: root.svc.appsStatus === "ready" && root.shown.length === 0
-    compact: true
-    glyph: Model.Glyph.apps
-    title: searchField.text ? "No app matches “" + searchField.text + "”" : "No apps installed yet"
-    text: searchField.text ? "Try part of the name or the bundle ID." : "Build one in Projects and run it on this iPhone."
-    actionText: searchField.text ? "Clear filter" : "Open Projects"
-    onAction: searchField.text ? searchField.clear() : root.app.nav("projects")
+    resource: root.svc.appsResource
+    isEmpty: function() { return root.shown.length === 0 }
+    retry: function() { root.svc.refreshApps(true) }
+    errorTitle: "Couldn't list the apps"
+    emptyGlyph: Model.Glyph.apps
+    emptyTitle: searchField.text ? "No app matches “" + searchField.text + "”" : "No apps installed yet"
+    emptyText: searchField.text ? "Try part of the name or the bundle ID." : "Build one in Projects and run it on this iPhone."
+    emptyActionText: searchField.text ? "Clear filter" : "Open Projects"
+    onEmptyAction: searchField.text ? searchField.clear() : root.app.nav("projects")
+    skeletonLines: 6; skeletonRowHeight: Style.space(40)
   }
 
   ListView {
@@ -88,29 +83,15 @@ ColumnLayout {
     reuseItems: true
 
     // Only rows inside the page's viewport (plus a screen of slack each way) exist.
-    property Flickable pageFlick: null
-    property real listTop: 0                // this list's y in the page's content
-    readonly property real slack: pageFlick ? pageFlick.height : 0
-    displayMarginBeginning: pageFlick ? -Math.max(0, pageFlick.contentY - listTop - slack) : 0
-    displayMarginEnd: pageFlick ? -Math.max(0, listTop + height - pageFlick.contentY - pageFlick.height - slack) : 0
-    function place() { if (pageFlick) listTop = list.mapToItem(pageFlick.contentItem, 0, 0).y }
-    Component.onCompleted: {
-      var p = root.parent
-      while (p && !(p instanceof Flickable)) p = p.parent
-      pageFlick = p
-      place()
-    }
-    onYChanged: place()
-    onHeightChanged: place()
-    Connections { target: root; function onYChanged() { list.place() } }
+    PageViewport { id: viewport; view: list }
+    displayMarginBeginning: viewport.marginBeginning
+    displayMarginEnd: viewport.marginEnd
 
     // Keyboard moves keep the cursor's row on screen (rows have one height, so it may not exist yet).
     function reveal(i) {
-      if (!pageFlick || i < 0 || i >= count || count === 0) return
+      if (i < 0 || i >= count || count === 0) return
       var stride = (contentHeight + spacing) / count
-      var y0 = listTop + i * stride, y1 = y0 + stride - spacing
-      if (y0 < pageFlick.contentY) pageFlick.contentY = Math.max(0, y0 - Style.spacing.lg)
-      else if (y1 > pageFlick.contentY + pageFlick.height) pageFlick.contentY = y1 - pageFlick.height + Style.spacing.lg
+      viewport.reveal(i * stride, (i + 1) * stride - spacing)
     }
     Connections { target: root; function onCursorChanged() { list.reveal(root.cursor) } }
 
@@ -148,7 +129,7 @@ ColumnLayout {
           Image {
             id: icon
             anchors.fill: parent
-            source: row.iconPath ? "file://" + row.iconPath : ""
+            source: Util.fileUrl(row.iconPath)
             sourceSize.width: width * 2; sourceSize.height: height * 2
             asynchronous: true; smooth: true; mipmap: true
             fillMode: Image.PreserveAspectFit
@@ -166,7 +147,7 @@ ColumnLayout {
         IconButton { glyph: Model.Glyph.play; tooltip: "Open on iPhone"; busy: row.busy === "launch"; enabled: row.busy === ""; onClicked: root.svc.launchApp(row.modelData) },
         // Stop keeps its slot while the app isn't running, so ▶, ■, copy and trash stay in fixed columns
         IconButton { glyph: Model.Glyph.stop; tooltip: row.modelData.running ? "Stop" : ""; opacity: row.modelData.running ? 1 : 0; busy: row.busy === "kill"; enabled: row.modelData.running && row.busy === ""; onClicked: root.svc.stopApp(row.modelData) },
-        IconButton { glyph: Model.Glyph.copy; tooltip: "Copy bundle ID"; visible: !row.narrow; onClicked: { Util.execArgv(["wl-copy", row.modelData.bundleId]); root.app.toast("Copied " + row.modelData.bundleId) } },
+        IconButton { glyph: Model.Glyph.copy; tooltip: "Copy bundle ID"; visible: !row.narrow; onClicked: root.app.copyText(row.modelData.bundleId) },
         IconButton { glyph: Model.Glyph.trash; tooltip: "Remove from iPhone"; danger: true; visible: row.modelData.removable; busy: row.busy === "uninstall"; enabled: row.busy === ""; onClicked: root.svc.uninstallApp(row.modelData) }
       ]
     }

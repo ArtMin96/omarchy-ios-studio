@@ -42,5 +42,11 @@ Rectangle {
   }
   HoverHandler { cursorShape: Qt.PointingHandCursor }
   TapHandler { onTapped: player.playbackState === MediaPlayer.PlayingState ? player.pause() : player.play() }
+  // nobody sees it while the tab (or page) is hidden: don't keep decoding the loop
+  property bool _resume: false
+  onVisibleChanged: {
+    if (!visible) { root._resume = player.playbackState === MediaPlayer.PlayingState; player.pause() }
+    else if (root._resume) { root._resume = false; player.play() }
+  }
   Component.onDestruction: player.stop()
 }

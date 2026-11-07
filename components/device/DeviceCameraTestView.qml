@@ -116,15 +116,15 @@ ColumnLayout {
     }
   }
   function cancel() { root.svc.request("transfer.cancel", { transferId: root.testId }, null) }
-  function open(p) { Qt.openUrlExternally("file://" + p) }
-  function docs() { Qt.openUrlExternally("file://" + root.app.repoPath + "/docs/camera-testing.md") }
+  function open(p) { root.app.openPath(p) }
+  function docs() { root.app.openPath(root.app.repoPath + "/docs/camera-testing.md") }
 
   FileDialog {
     id: pick
     title: "Choose test images or videos"
     fileMode: FileDialog.OpenFiles
     nameFilters: ["Images and videos (*.jpg *.jpeg *.png *.heic *.heif *.mov *.mp4 *.m4v)", "All files (*)"]
-    currentFolder: "file://" + root.app.home + "/Pictures"
+    currentFolder: Util.fileUrl(root.app.home + "/Pictures")
     onAccepted: root.addInputs(selectedFiles.map(function(u) { return decodeURIComponent(String(u).replace(/^file:\/\//, "")) }))
   }
 
@@ -377,7 +377,7 @@ ColumnLayout {
           radius: Style.cornerRadius
           color: Theme.surfaceRaised
           clip: true
-          Image { anchors.fill: parent; source: "file://" + modelData; fillMode: Image.PreserveAspectFit; asynchronous: true; sourceSize.width: width * 2 }
+          Image { anchors.fill: parent; source: Util.fileUrl(modelData); fillMode: Image.PreserveAspectFit; asynchronous: true; sourceSize.width: width * 2 }
           HoverHandler { id: ih; cursorShape: Qt.PointingHandCursor }
           TapHandler { onTapped: root.open(modelData) }
           PanelToolTip { visible: ih.hovered; text: modelData.substring(modelData.lastIndexOf("/") + 1) + "  ·  click to open" }

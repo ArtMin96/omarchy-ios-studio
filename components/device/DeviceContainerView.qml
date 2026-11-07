@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // iPhone › Apps › an app › Files: browse the app's container on the iPhone, copy files out ("Save to…")
@@ -22,9 +23,20 @@ ColumnLayout {
   readonly property var candidates: svc.apps.filter(function(a) { return a.developer || a.fileSharing })
   property string bundleId: ""
   property string path: ""
-  property var listing: null                // container.list reply
-  property string status: "unknown"         // unknown | loading | ready | error
-  property var error: null
+  // The open folder (container.list reply). open(p) reads another one; the old listing stays (dimmed)
+  // until it arrives. An open() while one runs is read right after it.
+  property var _listArgs: ({})
+  property bool _openQueued: false
+  Resource {
+    id: lister
+    fetch: function(done, fail) { root.svc.fetch("container.list", root._listArgs, done, fail, 60000) }
+    onSucceeded: function(d) { root.path = d.path; root.selected = ({}); root._nextOpen() }
+    onFailed: root._nextOpen()
+  }
+  readonly property var listing: lister.data
+  readonly property var error: lister.error
+  // loading: a read runs · error: the last read failed (the listing is hidden) · ready
+  readonly property string status: lister.busy ? "loading" : lister.error ? "error" : lister.loaded ? "ready" : "unknown"
   property var selected: ({})               // phone path -> entry
   readonly property int selCount: Object.keys(selected).length
   property var transfer: null
@@ -42,7 +54,7 @@ ColumnLayout {
 
   onActiveChanged: if (active) _ensure()
   onCandidatesChanged: if (active) _ensure()
-  onFixedAppChanged: { root.bundleId = ""; root.listing = null; root.path = ""; root.status = "unknown"; root.selected = ({}); if (active) _ensure() }
+  onFixedAppChanged: { root.bundleId = ""; lister.reset(); root._openQueued = false; root.path = ""; root.selected = ({}); if (active) _ensure() }
   Connections {
     target: root.svc
     function onConnStateChanged() { if (root.active && root.svc.connected && root.status !== "ready") root.open(root.path) }
@@ -60,21 +72,19 @@ ColumnLayout {
   function choose(bid) {
     if (bid === root.bundleId && root.status === "ready") return
     root.bundleId = bid
-    root.listing = null
+    lister.reset()
+    root._openQueued = false
     open("")
   }
 
   function open(p) {
     if (!root.bundleId) return
-    root.status = "loading"
-    root.error = null
     var args = { bundleId: root.bundleId }
     if (p) args.path = p
-    root.svc.request("container.list", args, function(ok, d) {
-      if (ok) { root.listing = d; root.path = d.path; root.status = "ready"; root.selected = ({}) }
-      else { root.error = d; root.status = "error" }
-    }, 60000)
+    root._listArgs = args
+    if (!lister.load(true)) root._openQueued = true
   }
+  function _nextOpen() { if (root._openQueued) { root._openQueued = false; lister.load(true) } }
 
   function up() {
     if (!root.listing || root.path === root.rootPath) return
@@ -121,7 +131,7 @@ ColumnLayout {
           onConfirm: function() { root.push(srcs, true) }
         })
       } else if (d.code === "cancelled") root.app.toast("Copy stopped", "info")
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     }, 24 * 3600000)
   }
 
@@ -134,7 +144,7 @@ ColumnLayout {
         var where = dest.indexOf(root.app.home) === 0 ? "~" + dest.substring(root.app.home.length) : dest
         root.app.toast("Saved " + d.files.length + (d.files.length === 1 ? " file" : " files") + " to " + where, "ok")
       } else if (d.code === "cancelled") root.app.toast("Copy stopped", "info")
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     }, 24 * 3600000)
   }
 
@@ -151,7 +161,7 @@ ColumnLayout {
       onConfirm: function() {
         root.svc.request("container.delete", { bundleId: root.bundleId, paths: entries.map(function(e) { return e.path }) }, function(ok, d) {
           if (ok) root.app.toast(d.failed.length ? d.failed.length + " couldn't be deleted" : "Deleted", d.failed.length ? "warn" : "ok")
-          else root.app.toast(Model.errorMessage(d), "error")
+          else root.app.toastError(d)
           root.open(root.path)
         })
       }
@@ -163,7 +173,7 @@ ColumnLayout {
     if (!n || n.indexOf("/") >= 0 || n === "." || n === "..") { root.app.toast("Use a folder name without slashes", "warn"); return }
     root.svc.request("container.mkdir", { bundleId: root.bundleId, path: (root.path === "/" ? "" : root.path) + "/" + n }, function(ok, d) {
       if (ok) { folderSheet.close(); root.open(root.path) }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -171,7 +181,7 @@ ColumnLayout {
   FolderDialog {
     id: saveDialog
     title: "Save from the iPhone to…"
-    currentFolder: "file://" + root.defaultSave
+    currentFolder: Util.fileUrl(root.defaultSave)
     onAccepted: root.pull(root._pendingSave, decodeURIComponent(String(selectedFolder).replace(/^file:\/\//, "")))
   }
   function saveTo(paths) { root._pendingSave = paths; saveDialog.open() }
@@ -180,7 +190,7 @@ ColumnLayout {
     id: addDialog
     title: "Copy files to the iPhone"
     fileMode: FileDialog.OpenFiles
-    currentFolder: "file://" + root.app.home
+    currentFolder: Util.fileUrl(root.app.home)
     onAccepted: root.push(selectedFiles.map(function(u) { return decodeURIComponent(String(u).replace(/^file:\/\//, "")) }), false)
   }
 
@@ -270,22 +280,27 @@ ColumnLayout {
     id: dropZone
     Layout.fillWidth: true
     visible: root.status !== "error" && !!root.listing
-    implicitHeight: Math.max(list.implicitHeight, Style.space(160))
+    implicitHeight: Math.max(list.contentHeight, Style.space(160))
     opacity: root.status === "loading" ? 0.5 : 1
 
-    ColumnLayout {
+    // a folder can hold thousands of entries: only the rows inside the page's viewport exist
+    ListView {
       id: list
       anchors.left: parent.left; anchors.right: parent.right
+      height: contentHeight
+      interactive: false
       spacing: Style.spacing.xxs
-      Repeater {
-        model: root.listing ? root.listing.entries : []
+      model: root.listing ? root.listing.entries : []
+      PageViewport { id: viewport; view: list }
+      displayMarginBeginning: viewport.marginBeginning
+      displayMarginEnd: viewport.marginEnd
         delegate: ListRow {
           id: row
           required property var modelData
           required property int index
           readonly property bool isDir: modelData.type === "dir"
           readonly property bool denied: modelData.type === "unknown"
-          Layout.fillWidth: true
+          width: ListView.view.width
           property bool hot: false
           current: !!root.selected[modelData.path]
           hasCursor: hot && !current
@@ -308,7 +323,6 @@ ColumnLayout {
             IconButton { glyph: Model.Glyph.trash; tooltip: "Delete"; danger: true; visible: !row.denied && !root.busy && root.path !== "/"; onClicked: root.remove([row.modelData]) }
           ]
         }
-      }
     }
 
     EmptyState {

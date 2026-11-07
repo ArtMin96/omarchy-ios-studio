@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // App data › Defaults: the app's UserDefaults (Library/Preferences/<bundle id>.plist) as a key list.
@@ -19,11 +20,32 @@ ColumnLayout {
   property bool active: false
 
   readonly property string bundleId: view.bundleId
-  property string status: "unknown"           // unknown | loading | ready | error
-  property var reply: null                    // appdata.defaults reply (not `data`: that is the default property)
-  property var error: null
+  // The defaults: read when the pane first shows an app, then again on load() (Reload, after a change)
+  // or after invalidate() (a reset elsewhere) the next time it shows.
+  Resource {
+    id: defaults
+    active: root.active && root.bundleId !== ""
+    autoLoad: true
+    ttl: 2147483647                           // never stale by age
+    fetch: function(done, fail) {
+      var bid = root.bundleId
+      root.waiting = root.view.waitLeft() > 0
+      root.svc.fetch("appdata.defaults", { bundleId: bid }, function(d) {
+        if (bid === root.bundleId) root.waiting = false
+        done(root.view.norm(d))
+      }, function(e) {
+        if (bid === root.bundleId) root.waiting = false
+        if (e && e.code === "no-defaults") done({ exists: false, values: {}, keys: 0 })
+        else fail(e)
+      }, 120000)
+    }
+    onSucceeded: function(d) { root.reverted = d.reverted || [] }
+  }
+  readonly property var reply: defaults.data  // appdata.defaults reply (not `data`: that is the default property)
+  readonly property var error: defaults.error
+  // loading: a read runs (keys already shown stay, dimmed) · error: the last read failed
+  readonly property string status: defaults.busy ? "loading" : defaults.error ? "error" : defaults.loaded ? "ready" : "unknown"
   property var expanded: ({})                 // key -> true
-  property string loadedFor: ""
   property bool waiting: false                // this read is waiting for iOS to save the settings after a stop
   property var reverted: []                   // [{key, expected, actual}]: keys iOS put back after a change
   property var result: null                   // a change that may not reach the app: {key, title, text, launchArgs}
@@ -45,26 +67,12 @@ ColumnLayout {
 
   spacing: Style.spacing.lg
 
-  onActiveChanged: if (active && loadedFor !== bundleId) load()
-  onBundleIdChanged: { result = null; reverted = []; status = "unknown"; reply = null; expanded = ({}); loadedFor = ""; if (active) load() }
+  onBundleIdChanged: { result = null; reverted = []; expanded = ({}); defaults.reset(); defaults.load() }
 
   FontMetrics { id: keyMetrics; font.family: Style.font.family; font.pixelSize: Style.font.body }
 
-  function load() {
-    if (!root.bundleId) return
-    var bid = root.bundleId
-    root.status = "loading"
-    root.error = null
-    root.waiting = root.view.waitLeft() > 0
-    root.svc.request("appdata.defaults", { bundleId: bid }, function(ok, d) {
-      if (bid !== root.bundleId) return
-      root.loadedFor = bid
-      root.waiting = false
-      if (ok) { root.reply = root.view.norm(d); root.reverted = root.reply.reverted || []; root.status = "ready" }
-      else if (d && d.code === "no-defaults") { root.reply = { exists: false, values: {}, keys: 0 }; root.status = "ready" }
-      else { root.error = d; root.status = "error" }
-    }, 120000)
-  }
+  function load() { defaults.load(true) }
+  function invalidate() { defaults.invalidate() }
 
   // How a set or delete landed (the reply's method, verified, warning, refreshError, launchArgs).
   function changed(k, d, deleted) {
@@ -86,8 +94,7 @@ ColumnLayout {
   }
   function copyLaunchArgs(args) {
     var text = args.map(function(a) { return /[\s"']/.test(a) ? "'" + String(a).replace(/'/g, "'\\''") + "'" : a }).join(" ")
-    Util.execArgv(["wl-copy", "--", text])
-    root.app.toast("Copied the launch arguments", "ok")
+    root.app.copyText(text, "the launch arguments")
   }
 
   // ---- values (as helper/iosstudio/features/app_data.py's view() sends them: plain JSON, or {"$type": …} where JSON lacks the
@@ -165,14 +172,13 @@ ColumnLayout {
     if (root.reply && !root.reply.truncated) { then(root.reply.values); return }
     root.svc.request("appdata.defaults", { bundleId: root.bundleId, full: true }, function(ok, d) {
       if (ok) then(root.view.norm(d.values))
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     }, 60000)
   }
   function copyJson() {
     if (!root.reply) return
     root.withFull(function(values) {
-      Util.execArgv(["wl-copy", "--", JSON.stringify(values, null, 2)])
-      root.app.toast("Copied " + Model.plural(Object.keys(values).length, "key") + " as JSON", "ok")
+      root.app.copyText(JSON.stringify(values, null, 2), Model.plural(Object.keys(values).length, "key") + " as JSON")
     })
   }
   function edit(k) {
