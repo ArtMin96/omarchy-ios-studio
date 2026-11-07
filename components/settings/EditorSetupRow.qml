@@ -73,20 +73,7 @@ Item {
       Layout.fillWidth: true
       spacing: Style.spacing.xxl
 
-      Rectangle {
-        Layout.alignment: Qt.AlignTop
-        implicitWidth: Style.space(32); implicitHeight: Style.space(32)
-        radius: Style.cornerRadius
-        color: root.edState === "ready" ? Theme.levelFill("ok") : Theme.surface
-        border.width: Style.normalBorderWidth
-        border.color: root.edState === "ready" ? Util.alpha(Theme.success, 0.35) : Theme.hairline
-        Icon {
-          anchors.centerIn: parent
-          glyph: Model.Glyph.fileCode
-          size: Style.font.icon
-          color: root.edState === "ready" ? Theme.success : Commons.Color.foreground
-        }
-      }
+      IconTile { id: tile; glyph: Model.Glyph.fileCode; level: root.edState === "ready" ? "ok" : "" }
 
       ColumnLayout {
         Layout.fillWidth: true
@@ -153,7 +140,7 @@ Item {
     // ---- the dry run, or what it did
     ColumnLayout {
       Layout.fillWidth: true
-      Layout.leftMargin: Style.space(32) + Style.spacing.xxl
+      Layout.leftMargin: tile.side + Style.spacing.xxl
       visible: root.open || root.planState === "error"
       spacing: Style.spacing.md
 

@@ -25,7 +25,7 @@ Quickshell picks up new files in a `components/` folder automatically (no qmldir
 | `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `StyleWarningsSection`, its sheets |
 | `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
 | `components/account/` | the Apple ID page: `AccountSignInSheet`, `AccountRevokeWarning` |
-| `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow` |
+| `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow`, `IconTile` |
 | `core/` (repo root) | non-visual: `Cli`, `Stream`, `Resource`, `ThemeWatcher`, `Host`, `CommandCheck` |
 
 An area folder imports `"../common"` (and `"../../core"` when it uses `Stream`, `Resource`, `Host` or
@@ -294,7 +294,8 @@ IconButton { glyph: Model.Glyph.trash; tooltip: "Uninstall"; danger: true; onCli
 
 Quiet raised surface with an optional header. Props: `title`, `subtitle`, `glyph`, `glyphColor`,
 `actions` (list, top right), `clickable` + `clicked()`, `hasCursor`, `accentEdge`, `edgeColor`,
-`contentSpacing`. Children go into a ColumnLayout, so use `Layout.fillWidth: true` on them.
+`contentSpacing`. Children go into a ColumnLayout, so use `Layout.fillWidth: true` on them. The glyph is
+centred on the title's line; the subtitle starts on the content's left edge (under the glyph), like the body.
 ```qml
 Card {
   Layout.fillWidth: true
@@ -714,7 +715,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   new `lastBuild` goes to `app.projects.showWatchBuild(…)` with the full diagnostics from the build history (matched
   by `buildId`, else the log file; the snapshot's first five when not found). See
   [features/watch-mode.md](features/watch-mode.md).
-- **RunPresetsSheet**: a project's Run presets sheet. Props: `app`, `svc`; `openFor(project)` opens the list,
+- **RunPresetsSheet**: a project's Run presets sheet ("Run presets · <name>"). Props: `app`, `svc`; `openFor(project)` opens the list,
   `openFor(project, name)` goes straight to that preset's editor. The list has Default (no preset) and one row per
   preset with Use for Run (or a "Used by Run" pill), edit and delete (asks first); the editor has name, language
   (Same as the iPhone, `Model.PRESET_LANGUAGES` or Other language code…), region (with a "Use <region>"
@@ -793,8 +794,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   - `list`: the `packages list` answer is a Resource (`listRes`, reset when another project opens; a `load()` while
     one runs loads again after it). LoadingState, ErrorState (retry) or EmptyState "No packages yet" (Add package…).
     Its status lines (update/resolve running, the finished notice, unresolved packages) and the Added/Remove headlines
-    are SheetGlyphRows. Otherwise "N packages"
-    with ghost Update all and Add package…, then one row per package, hairlines between rows from the text edge:
+    are SheetGlyphRows. Otherwise "N packages" (on the body's left edge, heading the glyph column too, like
+    "N presets" in RunPresetsSheet) with ghost Update all and Add package…, then one row per package, hairlines between rows from the text edge:
     the name (bold, keeps its whole width and elides first) with a `local` Badge; the URL or path dim and
     middle-elided; "Used by <targets> · <products>" faint (amber "Not linked to a target yet"). Like ListRow, the
     right cluster is centred on the whole row: the requirement ("from 1.1.0"), a Badge with the resolved version
@@ -1060,7 +1061,10 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `editorConfig(action)` (`scope: "user"` but not iOS Studio's settings.json, which is also user scope), `stateText`,
   `stateLevel`, `commandOf(editor)`, `openDocs()`. Deep link `nav("settings", {section: "editor"})`. See
   [features/editor-setup.md](features/editor-setup.md).
-- **EditorSetupRow**: one installed editor in EditorSection, laid out like the AI tools rows (32 px tile, name and a
+- **IconTile**: the fixed 32 px glyph square at the start of a Settings row (editors, AI tools). Props: `glyph`,
+  `level` ("" neutral, or ok/warn/error/info: tinted fill, edge and glyph), `glyphColor`, `spinning`; `side`. A
+  neutral tile has a visible edge too, so it reads the same size as a tinted one.
+- **EditorSetupRow**: one installed editor in EditorSection, laid out like the AI tools rows (an IconTile, name and a
   quiet pill: Ready, Not set up, One step left, Set up by hand; the note below; a fixed-width button slot). Props:
   `section`, `editor` (an `editor status` entry), `plan` (`{state: loading|ready|error|running|done, result,
   error}`), `first`, `slotWidth`; signals `setupRequested()`, `applyRequested()`, `cancelRequested()`. A

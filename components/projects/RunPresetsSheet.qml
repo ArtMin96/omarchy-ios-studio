@@ -113,9 +113,9 @@ Sheet {
   }
   readonly property var previewEnv: Object.keys(draft.env).map(function(k) { return k + "=" + draft.env[k] })
 
-  title: editing === null ? "Run presets" : (editing.renameFrom ? "Edit “" + editing.renameFrom + "”" : "New run preset")
+  title: editing === null ? "Run presets" + (project && project.name ? " · " + project.name : "") : (editing.renameFrom ? "Edit “" + editing.renameFrom + "”" : "New run preset")
   subtitle: editing === null
-            ? (project && project.name ? "Launch arguments, environment and language that Run can open " + project.name + " with." : "")
+            ? "Launch arguments, environment and language for Run."
             : "Run launches the app with these. Your iPhone's own settings don't change."
   glyph: Model.Glyph.tune
   preferredWidth: Style.space(680)

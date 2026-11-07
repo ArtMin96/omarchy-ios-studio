@@ -438,10 +438,10 @@ Sheet {
   readonly property real glyphW: headerGlyph.implicitWidth
   readonly property real textX: glyphW + Style.spacing.xxl
 
-  // count + actions
+  // count + actions: the count starts on the body's left edge, like the header glyph and the rows' glyphs,
+  // so it heads the whole list (glyph column included) instead of only its text column
   RowLayout {
     Layout.fillWidth: true
-    Layout.leftMargin: root.textX
     // a compact ghost button's label ends xs further right than an IconButton's glyph: this puts "Add package…"
     // on the same right edge as the header's × and the rows' bin (measured: both end at body right − 12)
     Layout.rightMargin: Style.spacing.xs

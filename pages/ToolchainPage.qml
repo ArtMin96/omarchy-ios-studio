@@ -109,14 +109,20 @@ PageFrame {
         }
         hasCursor: page.cursor === index
         onHovered: function(h) { if (h) page.cursor = index }
+        // pill and button share one centre line, a normal control gap apart
         trailing: [
-          StatusPill { level: page.levelOf(modelData.status); text: page.statusText(modelData); quiet: modelData.status === "ok" },
-          ActionButton {
-            visible: modelData.status !== "ok"
-            compact: true
-            text: modelData.status === "error" ? "Repair" : "Install"
-            glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download
-            onClicked: page.app.openSetupStep(modelData.step)
+          Row {
+            anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+            spacing: Style.spacing.md
+            StatusPill { anchors.verticalCenter: parent.verticalCenter; level: page.levelOf(modelData.status); text: page.statusText(modelData); quiet: modelData.status === "ok" }
+            ActionButton {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: modelData.status !== "ok"
+              compact: true
+              text: modelData.status === "error" ? "Repair" : "Install"
+              glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download
+              onClicked: page.app.openSetupStep(modelData.step)
+            }
           }
         ]
       }
