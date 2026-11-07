@@ -430,7 +430,8 @@ Item {
       return
     }
     var want = data.launch.bundleId
-    app.device.request("apps.list", { udid: data.udid, icons: false, sizes: false }, function(ok, apps) {
+    app.device.request("apps.list", { udid: data.udid, icons: false, sizes: false }, function(ok, reply) {
+      var apps = reply && reply.apps ? reply.apps : reply
       var bid = want
       if (ok && apps && apps.length) {
         for (var i = 0; i < apps.length; i++) {

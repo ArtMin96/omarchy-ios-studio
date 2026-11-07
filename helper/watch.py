@@ -1225,7 +1225,10 @@ class DeviceSteps:
         if not bundle:
             return {"ok": False, "error": {"message": "no bundle id"}}
         apps = self._once("apps.list", {"udid": udid, "icons": False, "sizes": False}, 60)
-        items = apps.get("data") if apps.get("ok") and isinstance(apps.get("data"), list) else []
+        data = apps.get("data") if apps.get("ok") else None
+        if isinstance(data, dict):  # {apps, stale, fetchedAt}
+            data = data.get("apps")
+        items = data if isinstance(data, list) else []
         plain = bundle.split(".", 1)[-1] if bundle.startswith("XTL-") else bundle
         real = next((a.get("bundleId") for a in items if a.get("bundleId") == bundle), None) or \
             next((a.get("bundleId") for a in items if str(a.get("bundleId") or "").endswith("." + plain)), bundle)

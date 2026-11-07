@@ -204,6 +204,8 @@ async def dcall(state: AppState, cmd: str, args: dict | None = None, *, timeout:
 
 async def apps(state: AppState, udid: str | None = None, system: bool = False) -> list[dict]:
     data = await dcall(state, "apps.list", {"system": system, "icons": False, "sizes": False}, udid=udid, timeout=40)
+    if isinstance(data, dict):  # {apps, stale, fetchedAt}
+        data = data.get("apps")
     return data if isinstance(data, list) else []
 
 

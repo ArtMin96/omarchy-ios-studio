@@ -12,7 +12,7 @@ API
 
     async with DeviceClient(name="mcp") as dev:           # connects; spawns the daemon if needed
         info = await dev.request("device.info", {}, timeout=40)   # -> reply data (dict / list)
-        apps = await dev.request("apps.list", {"icons": False})
+        apps = (await dev.request("apps.list", {"icons": False}))["apps"]
 
         # events: async iterator (each call gets its own queue) ...
         async with dev.events(["syslog", "syslogState"]) as stream:
