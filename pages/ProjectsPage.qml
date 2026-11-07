@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/projects"
+import "../lib/Model.js" as Model
 
 // Projects (projects slice): your xtool apps, Run on iPhone, .ipa builds, 7-day renewal,
 // new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:

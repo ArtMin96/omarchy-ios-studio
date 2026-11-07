@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/account"
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Apple ID: who you're signed in as, signing health, and what Apple has on file
 // (certificates, profiles, App IDs, devices). Account slice.

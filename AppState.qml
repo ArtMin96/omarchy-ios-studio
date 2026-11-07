@@ -4,7 +4,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import "services"
-import "Model.js" as Model
+import "core"
+import "lib/Model.js" as Model
 
 // Root state object. shell.qml creates exactly one (`app`) and hands it to
 // every page as `required property var app`. Services live here so their

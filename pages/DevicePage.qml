@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/device"
+import "../lib/Model.js" as Model
 
 PageFrame {
   id: page
@@ -249,7 +250,7 @@ PageFrame {
     function initial() { return Object.assign({ app: tl.app }, tl.props) }
     function ensure() {
       if (item || status === Loader.Loading) return
-      setSource(Qt.resolvedUrl("../components/" + file), initial())
+      setSource(Qt.resolvedUrl("../components/device/" + file), initial())
     }
     // Started in the background so the tab bar answers at once; what's left after a frame or two is
     // finished in one go (much quicker than trickling between frames). Turning `asynchronous` off
@@ -260,7 +261,7 @@ PageFrame {
       onTriggered: {
         tl.setSource("")
         tl.hurry = true
-        tl.setSource(Qt.resolvedUrl("../components/" + tl.file), tl.initial())
+        tl.setSource(Qt.resolvedUrl("../components/device/" + tl.file), tl.initial())
       }
     }
     onShownChanged: if (shown) ensure()
@@ -392,7 +393,7 @@ PageFrame {
   Loader {
     id: pairLoader
     visible: false
-    function ensure() { if (!item) setSource(Qt.resolvedUrl("../components/DevicePairSheet.qml"), { app: page.app }) }
+    function ensure() { if (!item) setSource(Qt.resolvedUrl("../components/device/DevicePairSheet.qml"), { app: page.app }) }
   }
   Loader {
     id: devModeLoader

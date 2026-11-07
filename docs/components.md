@@ -1,6 +1,6 @@
 # iOS Studio components
 
-Shared building blocks in `components/` on top of Omarchy's `qs.Ui` kit. Build every page
+Shared building blocks in `components/common/` on top of Omarchy's `qs.Ui` kit. Build every page
 from these, so all pages look the same and follow the live theme.
 
 ```qml
@@ -9,14 +9,27 @@ import QtQuick.Layouts
 import qs.Commons                  // Style, Util, Border
 import qs.Commons as Commons       // Commons.Color.*
 import qs.Ui                       // Button, TextField, ToggleSwitch, Dropdown, …
-import qs.components               // everything below
-import "../Model.js" as Model      // Glyph, formatters (from pages/ or services/)
+import "../components/common"      // everything below (from pages/; "../common" from components/<area>/)
+import "../lib/Model.js" as Model  // Glyph, formatters (from pages/ or services/; "../../lib/…" from components/<area>/)
 ```
 
 Rules: sizes come only from `Style.font.*`, spacing from `Style.spacing.*` / `Style.space(px)`, radius from
 `Style.cornerRadius`, and colours from `Commons.Color.*` or `Theme.*`. No hard-coded px or hex values.
-Quickshell picks up new files in `components/` automatically (no qmldir). Add new shared pieces as **new
-files** there.
+Quickshell picks up new files in a `components/` folder automatically (no qmldir). Add new shared pieces as
+**new files** in `components/common/`; parts of one page go in that area's folder:
+
+| Folder | What's in it |
+|---|---|
+| `components/common/` | widgets used by more than one area: everything documented below, plus `LogView`, `BuildDiagnosticRow`, `DiffView`, `StateView` |
+| `components/device/` | the iPhone page: `DeviceHero`, the tab views (`Device*View`), app data, `Debug*`, `PerfChart`, `Screenshot*` |
+| `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `StyleWarningsSection`, its sheets |
+| `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
+| `components/account/` | the Apple ID page: `AccountSignInSheet`, `AccountRevokeWarning` |
+| `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow` |
+| `core/` (repo root) | non-visual: `Cli`, `Stream`, `Resource`, `ThemeWatcher`, `Host`, `CommandCheck` |
+
+An area folder imports `"../common"` (and `"../../core"` when it uses `Stream`, `Resource`, `Host` or
+`CommandCheck`). A widget that a second area starts using moves to `common/`.
 
 > Note on names: several names are taken by QtQuick / QtQuick.Controls, and a page that imports
 > QtQuick.Controls would silently get the Qt type instead. So the palette singleton is **`Theme`** (not
@@ -75,7 +88,7 @@ PageFrame {
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths |
 | `app.refreshAll()`, `app.refreshCurrent()` | |
 
-## Cli (one-shot helper calls), `Cli.qml`
+## Cli (one-shot helper calls), `core/Cli.qml`
 
 ```qml
 app.cli.call(["toolchain", "status"], "",
@@ -89,7 +102,7 @@ Every call spawns its own process, so calls run concurrently. `onFail` always ge
 on a crash, garbage output or timeout (default 120 s). Services can also create their own `Cli {}` (import
 `".."` from `services/`). `cli.busy` is the number of calls in flight.
 
-## Stream (JSON-lines processes), `Stream.qml`
+## Stream (JSON-lines processes), `core/Stream.qml`
 
 ```qml
 Stream {
@@ -114,8 +127,9 @@ passes through unchanged.
 ## Loading data: Resource + StateView
 
 Use these instead of hand-rolling `xStatus: "unknown"` + Skeleton/ErrorState/EmptyState for each list.
-`Resource.qml` (next to `Cli.qml`, import `".."` from `components/` and `services/`) holds one piece of
-backend data and its state; `StateView` (components/) shows the right state for it.
+`core/Resource.qml` (next to `Cli.qml`; import `"../core"` from `services/`, `"../../core"` from
+`components/<area>/`) holds one piece of backend data and its state; `StateView` (components/common/) shows
+the right state for it.
 
 ```qml
 Resource {
@@ -162,9 +176,9 @@ First users: DeviceNetworkView (condition list), DeviceService `profilesResource
 | `app.openPath(path)`, `app.showInFolder(file)` | `xdg-open` the path · the folder a file is in. |
 | `Model.clock(sec)`, `Model.elapsedSeconds(t, nowMs?)` | `"4:59"`, `"1:02:03"` for timers and countdowns · seconds since a time (Date, s/ms epoch, ISO). |
 | `Util.fileUrl(path)` (qs.Commons) | `file://` URL with each segment encoded, for `Image.source`; use it instead of `"file://" + path`. |
-| `Util.clamp` (qs.Commons), `CommandCheck` (components/) | Clamp in QML · is a program on PATH (`CommandCheck.check(name)`, `CommandCheck.found[name]`). |
+| `Util.clamp` (qs.Commons), `CommandCheck` (core/) | Clamp in QML · is a program on PATH (`CommandCheck.check(name)`, `CommandCheck.found[name]`). |
 
-## Model.js
+## Model.js (`lib/Model.js`)
 
 `Model.Glyph.*` (Nerd Font glyphs): home rocket apple account phone hammer build play pause stop logs
 console crash gear sdk box toolbox wrench folder folderOpen folderPlus file check checkCircle circle dot warn
@@ -460,7 +474,7 @@ Sheet {
 ## ConfirmHost / ToastHost / ShortcutSheet / Sidebar / Host
 
 Hosted by `shell.qml`. Pages use them only through `app.confirm(...)`, `app.toast(...)` and
-`app.shortcutsOpen`. `Host` (singleton) is the overlay registry: `Host.depth > 0` means an overlay owns
+`app.shortcutsOpen`. `Host` (singleton, `core/Host.qml`) is the overlay registry: `Host.depth > 0` means an overlay owns
 the keyboard. `Host.covers(item, Host.top)` is true while an overlay is open and `item` isn't inside it;
 `ActionButton`, `IconButton` and `RunSplitButton` use it to hide their tooltips under a confirm dialog or sheet
 (the pointer hasn't moved, so their hover would otherwise keep the tooltip up over the dim layer). Do the same for a
@@ -868,7 +882,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   `devModeHelp()`.
 - **DevicePage tabs**: the Apps list is built with the page; every other tab (an app's details, Screen, Files,
   Location, Network, Performance, Debug, Profiles, Info) is a `TabLoader`, an inline Loader that loads its
-  `file` from `components/` the first time the tab is `shown` and then keeps it. `onScreen` (the tab and the page
+  `file` from `components/device/` the first time the tab is `shown` and then keeps it. `onScreen` (the tab and the page
   are showing) is bound to the view's `active`, so a hidden tab does no work; `withItem(fn)` runs `fn(view)` now
   or once it has loaded (deep links such as `device:screen:compare`). Opening Network or Profiles calls
   `app.device.wantProfiles()`. The Pair and Developer Mode sheets are built the first time they open

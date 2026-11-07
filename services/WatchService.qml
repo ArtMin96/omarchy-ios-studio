@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Watch mode, compile on save (issue #7; helper/watch.py, docs/features/watch-mode.md).
 // One watcher per user: starting one stops the other, and agents (MCP ios_watch_start/stop) can

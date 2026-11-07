@@ -5,8 +5,9 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/settings"
+import "../lib/Model.js" as Model
 
 // Settings: preferences in ~/.config/ios-studio/settings.json, plus desktop
 // integration (launcher key, window rule) done by the helper's `app` group.
