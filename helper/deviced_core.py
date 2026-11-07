@@ -25,7 +25,7 @@ import device_link as link  # noqa: E402
 from common import HelperError, fix  # noqa: E402
 
 VERSION = "1"
-SCREENS_DIR = common.CACHE_DIR / "screens"
+SCREENS_DIR = common.CACHE_DIR / "screens"      # screenshots (kept, pruned)
 ICONS_DIR = common.CACHE_DIR / "icons"
 CRASH_DIR = common.CACHE_DIR / "crashes"
 DEVICE_CACHE = common.CACHE_DIR / "devices.json"
@@ -33,6 +33,14 @@ LAST_DEVICE = common.STATE_DIR / "last-device"
 DEVICE_STATE = common.STATE_DIR / "device.json"   # read by Setup while the daemon isn't running
 
 TUNNEL_WAIT_S = 25
+
+
+def frames_dir() -> Path:
+    """Where the live mirror's rotating frame files go: <runtime dir>/ios-studio/screens. The runtime
+    dir ($XDG_RUNTIME_DIR, see device_client.runtime_base) is tmpfs, so up to 30 frames a second never
+    touch the disk. Clients get the path from each `frame` event."""
+    import device_client
+    return device_client.runtime_dir(False) / "screens"
 
 # ---------------------------------------------------------------- output
 
@@ -189,6 +197,67 @@ def battery_view(b: dict | None) -> dict | None:
         "health": health,
         "temperature": round(b["Temperature"] / 100, 1) if isinstance(b.get("Temperature"), (int, float)) else None,
     }
+
+
+class TaskSet:
+    """Background tasks the daemon starts and doesn't await at once (closing a service after a tunnel
+    drop, a deviceInfo refresh, ...). Each is kept until it ends, so none is garbage-collected
+    mid-flight or outlives the daemon: close() waits a moment for them, then cancels the rest."""
+
+    def __init__(self):
+        self.tasks: set[asyncio.Task] = set()
+
+    def spawn(self, coro, name: str | None = None) -> asyncio.Task:
+        t = asyncio.get_running_loop().create_task(coro, name=name)
+        self.tasks.add(t)
+        t.add_done_callback(self._done)
+        return t
+
+    def _done(self, t: asyncio.Task) -> None:
+        self.tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            dlog(f"background task {t.get_name()} failed: {t.exception()!r}")
+
+    def __len__(self) -> int:
+        return len(self.tasks)
+
+    async def close(self, grace: float = 0.0) -> None:
+        """Wait up to `grace` seconds for running tasks, then cancel what's left and wait for it."""
+        pending = [t for t in self.tasks if not t.done()]
+        if pending and grace > 0:
+            _, pending = await asyncio.wait(pending, timeout=grace)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
+class MtimeFile:
+    """A small file read again only when its mtime or size changed (settings, last-device)."""
+
+    def __init__(self, path: Path, load, default=None):
+        self.path = Path(path)
+        self.load = load
+        self.default = default
+        self._sig: tuple | None = None
+        self._value = default
+
+    def get(self):
+        try:
+            st = self.path.stat()
+            sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            sig = None
+        if sig != self._sig:
+            self._sig = sig
+            if sig is None:
+                self._value = self.default
+            else:
+                try:
+                    self._value = self.load(self.path)
+                except (OSError, ValueError):
+                    self._value = self.default
+        return self._value
 
 
 # ---------------------------------------------------------------- port forwarding

@@ -56,6 +56,7 @@ from deviced_core import (  # noqa: E402
 BACKOFF = [3, 5, 10, 20, 30]
 HEALTH_EVERY_S = 60
 DISCOVERY_EVERY_S = 3
+INFO_FRESH_S = 10      # a `fresh` device.info joins a refresh started this recently instead of a new one
 
 
 # ---------------------------------------------------------------- device session
@@ -100,6 +101,8 @@ class Session:
         self.data: dict = {}               # feature state for this device (survives reconnects)
         self.tunnel_data: dict = {}        # feature state for the current tunnel (cleared on drop)
         self.last_connection: dict | None = None
+        self._info_task: asyncio.Task | None = None
+        self._info_started = 0.0
 
     # -- lifecycle
     def start(self):
@@ -109,6 +112,8 @@ class Session:
         self.closing = True
         self.dropped.set()
         self.wake.set()
+        if self._info_task is not None:
+            self._info_task.cancel()
         if self.task:
             self.task.cancel()
             with contextlib.suppress(BaseException):
@@ -207,10 +212,10 @@ class Session:
         self.instruments = {}
         stack, self.dvt_stack = self.dvt_stack, None
         if stack is not None:
-            asyncio.create_task(self._close_stack(stack))
+            self.d.bg.spawn(self._close_stack(stack), name="close-dvt")
         services, self.services = self.services, {}
         for svc in services.values():
-            asyncio.create_task(self._close_service(svc))
+            self.d.bg.spawn(self._close_service(svc), name="close-service")
         self.tunnel_data = {}
         # A closing session (device switch, shutdown) had its resources and hooks run already, and
         # a tunnel-drop now would release the next session's tunnel resources.
@@ -229,7 +234,7 @@ class Session:
 
     async def _hold(self):
         """Stay connected until dropped; refresh battery etc. periodically (doubles as health check)."""
-        asyncio.create_task(self._push_info())
+        self.refresh_info()
         while not self.closing:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self.dropped.wait(), timeout=HEALTH_EVERY_S)
@@ -244,13 +249,31 @@ class Session:
 
     async def _push_info(self, raise_: bool = False):
         try:
-            data = await self.dynamic_info()
-            self.info.update(data)
-            emit("deviceInfo", {"udid": self.udid, **data})
-            self.d.write_state(self)
+            await asyncio.shield(self.refresh_info(force=True))
         except BaseException:
             if raise_:
                 raise
+
+    def refresh_info(self, force: bool = False, within: float = 0.0) -> asyncio.Task:
+        """The one dynamic_info() refresh (four service connections): callers join the one in flight,
+        or one started less than `within` seconds ago, instead of opening the services again. The
+        result lands in s.info and goes out as a `deviceInfo` event. Await it through
+        asyncio.shield() so a cancelled request doesn't cancel it for the others."""
+        t = self._info_task
+        fresh_enough = within > 0 and time.monotonic() - self._info_started < within
+        if t is not None and (not t.done() or (fresh_enough and not force and not t.cancelled()
+                                               and t.exception() is None)):
+            return t
+        self._info_started = time.monotonic()
+        self._info_task = t = self.d.bg.spawn(self._refresh_info(), name=f"info-{self.udid}")
+        return t
+
+    async def _refresh_info(self) -> dict:
+        data = await self.dynamic_info()
+        self.info.update(data)
+        emit("deviceInfo", {"udid": self.udid, **data})
+        self.d.write_state(self)
+        return data
 
     async def get_rsd(self, timeout: float = TUNNEL_WAIT_S):
         if self.rsd is not None:
@@ -490,7 +513,7 @@ class Session:
         self.instruments = {}
         stack, self.dvt_stack = self.dvt_stack, None
         if stack:
-            asyncio.create_task(self._close_stack(stack))
+            self.d.bg.spawn(self._close_stack(stack), name="close-dvt")
 
     async def dvt_instrument(self, key: str, factory, *args, **kw):
         """An instrument (Screenshot, LocationSimulation, Sysmontap, ...) opened once on the shared
@@ -552,6 +575,11 @@ class Daemon:
         self.disc_task: asyncio.Task | None = None
         self._last_devices = None
         self.stopping = asyncio.Event()
+        self.bg = core.TaskSet()           # fire-and-forget work, cancelled at shutdown
+        self.records = link.PairRecords(pmd3)
+        self._settings = core.MtimeFile(common.SETTINGS_FILE, lambda p: common.load_json(p, {}) or {}, {})
+        self._last_device = core.MtimeFile(LAST_DEVICE, lambda p: p.read_text().strip(), "")
+        self._state_old: dict | None = None
         self.resources = resources or kit.Resources(log=dlog)
         self.registry = kit.FeatureRegistry(log=dlog)
         self._register_core(self.registry.module("core"))
@@ -577,7 +605,9 @@ class Daemon:
             return
         info = s.info or {}
         cached = self.cache.get(s.udid, {})
-        old = common.load_json(DEVICE_STATE, {}) or {}
+        if self._state_old is None:      # read once; afterwards we're the only writer
+            self._state_old = common.load_json(DEVICE_STATE, {}) or {}
+        old = self._state_old
         same = old.get("udid") == s.udid
 
         def pick(key, ikey=None):
@@ -601,6 +631,13 @@ class Daemon:
             "battery": (info.get("battery") or {}).get("level") if info.get("battery") else (old.get("battery") if same else None),
             "updatedAt": time.time(),
         }
+        # Unchanged, written within the last minute and still there (Setup may remove it): skip the
+        # disk write (set_state calls this often).
+        if state["updatedAt"] - (old.get("updatedAt") or 0) < HEALTH_EVERY_S and \
+                {k: v for k, v in state.items() if k != "updatedAt"} == {k: v for k, v in old.items() if k != "updatedAt"} \
+                and DEVICE_STATE.exists():
+            return
+        self._state_old = state
         with contextlib.suppress(OSError):
             common.save_json(DEVICE_STATE, state)
 
@@ -644,8 +681,9 @@ class Daemon:
                 usb = set()
             new_usb = usb - self.usb
             self.usb = usb
-            self.wifi = link.wifi_records(self.pmd3)
-            self.lockdown = link.lockdown_records()
+            # Off the loop: stats the record folders and re-reads records only when they changed.
+            with contextlib.suppress(Exception):
+                self.wifi, self.lockdown = await asyncio.to_thread(self.records.read)
             s = self.session
             if s is None:
                 cand = self.default_udid()
@@ -661,10 +699,8 @@ class Daemon:
             await asyncio.sleep(DISCOVERY_EVERY_S)
 
     def default_udid(self) -> str | None:
-        last = ""
-        with contextlib.suppress(OSError):
-            last = LAST_DEVICE.read_text().strip()
-        pref = (common.settings().get("defaultDevice") or "").strip()
+        last = self._last_device.get() or ""
+        pref = str(self._settings.get().get("defaultDevice") or "").strip()
         for cand in (pref, last):
             if cand and (cand in self.usb or cand in self.wifi):
                 return cand
@@ -696,7 +732,7 @@ class Daemon:
 
     def on_disconnected(self, s: Session):
         self.publish_devices()
-        asyncio.create_task(self._tunnel_dropped(s))
+        self.bg.spawn(self._tunnel_dropped(s), name="tunnel-dropped")
 
     async def _tunnel_dropped(self, s: Session):
         await self.resources.release_all("tunnel", ("tunnel",))
@@ -753,9 +789,12 @@ class Daemon:
         @reg.command("device.info")
         async def c_device_info(d, a):
             s, _ = await d.rsd(a)
-            if a.get("fresh") or "battery" not in s.info:
-                s.info.update(await s.dynamic_info())
-            d.write_state(s)
+            # Cached info answers at once (the health check refreshes it every HEALTH_EVERY_S). Without
+            # any yet, or with `fresh`, join the refresh in flight / just made rather than start another.
+            if a.get("fresh"):
+                await asyncio.shield(s.refresh_info(within=INFO_FRESH_S))
+            elif "battery" not in s.info:
+                await asyncio.shield(s.refresh_info(within=HEALTH_EVERY_S))
             info = dict(s.info)
             info.update(transport=s.where.get("transport"), address=s.where.get("address", ""),
                         wifiPaired=s.udid in d.wifi, usbPaired=s.udid in d.lockdown)
@@ -842,6 +881,7 @@ class Daemon:
         if self.session:
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(self.session.close(), 5)
+        await self.bg.close(grace=3)   # let service closes finish (each is bounded), cancel the rest
 
 
 class BrokenBackend:
@@ -901,8 +941,7 @@ async def once(cmd: str, raw_args: str) -> int:
     if not d.registry.has(cmd):
         return reply({"ok": False, "error": {"code": "bad-args", "message": f"Unknown command {cmd!r}."}})
     d.usb = set(await link.usb_udids(pmd3))
-    d.wifi = link.wifi_records(pmd3)
-    d.lockdown = link.lockdown_records()
+    d.wifi, d.lockdown = await asyncio.to_thread(d.records.read)
     udid = args.get("udid") or d.default_udid()
     if not udid:
         return reply({"ok": False, "error": err("no-device", "No paired iPhone was found.", PAIR_FIX).to_json()})

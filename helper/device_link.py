@@ -16,6 +16,7 @@ import contextlib
 import hashlib
 import importlib.metadata
 import logging
+import os
 import plistlib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,6 +73,11 @@ def load_pmd3() -> argparse.Namespace:
             image_type_for_device,
         )
         from pymobiledevice3.services.os_trace import OsTraceService
+        try:
+            from pymobiledevice3.common import get_home_folder
+            remote_dir = Path(get_home_folder())
+        except Exception:  # noqa: BLE001 - only the discovery cache's change check uses it
+            remote_dir = REMOTE_DIR
 
         for module, attr in (
             (tunnel_service, "get_remote_pairing_tunnel_services"),
@@ -121,6 +127,7 @@ def load_pmd3() -> argparse.Namespace:
         auto_mount=auto_mount,
         image_type_for_device=image_type_for_device,
         OsTraceService=OsTraceService,
+        remote_dir=remote_dir,
     )
 
 
@@ -138,7 +145,7 @@ async def usb_udids(pmd3) -> list[str]:
 
 
 def wifi_records(pmd3) -> dict[str, str]:
-    """udid -> path of each RemotePairing record."""
+    """udid -> path of each RemotePairing record (parses every record: use the cached one in loops)."""
     out = {}
     try:
         for identifier, path, _record in pmd3.iter_remote_pair_records_by_identifier():
@@ -148,11 +155,63 @@ def wifi_records(pmd3) -> dict[str, str]:
     return out
 
 
-def lockdown_records() -> set[str]:
+def lockdown_records(folder: Path = LOCKDOWN_DIR) -> set[str]:
     try:
-        return {p.stem for p in LOCKDOWN_DIR.glob("*.plist") if p.stem != "SystemConfiguration"}
+        return {p.stem for p in folder.glob("*.plist") if p.stem != "SystemConfiguration"}
     except OSError:
         return set()
+
+
+def dir_signature(folder: Path, prefix: str = "") -> tuple | None:
+    """What changes when a record in `folder` is added, removed or rewritten: the folder's mtime plus
+    (name, mtime, size) of each entry starting with `prefix`. None when the folder can't be read."""
+    try:
+        st = folder.stat()
+        entries = []
+        with os.scandir(folder) as it:
+            for e in it:
+                if e.name.startswith(prefix):
+                    est = e.stat(follow_symlinks=False)
+                    entries.append((e.name, est.st_mtime_ns, est.st_size))
+        return (st.st_mtime_ns, tuple(sorted(entries)))
+    except OSError:
+        try:
+            return (folder.stat().st_mtime_ns,)   # listable no, stat-able yes (root-owned 0700)
+        except OSError:
+            return None
+
+
+class CachedRecords:
+    """Discovery runs every few seconds; the pairing records almost never change. Re-read them only
+    when their folder's signature (dir_signature) changed. Blocking: call it from a worker thread."""
+
+    def __init__(self, compute, signature):
+        self.compute = compute
+        self.signature = signature
+        self._sig = object()
+        self._value = None
+        self.reads = 0
+
+    def get(self):
+        sig = self.signature()
+        if sig != self._sig or self._value is None:
+            self._value = self.compute()
+            self._sig = sig
+            self.reads += 1
+        return self._value
+
+
+class PairRecords:
+    """The two pairing-record sets discovery needs (Wi-Fi RemotePairing records, USB lockdown
+    records), each cached by its folder's signature."""
+
+    def __init__(self, pmd3, lockdown_dir: Path = LOCKDOWN_DIR):
+        remote = Path(getattr(pmd3, "remote_dir", REMOTE_DIR))
+        self.wifi = CachedRecords(lambda: wifi_records(pmd3), lambda: dir_signature(remote, "remote_"))
+        self.lockdown = CachedRecords(lambda: lockdown_records(lockdown_dir), lambda: dir_signature(lockdown_dir))
+
+    def read(self) -> tuple[dict[str, str], set[str]]:
+        return dict(self.wifi.get()), set(self.lockdown.get())
 
 
 def scope_interface(host: str) -> str:
