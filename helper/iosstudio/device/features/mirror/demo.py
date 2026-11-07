@@ -323,9 +323,10 @@ class Recording:
 
 def _clamp(v, lo, hi, default):
     try:
-        return max(lo, min(hi, float(v)))
+        f = float(v)
     except (TypeError, ValueError):
         return default
+    return default if f != f else max(lo, min(hi, f))      # NaN: min/max would pick hi
 
 
 def register(reg):
@@ -388,7 +389,10 @@ def register(reg):
 
     @reg.command("mirror.ack")
     def mirror_ack(ctx, a):
-        seq = int(a.get("seq") or 0)
+        try:
+            seq = int(a.get("seq") or 0)
+        except (TypeError, ValueError, OverflowError):     # OverflowError: seq = Infinity
+            raise err("bad-args", "seq must be a number.") from None
         with m.lock:
             if seq > m.acked:
                 m.acked = min(seq, m.seq)

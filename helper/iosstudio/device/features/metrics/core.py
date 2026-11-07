@@ -150,7 +150,7 @@ def export_csv(sess: MetricsSession, out_dir: Path) -> dict:
     for r in rows:
         t = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(r.get("ts", 0)))
         w.writerow([t] + [("" if r.get(c) is None else r.get(c)) for c in cols[1:]])
-    path = base.with_suffix(".csv")
+    path = Path(f"{base}.csv")   # not with_suffix: dotted names ("com.example.habits") would lose their tail
     path.write_text(buf.getvalue())
     evs = sess.all_events()
     ebuf = io.StringIO()

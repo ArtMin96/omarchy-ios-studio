@@ -1168,9 +1168,10 @@ def remux_hevc(raw: Path, times: list[float], out: Path) -> int:
 
 def clamp(v, lo, hi, default):
     try:
-        return max(lo, min(hi, float(v)))
+        f = float(v)
     except (TypeError, ValueError):
         return default
+    return default if f != f else max(lo, min(hi, f))      # NaN: min/max would pick hi
 
 
 class Mirror:
@@ -1500,7 +1501,7 @@ def register(reg):
     async def c_mirror_ack(d, a):
         try:
             m.sink.ack(int(a.get("seq") or 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):     # OverflowError: seq = Infinity
             raise err("bad-args", "seq must be a number.") from None
         return {}
 

@@ -99,9 +99,8 @@ class SeriesStats(unittest.TestCase):
         st = S.series_stats(rows(3, cpu=lambda i: [5, None, 15][i]), "cpu")
         self.assertEqual((st["n"], st["avg"], st["last"]), (2, 10, 15))
 
-    @unittest.expectedFailure
     def test_nan_sample_is_ignored(self):
-        # BUG: stats._vals (features/metrics/stats.py:65) lets float NaN through (only isinstance int/float is
+        # Was a bug: stats._vals (features/metrics/stats.py:65) lets float NaN through (only isinstance int/float is
         # checked; real.py's _num() passes NaN too). One NaN gauge value makes min (when it comes first), avg
         # and p95 of the whole series None in the summary instead of skipping that one sample.
         st = S.series_stats(rows(3, cpu=lambda i: [float("nan"), 10.0, 20.0][i]), "cpu")
@@ -317,9 +316,8 @@ class Session(unittest.TestCase):
         s.set_status("reconnecting", {"code": "unreachable"})
         self.assertEqual(got, ["metrics.state"] * 3)
 
-    @unittest.expectedFailure
     def test_export_name_with_a_dot(self):
-        # BUG: features/metrics/core.py:153 `base.with_suffix(".csv")` treats everything after the last dot of
+        # Was a bug: features/metrics/core.py:153 `base.with_suffix(".csv")` treats everything after the last dot of
         # the session name as a suffix: a session named after its bundle id ("com.example.habits", the default
         # when the app has no display name) exports to "com.example.csv", so every export of every such session
         # overwrites the last one (the -events.csv file keeps the full name).
