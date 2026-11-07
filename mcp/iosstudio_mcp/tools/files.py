@@ -2,20 +2,17 @@
 
 Daemon commands: media.list/thumb/pull, container.list/pull/push/mkdir/delete, transfer.cancel and
 cameratest.run (docs/deviced-protocol.md, "Files"). Transfers and camera tests can outlast one tool
-call, so they run as background tasks in this server: the tool waits up to wait_seconds and, if the
-work isn't finished, returns state='running' with an id to poll by calling the same tool again with
-transfer_id / test_id (cancel=true stops it). Progress comes from the daemon's `transfer` and
-`cameratest` events.
+call, so they run as jobs of this server (core/jobs.py, kinds 'transfer' and 'cameratest'): the tool
+waits up to wait_seconds and, if the work isn't finished, returns state='running' with a job_id to poll
+by calling the same tool again with job_id (ios_job_cancel stops it, also on the phone). Progress comes
+from the daemon's `transfer` and `cameratest` events.
 """
 from __future__ import annotations
 
-import asyncio
-import itertools
 import logging
 import posixpath
 import time
 from collections import Counter
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
@@ -29,6 +26,8 @@ from ..backends.device import client, dcall, hub, resolve_app
 from ..backends.projects import resolve_project
 from ..core import budget as B
 from ..core.errors import device_error
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import BundleId, Udid
 from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import ActionResult, CrashDetail, Out
@@ -36,7 +35,6 @@ from ..state import AppState, get_state
 
 log = logging.getLogger("iosstudio.files")
 
-MAX_JOBS = 30
 LIST_DIRS = 60           # folders ios_files_list opens at most per call
 FILES_SHOWN = 20         # local paths listed in a transfer status
 LOG_SHOWN = 30           # key log lines in a camera test result
@@ -97,8 +95,8 @@ class FilesList(B.Budgeted, Out):
 
 
 class TransferStatus(B.Budgeted, Out):
-    transfer_id: str
-    kind: str
+    job_id: str = Field(description="The copy's job: call the same tool again with job_id to wait for it")
+    kind: str = Field(description="media.pull, container.pull or container.push")
     state: str = Field(description="running, succeeded, failed, cancelled, or needs_confirm (push would overwrite)")
     progress: float | None = Field(None, description="0..1")
     bytes: int = 0
@@ -126,7 +124,7 @@ class StepState(Out):
 
 class CameraTestResult(B.Budgeted, Out):
     BULK: ClassVar[tuple[str, ...]] = ("log_lines",)
-    test_id: str
+    job_id: str = Field(description="The test's job: call ios_camera_test(job_id=...) again to wait for it")
     state: str = Field(description="running, succeeded (the run finished; see ok), failed, cancelled")
     bundle_id: str | None = None
     step: str | None = None
@@ -151,172 +149,111 @@ class CameraTestResult(B.Budgeted, Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
-# ------------------------------------------------------------------ background work
+# ------------------------------------------------------------------ background work (jobs)
 
-@dataclass
-class FJob:
-    id: str
-    kind: str
-    started: float = field(default_factory=time.time)
-    task: asyncio.Task | None = None
-    progress: dict = field(default_factory=dict)       # last transfer event
-    steps: dict = field(default_factory=dict)           # cameratest step -> event
-    result: dict | None = None
-    error: Exception | None = None
-    raw_error: Exception | None = None
-    meta: dict = field(default_factory=dict)
-    changed: asyncio.Event = field(default_factory=asyncio.Event)
+def _listen(state: AppState) -> None:
+    """Once per server: fold the daemon's transfer and camera test events into their jobs."""
+    if state.extras.get("files.listening"):
+        return
+    state.extras["files.listening"] = True
 
-    @property
-    def finished(self) -> bool:
-        return self.task is not None and self.task.done()
-
-
-_ids = itertools.count(1)
-
-
-def _jobs(state: AppState) -> dict[str, FJob]:
-    jobs = state.extras.get("files.jobs")
-    if jobs is None:
-        jobs = state.extras["files.jobs"] = {}
-        h = hub(state)
-
-        def listener(name: str, data: Any) -> None:
-            if not isinstance(data, dict):
-                return
-            if name == "transfer":
-                j = jobs.get(str(data.get("id")))
-                if j:
-                    j.progress = data
-                    j.changed.set()
-            elif name == "cameratest":
-                j = jobs.get(str(data.get("testId")))
-                if j:
-                    j.steps[str(data.get("step"))] = data
-                    j.changed.set()
-        h["listeners"].append(listener)
-    return jobs
+    def listener(name: str, data: Any) -> None:
+        if not isinstance(data, dict) or name not in ("transfer", "cameratest"):
+            return
+        j = state.jobs.jobs.get(str(data.get("id") if name == "transfer" else data.get("testId")))
+        if j is None or j.finished or j.kind not in ("transfer", "cameratest"):
+            return
+        if name == "transfer":
+            j.data["progress"] = data
+            total = data.get("total")
+            frac = float(data.get("bytes") or 0) / max(1, float(total)) if total else None
+            j.report(frac, str(data.get("file") or j.action))
+        else:
+            j.data["steps"][str(data.get("step"))] = data
+            j.report(None, f"{data.get('step')}: {data.get('state')}")
+    hub(state)["listeners"].append(listener)
 
 
-async def _start(state: AppState, kind: str, prefix: str, cmd: str, args: dict, timeout: float, meta: dict) -> FJob:
-    jobs = _jobs(state)
+async def _start(state: AppState, kind: str, cmd: str, args: dict, timeout: float, meta: dict) -> Job:
+    _listen(state)
     await client(state)   # the event listener needs the connection
-    finished = [k for k, j in jobs.items() if j.finished]
-    for k in finished[:max(0, len(jobs) - MAX_JOBS)]:
-        jobs.pop(k, None)
-    jid = f"{prefix}{int(time.time()) % 100000}-{next(_ids)}"
-    job = FJob(id=jid, kind=kind, meta=meta)
-    a = dict(args)
-    a["testId" if kind == "cameratest" else "transferId"] = jid
 
-    async def run():
+    async def run(job: Job) -> dict:
+        a = dict(args)
+        a["testId" if kind == "cameratest" else "transferId"] = job.id
         try:
             dev = await client(state)
-            job.result = await dev.request(cmd, a, timeout=timeout) or {}
-        except Exception as exc:  # noqa: BLE001  kept for the status
-            job.raw_error = exc
-            job.error = device_error(exc) if exc.__class__.__name__ == "DeviceError" else exc
-        finally:
-            job.changed.set()
-    jobs[jid] = job
-    job.task = asyncio.create_task(run(), name=f"files-{jid}")
-    return job
+            return await dev.request(cmd, a, timeout=timeout) or {}
+        except Exception as exc:
+            job.data["raw_error"] = exc
+            if exc.__class__.__name__ == "DeviceError":
+                raise device_error(exc) from None
+            raise
 
-
-def _get(state: AppState, jid: str, kind: str | None = None) -> FJob:
-    job = _jobs(state).get(jid.strip())
-    if job is None or (kind and job.kind != kind):
-        known = ", ".join(k for k, j in _jobs(state).items() if not kind or j.kind == kind) or "none"
-        raise ToolError(f"Unknown id '{jid}' (known here: {known}). Ids live only while this MCP server runs.")
-    return job
-
-
-async def _wait(job: FJob, seconds: float, ctx: Context | None) -> None:
-    deadline = time.monotonic() + max(0.0, min(seconds, MAX_WAIT))
-    last = -1.0
-    while not job.finished:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            break
-        job.changed.clear()
+    async def stop(job: Job) -> None:
         try:
-            await asyncio.wait_for(job.changed.wait(), min(left, 5.0))
-        except asyncio.TimeoutError:
+            await dcall(state, "transfer.cancel", {"transferId": job.id}, timeout=10)
+        except ToolError:
             pass
-        p = job.progress
-        if ctx is not None and p.get("total"):
-            pct = round(100 * float(p.get("bytes") or 0) / max(1, float(p["total"])), 1)
-            if pct > last:
-                last = pct
-                try:
-                    await ctx.report_progress(pct, 100, message=str(p.get("file") or job.kind))
-                except Exception:  # noqa: BLE001
-                    pass
+
+    title = {"media.pull": "Import from camera roll", "container.pull": "Copy app files here",
+             "container.push": "Copy files into an app", "cameratest.run": "Camera test"}[cmd]
+    return state.jobs.run(run, kind, action=cmd, title=title, tool=meta.get("tool"),
+                          data={"meta": meta, "progress": {}, "steps": {}}, on_cancel=stop)
 
 
-async def _cancel(state: AppState, job: FJob) -> None:
-    if job.finished:
-        return
-    try:
-        await dcall(state, "transfer.cancel", {"transferId": job.id}, timeout=10)
-    except ToolError:
-        pass
-    try:
-        await asyncio.wait_for(asyncio.shield(job.task), 10)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _err_text(exc: Exception | None) -> str | None:
-    if exc is None:
+def _err_text(job: Job) -> str | None:
+    if job.state not in ("failed", "cancelled") or not job.error:
         return None
-    return B.clip_error(str(exc))
+    return B.clip_error(str(job.error.get("message") or job.state))
 
 
-def _code(exc: Exception | None) -> str:
-    text = str(exc or "")
+def _code(job: Job) -> str:
+    text = str((job.error or {}).get("message") or "") if job.state == "failed" else ""
     return text[text.rfind("[") + 1:text.rfind("]")] if "[" in text and "]" in text else ""
 
 
-def _transfer_status(job: FJob) -> TransferStatus:
-    p = job.progress
-    r = job.result or {}
+def _cancelled(job: Job) -> bool:
+    return job.state == "cancelled" or (job.state == "failed" and "cancel" in (_err_text(job) or "").lower())
+
+
+def _transfer_status(job: Job) -> TransferStatus:
+    p = job.data["progress"]
+    r = job.result if isinstance(job.result, dict) else {}
     st = "running"
     if job.finished:
-        st = "succeeded" if job.error is None else ("cancelled" if "cancel" in str(job.error).lower() else "failed")
+        st = "succeeded" if job.state == "succeeded" else ("cancelled" if _cancelled(job) else "failed")
     total = p.get("total")
     files = [helper.tilde(f) for f in (r.get("files") or [])]
     nxt: list[str] = []
     if st == "running":
-        nxt.append(f"Still copying. Call {job.meta.get('tool')}(transfer_id='{job.id}') again to wait (or cancel=true).")
-    elif st == "succeeded" and job.kind == "media.pull":
+        nxt.append(still_running(job))
+    elif st == "succeeded" and job.action == "media.pull":
         nxt.append("The files are on this computer now; read or open them by path.")
     elif st == "failed":
         nxt.append("Fix the problem in the error, then start again.")
     failed = [f"{x.get('path')}: {x.get('message')}" for x in (r.get("failed") or []) if isinstance(x, dict)]
     return TransferStatus(
-        transfer_id=job.id, kind=job.kind, state=st,
+        job_id=job.id, kind=job.action, state=st,
         progress=1.0 if st == "succeeded" else (round(min(1.0, float(p.get("bytes") or 0) / total), 3) if total else None),
         bytes=int(r.get("bytes") or p.get("bytes") or 0), total_bytes=total, files_done=int(p.get("files") or 0),
         file_count=p.get("count"), current_file=p.get("file") or None if st == "running" else None,
-        elapsed_seconds=round(time.time() - job.started, 1),
-        destination=helper.tilde(r.get("dest") or r.get("path") or p.get("dest") or p.get("path") or job.meta.get("dest")),
+        elapsed_seconds=job.elapsed,
+        destination=helper.tilde(r.get("dest") or r.get("path") or p.get("dest") or p.get("path")
+                                 or job.data["meta"].get("dest")),
         files=files[:FILES_SHOWN], files_total=len(files), skipped=len(r.get("skipped") or []), failed=failed[:10],
-        converted=r.get("converted") if job.kind == "media.pull" else None, error=_err_text(job.error),
+        converted=r.get("converted") if job.action == "media.pull" else None, error=_err_text(job),
         next_steps=nxt,
         note=f"Showing {FILES_SHOWN} of {len(files)} files." if len(files) > FILES_SHOWN else None,
         truncated=len(files) > FILES_SHOWN, omitted=max(0, len(files) - FILES_SHOWN))
 
 
-async def _poll_transfer(ctx: Context, transfer_id: str, cancel: bool, wait_seconds: float) -> TransferStatus:
+async def _poll_transfer(ctx: Context, job_id: str, tool_name: str, wait_seconds: float) -> TransferStatus:
     state = get_state(ctx)
-    job = _get(state, transfer_id)
-    if job.kind == "cameratest":
-        raise ToolError(f"'{transfer_id}' is a camera test; poll it with ios_camera_test(test_id=...).")
-    if cancel:
-        await _cancel(state, job)
-    else:
-        await _wait(job, wait_seconds, ctx)
+    job = state.jobs.get(job_id, "transfer")
+    if job.tool != tool_name:
+        raise ToolError(f"Job {job.id} is a {job.title.lower()} job; poll it with {job.tool}(job_id='{job.id}').")
+    await wait_with_progress(state, job, wait_seconds, ctx)
     return _transfer_status(job)
 
 
@@ -360,27 +297,26 @@ def key_log_lines(lines: list[str], n: int) -> list[str]:
     return [B.clip(ln, B.LINE_CUT) for ln in picked]
 
 
-async def _camera_status(state: AppState, job: FJob, max_bytes: int | None) -> CameraTestResult:
+async def _camera_status(state: AppState, job: Job, max_bytes: int | None) -> CameraTestResult:
     steps = [StepState(id=k, state=str(v.get("state")), detail=B.clip(v.get("detail"), 160) or None)
-             for k, v in job.steps.items()]
+             for k, v in job.data["steps"].items()]
     cur = next((s.id for s in reversed(steps) if s.state == "running"), None)
-    common = dict(test_id=job.id, bundle_id=job.meta.get("bundle_id"), elapsed_seconds=round(time.time() - job.started, 1),
-                  steps=steps, step=cur)
+    meta = job.data["meta"]
+    common = dict(job_id=job.id, bundle_id=meta.get("bundle_id"), elapsed_seconds=job.elapsed, steps=steps, step=cur)
     if not job.finished:
-        p = job.progress
+        p = job.data["progress"]
         prog = f" ({p.get('file')}: {p.get('bytes')}/{p.get('total')} bytes)" if p.get("state") == "running" and p.get("total") else ""
         return CameraTestResult(state="running", **common, summary=f"Running: {cur or 'starting'}{prog}.",
-                                next_steps=[f"Call ios_camera_test(test_id='{job.id}', wait_seconds=20) again, or "
-                                            "cancel=true to stop it."]).with_budget(max_bytes)
-    if job.error is not None:
-        cancelled = "cancel" in str(job.error).lower()
-        code = _code(job.error)
+                                next_steps=[still_running(job)]).with_budget(max_bytes)
+    if job.state != "succeeded":
+        cancelled = _cancelled(job)
+        code = _code(job)
         nxt = []
         if code == "not-dev-app":
             nxt.append("Pick one of your own apps: ios_app_list(scope='own').")
         elif code == "no-file-sharing":
             nxt.append("Camera tests only work with your own development builds.")
-        return CameraTestResult(state="cancelled" if cancelled else "failed", **common, error=_err_text(job.error),
+        return CameraTestResult(state="cancelled" if cancelled else "failed", **common, error=_err_text(job),
                                 next_steps=nxt).with_budget(max_bytes)
     r = job.result or {}
     count, summ, sample = results_summary(r.get("done"))
@@ -395,7 +331,7 @@ async def _camera_status(state: AppState, job: FJob, max_bytes: int | None) -> C
             crash.next_steps = []
         except ToolError:
             crash = None
-    name = job.meta.get("app") or r.get("bundleId")
+    name = meta.get("app") or r.get("bundleId")
     if r.get("done") is not None:
         summary = f"{name} wrote done.json with {count if count is not None else '?'} result(s) in {r.get('seconds')} s."
     elif r.get("doneRaw"):
@@ -473,17 +409,16 @@ def register(mcp: MCPServer) -> None:
         kind: Annotated[Literal["all", "photo", "video"], Field(description="With latest: only photos or videos")] = "all",
         dest: Annotated[str, Field(description="Folder on this computer (inside your home folder)")] = "~/Pictures/iPhone",
         convert_heic: Annotated[bool, Field(description="Save HEIC photos as JPEG")] = False,
-        transfer_id: Annotated[str | None, Field(description="Poll (or cancel) an import started earlier")] = None,
-        cancel: Annotated[bool, Field(description="With transfer_id: stop it")] = False,
+        job_id: Annotated[str | None, Field(description="Wait for an import started earlier (its job_id)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
                                                                            "state='running'")] = 20,
         udid: Udid = None,
     ) -> TransferStatus:
         """Copy photos/videos from the iPhone's camera roll to a folder on this computer (read-only on the
         phone; files already imported are skipped). Big imports keep running in the background: if
-        state is 'running', call again with transfer_id to wait for it."""
-        if transfer_id:
-            return await _poll_transfer(ctx, transfer_id, cancel, wait_seconds)
+        state is 'running', call again with job_id to wait for it (ios_job_cancel stops it)."""
+        if job_id:
+            return await _poll_transfer(ctx, job_id, "ios_media_pull", wait_seconds)
         state = get_state(ctx)
         target = _local_path(dest, "destination folder", must_exist=False)
         if latest and not ids:
@@ -501,9 +436,9 @@ def register(mcp: MCPServer) -> None:
         args = {"ids": ids, "dest": str(target), "convertHeic": convert_heic}
         if udid:
             args["udid"] = udid
-        job = await _start(state, "media.pull", "m", "media.pull", args, timeout=3600,
+        job = await _start(state, "transfer", "media.pull", args, timeout=3600,
                            meta={"tool": "ios_media_pull", "dest": str(target)})
-        await _wait(job, wait_seconds, ctx)
+        await wait_with_progress(state, job, wait_seconds, ctx)
         return _transfer_status(job)
 
     @tool(mcp, "List app files", kind="read_remote")
@@ -579,18 +514,17 @@ def register(mcp: MCPServer) -> None:
         paths: Annotated[list[str] | None, Field(description="Files or folders in the container, e.g. "
                                                              "['/Documents/export.csv']; folders are copied whole")] = None,
         dest: Annotated[str, Field(description="Folder on this computer (inside your home folder)")] = "~/Downloads",
-        transfer_id: Annotated[str | None, Field(description="Poll (or cancel) a copy started earlier")] = None,
-        cancel: Annotated[bool, Field(description="With transfer_id: stop it")] = False,
+        job_id: Annotated[str | None, Field(description="Wait for a copy started earlier (its job_id)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
                                                                            "returning state='running' with the "
-                                                                           "transfer_id")] = 20,
+                                                                           "job_id")] = 20,
         udid: Udid = None,
     ) -> TransferStatus:
         """Copy files or folders from an app's container on the iPhone to this computer. Existing local
         files are never overwritten ('name (2).ext'). Long copies continue in the background: poll with
-        transfer_id."""
-        if transfer_id:
-            return await _poll_transfer(ctx, transfer_id, cancel, wait_seconds)
+        job_id (ios_job_cancel stops it)."""
+        if job_id:
+            return await _poll_transfer(ctx, job_id, "ios_files_pull", wait_seconds)
         if not bundle_id or not paths:
             raise ToolError("Pass bundle_id and paths (see ios_files_list).")
         state = get_state(ctx)
@@ -599,9 +533,9 @@ def register(mcp: MCPServer) -> None:
         args = {"bundleId": app["bundleId"], "paths": paths, "dest": str(target)}
         if udid:
             args["udid"] = udid
-        job = await _start(state, "container.pull", "c", "container.pull", args, timeout=3600,
+        job = await _start(state, "transfer", "container.pull", args, timeout=3600,
                            meta={"tool": "ios_files_pull", "dest": str(target)})
-        await _wait(job, wait_seconds, ctx)
+        await wait_with_progress(state, job, wait_seconds, ctx)
         return _transfer_status(job)
 
     @tool(mcp, "Copy files into an app", kind="destructive", open_world=True)
@@ -615,19 +549,18 @@ def register(mcp: MCPServer) -> None:
         confirm: Annotated[bool, Field(description="Replace files that already exist there. Without it a push "
                                                    "that would overwrite returns state='needs_confirm' and changes "
                                                    "nothing")] = False,
-        transfer_id: Annotated[str | None, Field(description="Poll (or cancel) a push started earlier")] = None,
-        cancel: Annotated[bool, Field(description="With transfer_id: stop it")] = False,
+        job_id: Annotated[str | None, Field(description="Wait for a push started earlier (its job_id)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
                                                                            "returning state='running' with the "
-                                                                           "transfer_id")] = 20,
+                                                                           "job_id")] = 20,
         udid: Udid = None,
     ) -> TransferStatus:
         """Copy files from this computer into an app's container on the iPhone (your own builds, or App
         Store apps with file sharing: Documents only). If any file already exists there, nothing is
         copied and state='needs_confirm' lists what would be replaced: ask the user, then repeat with
         confirm=true."""
-        if transfer_id:
-            return await _poll_transfer(ctx, transfer_id, cancel, wait_seconds)
+        if job_id:
+            return await _poll_transfer(ctx, job_id, "ios_files_push", wait_seconds)
         if not bundle_id or not sources:
             raise ToolError("Pass bundle_id and sources.")
         state = get_state(ctx)
@@ -637,17 +570,17 @@ def register(mcp: MCPServer) -> None:
         args = {"bundleId": app["bundleId"], "srcs": srcs, "path": folder, "overwrite": confirm}
         if udid:
             args["udid"] = udid
-        job = await _start(state, "container.push", "p", "container.push", args, timeout=3600,
+        job = await _start(state, "transfer", "container.push", args, timeout=3600,
                            meta={"tool": "ios_files_push", "dest": folder})
-        await _wait(job, wait_seconds, ctx)
-        if job.finished and _code(job.error) == "exists":
-            detail = str(getattr(job.raw_error, "detail", None) or "")
+        await wait_with_progress(state, job, wait_seconds, ctx)
+        if job.finished and _code(job) == "exists":
+            detail = str(getattr(job.data.get("raw_error"), "detail", None) or "")
             clash = [ln.strip() for ln in detail.splitlines() if ln.strip().startswith("/")]
-            _jobs(state).pop(job.id, None)
-            return TransferStatus(transfer_id=job.id, kind=job.kind, state="needs_confirm",
-                                  elapsed_seconds=round(time.time() - job.started, 1), destination=folder,
+            state.jobs.jobs.pop(job.id, None)     # nothing happened: not a job worth keeping
+            return TransferStatus(job_id=job.id, kind=job.action, state="needs_confirm",
+                                  elapsed_seconds=job.elapsed, destination=folder,
                                   would=[f"Replace {c}" for c in clash[:B.LIST_CAP]] or ["Replace files that already exist in " + folder],
-                                  error=_err_text(job.error),
+                                  error=_err_text(job),
                                   next_steps=["Ask the user whether to replace the existing files; only then repeat the "
                                               "call with confirm=true."])
         return _transfer_status(job)
@@ -707,11 +640,10 @@ def register(mcp: MCPServer) -> None:
         args: Annotated[list[str] | None, Field(description="Launch arguments; default ['-cameraTestMode', '1']")] = None,
         env: Annotated[dict[str, str] | None, Field(description="Environment variables for the app")] = None,
         timeout_s: Annotated[int, Field(ge=5, le=600, description="How long the app gets to write done.json")] = 60,
-        test_id: Annotated[str | None, Field(description="Poll (or cancel) a test started earlier")] = None,
-        cancel: Annotated[bool, Field(description="With test_id: stop it")] = False,
+        job_id: Annotated[str | None, Field(description="Wait for a test started earlier (its job_id)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
                                                                            "returning state='running' with the "
-                                                                           "test_id")] = 20,
+                                                                           "job_id")] = 20,
         max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
                                                                                   "structuredContent together (default 12000 bytes)")] = None,
         udid: Udid = None,
@@ -721,14 +653,11 @@ def register(mcp: MCPServer) -> None:
         Documents/CameraTestOutput/done.json (or the timeout), copies the outputs here, and reports a
         summary of done.json's results, the output files, key log lines and any new crash. Needs the
         test hook in the app (docs/camera-testing.md). Runs as a job: if state='running', call again
-        with test_id."""
+        with job_id (ios_job_cancel stops it)."""
         state = get_state(ctx)
-        if test_id:
-            job = _get(state, test_id, "cameratest")
-            if cancel:
-                await _cancel(state, job)
-            else:
-                await _wait(job, wait_seconds, ctx)
+        if job_id:
+            job = state.jobs.get(job_id, "cameratest")
+            await wait_with_progress(state, job, wait_seconds, ctx)
             return await _camera_status(state, job, max_bytes)
         app = project_path or bundle_id
         if not app or not inputs:
@@ -753,7 +682,7 @@ def register(mcp: MCPServer) -> None:
             a["env"] = env
         if udid:
             a["udid"] = udid
-        job = await _start(state, "cameratest", "ct", "cameratest.run", a, timeout=timeout_s + 600,
-                           meta={"bundle_id": a_["bundleId"], "app": a_.get("name")})
-        await _wait(job, wait_seconds, ctx)
+        job = await _start(state, "cameratest", "cameratest.run", a, timeout=timeout_s + 600,
+                           meta={"tool": "ios_camera_test", "bundle_id": a_["bundleId"], "app": a_.get("name")})
+        await wait_with_progress(state, job, wait_seconds, ctx)
         return await _camera_status(state, job, max_bytes)

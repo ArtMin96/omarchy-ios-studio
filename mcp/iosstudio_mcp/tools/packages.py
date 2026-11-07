@@ -1,7 +1,7 @@
 """Swift package dependencies: ios_package_list, ios_package_add, ios_package_update, ios_package_resolve and
 ios_package_remove. The work happens in helper/packages.py (`packages <action>`); add, update and resolve fetch
 from the network and run as jobs (state='running' + job_id; call the same tool again with job_id; cancel with
-ios_build_cancel(build_id=job_id), which puts Package.swift and Package.resolved back)."""
+ios_job_cancel(job_id), which puts Package.swift and Package.resolved back)."""
 from __future__ import annotations
 
 import re
@@ -15,9 +15,9 @@ from .. import helper
 from ..backends.projects import resolve_project
 from ..core import budget as B
 from ..core.job_status import wait_with_progress
+from ..core.jobs import Job
 from ..core.params import MaxBytes, ProjectPath
 from ..core.registry import MAX_WAIT, fit_page, tool
-from ..jobs import Job
 from ..models import ErrorInfo, Out
 from ..state import get_state
 
@@ -218,7 +218,7 @@ def _busy(state, path: str) -> None:
     job = state.jobs.running_for(path)
     if job:
         raise ToolError(f"{job.title} ({job.id}) is still running for this project. Wait for it with "
-                        f"ios_build_status(build_id='{job.id}') or stop it with ios_build_cancel, then retry.")
+                        f"ios_job_status(job_id='{job.id}') or stop it with ios_job_cancel, then retry.")
 
 
 def _job_view(job: Job, action: str, tool_name: str, p: dict) -> PackageResult:
@@ -233,7 +233,7 @@ def _job_view(job: Job, action: str, tool_name: str, p: dict) -> PackageResult:
             progress=round(job.progress, 3) if job.progress is not None else None,
             progress_detail=B.clip(job.progress_detail, 200) if job.progress_detail else None,
             next_steps=[f"Call {tool_name}(job_id='{job.id}', wait_seconds=20) again; "
-                        f"ios_build_cancel(build_id='{job.id}') stops it and puts Package.swift back."])
+                        f"ios_job_cancel(job_id='{job.id}') stops it and puts Package.swift back."])
     if job.state != "succeeded":
         err = dict(job.error or {"code": "failed", "message": "Failed."})
         r = _err_result(action, p, err, **common)
@@ -425,7 +425,7 @@ def register(mcp: MCPServer) -> None:
     ) -> PackageResult:
         """Update packages to the newest versions their rules allow (swift package update) and report `changes`
         (identity, from_version, to_version) from Package.resolved before and after. Package.swift isn't changed.
-        Runs as a job: state 'running' means call again with job_id; ios_build_cancel(build_id=job_id) stops it
+        Runs as a job: state 'running' means call again with job_id; ios_job_cancel(job_id) stops it
         and puts Package.resolved back."""
         return await _resolve_like(ctx, "update", project_path, package, job_id, wait_seconds, max_bytes)
 

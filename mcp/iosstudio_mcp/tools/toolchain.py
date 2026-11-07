@@ -12,7 +12,7 @@ from .. import helper
 from ..core.job_status import start_and_wait
 from ..core.params import WaitSeconds
 from ..core.registry import dry_run, tool
-from ..models import ActionResult, BuildStatus, DiskItem, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
+from ..models import ActionResult, DiskItem, JobStatus, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
 from ..state import get_state
 
 MB = 1024 * 1024
@@ -96,12 +96,12 @@ def register(mcp: MCPServer) -> None:
         include_optional: Annotated[bool, Field(description="With all: also optional extras")] = False,
         force: Annotated[bool, Field(description="Reinstall even if the step looks done")] = False,
         wait_seconds: WaitSeconds = 5,
-    ) -> BuildStatus:
-        """Install missing toolchain pieces as a background job (build_id 't-N'; poll ios_build_status).
+    ) -> JobStatus:
+        """Install missing toolchain pieces as a background job (job_id 't-N'; poll ios_job_status).
 
         Big steps (Swift, xtool, the SDK) download up to ~2 GB and take 15-45 min. The job first asks
         for confirmation (state needs_input): show the user the prompt and answer with
-        ios_build_respond. System packages need root, so a polkit password dialog appears on the user's
+        ios_job_respond. System packages need root, so a polkit password dialog appears on the user's
         screen; tell them to expect it. Steps that need the human (Xcode download, sign-in, pairing)
         are not done here: see ios_toolchain_check.
         """
@@ -110,7 +110,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         busy = [j for j in state.jobs.jobs.values() if j.kind == "toolchain-install" and not j.finished]
         if busy:
-            raise ToolError(f"Toolchain install {busy[0].id} is already running; poll ios_build_status.")
+            raise ToolError(f"Toolchain install {busy[0].id} is already running; poll ios_job_status.")
         flags = {"all": all, "step": step, "include_optional": include_optional and all, "force": force}
         return await start_and_wait(state, ctx, kind="toolchain-install", group="setup", action="install",
                                     flags=flags, title=f"Install {'toolchain' if all else step}", prefix="t",
@@ -144,9 +144,9 @@ def register(mcp: MCPServer) -> None:
                                   flags={"item": item}, title=f"Clean {it.get('name')}", prefix="t",
                                   wait_seconds=wait_seconds)
         if st.state == "succeeded":
-            freed = (state.jobs.get(st.build_id).result or {}).get("freed") or 0
+            freed = (state.jobs.get(st.job_id).result or {}).get("freed") or 0
             return ActionResult(done=True, message=f"Deleted {it.get('name')}, freed {freed / MB:.0f} MB.")
         if st.state in ("failed", "cancelled"):
             raise ToolError(f"Cleaning failed: {st.error.message if st.error else st.state}.")
-        return ActionResult(done=True, message=f"Still deleting; poll ios_build_status('{st.build_id}').",
-                            data={"build_id": st.build_id})
+        return ActionResult(done=True, message=f"Still deleting; poll ios_job_status('{st.job_id}').",
+                            data={"job_id": st.job_id})

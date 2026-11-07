@@ -59,7 +59,7 @@ class RunCaptureResult(RunCapture):
     """RunCapture, or (state='installing') an install that is still running; nothing was launched yet."""
     BULK: ClassVar[tuple[str, ...]] = ("key_lines", "console_lines")
     state: Literal["done", "installing"] = Field("done", description="installing: the install is still running and "
-                                                 "nothing was launched; call again with install_id")
+                                                 "nothing was launched; call again with job_id")
     installed: AppInstallStatus | None = None
     console: ConsoleSummary | None = Field(None, description="What the app printed (stdout/stderr): counts, and "
                                                              "the session for ios_app_console_read")
@@ -394,8 +394,8 @@ def register(mcp: MCPServer) -> None:
         install: Annotated[bool, Field(description="First install the project's last signed build (or ipa_path). "
                                                    "Does not build: use ios_run to rebuild")] = False,
         ipa_path: Annotated[str | None, Field(description="A signed .ipa/.app to install first")] = None,
-        install_id: Annotated[str | None, Field(description="Continue a call that returned state='installing': wait "
-                                                            "for that install, then launch and capture")] = None,
+        job_id: Annotated[str | None, Field(description="Continue a call that returned state='installing': wait "
+                                                        "for that install job, then launch and capture")] = None,
         seconds: Annotated[int, Field(ge=1, le=MAX_WAIT, description="How long to capture after launch")] = 8,
         min_level: Annotated[Level, Field(description="Lowest log level to capture")] = "default",
         relaunch: Annotated[bool, Field(description="Stop the app first if it's running, so you see a fresh "
@@ -417,8 +417,8 @@ def register(mcp: MCPServer) -> None:
         exception, reason and top frames, what the app printed (console: stderr lines and the latest
         print() output, after the log lines), and next steps. The key lines come as plain text after the JSON
         (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
-        An install that outlasts the call returns state='installing' with installed.install_id and nothing
-        launched: call again with install_id (and the other arguments) to wait for it and then capture.
+        An install that outlasts the call returns state='installing' with installed.job_id and nothing
+        launched: call again with job_id (and the other arguments) to wait for it and then capture.
         Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read.
         preset='<name>' launches with a run preset of the app's project (ios_project_presets; the project is
         project_path, else the one that builds bundle_id): its args come first, then `args`, and `env`
@@ -432,7 +432,7 @@ def register(mcp: MCPServer) -> None:
             bundle_id = proj.get("bundleId")
             if not bundle_id:
                 raise ToolError(f"{proj.get('name')} has no bundle id yet. Check ios_project_info.")
-        if not bundle_id and not install_id and not ipa_path:
+        if not bundle_id and not job_id and not ipa_path:
             raise ToolError("Pass bundle_id or project_path (or ipa_path to install and run).")
         if preset and (project_path or bundle_id):   # before any install: an unknown name fails at once
             how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id)
@@ -444,18 +444,18 @@ def register(mcp: MCPServer) -> None:
                 step[0] = done
                 await ctx.report_progress(round(done, 1), total, message=msg)
 
-        if install_id or install or ipa_path:
-            if install_id:
-                job = get_install(state, install_id)
+        if job_id or install or ipa_path:
+            if job_id:
+                job = get_install(state, job_id)
             else:
                 pkg, _ = await package_for(state, ipa_path, None if ipa_path else (project_path or None))
-                job = start_install(state, udid, pkg)
+                job = start_install(state, udid, pkg, tool="ios_app_run_and_capture")
             await progress(0.1, "Installing")
             # Whatever the install leaves of MAX_WAIT goes to the capture; a long install returns early instead
-            await wait_install(job, max(3.0, MAX_WAIT - seconds - 7),
+            await wait_install(state, job, max(3.0, MAX_WAIT - seconds - 7),
                                lambda pct, st: progress(0.1 + 0.3 * pct / 100, f"Installing {pct:.0f}%"))
             if not job.finished:
-                again = (f"ios_app_run_and_capture(install_id='{job.id}'"
+                again = (f"ios_app_run_and_capture(job_id='{job.id}'"
                          + (f", bundle_id='{bundle_id}'" if bundle_id else "")
                          + (f", preset='{preset}'" if preset else "")
                          + f", seconds={seconds})")

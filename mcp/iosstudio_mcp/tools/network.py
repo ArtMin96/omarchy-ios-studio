@@ -2,9 +2,10 @@
 shared device daemon (condition.* and pcap.* in docs/deviced-protocol.md).
 
 A condition belongs to this server's daemon client: it switches off at its timeout, on
-ios_network_condition_clear, or when this MCP server exits. A capture is a daemon-side job: ios_pcap_capture
-starts it and waits up to 25 s; a longer one returns capture_id, and the same tool called with capture_id waits
-for it and returns the summary (no payloads) and the pcapng path.
+ios_network_condition_clear, or when this MCP server exits. A capture runs in the daemon and is followed by a
+job of this server (core/jobs.py, kind 'pcap'): ios_pcap_capture starts it and waits up to 25 s; a longer one
+returns job_id, and the same tool called with job_id waits for it and returns the summary (no payloads) and the
+pcapng path. ios_job_cancel ends it early (the packets so far are kept).
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from pydantic import Field
 
 from ..backends.device import dcall
 from ..core import budget as B
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import Udid
 from ..core.registry import MAX_WAIT, dry_run, tool
 from ..models import ActionResult, Out, iso
@@ -91,7 +94,7 @@ class CaptureHost(Out):
 
 
 class PcapCapture(Out):
-    capture_id: str = Field(description="Pass back with capture_id= to wait for a running capture")
+    job_id: str = Field(description="The capture's job: pass back as job_id to wait for it")
     state: str = Field(description="running | done | failed")
     file: str | None = Field(None, description="The pcapng file (open in Wireshark); packet comments name the process")
     file_bytes: int | None = None
@@ -125,13 +128,13 @@ def _capture_id(st: dict) -> str:
     return Path(str(st.get("file") or "capture")).stem
 
 
-def _capture(st: dict, state_: str | None = None, note: list[str] | None = None) -> PcapCapture:
+def _capture(job_id: str, st: dict, state_: str | None = None, note: list[str] | None = None) -> PcapCapture:
     sm = st.get("summary") or {}
     running = bool(st.get("running"))
     err = st.get("error")
     state = state_ or ("running" if running else "failed" if err else "done")
     out = PcapCapture(
-        capture_id=_capture_id(st), state=state, file=st.get("file"), file_bytes=st.get("fileBytes"),
+        job_id=job_id, state=state, file=st.get("file"), file_bytes=st.get("fileBytes"),
         filter={k: v for k, v in (st.get("filter") or {}).items() if v}, seconds=st.get("seconds"),
         packets=int(st.get("packets") or 0), bytes=int(st.get("bytes") or 0),
         sent_bytes=sm.get("sentBytes"), received_bytes=sm.get("receivedBytes"), stop_reason=st.get("stopReason"),
@@ -145,25 +148,24 @@ def _capture(st: dict, state_: str | None = None, note: list[str] | None = None)
     return out
 
 
-async def _wait_capture(state, ctx: Context | None, cid: str, seconds: float) -> dict:
-    deadline = time.monotonic() + max(0.0, min(seconds, MAX_WAIT))
-    st: dict = {}
-    last = -1.0
+async def _follow(state, job: Job, started: dict) -> dict:
+    """The job's body: poll pcap.status once a second until the capture ends; its last status is the result."""
+    cid = _capture_id(started)
+    job.data["status"] = started
+    limit = time.monotonic() + float(started.get("maxSeconds") or 120) + 60
     while True:
         st = await _call(state, "pcap.status", {}, timeout=20) or {}
         if _capture_id(st) != cid:
-            raise ToolError(f"Capture '{cid}' isn't the current one (latest: '{_capture_id(st)}'). Captures live only "
-                            "until the next one starts; start a new one with ios_pcap_capture.")
-        if not st.get("running") or time.monotonic() >= deadline:
+            raise ToolError(f"Capture '{cid}' isn't the current one (latest: '{_capture_id(st)}'): a newer capture "
+                            "replaced it. Start a new one with ios_pcap_capture.")
+        job.data["status"] = st
+        if not st.get("running"):
             return st
-        if ctx is not None and st.get("maxSeconds"):
-            pct = min(99.0, round(100 * float(st.get("seconds") or 0) / float(st["maxSeconds"]), 1))
-            if pct > last:
-                last = pct
-                try:
-                    await ctx.report_progress(pct, 100, message=f"{st.get('packets', 0)} packets")
-                except Exception:  # noqa: BLE001  progress is best effort
-                    pass
+        if time.monotonic() > limit:     # overdue: ask the daemon to stop and save it
+            await _call(state, "pcap.stop", {}, timeout=30)
+        if st.get("maxSeconds"):
+            job.report(min(0.99, float(st.get("seconds") or 0) / float(st["maxSeconds"])),
+                       f"{st.get('packets', 0)} packets")
         await asyncio.sleep(1)
 
 
@@ -253,37 +255,39 @@ def register(mcp: MCPServer) -> None:
         bundle_id: Annotated[str | None, Field(description="Only this app's traffic (bundle id, plain or XTL- form); "
                                                            "omit for the whole phone")] = None,
         seconds: Annotated[int, Field(ge=3, le=120, description="How long to capture")] = 10,
-        capture_id: Annotated[str | None, Field(description="Wait for this running capture instead of starting one")] = None,
-        stop: Annotated[bool, Field(description="With capture_id: stop it now and return the summary")] = False,
+        job_id: Annotated[str | None, Field(description="Wait for a running capture (its job_id) instead of starting "
+                                                        "one")] = None,
         wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="How long this call waits for the result")] = MAX_WAIT,
         udid: Udid = None,
     ) -> PcapCapture:
         """Record the iPhone's network traffic (needs a USB cable) and summarize it: packets and bytes per process,
         top remote hosts:ports, protocols and services (HTTPS, QUIC, DNS...). Only headers are read, never payloads.
         The full capture is saved as pcapng (file) for Wireshark. Captures of more than ~20 s come back as
-        state='running' with capture_id: call again with capture_id (and wait_seconds) for the result. Reproduce the
+        state='running' with job_id: call again with job_id (and wait_seconds) for the result; ios_job_cancel ends
+        it early and keeps what was captured. Reproduce the
         app's network activity while it records (ios_app_launch)."""
         state = get_state(ctx)
-        if capture_id:
-            cid = Path(capture_id).stem
-            if stop:
-                st = await _call(state, "pcap.status", {}, timeout=20) or {}
-                if _capture_id(st) == cid and st.get("running"):
-                    await _call(state, "pcap.stop", {}, timeout=30)
-            st = await _wait_capture(state, ctx, cid, 0 if stop else wait_seconds)
+        if job_id:
+            job = state.jobs.get(job_id, "pcap")
         else:
             args: dict = {"maxSeconds": seconds}
             if bundle_id:
                 args["bundleId"] = bundle_id
-            st = await _call(state, "pcap.start", args, udid=udid, timeout=60,
-                             hints={"not-found": "Check the bundle id with ios_app_list(scope='own')."}) or {}
-            st = await _wait_capture(state, ctx, _capture_id(st), wait_seconds)
-        cid = _capture_id(st)
-        if st.get("running"):
+            started = await _call(state, "pcap.start", args, udid=udid, timeout=60,
+                                  hints={"not-found": "Check the bundle id with ios_app_list(scope='own')."}) or {}
+
+            async def stop(j: Job) -> None:
+                await _call(state, "pcap.stop", {}, timeout=30)
+
+            job = state.jobs.run(lambda j: _follow(state, j, started), "pcap", title=f"Capture traffic ({seconds} s)",
+                                 tool="ios_pcap_capture", data={"status": started}, on_cancel=stop)
+        await wait_with_progress(state, job, wait_seconds, ctx)
+        st = job.result if isinstance(job.result, dict) else job.data.get("status") or {}
+        if not job.finished:
             left = max(0, round(float(st.get("maxSeconds") or 0) - float(st.get("seconds") or 0)))
-            return _capture(st, "running", [f"Still recording (about {left} s left). Call ios_pcap_capture("
-                                            f"capture_id='{cid}', wait_seconds=25) for the summary, or add stop=true "
-                                            "to end it now."])
+            return _capture(job.id, st, "running", [f"Still recording (about {left} s left). " + still_running(job)])
+        if not isinstance(job.result, dict):     # failed, or cancelled before the daemon saved anything
+            st = {**st, "running": False, "error": (job.error or {}).get("message") or job.state}
         nxt = []
         if st.get("error"):
             nxt.append("The capture failed; check the iPhone is still plugged in by USB and unlocked, then retry.")
@@ -293,4 +297,4 @@ def register(mcp: MCPServer) -> None:
         else:
             nxt.append(f"Full capture: {st.get('file')} (pcapng, comments name the process). The user can open it "
                        "in Wireshark from the iPhone page's Network tab.")
-        return _capture(st, None, nxt)
+        return _capture(job.id, st, None, nxt)

@@ -29,15 +29,15 @@ def _head(text: str, hint: str, cap: int = MAX_TEXT) -> str:
 
 def register(mcp: MCPServer) -> None:
 
-    @mcp.resource("iosstudio://builds/{build_id}/log", name="build-log", mime_type="text/plain")
-    async def build_log(build_id: str, ctx: Context) -> str:
-        """The in-memory output of a build or job started in this session: its last 100 KB (ios_build_log
-        pages through all of it)."""
+    @mcp.resource("iosstudio://jobs/{job_id}/log", name="job-log", mime_type="text/plain")
+    async def job_log(job_id: str, ctx: Context) -> str:
+        """The in-memory output of a build or other job started in this session: its last 100 KB
+        (ios_build_log pages through a build's whole log)."""
         state = get_state(ctx)
-        job = state.jobs.jobs.get(build_id)
+        job = state.jobs.jobs.get(job_id)
         if job is None:
-            raise ResourceError(f"Unknown build_id '{build_id}'.")
-        return _tail("\n".join(job.lines), f"ios_build_log(build_id='{build_id}', before=...)")
+            raise ResourceError(f"Unknown job_id '{job_id}'.")
+        return _tail("\n".join(job.lines), f"ios_build_log(job_id='{job_id}', before=...)")
 
     @mcp.resource("iosstudio://cache/{kind}/{name}", name="saved-output", mime_type="text/plain")
     def saved_output(kind: str, name: str) -> str:

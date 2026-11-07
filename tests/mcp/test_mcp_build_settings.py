@@ -76,7 +76,7 @@ class BuildSettingsTool(unittest.TestCase):
 
             # Refused while not allowed; the error names the new setting.
             b = await call("ios_build_start", project_path=p, action="compile")
-            st = await self._wait(call, b["build_id"])
+            st = await self._wait(call, b["job_id"])
             self.assertEqual(st["state"], "failed")
             self.assertEqual(st["error"]["code"], "generated-project")
             self.assertNotIn("…", st["error"]["message"])
@@ -107,9 +107,9 @@ class BuildSettingsTool(unittest.TestCase):
             self.assertNotIn("suggested_build_settings", info)
 
             b = await call("ios_build_start", project_path=p, action="compile")
-            st = await self._wait(call, b["build_id"])
+            st = await self._wait(call, b["job_id"])
             self.assertEqual(st["state"], "succeeded", st)
-            log = await call("ios_build_log", build_id=b["build_id"], grep="generate.sh|BUILD_FLAVOR|NOFILE|bundleID")
+            log = await call("ios_build_log", job_id=b["job_id"], grep="generate.sh|BUILD_FLAVOR|NOFILE|bundleID")
             text = "\n".join(str(x) for x in log.get("lines") or [])
             self.assertIn("args=7", text)
             self.assertIn("BUILD_FLAVOR=dev", text)
@@ -118,17 +118,17 @@ class BuildSettingsTool(unittest.TestCase):
             # A failing prebuild is one config diagnostic with a hint.
             await call("ios_project_build_settings", project_path=p, prebuild="./generate.sh fail", confirm=True)
             b = await call("ios_build_start", project_path=p, action="compile")
-            st = await self._wait(call, b["build_id"])
+            st = await self._wait(call, b["job_id"])
             self.assertEqual(st["state"], "failed")
-            diags = await call("ios_build_diagnostics", build_id=b["build_id"])
+            diags = await call("ios_build_diagnostics", job_id=b["job_id"])
             (g,) = diags["diagnostics"]
             self.assertEqual(g["category"], "config")
             self.assertIn("prebuild", g["message"])
             self.assertTrue(g.get("hint"))
 
-    async def _wait(self, call, build_id):
+    async def _wait(self, call, job_id):
         for _ in range(20):
-            st = await call("ios_build_status", build_id=build_id, wait_seconds=10)
+            st = await call("ios_job_status", job_id=job_id, wait_seconds=10)
             if st.get("state") in ("succeeded", "failed", "cancelled"):
                 return st
         self.fail("build did not finish")

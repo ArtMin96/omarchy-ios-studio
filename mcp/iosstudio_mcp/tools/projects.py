@@ -5,10 +5,7 @@ builds into an iPhone app). Sources live in Sources/<Product>/.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import re
-import time
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -17,6 +14,8 @@ from pydantic import Field
 
 from .. import helper
 from ..backends.projects import existing_dir, resolve_project
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import ProjectPath
 from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import (
@@ -29,7 +28,7 @@ from ..models import (
     Template,
     TemplateList,
 )
-from ..state import get_state
+from ..state import AppState, get_state
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,48}$")
 BUNDLE_RE = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
@@ -62,6 +61,25 @@ def _detail_next(p: dict) -> list[str]:
 DEMO_NEXT = ["Demo mode keeps its three made-up projects. Continue with one of them, e.g. "
              "ios_build_start(project_path='HabitTracker', action='compile') (it has 2 compiler errors) or "
              "ios_run(project_path='WeatherGlance')."]
+
+
+async def _creation(state: AppState, ctx: Context, job: Job, wait_seconds: float) -> ProjectChange:
+    """Wait for a project-create job; its ProjectChange once done (raising the helper's error if it failed)."""
+    name = job.data.get("name")
+    await wait_with_progress(state, job, wait_seconds, ctx)
+    if not job.finished:
+        return ProjectChange(done=False, job_id=job.id, message=f"Still creating {name} ({job.elapsed:g} s so far).",
+                             next_steps=[still_running(job)])
+    job.data["delivered"] = True
+    if job.state != "succeeded":
+        raise ToolError((job.error or {}).get("message") or f"Creating {name} was {job.state}.")
+    data = job.result or {}
+    state.invalidate_projects()
+    if _is_demo_stub(data):
+        return ProjectChange(done=False, message=f"Demo mode: {name} was not really created.",
+                             next_steps=DEMO_NEXT)
+    return ProjectChange(done=True, message=f"Created {data.get('name')} at {data.get('path')}.",
+                         project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
 
 
 def register(mcp: MCPServer) -> None:
@@ -132,8 +150,8 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Create app", kind="write")
     async def ios_project_create(
         ctx: Context,
-        name: Annotated[str, Field(description="App name: starts with a letter; letters, digits, _ only "
-                                               "(no spaces), e.g. 'WeatherGlance'")],
+        name: Annotated[str | None, Field(description="App name: starts with a letter; letters, digits, _ only "
+                                                      "(no spaces), e.g. 'WeatherGlance'. Not needed with job_id")] = None,
         template: Annotated[str, Field(description="Template id from ios_project_templates")] = "swiftui-app",
         directory: Annotated[str | None, Field(description="Parent folder inside the home folder; default: "
                                                            "the app's default folder (usually ~/Developer)")] = None,
@@ -142,16 +160,20 @@ def register(mcp: MCPServer) -> None:
         git: Annotated[bool, Field(description="Initialise a git repo with a first commit")] = True,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for it (≤25 s); "
                                                                            "if it isn't done by then, call again "
-                                                                           "with the same arguments")] = 20,
+                                                                           "with job_id")] = 20,
+        job_id: Annotated[str | None, Field(description="Wait for a creation started earlier (its job_id)")] = None,
     ) -> ProjectChange:
         """Create a new SwiftUI iPhone app from a template and register it with iOS Studio.
 
         Writes <directory>/<name>/ with Package.swift, xtool.yml and Sources/<name>/. Fails if the folder
         exists. Returns the new project; next, edit its sources and build with ios_build_start. Usually
-        takes a few seconds; if it is still running after wait_seconds, the result says so (done=false)
-        and calling again with the same arguments waits for the same creation instead of starting another.
+        takes a few seconds; if it is still running after wait_seconds, the result says so (done=false, with
+        a job_id): call again with job_id (or the same arguments) to wait for the same creation.
         """
-        if not NAME_RE.match(name):
+        state = get_state(ctx)
+        if job_id:
+            return await _creation(state, ctx, state.jobs.get(job_id, "project-create"), wait_seconds)
+        if not name or not NAME_RE.match(name):
             raise ToolError("App names start with a letter and use only letters, digits and _ (no spaces).")
         if bundle_id and not BUNDLE_RE.match(bundle_id):
             raise ToolError("bundle_id must look like com.yourname.AppName (letters, digits, dots and dashes).")
@@ -168,32 +190,15 @@ def register(mcp: MCPServer) -> None:
             if not helper.inside_home(d):
                 raise ToolError("directory must be inside your home folder (or a folder listed in IOSSTUDIO_MCP_ALLOW_PATHS).")
             flags["dir"] = str(d)
-        state = get_state(ctx)
-        creating: dict = state.extras.setdefault("projects.creating", {})
-        key = (name, flags.get("dir") or "")
-        entry = creating.get(key)
-        if entry is None:
-            entry = creating[key] = (asyncio.create_task(helper.call("projects", "new", flags, timeout=90)), time.time())
-        task, started = entry
-        deadline = time.monotonic() + min(wait_seconds, MAX_WAIT)
-        while not task.done() and time.monotonic() < deadline:   # heartbeat for clients that reset on progress
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(asyncio.shield(task), min(5.0, max(0.0, deadline - time.monotonic())))
-            if not task.done():
-                await ctx.report_progress(round(time.time() - started), None, message=f"Creating {name}")
-        if not task.done():
-            return ProjectChange(done=False, message=f"Still creating {name} ({round(time.time() - started)} s so far).",
-                                 next_steps=[f"Call ios_project_create(name='{name}'"
-                                             + (f", directory='{directory}'" if directory else "")
-                                             + ") again to wait for it."])
-        creating.pop(key, None)
-        data = task.result()     # raises the helper's ToolError, as before
-        state.invalidate_projects()
-        if _is_demo_stub(data):
-            return ProjectChange(done=False, message=f"Demo mode: {name} was not really created.",
-                                 next_steps=DEMO_NEXT)
-        return ProjectChange(done=True, message=f"Created {data.get('name')} at {data.get('path')}.",
-                             project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
+        key = f"{name}|{flags.get('dir') or ''}"
+        job = next((j for j in reversed(list(state.jobs.jobs.values()))
+                    if j.kind == "project-create" and j.data.get("key") == key and not j.data.get("delivered")), None)
+        if job is None:
+            async def create(j: Job) -> dict:
+                return await helper.call("projects", "new", flags, timeout=90)
+            job = state.jobs.run(create, "project-create", title=f"Create {name}", tool="ios_project_create",
+                                 data={"key": key, "name": name})
+        return await _creation(state, ctx, job, wait_seconds)
 
     @tool(mcp, "Add existing project", kind="write", idempotent=True)
     async def ios_project_add(

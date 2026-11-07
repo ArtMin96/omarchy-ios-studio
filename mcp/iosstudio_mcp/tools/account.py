@@ -18,8 +18,8 @@ from ..core.registry import dry_run, tool
 from ..models import (
     AccountStatus,
     ActionResult,
-    BuildStatus,
     Certificate,
+    JobStatus,
     Profile,
     ProjectSigning,
     RenewalDue,
@@ -153,15 +153,15 @@ def register(mcp: MCPServer) -> None:
         project_path: ProjectPath,
         udid: Udid = None,
         wait_seconds: WaitSeconds = 0,
-    ) -> BuildStatus:
+    ) -> JobStatus:
         """Re-sign and reinstall an app so it keeps opening for another 7 days (free Apple IDs). Runs as a
-        job: returns a build_id ('r-N'); poll ios_build_status. Needs the signed-in Apple ID and the
+        job: returns a job_id ('r-N'); poll ios_job_status. Needs the signed-in Apple ID and the
         iPhone reachable. The app's data on the phone is kept."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         busy = state.jobs.running_for(p["path"])
         if busy:
-            raise ToolError(f"{p.get('name')} already has a running job {busy.id}; poll ios_build_status.")
+            raise ToolError(f"{p.get('name')} already has a running job {busy.id}; poll ios_job_status.")
         udid = udid or (p.get("signing") or {}).get("udid") or await state.active_udid()
         if not udid:
             raise ToolError("No iPhone is known. Ask the user to connect it (ios_open_app(page='device')) or pass udid.")

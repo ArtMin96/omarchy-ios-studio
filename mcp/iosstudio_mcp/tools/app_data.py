@@ -4,16 +4,13 @@ Daemon commands appdata.defaults / defaults.set / defaults.delete / stores / row
 (docs/deviced-protocol.md, "App data"; docs/features/app-data.md). Your own development builds only. Writes
 (defaults set/delete, resets) are dry runs until confirm=true and never happen while the app runs:
 stop_app=true stops it first. A reset with confirm runs in the background (a reinstall over Wi-Fi can take a
-minute): state='running' + job_id, call again with job_id.
+minute): they are jobs (core/jobs.py, kinds 'app-defaults' and 'app-reset'): state='running' + job_id, call
+again with job_id.
 """
 from __future__ import annotations
 
-import asyncio
-import itertools
 import json
 import re
-import time
-from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -24,12 +21,13 @@ from .. import helper
 from ..backends.device import dcall, package_for, resolve_app
 from ..core import budget as B
 from ..core.errors import rehint
+from ..core.job_status import still_running, wait_with_progress
+from ..core.jobs import Job
 from ..core.params import BundleId, Udid
 from ..core.registry import MAX_WAIT, fit_page, tool
 from ..models import Out
 from ..state import AppState, get_state
 
-MAX_JOBS = 10
 ITEMS_SHOWN = 20            # reset dry run: items listed
 COLUMNS_SHOWN = 40          # store summary: columns per table
 KEYS_LISTED = 60            # defaults: names of keys left out
@@ -59,7 +57,7 @@ async def call(state: AppState, cmd: str, args: dict, udid: str | None, timeout:
 class AppDefaults(B.Budgeted, Out):
     action: str = Field(description="read, set, delete or refresh")
     bundle_id: str
-    state: Literal["dry_run", "running", "succeeded", "failed"] | None = Field(
+    state: Literal["dry_run", "running", "succeeded", "failed", "cancelled"] | None = Field(
         None, description="set/delete/refresh: running means call again with job_id")
     job_id: str | None = Field(None, description="state=running: call ios_app_defaults(job_id=...) again")
     done: bool | None = Field(None, description="set/delete: False for a dry run or while running")
@@ -135,7 +133,7 @@ class StoreResult(B.Budgeted, Out):
 
 
 class ResetResult(B.Budgeted, Out):
-    state: Literal["dry_run", "running", "succeeded", "failed"]
+    state: Literal["dry_run", "running", "succeeded", "failed", "cancelled"]
     mode: str
     bundle_id: str
     job_id: str | None = Field(None, description="state=running: call ios_app_reset(job_id=...) again")
@@ -181,40 +179,22 @@ def _preview(v: Any) -> Any:
     return B.clip_data(v, 10) if isinstance(v, (dict, list, str)) else v
 
 
-@dataclass
-class ResetJob:
-    """A reset or a defaults change running in this server (they take 15 s to a few minutes)."""
-    id: str
-    bundle_id: str
-    mode: str                                  # wipe | reinstall | set | delete | refresh
-    kind: str = "reset"                        # reset | defaults
-    meta: dict = field(default_factory=dict)
-    started: float = field(default_factory=time.time)
-    task: asyncio.Task | None = None
-    result: dict | None = None
-    error: Exception | None = None
-
-    @property
-    def finished(self) -> bool:
-        return self.task is not None and self.task.done()
+def _job_error(job: Job) -> ToolError:
+    """A failed job's error with this feature's next steps."""
+    if job.exc is not None:
+        return rehint(job.exc, NEXT)
+    return ToolError((job.error or {}).get("message") or f"The job {job.state}.")
 
 
-_ids = itertools.count(1)
-
-
-def _jobs(state: AppState) -> dict[str, ResetJob]:
-    return state.extras.setdefault("appdata.jobs", {})
-
-
-def _reset_status(job: ResetJob) -> ResetResult:
-    common = dict(mode=job.mode, bundle_id=job.bundle_id, job_id=job.id,
-                  elapsed_seconds=round(time.time() - job.started, 1))
+def _reset_status(job: Job) -> ResetResult:
+    bundle_id = job.data["bundle_id"]
+    common = dict(mode=job.action, bundle_id=bundle_id, job_id=job.id, elapsed_seconds=job.elapsed)
     if not job.finished:
-        what = "Reinstalling the app" if job.mode == "reinstall" else "Deleting the app's data"
-        return ResetResult(state="running", **common, message=f"{what}…",
-                           next_steps=[f"Call ios_app_reset(job_id='{job.id}', wait_seconds=20) again to wait."])
-    if job.error is not None:
-        return ResetResult(state="failed", **common, error=B.clip_error(str(rehint(job.error, NEXT))),
+        what = "Reinstalling the app" if job.action == "reinstall" else "Deleting the app's data"
+        return ResetResult(state="running", **common, message=f"{what}…", next_steps=[still_running(job)])
+    if job.state != "succeeded":
+        return ResetResult(state="cancelled" if job.state == "cancelled" else "failed", **common,
+                           error=B.clip_error(str(_job_error(job))),
                            next_steps=["Fix the problem in the error, then repeat the reset (dry run first)."])
     r = job.result or {}
     failed = [str(x) for x in (r.get("failed") or [])]
@@ -230,20 +210,20 @@ def _reset_status(job: ResetJob) -> ResetResult:
                        stopped_app=bool(r.get("stopped")), artifact=helper.tilde(r.get("artifact")),
                        project=r.get("project"), message=msg,
                        next_steps=[f"Launch it to see the first-launch state: ios_app_run_and_capture(bundle_id="
-                                   f"'{r.get('bundleId') or job.bundle_id}')."])
+                                   f"'{r.get('bundleId') or bundle_id}')."])
 
 
-def _defaults_status(job: ResetJob) -> AppDefaults:
-    action, key = job.mode, job.meta.get("key")
-    common = dict(action=action, bundle_id=job.bundle_id, key=key, job_id=job.id,
-                  elapsed_seconds=round(time.time() - job.started, 1))
+def _defaults_status(job: Job) -> AppDefaults:
+    action, key, bundle_id = job.action, job.data.get("key"), job.data["bundle_id"]
+    common = dict(action=action, bundle_id=bundle_id, key=key, job_id=job.id, elapsed_seconds=job.elapsed)
     if not job.finished:
         return AppDefaults(state="running", done=False, **common,
                            message="Waiting for iOS to save the app's settings, then changing the file and "
                                    "installing the app's last build over it (about 20 s)…",
-                           next_steps=[f"Call ios_app_defaults(job_id='{job.id}') again to wait."])
-    if job.error is not None:
-        return AppDefaults(state="failed", done=False, **common, error=B.clip_error(str(rehint(job.error, NEXT))),
+                           next_steps=[still_running(job)])
+    if job.state != "succeeded":
+        return AppDefaults(state="cancelled" if job.state == "cancelled" else "failed", done=False, **common,
+                           error=B.clip_error(str(_job_error(job))),
                            next_steps=["Fix the problem in the error, then repeat (dry run first)."])
     r = job.result or {}
     refreshed = bool(r.get("refreshed"))
@@ -263,10 +243,10 @@ def _defaults_status(job: ResetJob) -> AppDefaults:
     nxt = []
     if not refreshed and r.get("launchArgs"):
         nxt.append(f"To be sure the app sees it, launch it with these arguments: ios_app_launch(bundle_id="
-                   f"'{job.bundle_id}', args={json.dumps(r['launchArgs'])}) (one launch only).")
+                   f"'{bundle_id}', args={json.dumps(r['launchArgs'])}) (one launch only).")
     if not refreshed and (r.get("refreshError") or {}).get("code") == "no-build":
         nxt.append("Build the app once (ios_build_start(project_path, action='ipa')) so changes can be applied fully.")
-    nxt.append(f"Launch the app to see it: ios_app_run_and_capture(bundle_id='{job.bundle_id}').")
+    nxt.append(f"Launch the app to see it: ios_app_run_and_capture(bundle_id='{bundle_id}').")
     return AppDefaults(state="succeeded", done=True, **common, existed=r.get("existed"),
                        previous=_preview(r.get("previous")), previous_type=r.get("previousType"),
                        value=_preview(r.get("value")) if action == "set" else None,
@@ -278,29 +258,15 @@ def _defaults_status(job: ResetJob) -> AppDefaults:
 
 
 def _start_job(state: AppState, bid: str, mode: str, kind: str, cmd: str, args: dict, udid: str | None,
-               meta: dict | None = None) -> ResetJob:
-    jobs = _jobs(state)
-    for k in [k for k, j in jobs.items() if j.finished][:max(0, len(jobs) - MAX_JOBS)]:
-        jobs.pop(k, None)
-    job = ResetJob(id=f"{'r' if kind == 'reset' else 'd'}{int(time.time()) % 100000}-{next(_ids)}", bundle_id=bid,
-                   mode=mode, kind=kind, meta=meta or {})
+               meta: dict | None = None) -> Job:
+    """A reset (kind 'app-reset') or a defaults change ('app-defaults') as a job of this server."""
+    async def run(job: Job) -> dict:
+        return await call(state, cmd, args, udid, timeout=900) or {}
 
-    async def run() -> None:
-        try:
-            job.result = await call(state, cmd, args, udid, timeout=900) or {}
-        except Exception as exc:  # noqa: BLE001 - kept for the status
-            job.error = exc
-    jobs[job.id] = job
-    job.task = asyncio.create_task(run(), name=f"appdata-{job.id}")
-    return job
-
-
-def _get_job(state: AppState, job_id: str, kind: str) -> ResetJob:
-    job = _jobs(state).get(job_id.strip())
-    if job is None or job.kind != kind:
-        known = ", ".join(k for k, j in _jobs(state).items() if j.kind == kind) or "none"
-        raise ToolError(f"Unknown job_id '{job_id}' (known here: {known}). Ids live only while this MCP server runs.")
-    return job
+    tool_name = "ios_app_reset" if kind == "app-reset" else "ios_app_defaults"
+    title = f"{'Reset' if kind == 'app-reset' else 'Change UserDefaults of'} {bid} ({mode})"
+    return state.jobs.run(run, kind, action=mode, title=title, tool=tool_name,
+                          data={"bundle_id": bid, **(meta or {})})
 
 
 # ------------------------------------------------------------------ tools
@@ -342,8 +308,8 @@ def register(mcp: MCPServer) -> None:
         launch. That takes about 20 s and runs as a job: state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
-            job = _get_job(state, job_id, "defaults")
-            await _wait(job, wait_seconds)
+            job = state.jobs.get(job_id, "app-defaults")
+            await wait_with_progress(state, job, wait_seconds, ctx)
             return _defaults_status(job)
         if not bundle_id:
             raise ToolError("Pass bundle_id (or job_id to wait for a change started earlier).")
@@ -396,8 +362,8 @@ def register(mcp: MCPServer) -> None:
 
         if action == "refresh":
             a = {"bundleId": bid, **({"stopApp": True} if stop_app else {})}
-            job = _start_job(state, bid, "refresh", "defaults", "appdata.defaults.refresh", a, udid)
-            await _wait(job, wait_seconds)
+            job = _start_job(state, bid, "refresh", "app-defaults", "appdata.defaults.refresh", a, udid)
+            await wait_with_progress(state, job, wait_seconds, ctx)
             return _defaults_status(job)
         if not key:
             raise ToolError(f"Pass key for action='{action}'.")
@@ -433,11 +399,11 @@ def register(mcp: MCPServer) -> None:
             args["stopApp"] = True
         if not refresh:
             args["refresh"] = False
-        job = _start_job(state, bid, action, "defaults", cmd, args, udid, {"key": key})
-        await _wait(job, wait_seconds)
-        if job.finished and job.error is not None:
-            _jobs(state).pop(job.id, None)
-            raise rehint(job.error, NEXT)
+        job = _start_job(state, bid, action, "app-defaults", cmd, args, udid, {"key": key})
+        await wait_with_progress(state, job, wait_seconds, ctx)
+        if job.finished and job.state == "failed":
+            state.jobs.jobs.pop(job.id, None)     # failed within the call: the error is the answer
+            raise _job_error(job)
         return _defaults_status(job)
 
     @tool(mcp, "Read an app's SwiftData / Core Data stores", kind="read_remote")
@@ -542,8 +508,8 @@ def register(mcp: MCPServer) -> None:
         (stop_app=true stops it)."""
         state = get_state(ctx)
         if job_id:
-            job = _get_job(state, job_id, "reset")
-            await _wait(job, wait_seconds)
+            job = state.jobs.get(job_id, "app-reset")
+            await wait_with_progress(state, job, wait_seconds, ctx)
             return _reset_status(job)
         if not bundle_id:
             raise ToolError("Pass bundle_id (or job_id to wait for a reset started earlier).")
@@ -577,21 +543,11 @@ def register(mcp: MCPServer) -> None:
             return out
         if stop_app:
             args["stopApp"] = True
-        jobs = _jobs(state)
-        job = _start_job(state, bid, mode, "reset", "appdata.reset", {**args, "confirm": True}, udid)
-        await _wait(job, wait_seconds)
-        if job.finished and job.error is not None and not isinstance(job.error, ToolError):
-            raise job.error
-        if job.finished and job.error is not None:
-            jobs.pop(job.id, None)
-            raise rehint(job.error, NEXT)
+        job = _start_job(state, bid, mode, "app-reset", "appdata.reset", {**args, "confirm": True}, udid)
+        await wait_with_progress(state, job, wait_seconds, ctx)
+        if job.finished and job.state == "failed":
+            state.jobs.jobs.pop(job.id, None)     # failed within the call: the error is the answer
+            if job.exc is not None and not isinstance(job.exc, ToolError):
+                raise job.exc
+            raise _job_error(job)
         return _reset_status(job)
-
-
-async def _wait(job: ResetJob, seconds: float) -> None:
-    if job.task is None or job.finished:
-        return
-    try:
-        await asyncio.wait_for(asyncio.shield(job.task), max(0.0, min(seconds, MAX_WAIT)))
-    except asyncio.TimeoutError:
-        pass

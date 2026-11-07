@@ -4,7 +4,7 @@ The watcher is one helper process per user (`watch serve`, see helper/watch.py a
 docs/features/watch-mode.md), shared with the app: whoever starts it, both see its status and either can stop
 it. A watcher this server starts (or joins) lists this server's pid as an owner, so it stops by itself once
 this server exits and the app isn't using it either. Each compile is a normal `build compile` (build history,
-ios_build_diagnostics(build_id='w-N'), ios_build_log(log_file=...)). Status results stay small: counts and
+ios_build_diagnostics(job_id='w-N'), ios_build_log(log_file=...)). Status results stay small: counts and
 the first ≤ 5 errors.
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ class WatchError(Out):
 
 
 class WatchBuild(Out):
-    build_id: str = Field(description="w-N: pass to ios_build_diagnostics(build_id=...) for the full list")
+    build_id: str = Field(description="w-N: pass to ios_build_diagnostics(job_id=...) for the full list")
     result: str = Field(description="ok or failed")
     duration_seconds: float | None = None
     finished_at: str | None = None
@@ -145,7 +145,7 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
         else:
             out.append(f"Not watching. ios_watch_start(project_path='{p}') compiles on every save.")
         if st.last_build and st.last_build.errors:
-            out.append(f"The last watch build had errors: ios_build_diagnostics(build_id='{st.last_build.build_id}').")
+            out.append(f"The last watch build had errors: ios_build_diagnostics(job_id='{st.last_build.build_id}').")
         return out
     if st.state in ("changed", "compiling"):
         out.append("A build is pending or running: ios_watch_status(wait_seconds=20) returns when it finishes.")
@@ -153,15 +153,15 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
     if lb and lb.result == "failed" and st.state == "failed":
         if lb.errors:
             more = f" (first {len(st.first_errors)} shown)" if lb.errors > len(st.first_errors) else ""
-            out.append(f"{lb.errors} error(s){more}. Full list with hints: ios_build_diagnostics(build_id="
+            out.append(f"{lb.errors} error(s){more}. Full list with hints: ios_build_diagnostics(job_id="
                        f"'{lb.build_id}'). Fix and save the files: the watcher compiles again by itself; then "
                        "ios_watch_status(wait_seconds=20).")
         else:
             nxt = helper.next_step_for({"code": lb.error_code}) if lb.error_code else None
-            out.append(f"The build failed without a compiler error: ios_build_diagnostics(build_id='{lb.build_id}')"
+            out.append(f"The build failed without a compiler error: ios_build_diagnostics(job_id='{lb.build_id}')"
                        + (f". {nxt}" if nxt else "."))
     elif lb and st.state == "ok":
-        out.append("Compiled cleanly" + (f" with {lb.warnings} warning(s) (ios_build_diagnostics(build_id='"
+        out.append("Compiled cleanly" + (f" with {lb.warnings} warning(s) (ios_build_diagnostics(job_id='"
                                          f"{lb.build_id}', severity='warning'))" if lb.warnings else "") + ".")
         if not st.auto_run:
             out.append(f"To try it on the iPhone: ios_run(project_path='{p}').")
@@ -245,7 +245,7 @@ def register(mcp: MCPServer) -> None:
         """The watcher's state (watching, changed, compiling, ok, failed, stopped, off), the latest finished
         build (w-N id, result, duration, error and warning counts) and its first ≤ 5 errors as
         'file:line:col' + message. wait_seconds blocks until a build that finishes after this call (use it right
-        after saving a file); timed_out says it was still busy. The full list: ios_build_diagnostics(build_id=
+        after saving a file); timed_out says it was still busy. The full list: ios_build_diagnostics(job_id=
         last_build.build_id)."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}

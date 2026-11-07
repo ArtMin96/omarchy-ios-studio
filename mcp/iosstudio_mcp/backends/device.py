@@ -8,18 +8,16 @@ phone; ios_status only attaches when a daemon is already running.
     hub(state)                       event cache: connection state, device info, listeners
     apps / match_app / resolve_app   installed apps; either bundle id form (XTL-<TEAM>.… or plain)
     launch(state, udid, bundle_id)   open an app (optionally with its console captured)
-    start_install / wait_install / install_status   app.install as a background task of this server
+    start_install / wait_install / install_status   app.install as a job of this server (kind 'install')
     package_for(state, path, project_path)          the .ipa/.app to install
     attach(state) / close(state)     fill the AppState device slots / close the client (tools/device.py)
 """
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,8 +26,8 @@ from pydantic import Field
 
 from .. import helper
 from ..core.errors import device_error
+from ..core.jobs import Job
 from ..core.registry import MAX_WAIT
-from ..jobs import Job
 from ..models import AppInstallResult
 from ..state import AppState
 from .builds import history
@@ -186,122 +184,69 @@ async def _install_for_job(state: AppState, udid: str, ipa: str, job: Job) -> di
 class AppInstallStatus(AppInstallResult):
     """AppInstallResult plus the state of the background install (ios_app_install, ios_app_run_and_capture)."""
     state: Literal["running", "succeeded"] = Field("succeeded", description="running: still installing; call "
-                                                   "the same tool again with install_id")
-    install_id: str | None = Field(None, description="Pass back as install_id to wait for this install")
+                                                   "the same tool again with job_id")
+    job_id: str | None = Field(None, description="The install's job: pass back as job_id to wait for it")
     progress: float | None = Field(None, description="0-1 while installing")
     progress_detail: str | None = None
     elapsed_seconds: float | None = None
 
 
-@dataclass
-class InstallJob:
-    """One app.install running in this server, so a tool can return before it ends (installs over Wi-Fi
-    can take minutes) and a later call can wait for it."""
-    id: str
-    pkg: str
-    started: float = field(default_factory=time.time)
-    task: asyncio.Task | None = None
-    percent: float | None = None
-    status: str = ""
-    result: dict | None = None
-    error: BaseException | None = None
-    changed: asyncio.Event = field(default_factory=asyncio.Event)
+def start_install(state: AppState, udid: str | None, pkg: str, project: dict | None = None,
+                  tool: str = "ios_app_install") -> Job:
+    """Start app.install as a job of this server (it keeps going if the tool call returns or the client
+    gives up; installs over Wi-Fi can take minutes), recording the install on the project when it ends."""
 
-    @property
-    def finished(self) -> bool:
-        return self.task is not None and self.task.done()
+    def prog(job: Job, pct: float, status: str) -> None:
+        job.data["percent"], job.data["status"] = pct, status
+        job.report(pct / 100, f"{status or 'installing'} {pct:.0f}%")
 
-
-_install_ids = itertools.count(1)
-INSTALLS_KEPT = 10
-
-
-def _installs(state: AppState) -> dict[str, InstallJob]:
-    return state.extras.setdefault("device.installs", {})
-
-
-def start_install(state: AppState, udid: str | None, pkg: str, project: dict | None = None) -> InstallJob:
-    """Start app.install as a background task of this server (it keeps going if the tool call returns or the
-    client gives up), recording the install on the project when it ends."""
-    jobs = _installs(state)
-    for k in [k for k, j in jobs.items() if j.finished][:max(0, len(jobs) - INSTALLS_KEPT)]:
-        jobs.pop(k, None)
-    job = InstallJob(id=f"i{int(time.time()) % 100000}-{next(_install_ids)}", pkg=pkg)
-
-    def prog(pct: float, status: str) -> None:
-        job.percent, job.status = pct, status
-        job.changed.set()
-
-    async def run() -> None:
-        try:
-            u = udid or await state.active_udid()
-            job.result = await install_ipa(state, udid, pkg, prog)
-            if project:
-                try:
-                    await helper.call("projects", "record-install", {"path": project["path"], "udid": u,
-                                                                     "via": "wifi", "ipa": pkg})
-                except ToolError:
-                    pass
-        except BaseException as exc:  # noqa: BLE001 - kept for the status
-            job.error = exc
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-        finally:
-            job.changed.set()
-
-    jobs[job.id] = job
-    job.task = asyncio.create_task(run(), name=f"install-{job.id}")
-    return job
-
-
-def get_install(state: AppState, install_id: str) -> InstallJob:
-    job = _installs(state).get(install_id.strip())
-    if job is None:
-        known = ", ".join(_installs(state)) or "none"
-        raise ToolError(f"Unknown install_id '{install_id}' (known here: {known}). Ids live only while this MCP "
-                        "server runs; start the install again.")
-    return job
-
-
-async def wait_install(job: InstallJob, seconds: float, on_progress=None) -> None:
-    """Wait up to `seconds` (≤ MAX_WAIT) for the install, calling on_progress(percent, status) as it moves."""
-    deadline = time.monotonic() + max(0.0, min(seconds, MAX_WAIT))
-    while not job.finished:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            break
-        job.changed.clear()
-        try:
-            await asyncio.wait_for(job.changed.wait(), min(left, 5.0))
-        except asyncio.TimeoutError:
-            pass
-        if on_progress and job.percent is not None:
+    async def run(job: Job) -> dict:
+        u = udid or await state.active_udid()
+        res = await install_ipa(state, udid, pkg, lambda pct, st: prog(job, pct, st))
+        if project:
             try:
-                await on_progress(job.percent, job.status)
-            except Exception:  # noqa: BLE001
+                await helper.call("projects", "record-install", {"path": project["path"], "udid": u,
+                                                                 "via": "wifi", "ipa": pkg})
+            except ToolError:
                 pass
+        return res
+
+    return state.jobs.run(run, "install", title=f"Install {Path(pkg).name}", tool=tool, data={"pkg": pkg})
 
 
-def install_status(job: InstallJob, next_step: str | None = None) -> AppInstallStatus:
+def get_install(state: AppState, job_id: str) -> Job:
+    return state.jobs.get(job_id, "install")
+
+
+async def wait_install(state: AppState, job: Job, seconds: float, on_progress=None) -> None:
+    """Wait up to `seconds` (≤ MAX_WAIT) for the install, calling on_progress(percent, status) as it moves."""
+    async def report(j: Job) -> None:
+        if on_progress and j.data.get("percent") is not None:
+            await on_progress(j.data["percent"], j.data.get("status") or "")
+    await state.jobs.wait(job, max(0.0, min(seconds, MAX_WAIT)), report)
+
+
+def install_status(job: Job, next_step: str | None = None) -> AppInstallStatus:
     """The install's result, or state='running'; raises the install's error if it failed."""
+    pkg = job.data.get("pkg") or ""
     if not job.finished:
-        pct = job.percent
+        pct = job.data.get("percent")
         return AppInstallStatus(
-            installed=False, state="running", install_id=job.id, path=helper.tilde(job.pkg),
+            installed=False, state="running", job_id=job.id, path=helper.tilde(pkg),
             progress=round(pct / 100, 3) if pct is not None else None,
-            progress_detail=f"{job.status or 'installing'} {pct:.0f}%" if pct is not None else "starting",
-            elapsed_seconds=round(time.time() - job.started, 1),
-            next_steps=[next_step or f"Still installing. Call ios_app_install(install_id='{job.id}', "
+            progress_detail=f"{job.data.get('status') or 'installing'} {pct:.0f}%" if pct is not None else "starting",
+            elapsed_seconds=job.elapsed,
+            next_steps=[next_step or f"Still installing. Call ios_app_install(job_id='{job.id}', "
                                      "wait_seconds=20) again to wait for it."])
-    if job.error is not None:
-        if isinstance(job.error, ToolError):
-            raise ToolError(str(job.error))
-        raise ToolError(f"Installing {helper.tilde(job.pkg)} failed: {job.error}")
+    if job.state != "succeeded":
+        if isinstance(job.exc, ToolError) or job.state == "cancelled":
+            raise ToolError((job.error or {}).get("message") or "The install was cancelled.")
+        raise ToolError(f"Installing {helper.tilde(pkg)} failed: {(job.error or {}).get('message') or job.state}")
     res = job.result or {}
     bid = res.get("bundleId")
-    return AppInstallStatus(installed=True, state="succeeded", install_id=job.id, bundle_id=bid,
-                            package_bundle_id=res.get("packageBundleId"), path=helper.tilde(job.pkg),
-                            seconds=res.get("seconds"), elapsed_seconds=round(time.time() - job.started, 1),
+    return AppInstallStatus(installed=True, state="succeeded", job_id=job.id, bundle_id=bid,
+                            package_bundle_id=res.get("packageBundleId"), path=helper.tilde(pkg),
+                            seconds=res.get("seconds"), elapsed_seconds=job.elapsed,
                             next_steps=[f"Launch it and see what happens: ios_app_run_and_capture(bundle_id='{bid}')."
                                         if bid else "Launch it with ios_app_launch."])
 

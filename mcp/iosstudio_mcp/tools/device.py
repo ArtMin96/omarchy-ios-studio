@@ -264,8 +264,8 @@ def register(mcp: MCPServer) -> None:
                                                       "'~/Projects/MyApp/xtool/MyApp.ipa'")] = None,
         project_path: Annotated[str | None, Field(description="Instead of path: install this project's last signed "
                                                               "build")] = None,
-        install_id: Annotated[str | None, Field(description="Wait for an install started earlier (from a result with "
-                                                            "state='running') instead of starting one")] = None,
+        job_id: Annotated[str | None, Field(description="Wait for an install started earlier (from a result with "
+                                                        "state='running') instead of starting one")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for the install "
                                                                            "before returning state='running'")] = 20,
         udid: Udid = None,
@@ -273,7 +273,7 @@ def register(mcp: MCPServer) -> None:
         """Install an already signed .ipa/.app on the iPhone over the current connection (Wi-Fi or USB);
         ~10 s for a typical app, with progress notifications. Replaces an installed copy and keeps its data.
         Runs in the background: if it takes longer than wait_seconds (≤25) the result has state='running'
-        and an install_id; call again with install_id to keep waiting. To build AND install, use ios_run
+        and a job_id; call again with job_id to keep waiting (ios_job_cancel stops it). To build AND install, use ios_run
         instead. Fails with app-limit when a free Apple ID already has 3 apps on the phone. Then
         ios_app_launch or ios_app_run_and_capture."""
         state = get_state(ctx)
@@ -284,12 +284,12 @@ def register(mcp: MCPServer) -> None:
                 last[0] = pct
                 await ctx.report_progress(pct, 100, message=f"{status} {pct:.0f}%")
 
-        if install_id:
-            job = get_install(state, install_id)
+        if job_id:
+            job = get_install(state, job_id)
         else:
             pkg, proj = await package_for(state, path, project_path)
             job = start_install(state, udid, pkg, proj)
-        await wait_install(job, wait_seconds, prog)
+        await wait_install(state, job, wait_seconds, prog)
         return install_status(job)
 
     @tool(mcp, "Launch app", kind="write", open_world=True)

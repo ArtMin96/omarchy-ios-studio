@@ -1,6 +1,6 @@
 """MCP side of watch mode (mcp/iosstudio_mcp/tools/watch.py): ios_watch_start / stop / status against a mocked
 helper (flags, owner pid, bounded output with the first ≤ 5 errors, wait_seconds, another project watched),
-ios_build_diagnostics(build_id='w-N') from the build history, and one round trip through the real helper in
+ios_build_diagnostics(job_id='w-N') from the build history, and one round trip through the real helper in
 demo mode. Also that the server registers the tools.
 
 Needs the MCP server's dependencies (the dev venv; skipped otherwise):
@@ -95,7 +95,7 @@ class WatchTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(data["changed_files"]), 5)
         self.assertEqual(data["last_build"]["log_file"], "~/.local/state/ios-studio/build-logs/x.log"
                          if str(Path.home()) == "/home/u" else data["last_build"]["log_file"])
-        self.assertIn("ios_build_diagnostics(build_id='w-3')", " ".join(data["next_steps"]))
+        self.assertIn("ios_build_diagnostics(job_id='w-3')", " ".join(data["next_steps"]))
         self.assertLess(B.nbytes(text) + B.nbytes(json.dumps(data)), B.DEFAULT_BYTES)
 
     async def test_wait_seconds_goes_to_the_helper_with_a_longer_timeout(self):
@@ -145,7 +145,7 @@ class WatchDiagnostics(unittest.IsolatedAsyncioTestCase):
             return {"builds": hist}
 
         with mock.patch.object(BT.helper, "call", fake_call):
-            res = await mcp.tools["ios_build_diagnostics"](ctx, build_id="w-3")
+            res = await mcp.tools["ios_build_diagnostics"](ctx, job_id="w-3")
             data = res.structured_content
             self.assertEqual((data["errors"], data["build_result"], data["build_id"]), (1, "failed", "w-3"))
             steps = " ".join(data["next_steps"])
@@ -156,7 +156,7 @@ class WatchDiagnostics(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first.get("build_id"), "w-3")
             self.assertEqual(data["diagnostics"][0]["locations"], ["Sources/Glance/A.swift:3:1"])
             with self.assertRaises(ToolError):
-                await mcp.tools["ios_build_diagnostics"](ctx, build_id="w-99")
+                await mcp.tools["ios_build_diagnostics"](ctx, job_id="w-99")
 
 
 class DiagnosticsPicksTheNewerBuild(unittest.IsolatedAsyncioTestCase):
@@ -164,7 +164,7 @@ class DiagnosticsPicksTheNewerBuild(unittest.IsolatedAsyncioTestCase):
     started after that job ended."""
 
     async def run_diag(self, hist_time):
-        from iosstudio_mcp.jobs import Job
+        from iosstudio_mcp.core.jobs import Job
         mcp = FakeMCP()
         BT.register(mcp)
         state = AppState()
