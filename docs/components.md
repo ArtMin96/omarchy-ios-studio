@@ -920,13 +920,18 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   LogView without its toolbar (stderr lines are `warn`/`error`, meta = time). Launch, the session picker, filter,
   stderr-only (when the streams are split), pause, copy, export and clear. Read-only `view`, `search`;
   `togglePause()`, `copySelected()`. See [features/app-console.md](features/app-console.md).
-- **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history, then the selected build's summary,
-  problems and full log. The detail pane shrinks with the window: the build name elides with its result pill
-  beside it, and below 560 px (`detail.narrow`) Rebuild shows only its hammer (the tooltip names it) and the log
+- **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history (rows: kind · duration, then when ·
+  problem counts; the glyph shows the result), then the selected build's summary, problems and full log. The
+  detail pane shrinks with the window: the build name has its result pill beside it, and below 560 px
+  (`detail.narrow`) the name gets the header row (with the buttons; Rebuild shows only its hammer, the tooltip
+  names it), the pill and the details move to a row below it (the details wrap at the dots), and the log
   toolbar takes two rows (the filter, then the level chips and the line count).
 - **CrashBrowser / CrashReportView**: the Logs page's Crashes tab (`app`; `scope` `mine`/`all`) and one report
   (`app`, `item` = a CrashItem): a plain-language summary card, the crashed thread and the full report, with
-  `save()` (to `~/Downloads`) and `copy()`. The crashed thread's frames are **CrashFrameRow**s (`text`, `info` =
+  `save()` (to `~/Downloads`) and `copy()`. List rows show the exception, then when it happened; the card's
+  Reason wraps (the other values elide); below 480 px (`narrow`) Copy and Save show only their icons and the
+  header drops the relative time. The page's Crashes tab badge counts new crashes of your apps like the
+  sidebar, and keeps that count while you're on the tab (the sidebar badge clears when it opens). The crashed thread's frames are **CrashFrameRow**s (`text`, `info` =
   an entry of `summary.symbolication.frames` or null, `mine`; signal `clicked()`): a resolved app frame shows
   its function with file:line below, and a click opens it in the editor; under them, the symbolication status.
 - **DeviceConnect**: "Connect your iPhone", shown when no paired iPhone is known: cable or Wi-Fi. Props: `app`;

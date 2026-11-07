@@ -27,9 +27,19 @@ PageFrame {
   readonly property var tabs: [
     { key: "device", label: "Device log", glyph: Model.Glyph.console },
     { key: "console", label: "Console", glyph: Model.Glyph.consoleLine },
-    { key: "crashes", label: "Crashes", glyph: Model.Glyph.crash, count: svc.newCrashCount > 0 ? svc.newCrashCount : undefined, level: "warn" },
+    { key: "crashes", label: "Crashes", glyph: Model.Glyph.crash, count: crashBadge > 0 ? crashBadge : undefined, level: "warn" },
     { key: "builds", label: "Build logs", glyph: Model.Glyph.hammer }
   ]
+
+  // New crashes of your apps, as on the sidebar. Opening the tab marks them seen (the sidebar badge
+  // clears), so during the visit count against the visit's baseline: the tab keeps the number the
+  // sidebar showed, matching the rows' "New" pills, until you leave the tab.
+  readonly property int crashBadge: {
+    if (svc.visitBaseline < 0) return svc.newCrashCount
+    var n = 0
+    for (var i = 0; i < svc.crashes.length; i++) if (svc.crashes[i].ts > svc.visitBaseline && svc.isOwn(svc.crashes[i])) n++
+    return n
+  }
 
   // The live stream runs only while this tab is on screen (unless "Keep streaming" is on).
   Binding { target: page.svc; property: "viewVisible"; value: page.onScreen && page.tab === "device" }
