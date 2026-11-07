@@ -1,4 +1,4 @@
-"""Editor setup (helper/iosstudio/features/editor_setup.py): the JSONC merge (new file, extra keys kept byte for byte, a
+"""Editor setup (helper/iosstudio/features/editor_setup/): the JSONC merge (new file, extra keys kept byte for byte, a
 conflicting value kept and reported, comments and trailing commas, invalid JSON skipped, never overwriting),
 the build server file, the machine-wide part per editor (Zed and VS Code extension detection, LazyVim extra
 with a backup, the plugin file when there's no extra, non-LazyVim left alone, sourcekit-lsp off PATH), the
@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from iosstudio.core import jsonc
+from iosstudio.features import config_files
 from iosstudio.features import editor_setup as E
 from support import ROOT
 
@@ -61,13 +62,13 @@ class MergeText(unittest.TestCase):
         return jsonc.parse(text).value
 
     def test_empty_file_is_written_fresh(self):
-        r = E.merge_text("", self.WANT)
+        r = config_files.merge_missing("", self.WANT)
         self.assertEqual(r["status"], "merged")
         self.assertEqual(json.loads(r["text"]), self.WANT)
 
     def test_extra_keys_kept_byte_for_byte(self):
         text = '{\n  "editor.fontSize": 13,\n  "a": [1, 2]\n}\n'
-        r = E.merge_text(text, self.WANT)
+        r = config_files.merge_missing(text, self.WANT)
         self.assertEqual(r["status"], "merged")
         self.assertTrue(r["text"].startswith('{\n  "editor.fontSize": 13,\n  "a": [1, 2],\n'))
         v = json.loads(r["text"])
@@ -78,14 +79,14 @@ class MergeText(unittest.TestCase):
 
     def test_conflicting_value_is_kept_and_reported(self):
         text = (FIX / "settings-conflict.json").read_text()
-        r = E.merge_text(text, self.WANT)
+        r = config_files.merge_missing(text, self.WANT)
         self.assertEqual(r["status"], "merged")
         self.assertTrue(json.loads(r["text"])["swift.autoGenerateLaunchConfigurations"])
         self.assertEqual(r["kept"], [{"key": "swift.autoGenerateLaunchConfigurations", "yours": True, "ours": False}])
 
     def test_jsonc_comments_and_trailing_commas(self):
         text = (FIX / "settings-jsonc.json").read_text()
-        r = E.merge_text(text, self.WANT)
+        r = config_files.merge_missing(text, self.WANT)
         self.assertEqual(r["status"], "merged")
         out = r["text"]
         for line in text.splitlines():       # every original line survives (only insertions)
@@ -101,7 +102,7 @@ class MergeText(unittest.TestCase):
 
     def test_vscode_extensions_template_with_comments(self):
         text = (FIX / "vscode-extensions-template.json").read_text()
-        r = E.merge_text(text, E.VSCODE_PROJECT_EXTENSIONS)
+        r = config_files.merge_missing(text, E.VSCODE_PROJECT_EXTENSIONS)
         self.assertEqual(r["status"], "merged")
         v = self.parsed(r["text"])
         self.assertEqual(v["recommendations"], [E.VSCODE_EXT])
@@ -111,31 +112,31 @@ class MergeText(unittest.TestCase):
     def test_list_append_keeps_existing_items(self):
         for text in ('{"recommendations": ["a.b",\n "c.d"]}', '{\n  "recommendations": [\n    "a.b"\n  ]\n}',
                      '{"recommendations": []}', '{"recommendations": ["a.b",],}'):
-            r = E.merge_text(text, E.VSCODE_PROJECT_EXTENSIONS)
+            r = config_files.merge_missing(text, E.VSCODE_PROJECT_EXTENSIONS)
             self.assertEqual(r["status"], "merged", text)
             self.assertEqual(self.parsed(r["text"])["recommendations"][-1], E.VSCODE_EXT, text)
 
     def test_inline_object_stays_inline(self):
-        r = E.merge_text('{"a": 1}', self.WANT)
+        r = config_files.merge_missing('{"a": 1}', self.WANT)
         self.assertNotIn("\n", r["text"])
         self.assertEqual(json.loads(r["text"])["a"], 1)
 
     def test_already_there_is_unchanged(self):
-        r = E.merge_text(json.dumps(self.WANT), self.WANT)
+        r = config_files.merge_missing(json.dumps(self.WANT), self.WANT)
         self.assertEqual(r["status"], "unchanged")
 
     def test_invalid_json_is_skipped(self):
-        r = E.merge_text((FIX / "settings-invalid.json").read_text(), self.WANT)
+        r = config_files.merge_missing((FIX / "settings-invalid.json").read_text(), self.WANT)
         self.assertEqual(r["status"], "skip")
         self.assertIn("isn't valid JSON", r["reason"])
         self.assertRegex(r["reason"], r"\(line \d+\)")
-        r = E.merge_text('["not", "an object"]', self.WANT)
+        r = config_files.merge_missing('["not", "an object"]', self.WANT)
         self.assertEqual(r["status"], "skip")
-        r = E.merge_text('{"a": 1 /* never ends', self.WANT)
+        r = config_files.merge_missing('{"a": 1 /* never ends', self.WANT)
         self.assertEqual(r["status"], "skip")
 
     def test_type_mismatch_is_a_conflict(self):
-        r = E.merge_text('{"files.watcherExclude": "nope"}', self.WANT)
+        r = config_files.merge_missing('{"files.watcherExclude": "nope"}', self.WANT)
         self.assertEqual(r["kept"][0]["key"], "files.watcherExclude")
         self.assertEqual(self.parsed(r["text"])["files.watcherExclude"], "nope")
 
@@ -144,7 +145,7 @@ class JsonAction(Base):
     def test_write_then_never_overwrite(self):
         acts = E.vscode_project_actions(self.project)
         self.assertEqual([a["kind"] for a in acts], ["write", "write"])
-        E._apply(acts, self.env())
+        E.apply_actions(acts, self.env())
         path = self.project / E.VSCODE_SETTINGS
         self.assertEqual(json.loads(path.read_text()), E.VSCODE_PROJECT_SETTINGS)
         path.write_text('{\n  // mine\n  "swift.autoGenerateLaunchConfigurations": true,\n}\n')
@@ -152,7 +153,7 @@ class JsonAction(Base):
         acts = E.vscode_project_actions(self.project)
         self.assertEqual(acts[0]["kind"], "merge")
         self.assertEqual(acts[0]["kept"][0]["yours"], True)
-        E._apply(acts, self.env())
+        E.apply_actions(acts, self.env())
         after = path.read_text()
         self.assertIn("// mine", after)
         self.assertIn('"swift.autoGenerateLaunchConfigurations": true', after)
@@ -169,7 +170,7 @@ class JsonAction(Base):
         act = E.vscode_project_actions(self.project)[0]
         self.assertEqual(act["kind"], "skip")
         self.assertIn("left alone", act["detail"])
-        E._apply([act], self.env())
+        E.apply_actions([act], self.env())
         self.assertEqual(path.read_text(), before)
 
     def test_unwanted_recommendation_is_respected(self):
@@ -184,7 +185,7 @@ class JsonAction(Base):
         acts = E.vscode_project_actions(self.project)
         (self.project / ".vscode").mkdir()
         (self.project / E.VSCODE_SETTINGS).write_text("{}")
-        E._apply(acts, self.env())
+        E.apply_actions(acts, self.env())
         self.assertEqual((self.project / E.VSCODE_SETTINGS).read_text(), "{}")
         self.assertEqual(acts[0]["kind"], "skip")
 
@@ -195,7 +196,7 @@ class Bsp(Base):
     def test_missing_is_written_like_xtool(self):
         act = E.bsp_action(self.project, self.env())
         self.assertEqual(act["kind"], "write")
-        E._apply([act], self.env())
+        E.apply_actions([act], self.env())
         self.assertEqual((self.project / E.BSP_REL).read_text(), E.BSP_TEXT)
         st = E.bsp_status(self.project, self.env())
         self.assertTrue(st["present"])
@@ -215,7 +216,7 @@ class Bsp(Base):
 
     def test_xtool_off_path_is_stale(self):
         (self.bin / "xtool").unlink()
-        E._apply([E.bsp_action(self.project, self.env())], self.env())
+        E.apply_actions([E.bsp_action(self.project, self.env())], self.env())
         st = E.bsp_status(self.project, self.env())
         self.assertTrue(st["stale"])
         self.assertIn("PATH", st["reason"])
@@ -226,7 +227,7 @@ class Bsp(Base):
         self.assertIn("~/.local/bin", st["note"])
 
     def test_missing_ios_sdk_is_stale(self):
-        E._apply([E.bsp_action(self.project, self.env())], self.env())
+        E.apply_actions([E.bsp_action(self.project, self.env())], self.env())
         shutil.rmtree(self.home / ".config/swiftpm")
         st = E.bsp_status(self.project, self.env())
         self.assertTrue(st["stale"])
@@ -301,7 +302,7 @@ class Machine(Base):
         acts = E.zed_machine_actions(self.env())
         self.assertEqual([a["kind"] for a in acts], ["backup", "merge"])
         self.assertEqual(acts[1]["scope"], "user")
-        E._apply(acts, self.env())
+        E.apply_actions(acts, self.env())
         self.assertTrue(Path(acts[0]["path"]).read_text().startswith("// Zed settings"))
         v = jsonc.parse(zs.read_text()).value
         self.assertEqual(v["theme"], "Omazed")
@@ -380,7 +381,7 @@ class Neovim(Base):
         self.assertEqual(acts[0]["detail"], E.NVIM_PLUGIN_DETAIL)
         self.assertTrue(E.editor_info("neovim", self.env())["lazyvim"])
         self.assertEqual(self.info_state(), "needs-setup")
-        E._apply(acts, self.env())
+        E.apply_actions(acts, self.env())
         text = (self.cfg / E.NVIM_PLUGIN_REL).read_text()
         self.assertIn("sourcekit = {", text)
         self.assertIn('ensure_installed = { "swift" }', text)
