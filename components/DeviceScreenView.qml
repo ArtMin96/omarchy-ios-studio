@@ -22,6 +22,7 @@ GridLayout {
   property int rotationSteps: 0
   readonly property string currentFile: svc.framePath !== "" ? svc.framePath : svc.lastShot
   property string pane: "view"            // "view" | "elements" | "audit" | "compare"
+  property bool active: false             // the tab is on screen (DevicePage)
   readonly property bool inspecting: pane === "elements" || pane === "audit"
   signal devModeHelp()
 
@@ -41,13 +42,10 @@ GridLayout {
 
   // AirPlay receiver (UxPlay): the smoothest mirror, started from the iPhone's Control Center.
   // `-p` = the fixed legacy ports that Setup's firewall step opens.
-  property bool uxplayInstalled: false
-  Process {
-    id: uxCheck
-    command: ["sh", "-c", "command -v uxplay"]
-    running: true
-    stdout: StdioCollector { onStreamFinished: root.uxplayInstalled = String(text || "").trim() !== "" }
-  }
+  // Checked when the tab is first shown (and again while it's missing), never while hidden.
+  readonly property bool uxplayInstalled: CommandCheck.found.uxplay === true
+  onActiveChanged: if (active) CommandCheck.check("uxplay")
+  Component.onCompleted: if (active) CommandCheck.check("uxplay")
   Process {
     id: uxplay
     command: ["uxplay", "-p", "-n", "iOS Studio", "-nh"]

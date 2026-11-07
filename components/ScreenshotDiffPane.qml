@@ -8,7 +8,8 @@ import "../Model.js" as Model
 // One image of the screenshot comparison (ScreenshotCompareView): a caption over a framed cell
 // that shows the image whole (aspect kept, centred), with changed `regions` outlined and the
 // ignored status bar (`maskedTop`) shaded. Regions and maskedTop are in the image's pixels;
-// `imageSize` ({w, h}) is that pixel size (the decoded size when it's not given). The cell's
+// `imageSize` ({w, h}) is that pixel size; with it the image is decoded at about the cell's size,
+// without it at full size (then the decoded size is the pixel size). The cell's
 // height comes from the caller, so the three panes stay the same size. Without a `path` the
 // cell shows `placeholder` instead. A click opens the image in the default viewer.
 //   ScreenshotDiffPane { title: "Diff"; path: r.diff_path; regions: r.regions; cellHeight: 400 }
@@ -48,8 +49,14 @@ ColumnLayout {
       id: img
       anchors.fill: parent
       anchors.margins: Style.spacing.md
-      source: root.path !== "" ? "file://" + root.path + "?v=" + root.revision : ""
+      // waits for the layout, so a bounded decode never starts at full size
+      source: root.path !== "" && width > 0 && height > 0 ? "file://" + root.path + "?v=" + root.revision : ""
       fillMode: Image.PreserveAspectFit
+      // Decoded at about the cell's size, not the screenshot's (a 1206 × 2622 PNG is 12 MB as a bitmap).
+      // Regions and maskedTop are in the file's pixels, so this needs imageSize; without it the
+      // decoded size is the file's own.
+      sourceSize.width: root.imageSize ? Math.ceil(width * Screen.devicePixelRatio) : 0
+      sourceSize.height: root.imageSize ? Math.ceil(height * Screen.devicePixelRatio) : 0
       asynchronous: true
       cache: false
       smooth: true
