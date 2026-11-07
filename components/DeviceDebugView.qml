@@ -15,10 +15,15 @@ ColumnLayout {
   id: root
   required property var app
   readonly property var svc: app.device
+  property bool active: false               // the tab is on screen (DevicePage)
 
-  // your own apps, running ones first (attaching needs a running app)
-  readonly property var devApps: svc.apps.filter(function(a) { return a.developer })
-                                         .sort(function(a, b) { return a.running === b.running ? 0 : (a.running ? -1 : 1) })
+  // your own apps, running ones first (attaching needs a running app); rebuilt only while the tab is on
+  // screen, hidden it keeps the last list (a live session keeps its app)
+  property var devApps: []
+  function updateDevApps() {
+    root.devApps = svc.apps.filter(function(a) { return a.developer })
+                           .sort(function(a, b) { return a.running === b.running ? 0 : (a.running ? -1 : 1) })
+  }
   property string pick: ""
   readonly property var current: {
     for (var i = 0; i < devApps.length; i++) if (devApps[i].bundleId === pick) return devApps[i]
@@ -81,10 +86,12 @@ ColumnLayout {
     })
   }
   function activate() {
+    var before = root.current
+    root.updateDevApps()   // a different app here loads its sources through onCurrentChanged
     if (root.checkStatus === "unknown") root.check()
     root.refreshSymbols()
     if (root.svc.appsStatus === "unknown" && root.svc.connected) root.svc.refreshApps()
-    root.loadSources()
+    if (root.current === before) root.loadSources()
   }
 
   function captureBacktrace() {
@@ -143,8 +150,9 @@ ColumnLayout {
     root.svc.request("debug.symbols", { action: "cancel" }, function(ok, d) { if (ok) root.symbols = d })
   }
 
-  onVisibleChanged: if (visible) root.activate()
-  onCurrentChanged: { root.sources = { project: null, files: [], localBuild: null }; root.loadSources() }
+  onActiveChanged: if (active) activate()
+  Component.onCompleted: if (active) activate()
+  onCurrentChanged: { root.sources = { project: null, files: [], localBuild: null }; if (root.active) root.loadSources() }
   spacing: Style.spacing.huge
 
   Stream {
@@ -165,9 +173,14 @@ ColumnLayout {
     function onDaemonEvent(name, data) {
       if (name !== "debugSymbols") return
       root.symProgress = data
-      if (data.phase === "done" || data.phase === "failed" || data.phase === "cancelled") root.refreshSymbols()
+      if (root.active && (data.phase === "done" || data.phase === "failed" || data.phase === "cancelled")) root.refreshSymbols()
     }
-    function onConnStateChanged() { if (root.svc.connected && !root.symbols) root.refreshSymbols() }
+    function onConnStateChanged() { if (root.active && root.svc.connected && !root.symbols) root.refreshSymbols() }
+  }
+  Connections {
+    target: root.svc
+    enabled: root.active
+    function onAppsChanged() { root.updateDevApps() }
   }
 
   // ---------------------------------------------------------------- debugger missing

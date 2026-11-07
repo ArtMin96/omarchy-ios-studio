@@ -13,6 +13,7 @@ ColumnLayout {
   id: root
   required property var app
   readonly property var svc: app.device
+  property bool active: false               // the tab is on screen (DevicePage)
   readonly property bool wifi: (svc.current && svc.current.transport === "wifi") || svc.connection.transport === "wifi"
 
   property var groups: []
@@ -83,15 +84,17 @@ ColumnLayout {
     })
   }
 
-  Timer { interval: 1000; repeat: true; running: root.visible && root.svc.conditionActive; onTriggered: root.now = Date.now() / 1000 }
-  onVisibleChanged: if (visible) { root.now = Date.now() / 1000; if (root.svc.connected && root.listStatus !== "loading") load() }
+  Timer { interval: 1000; repeat: true; running: root.active && root.svc.conditionActive; onTriggered: root.now = Date.now() / 1000 }
+  function activate() { root.now = Date.now() / 1000; if (root.svc.connected && root.listStatus !== "loading") load() }
+  onActiveChanged: if (active) activate()
+  Component.onCompleted: if (active) activate()
   Connections {
     target: root.svc
-    function onConnStateChanged() { if (root.visible && root.svc.connected) root.load() }
+    function onConnStateChanged() { if (root.active && root.svc.connected) root.load() }
     function onDaemonEvent(name, data) {
       if (name === "condition" || (name === "connection" && data && data.transport)) {
         root.now = Date.now() / 1000
-        if (name === "connection" && root.visible && root.svc.connected) root.load()   // Wi-Fi rules follow the transport
+        if (name === "connection" && root.active && root.svc.connected) root.load()   // Wi-Fi rules follow the transport
       }
     }
   }
@@ -258,5 +261,6 @@ ColumnLayout {
     Layout.fillWidth: true
     Layout.topMargin: Style.spacing.huge
     app: root.app
+    active: root.active && visible
   }
 }

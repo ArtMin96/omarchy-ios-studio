@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -24,7 +23,8 @@ ColumnLayout {
   property bool starting: false
   property bool stopping: false
   property var startError: null
-  property bool wiresharkInstalled: false
+  property bool active: false          // on screen (DeviceNetworkView passes its own)
+  readonly property bool wiresharkInstalled: CommandCheck.found.wireshark === true
 
   spacing: Style.spacing.xl
 
@@ -68,19 +68,18 @@ ColumnLayout {
              shutdown: "Stopped: the iPhone service stopped", error: "Stopped by an error" }[r] || "Finished"
   }
 
-  Process {
-    id: wsCheck
-    command: ["sh", "-c", "command -v wireshark"]
-    running: true
-    stdout: StdioCollector { onStreamFinished: root.wiresharkInstalled = String(text || "").trim() !== "" }
-  }
   // The daemon remembers the running or last capture: show it after a restart of the window too.
   function syncStatus() {
     if (!root.svc.daemonReady) return
     root.svc.request("pcap.status", {}, function(ok, d) { if (ok && (d.running || d.file)) root.svc.capture = d })
   }
-  onVisibleChanged: if (visible) { wsCheck.running = true; if (!root.cap.file) syncStatus() }
-  Component.onCompleted: if (visible) syncStatus()
+  // Each time it's shown: is Wireshark installed (yet), and the daemon's capture.
+  function activate() {
+    CommandCheck.check("wireshark")
+    if (!root.cap.file) syncStatus()
+  }
+  onActiveChanged: if (active) activate()
+  Component.onCompleted: if (active) activate()
 
   // ---------------------------------------------------------------- header
   ColumnLayout {

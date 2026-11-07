@@ -15,6 +15,7 @@ ColumnLayout {
   id: root
   required property var app
   readonly property var svc: app.device
+  property bool active: false          // the tab is on screen (DevicePage)
   readonly property bool narrow: width > 0 && width < Style.space(860)
 
   spacing: Style.spacing.huge
@@ -56,8 +57,10 @@ ColumnLayout {
   readonly property bool hitching: !!sess && !!sess.hitchTracking && sess.hitchTracking.running && (sess.hitchTracking.until * 1000 > nowMs)
 
   // ---------------------------------------------------------------- app picker
-  // Running apps first, your own (development-signed) apps marked, then by name.
-  readonly property var appOptions: {
+  // Running apps first, your own (development-signed) apps marked, then by name. Rebuilt only while the
+  // tab is on screen; hidden, it keeps the last list.
+  property var appOptions: []
+  function buildAppOptions() {
     var list = svc.apps.slice()
     list.sort(function(a, b) {
       if (!!a.running !== !!b.running) return a.running ? -1 : 1
@@ -71,6 +74,7 @@ ColumnLayout {
       return { value: a.bundleId, label: a.name + (tags.length ? "  ·  " + tags.join(", ") : "") }
     })
   }
+  function updateAppOptions() { root.appOptions = root.buildAppOptions() }
 
   function defaultPick() {
     if (root.picked !== "" && root.pickedApp) return
@@ -239,17 +243,27 @@ ColumnLayout {
         else if ((!root.sess || !root.sess.running) && data.running) root.attach(data)
       }
     }
-    function onConnStateChanged() { if (root.svc.connected && !root.sess) root.reattach() }
+    function onConnStateChanged() { if (root.active && root.svc.connected && !root.sess) root.reattach() }
+  }
+  Connections {
+    target: root.svc
+    enabled: root.active
+    function onAppsChanged() { root.updateAppOptions() }
   }
 
-  Timer { interval: 5000; repeat: true; running: root.running && root.visible; onTriggered: root.refreshStats() }
-  Timer { interval: 1000; repeat: true; running: root.visible; onTriggered: root.nowMs = Date.now() }
+  Timer { interval: 5000; repeat: true; running: root.running && root.active; onTriggered: root.refreshStats() }
+  Timer { interval: 1000; repeat: true; running: root.active; onTriggered: root.nowMs = Date.now() }
 
-  Component.onCompleted: {
+  // First shown (and every time after): the app list, and the daemon's session if there is one.
+  function activate() {
+    root.nowMs = Date.now()
     if (svc.connected && svc.appsStatus === "unknown") svc.refreshApps()
+    updateAppOptions()
     defaultPick()
-    reattach()
+    if (!root.sess && svc.connected) reattach()
   }
+  onActiveChanged: if (active) activate()
+  Component.onCompleted: if (active) activate()
 
   // ---------------------------------------------------------------- toolbar
   GridLayout {

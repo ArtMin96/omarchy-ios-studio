@@ -27,8 +27,14 @@ ColumnLayout {
   }
   property var last: null                    // the app as last seen, for the header while it reloads
   onCurrentChanged: if (current) last = current
-  onBundleIdChanged: { last = current; lastBusy = "" }
+  onBundleIdChanged: { last = current; lastBusy = ""; wantSizes() }
   readonly property var shown: current || last
+  // Icons and sizes arrive separately from the list (DeviceService appIcons / appSizes, when it has them).
+  readonly property string iconPath: shown ? ((svc.appIcons && svc.appIcons[shown.bundleId]) || shown.icon || "") : ""
+  readonly property real sizeBytes: shown ? ((svc.appSizes && svc.appSizes[shown.bundleId]) || shown.size || 0) : 0
+  // Sizes are slow to read on a real iPhone: asked for only when an app's details open.
+  function wantSizes() { if (root.active && root.bundleId && typeof svc.wantAppSizes === "function") svc.wantAppSizes() }
+  onActiveChanged: wantSizes()
   readonly property string busy: shown ? (svc.busyApps[shown.bundleId] || "") : ""
   property string lastBusy: ""               // "uninstall": we removed it ourselves, the service already said so
   onBusyChanged: if (busy) lastBusy = busy
@@ -105,7 +111,7 @@ ColumnLayout {
       Image {
         id: icon
         anchors.fill: parent
-        source: root.shown && root.shown.icon ? "file://" + root.shown.icon : ""
+        source: root.iconPath ? "file://" + root.iconPath : ""
         sourceSize.width: width * 2; sourceSize.height: height * 2
         asynchronous: true; smooth: true; mipmap: true
         fillMode: Image.PreserveAspectFit
@@ -122,7 +128,7 @@ ColumnLayout {
           if (!a) return ""
           var p = [a.bundleId]
           if (a.version && !root.narrow) p.push(a.version + (a.build && a.build !== a.version ? " (" + a.build + ")" : ""))
-          if (a.size && !root.narrow) p.push(Model.formatBytes(a.size))
+          if (root.sizeBytes && !root.narrow) p.push(Model.formatBytes(root.sizeBytes))
           return p.join("  ·  ")
         }
         // a long bundle id keeps both ends (the team prefix and the app's own name) when it must be cut

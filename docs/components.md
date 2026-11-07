@@ -44,7 +44,11 @@ PageFrame {
 ```
 
 - Pages are loaded lazily on first visit and **kept alive**, so page-local state survives switching.
-  Shared state belongs in the service (`app.device`, …).
+  Shared state belongs in the service (`app.device`, …). The load starts in the background (the page you came
+  from stays on screen, so the click shows at once); after 50 ms the shell finishes it in one go, and past 150 ms
+  a spinner replaces the old page. `activated(params)` runs once the page exists. Keep what a page builds up
+  front small: load tabs and sheets on first use (DevicePage's `TabLoader`), and start a view's work when it's
+  shown, not in `Component.onCompleted`.
 - Global keys that the shell handles first: `1`–`8` pages, `?` shortcut sheet, `r` refresh, `/` search,
   `Ctrl+Tab` next page, and `Esc` (closes the top overlay, else leaves a text field, else calls `page.goBack()`).
   The shell calls `handleKey(event)` **before** the global keys, so return `true` only for keys you use
@@ -456,8 +460,10 @@ the first line rather than centred on the block.
   PerfChart { title: "Network"; unit: "KB/s"; series: [{ key: "netRx", label: "In" }, { key: "netTx", label: "Out", dashed: true }]
     samples: view.samples; revision: view.revision; t0: view.t0; t1: view.t1; hoverTs: view.hoverTs; onHoverAt: function(ts) { view.hoverTs = ts } }
   ```
-- **DevicePerformanceView**: the iPhone page's Performance tab (`app`). It keeps its own state (the `metrics.*`
+- **DevicePerformanceView**: the iPhone page's Performance tab (`app`, `active`). It keeps its own state (the `metrics.*`
   session, samples, events and stats) and reattaches to a running session, including one an AI agent started.
+  Its work (the app list, `metrics.list`, the clocks) starts when `active` turns true; hidden, the app picker
+  keeps its last list instead of re-sorting on every app change.
 - **DevicePhoneFrame**: a drawn iPhone that shows a screenshot or mirror frame. Props: `source` (file URL),
   `live` with `liveLabel` (the corner marker, e.g. `"REC 0:12"`), `dimmed`, `rotationSteps`, `glyph`,
   `placeholder`, `screenAspect` (default the iPhone 17 Pro's), `clickable` + `clicked()`, `mirrorService`
@@ -484,6 +490,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   link `device:screen:compare` opens it). While inspecting, the phone outlines the inspector's
   cursor row. `handleKey(action)` and `focusFilter()` are DevicePage's hooks into the inspector (it calls them on the
   Screen tab: `j`/`k`, Enter, `/`), and `devModeHelp()` asks the page to open the Developer Mode sheet.
+  `active` (the tab is showing) gates the UxPlay check (`CommandCheck`).
 - **DeviceInspectView**: Screen › Elements and Audit (`app`, `section`: `"elements"` or `"audit"`,
   `availableHeight`: the lists scroll inside it so the phone stays beside them). Elements calls `ui.tree`, filters
   by label, value, role, identifier or hint, and presses the cursor row with `ui.press` (Press button or Enter),
@@ -524,13 +531,20 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ```
 - **ScreenshotDiffPane**: one image of that comparison: `title`, `detail` (caption, e.g. the size), `path` (local
   file), `revision` (bump to reload a file rewritten in place; the Image has `cache: false` and a `?v=` query),
-  `imageSize` (`{w, h}` pixels), `regions` (`[{x, y, w, h}]` pixels, outlined in the warn colour, at least 6 px on
+  `imageSize` (`{w, h}` pixels; with it the image is decoded at about the cell's size instead of full size), `regions` (`[{x, y, w, h}]` pixels, outlined in the warn colour, at least 6 px on
   screen, grown outward by the stroke plus a small gap so it never touches the change), `maskedTop` (pixels at the top that are shaded as ignored), `placeholder` + `placeholderGlyph` (no
   `path`), `cellHeight` (set by the caller so the panes match). The image keeps its aspect ratio and is centred;
   a click opens it with `xdg-open`.
   ```qml
   ScreenshotDiffPane { title: "Current"; path: r.current_path; imageSize: { w: r.width, h: r.height }
                        regions: r.regions; maskedTop: r.masked_top; cellHeight: panes.cellH }
+  ```
+- **CommandCheck** (singleton): whether a program is on PATH. `check(name)` runs `command -v` once at a time per
+  name; `found[name]` is `true`/`false` (absent until checked). Found stays found for the session; missing is
+  checked again on the next `check()`. Call it when the view that needs it is shown.
+  ```qml
+  readonly property bool hasUxplay: CommandCheck.found.uxplay === true
+  onActiveChanged: if (active) CommandCheck.check("uxplay")
   ```
 - **DeviceRecordingPreview**: a muted, looping player for a finished recording (`source`: file URL). It imports
   QtMultimedia, so load it through a `Loader`; without qt6-multimedia the Loader fails quietly and the view
@@ -799,12 +813,21 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **DeviceHero**: the iPhone page's header: the drawn phone with the latest screen, name, battery, storage and
   readiness pills, plus fixes when something needs the user. Props: `app`; signals `openScreen()`,
   `devModeHelp()`.
+- **DevicePage tabs**: the Apps list is built with the page; every other tab (an app's details, Screen, Files,
+  Location, Network, Performance, Debug, Profiles, Info) is a `TabLoader`, an inline Loader that loads its
+  `file` from `components/` the first time the tab is `shown` and then keeps it. `onScreen` (the tab and the page
+  are showing) is bound to the view's `active`, so a hidden tab does no work; `withItem(fn)` runs `fn(view)` now
+  or once it has loaded (deep links such as `device:screen:compare`). Opening Network or Profiles calls
+  `app.device.wantProfiles()`. The Pair and Developer Mode sheets are built the first time they open
+  (`beginPair(method)`, `openDevMode()`).
 - **DeviceAppsView**: installed apps (search, launch, stop, remove). Stop keeps its slot (invisible) while an app
   isn't running, so the row actions form fixed columns. Props: `app`, `cursor`, `devFirst`
   (your own builds first); read-only `search` (the FilterField); `current()`; signals `cursorMoved(index)` and
   `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor.
 - **DeviceAppDetailView**: iPhone › Apps › an app, shown by DevicePage in place of the list (`appDetail`, the
-  bundle id; `appSection`, the last section, kept for the session). Props: `app`, `bundleId`, `active`,
+  bundle id; `appSection`, the last section, kept for the session). Props: `app`, `bundleId`, `active` (asks
+  `app.device.wantAppSizes()` when it turns on or the app changes; the icon and size come from
+  `app.device.appIcons` / `appSizes`, else the app's own `icon` / `size`),
   `section` (`defaults`|`stores`|`reset`|`files`, falls back to one the app has); signals `back()` and
   `sectionPicked(section)`. The header has an outlined back button on the content edge, the icon, name, bundle ID
   (cut in the middle when it must be), version and size, the Yours and Running pills (hidden when narrow) and the
@@ -896,7 +919,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   Snippet (opens the docs).
 - **AgentsSection**: the Settings › AI agents card (helper `agents` group). Props: `app`. Public
   `refresh()` and `prepare(repair)`; SettingsPage deep-links to it with `nav("settings", {section: "agents"})`.
-- **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`. DeviceNetworkView
+- **DeviceNetworkView / DeviceCaptureView**: the iPhone page's Network tab. Props: `app`, `active` (loads the
+  conditions and the capture status, and checks for Wireshark, each time it turns true). DeviceNetworkView
   lists the conditions (`condition.list`), applies one through `app.confirm` and shows the active-condition
   banner with its countdown and Reset now. It embeds DeviceCaptureView (packet capture, USB only). The
   active condition and the capture state live in `app.device` (`condition`, `conditionActive`, `capture`,
@@ -916,8 +940,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   ```qml
   DeviceTransferBar { Layout.fillWidth: true; transfer: root.transfer; verb: "Importing"; onCancel: svc.request("transfer.cancel", { transferId: id }, null) }
   ```
-- **DeviceDebugView**: the iPhone › Debug tab. Props: `app`. It loads itself when it becomes visible (`debug check`,
-  `debug sources`, `debug.symbols`) and owns the backtrace stream; the breakpoint session is a `DebugSessionPanel`.
+- **DeviceDebugView**: the iPhone › Debug tab. Props: `app`, `active`. It loads itself each time `active` turns true
+  (`debug check`, `debug sources`, `debug.symbols`); hidden, it keeps its app list and starts nothing. It owns the
+  backtrace stream; the breakpoint session is a `DebugSessionPanel`.
   Its Debug symbols card follows the status `state`: a StatusPill, the reason or error, one primary fix
   (`symFix`: download, update, unpack or retry), Remove (confirmed) and the Keep the download switch.
 - **DebugSessionPanel**: a breakpoint session on one app (helper `debug session` as a `Stream`; commands are
