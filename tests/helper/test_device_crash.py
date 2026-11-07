@@ -1,4 +1,4 @@
-"""Crash report dates (helper/device_crash.py): file-name dates are the iPhone's local time. Stdlib only:
+"""Crash report dates (helper/iosstudio/device/device_crash.py): file-name dates are the iPhone's local time. Stdlib only:
     python -m pytest tests/helper/test_device_crash.py
 """
 from __future__ import annotations
@@ -8,7 +8,7 @@ import os
 import time
 import unittest
 
-import device_crash
+from iosstudio.device import device_crash
 
 NAME = "/MyApp-2026-11-01-142233.ips"
 

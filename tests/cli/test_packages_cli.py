@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import packages as P
+from iosstudio.features import packages as P
 from support import HELPER
 from support.fakes import FAKE_SWIFT
 from support.projects import package_project as make_project

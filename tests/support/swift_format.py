@@ -1,4 +1,4 @@
-"""A temp folder with a fake swift-format in it, for helper/format.py tests."""
+"""A temp folder with a fake swift-format in it, for helper/iosstudio/features/format.py tests."""
 from __future__ import annotations
 
 import os
@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import format as F
+from iosstudio.features import format as F
 from support.fakes import FAKE_SWIFT_FORMAT
 
 

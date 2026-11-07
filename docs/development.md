@@ -8,8 +8,8 @@ iOS Studio is a standalone [Quickshell](https://quickshell.org/) config with a P
 
 - UI: QML, started with `qs -n -p <repo>`. `shell.qml` declares `//@ pragma AppId ios-studio` (that's also the Hyprland window class), a `ShellRoot` and one `FloatingWindow`. Closing the window quits the app.
 - Helper (`bin/iosstudio-helper`): stdlib-only Python under `/usr/bin/python3 -I` (compiled modules cached in `~/.cache/ios-studio/pycache`). One call per action, or a stream of JSON lines for long jobs.
-- Device broker (`bin/iosstudio-deviced`, `helper/device_broker.py`): one long-running Python process per user in the pymobiledevice3 venv. It owns the only connection to the iPhone and listens on a Unix socket, so the app, the MCP server and background jobs share it. It exits two minutes after its last client disconnects.
-- MCP server (`bin/iosstudio-mcp`, `mcp/`): a stdio server for AI coding agents. It calls the same helper as the app and reaches the iPhone through the broker with `helper/device_client.py`. See [mcp.md](mcp.md).
+- Device broker (`bin/iosstudio-deviced`, `helper/iosstudio/device/device_broker.py`): one long-running Python process per user in the pymobiledevice3 venv. It owns the only connection to the iPhone and listens on a Unix socket, so the app, the MCP server and background jobs share it. It exits two minutes after its last client disconnects.
+- MCP server (`bin/iosstudio-mcp`, `mcp/`): a stdio server for AI coding agents. It calls the same helper as the app and reaches the iPhone through the broker with `helper/iosstudio/device/device_client.py`. See [mcp.md](mcp.md).
 - Tools it drives: xtool (build, sign, install, Apple account), the Swift toolchain, omarchy-apple-dev (SDK preparation), pymobiledevice3 (device access), rcodesign and ipsw.
 
 ## File layout
@@ -24,44 +24,54 @@ components/          shared UI building blocks (see components.md), including Ag
 services/            one QML service per area: Setup, Toolchain, Account, Device, Project, Log
 pages/               one page per sidebar entry
 helper/
-  main.py            helper router: group name -> module
-  common.py          shared helper code: ok()/fail()/event(), paths, fix links
-  setup.py, account.py, projects.py, appconfig.py   one module per helper group
-  build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
-  format.py          format and lint (`projects format`, `projects format-lint`, or just `format` / `format-lint`): swift-format dry run/apply with a bounded diff, swift-format and SwiftLint findings as style diagnostics, the stored lint result
-  packages.py        Swift package dependencies (`packages` group): list (dump-package, cached, + Package.resolved), add/add-product, update/resolve as streams with step/progress events and cancel, remove with a checked dry run
-  package_manifest.py  Package.resolved v1–v3, version rules, and the remove edit on Package.swift through a small Swift lexer
-  project_check.py   the project check: config mistakes found before building (xtool.yml keys, usage descriptions, icon, entitlements), used by projects.py
-  run_presets.py     run presets: saved launch arguments, environment, language/region and UI test mode per project, and the launch args they resolve to, used by projects.py
-  watch.py           compile on save (`watch` group): inotify (ctypes) or polling, debounce/supersede scheduler, one detached watcher per user found through watch.lock / watch.json in the runtime dir, `build compile` per save
-  editor_setup.py    editor setup (`editor` group): Swift completion in Zed, Neovim and VS Code once per machine, .bsp/xtool.json (and .vscode/ for VS Code) per project after builds and on create/convert, a JSONC merge that only inserts
-  screenshots.py     screenshot baselines and visual diffs (`screenshots` group): pure-Python PNG codec or Pillow, status-bar mask, regions, diff image, matrix sets
-  ui_inspect.py      UI inspection without a device: accessibility focus events -> elements, label matching, the change summary of a press, audit issues (used by deviced_features/ui.py and its demo twin)
-  diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
-  xip_version.py     reads the Xcode version out of a .xip without unpacking it
-  agents.py          Settings › AI agents: connect the MCP server to coding agents
-  debugger.py        iPhone › Debug: backtraces and breakpoint sessions (group `debug`)
-  lldb_driver.py     runs inside lldb's Python (python3.12) and drives lldb for debugger.py
-  debugger_demo.py   the `debug` group in demo mode: a made-up backtrace and session, no lldb
-  deviced.py         device daemon core: session, tunnel, device list, dispatch (pymobiledevice3)
-  deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
-  deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
-  deviced_features/  one module per feature group of the real daemon: appdata, apps, cameratest, conditions,
+  run.py             starts a module of the package as __main__ (`python3 -I helper/run.py iosstudio …`); the bin/ scripts use it
+  root/              scripts that run as root through pkexec
+  iosstudio/         the helper and the device daemon: one stdlib-only package (the real daemon adds pymobiledevice3)
+    __main__.py, cli.py   `python -m iosstudio <group> <action>`: group name -> features/ module (imported lazily)
+    core/            shared by everything; each module is used qualified (`output.ok(…)`, `appdirs.STATE_DIR`) so tests can patch it
+      output.py      the output protocol: ok()/fail()/event()/step()/done()/prompt(), HelperError, fix()
+      subproc.py     run_cmd(), stream_cmd(), run_group(), kill_proc(), wait_or_kill(), which(), pymd3_python(), demo_delay()
+      fileio.py      atomic_write(), load_json()/save_json(), tail_text(), dir_size(), prune()
+      appdirs.py     REPO, CONFIG_DIR/STATE_DIR/CACHE_DIR/DATA_DIR/…, settings(), project roots, cache_get()/cache_put()
+      flags.py       parse_flags(): --key value / --flag -> dict
+    features/        one module per helper group, plus the pure logic they and the daemon features share
+      setup.py, account.py, projects.py, appconfig.py   the setup/toolchain, account, projects/build and app groups
+      build_settings.py  per-project build settings (prebuild command, env, open-file limit, allow generated), used by projects.py
+      format.py      format and lint (`projects format`, `projects format-lint`, or just `format` / `format-lint`): swift-format dry run/apply with a bounded diff, swift-format and SwiftLint findings as style diagnostics, the stored lint result
+      packages.py    Swift package dependencies (`packages` group): list (dump-package, cached, + Package.resolved), add/add-product, update/resolve as streams with step/progress events and cancel, remove with a checked dry run
+      package_manifest.py  Package.resolved v1–v3, version rules, and the remove edit on Package.swift through a small Swift lexer
+      project_check.py   the project check: config mistakes found before building (xtool.yml keys, usage descriptions, icon, entitlements), used by projects.py
+      run_presets.py     run presets: saved launch arguments, environment, language/region and UI test mode per project, and the launch args they resolve to, used by projects.py
+      watch.py       compile on save (`watch` group): inotify (ctypes) or polling, debounce/supersede scheduler, one detached watcher per user found through watch.lock / watch.json in the runtime dir, `build compile` per save
+      editor_setup.py    editor setup (`editor` group): Swift completion in Zed, Neovim and VS Code once per machine, .bsp/xtool.json (and .vscode/ for VS Code) per project after builds and on create/convert, a JSONC merge that only inserts
+      screenshots.py     screenshot baselines and visual diffs (`screenshots` group): pure-Python PNG codec or Pillow, status-bar mask, regions, diff image, matrix sets
+      ui_inspect.py  UI inspection without a device: accessibility focus events -> elements, label matching, the change summary of a press, audit issues (used by device/features/ui.py and its demo twin)
+      diagnostics.py     build output -> diagnostics (compiler, linker, package, signing, device, ...), used by projects.py
+      crash_symbols.py   keeps each build's binary + dSYM by UUID, resolves crash frames to file:line
+      app_data.py    App data shared by both daemons: plist <-> JSON with tagged types, typed values, store summaries and bounded rows (read-only sqlite), the store cache, reset plans, the last build of a bundle id
+      xip_version.py     reads the Xcode version out of a .xip without unpacking it (used by setup.py)
+      agents.py      Settings › AI agents: connect the MCP server to coding agents
+      debugger.py    iPhone › Debug: backtraces and breakpoint sessions (group `debug`)
+      lldb_driver.py     runs inside lldb's Python (python3.12) and drives lldb for debugger.py
+    device/          the device daemon, its broker and client
+      deviced.py     device daemon core: session, tunnel, device list, dispatch (pymobiledevice3)
+      deviced_core.py    what feature modules import: emit, dlog, err, classify, paths, PortForward
+      deviced_kit.py     shared by both daemons: feature registry/loader, Resources, CursorRing
+      features/      one module per feature group of the real daemon: appdata, apps, cameratest, conditions,
                      console, crashes, ddi, debug, files, install, location, metrics, mirror, pairing,
                      pcap, profiles, screen, syslog, ui
-  device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
-  device_client.py   asyncio client for the broker (used by the MCP server)
-  device_link.py, device_crash.py, device_models.py   device helpers
-  crash_symbols.py   keeps each build's binary + dSYM by UUID, resolves crash frames to file:line
-  device_network.py  Network tab helpers shared by both daemons: condition rules, capture summary, pcapng
-  device_files.py    Files feature helpers shared by both daemons (transfers, paths, conversions, Photos.sqlite)
-  metrics_core.py    Performance sessions shared by both daemons: commands, sample rings, events, CSV
-  app_data.py        App data shared by both daemons: plist <-> JSON with tagged types, typed values, store summaries and bounded rows (read-only sqlite), the store cache, reset plans, the last build of a bundle id
-  app_console.py     App console shared by both daemons: an app's stdout/stderr split into lines, buffered, console.*
-  metrics_stats.py   the Performance report: averages, percentiles, leaks, spikes, hitches, anomalies
-  demo.py, demo_art.py, deviced_demo.py   demo mode: made-up helper answers, art and iPhone
-  deviced_demo_core.py, deviced_demo_features/   the demo iPhone's data and its feature modules
-  root/              scripts that run as root through pkexec
+      device_broker.py   shared daemon: socket, clients, events, syslog fan-out, idle exit
+      device_client.py   asyncio client for the broker (stdlib only, no package imports: the MCP server loads it by path)
+      device_link.py, device_crash.py, device_models.py   device helpers
+      device_network.py  Network tab helpers shared by both daemons: condition rules, capture summary, pcapng
+      device_files.py    Files feature helpers shared by both daemons (transfers, paths, conversions, Photos.sqlite)
+      metrics_core.py    Performance sessions shared by both daemons: commands, sample rings, events, CSV
+      metrics_stats.py   the Performance report: averages, percentiles, leaks, spikes, hitches, anomalies
+      app_console.py     App console shared by both daemons: an app's stdout/stderr split into lines, buffered, console.*
+      deviced_demo.py, deviced_demo_core.py, demo_features/   the demo iPhone: daemon, data and feature modules
+    demo/            the helper's demo mode
+      demo.py, demo_art.py   made-up helper answers and art (demo_art is also used by the demo daemon)
+      debugger_demo.py   the `debug` group in demo mode: a made-up backtrace and session, no lldb
 mcp/
   iosstudio_mcp/     the MCP server: server.py, tools/*.py (98 tools), prompts, resources
   pyproject.toml     its dependencies (installed into a private venv on first run)
@@ -95,7 +105,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; `projects check` in project_check.py, see [features/project-check.md](features/project-check.md); `projects presets` and `build run --preset` in run_presets.py, see [features/run-presets.md](features/run-presets.md); per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)), `screenshots` (screenshots.py: baselines and visual diffs, see [features/screenshot-compare.md](features/screenshot-compare.md)), `editor` (editor_setup.py: `editor status`, `editor setup --editor E`, `editor status --project P [--fix]`, see [features/editor-setup.md](features/editor-setup.md)), `watch` (watch.py: `watch run --project P [--auto-run] [--debounce-ms N]` streams the watcher's snapshots, `--detach [--owner PID]` starts or joins it and returns; `watch status [--project P] [--wait-seconds N]`, `watch stop [--project P]`; see [features/watch-mode.md](features/watch-mode.md)), `packages` (packages.py: `packages list|add|add-product|update|resolve|remove --project P …`, see [features/packages.md](features/packages.md)). `main.py` imports modules lazily, so one broken module doesn't take the others down.
+Groups: `setup`, `toolchain` (setup.py), `account` (account.py), `projects`, `build` (projects.py; `projects check` in project_check.py, see [features/project-check.md](features/project-check.md); `projects presets` and `build run --preset` in run_presets.py, see [features/run-presets.md](features/run-presets.md); per-project build settings in build_settings.py, see [features/project-build-settings.md](features/project-build-settings.md)), `app` (appconfig.py), `agents` (agents.py: connect the MCP server to AI tools, see [mcp.md](mcp.md)), `debug` (debugger.py: LLDB on your own apps, see [deviced-protocol.md](deviced-protocol.md#debugging-debug-used-by-iphone--debug-and-the-debug-helper-group)), `screenshots` (screenshots.py: baselines and visual diffs, see [features/screenshot-compare.md](features/screenshot-compare.md)), `editor` (editor_setup.py: `editor status`, `editor setup --editor E`, `editor status --project P [--fix]`, see [features/editor-setup.md](features/editor-setup.md)), `watch` (watch.py: `watch run --project P [--auto-run] [--debounce-ms N]` streams the watcher's snapshots, `--detach [--owner PID]` starts or joins it and returns; `watch status [--project P] [--wait-seconds N]`, `watch stop [--project P]`; see [features/watch-mode.md](features/watch-mode.md)), `packages` (packages.py: `packages list|add|add-product|update|resolve|remove --project P …`, see [features/packages.md](features/packages.md)). `iosstudio/cli.py` imports modules lazily, so one broken module doesn't take the others down.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -113,7 +123,7 @@ Root work goes through one `pkexec helper/root/root-tasks.sh <flags>` per step, 
 
 ## Device daemon
 
-`services/DeviceService.qml` starts `bin/iosstudio-deviced` when the app opens. That process is only a stdio bridge. The daemon itself is a shared broker on `$XDG_RUNTIME_DIR/ios-studio/deviced.sock` (`helper/device_broker.py`). A process started without `XDG_RUNTIME_DIR` (the MCP SDK's `stdio_client` drops it) uses `/run/user/<uid>` when that folder exists and is yours, so it still finds the app's daemon; only without it does everything fall back to `/tmp/ios-studio-<uid>` (`device_client.runtime_base()`, also used by watch mode). The bridge starts it if it isn't running, and it exits 120 s after its last client leaves, so the app and the MCP server (`helper/device_client.py`) share one tunnel to the phone. Demo mode uses its own socket under `$XDG_RUNTIME_DIR/ios-studio-demo/`. Diagnostics go to `deviced.log` next to the socket.
+`services/DeviceService.qml` starts `bin/iosstudio-deviced` when the app opens. That process is only a stdio bridge. The daemon itself is a shared broker on `$XDG_RUNTIME_DIR/ios-studio/deviced.sock` (`helper/iosstudio/device/device_broker.py`). A process started without `XDG_RUNTIME_DIR` (the MCP SDK's `stdio_client` drops it) uses `/run/user/<uid>` when that folder exists and is yours, so it still finds the app's daemon; only without it does everything fall back to `/tmp/ios-studio-<uid>` (`device_client.runtime_base()`, also used by watch mode). The bridge starts it if it isn't running, and it exits 120 s after its last client leaves, so the app and the MCP server (`helper/iosstudio/device/device_client.py`) share one tunnel to the phone. Demo mode uses its own socket under `$XDG_RUNTIME_DIR/ios-studio-demo/`. Diagnostics go to `deviced.log` next to the socket.
 
 Requests and replies are JSON lines with an `id`. The daemon also pushes events such as `devices`, `connection` and `syslog`. Pages call it through `app.device.request(cmd, args, callback)` and listen on `app.device.daemonEvent(name, data)`. The Logs page uses the same daemon for the live log and crash reports.
 
@@ -123,14 +133,14 @@ Every command and event is documented in [deviced-protocol.md](deviced-protocol.
 
 ### Device daemon features
 
-`deviced.py` is only the core. Each feature group is a module in `helper/deviced_features/`, with a demo twin of the same name in `helper/deviced_demo_features/`. At start the daemon imports every module there (files starting with `_` are skipped) and calls its `register(reg)`. When a module fails to import or register, the daemon logs the traceback to `deviced.log`, skips the module and keeps serving the rest. `daemon.features` lists what loaded, what failed and which module owns each command. A command name that is already taken makes the second module fail, so two features can't silently shadow each other.
+`deviced.py` is only the core. Each feature group is a module in `helper/iosstudio/device/features/`, with a demo twin of the same name in `helper/iosstudio/device/demo_features/`. At start the daemon imports every module there (files starting with `_` are skipped) and calls its `register(reg)`. When a module fails to import or register, the daemon logs the traceback to `deviced.log`, skips the module and keeps serving the rest. `daemon.features` lists what loaded, what failed and which module owns each command. A command name that is already taken makes the second module fail, so two features can't silently shadow each other.
 
 A feature module:
 
 ```python
-# helper/deviced_features/perf.py
-from deviced_core import emit, err          # never `import deviced` (it runs as __main__)
-from deviced_kit import CursorRing
+# helper/iosstudio/device/features/perf.py
+from iosstudio.device.deviced_core import emit, err   # never import deviced (it runs as __main__)
+from iosstudio.device.deviced_kit import CursorRing
 
 def register(reg):
     ring = CursorRing(max_items=5000, max_bytes=4 << 20)
@@ -189,9 +199,9 @@ To test in parallel checkouts without touching anyone else's daemon, give each o
 
 ```bash
 export IOSSTUDIO_RUNTIME_DIR=$XDG_RUNTIME_DIR/ios-$NAME IOSSTUDIO_DEMO=1   # keep it short: socket paths max out at 107 bytes
-python3 helper/device_client.py daemon.features     # starts this checkout's demo daemon on demand
-python3 helper/device_client.py device.info
-python3 helper/device_client.py daemon.shutdown '{"all": true}'
+python3 helper/iosstudio/device/device_client.py daemon.features     # starts this checkout's demo daemon on demand
+python3 helper/iosstudio/device/device_client.py device.info
+python3 helper/iosstudio/device/device_client.py daemon.shutdown '{"all": true}'
 ```
 
 `IOSSTUDIO_RUNTIME_DIR` replaces `$XDG_RUNTIME_DIR` as the base of `ios-studio[-demo]/` (socket, lock, log, demo files) for `bin/iosstudio-deviced`, `device_client.py` and the MCP server. A real daemon started under it answers every request with `busy` while the default real daemon is running, because a second tunnel would break the first one's connection.
@@ -228,7 +238,7 @@ pytest runs everything (the tests themselves are plain `unittest` classes). Make
 - `tests/helper/` and `tests/cli/` need nothing but the standard library and pytest: CI runs them with a bare system Python to keep the helper stdlib-only.
 - `tests/conftest.py` points every `XDG_*` folder and `IOSSTUDIO_RUNTIME_DIR` at a temp folder before any test imports the helper, so no test touches your settings, state or the running device daemon, and sets `IOSSTUDIO_DEMO_DELAY=0`.
 - Shared pieces live in `tests/support/` (`import support`): repo paths, `isolated_env()` for helper subprocesses, `helper_json()`, fake xtool/swift/swift-format scripts, throwaway projects, a crash report, and `FakeMCP`/`size_of` for MCP tool tests. Test files never import each other.
-- Helper and MCP modules are imported by their top-level name (`import format as F`, `from iosstudio_mcp import budget`): `pyproject.toml` puts `helper/`, `mcp/` and `tests/` on the path.
+- Helper and MCP modules are imported from their packages (`from iosstudio.features import format as F`, `from iosstudio_mcp import budget`): `pyproject.toml` puts `helper/`, `mcp/` and `tests/` on the path. Patch a shared folder or output where the code reads it (`mock.patch.object(appdirs, "STATE_DIR", …)`, `output._write = …`).
 - Fixtures (captured tool output, small projects, PNGs, stores) are in `tests/fixtures/<area>/`; each test file's docstring says what it covers.
 - No test needs xtool, pymobiledevice3, an iPhone or your home folder. Tests that use Swift, `swift-format` or `llvm-symbolizer` skip without them.
 
@@ -287,7 +297,7 @@ Users install a release by cloning its tag or from the tarball, see the README's
 | Build logs (the newest 300 builds' logs are kept) | `~/.local/state/ios-studio/build-logs/` |
 | Cache (screenshots, crash files, account lists) | `~/.cache/ios-studio/` |
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |
-| Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `common.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
+| Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
 | Watch mode (lock, status, events, owners, log; demo mode uses `ios-studio-demo/`) | `$XDG_RUNTIME_DIR/ios-studio/watch*` (`$IOSSTUDIO_RUNTIME_DIR` overrides the base; without `XDG_RUNTIME_DIR`, `/run/user/<uid>` when it's yours, else `/tmp/ios-studio-<uid>`: `device_client.runtime_base()`, shared with the device daemon) |
 | Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
@@ -300,7 +310,7 @@ Users install a release by cloning its tag or from the tarball, see the README's
 | App checkout | anywhere; the README clones into `~/.local/share/omarchy-ios-studio`. `install.sh` and `bin/ios-studio` find it from their own path |
 | Launcher command | `~/.local/bin/ios-studio` (symlink into the checkout) |
 | Desktop entry, icon | `~/.local/share/applications/ios-studio.desktop`, `~/.local/share/icons/hicolor/scalable/apps/ios-studio.svg` |
-| New apps (default) | `~/Developer`; scanned roots default to whichever of `~/Developer`, `~/Projects`, `~/Code`, `~/src`, … exist (`common.default_project_roots()`) |
+| New apps (default) | `~/Developer`; scanned roots default to whichever of `~/Developer`, `~/Projects`, `~/Code`, `~/src`, … exist (`appdirs.default_project_roots()`) |
 | Apple sign-in (owned by xtool) | `~/.config/xtool` |
 
 ## Conventions

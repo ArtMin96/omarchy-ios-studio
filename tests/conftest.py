@@ -3,7 +3,7 @@ tests by folder.
 
 - XDG_* and IOSSTUDIO_RUNTIME_DIR point into one temp folder, so no test (or helper subprocess it starts) reads or
   writes ~/.config/ios-studio, ~/.local/state/ios-studio or the live device daemon's socket.
-- IOSSTUDIO_DEMO_DELAY=0 makes the demo's pretend-work sleeps instant (see helper/common.py demo_delay).
+- IOSSTUDIO_DEMO_DELAY=0 makes the demo's pretend-work sleeps instant (see demo_delay in helper/iosstudio/core/subproc.py).
 - tests/cli/ is marked `slow`, tests/mcp/ `mcp`, tests/e2e/ `slow` (network tests there add `network` themselves).
 """
 from __future__ import annotations

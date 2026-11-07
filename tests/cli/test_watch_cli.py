@@ -1,4 +1,4 @@
-"""Watch mode through helper/main.py with a fake xtool: compile on save through the real `build compile`, a stop
+"""Watch mode through helper/run.py iosstudio with a fake xtool: compile on save through the real `build compile`, a stop
 that kills the running build, replacing another project's watcher, a follower that detaches, demo mode."""
 from __future__ import annotations
 

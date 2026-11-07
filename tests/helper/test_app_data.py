@@ -1,4 +1,4 @@
-"""App data (helper/app_data.py): plist <-> JSON round trips, typed values, sqlite summaries and paging on
+"""App data (helper/iosstudio/features/app_data.py): plist <-> JSON round trips, typed values, sqlite summaries and paging on
 the fixture stores in tests/fixtures/app-data/ (written by its make_fixtures.py), cell bounds, the store
 cache, reset plans, finding the last build; plus the demo daemon's appdata.* commands.
 """
@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import app_data as AD
+from iosstudio.features import app_data as AD
 from support import ROOT
 
 FIX = ROOT / "tests" / "fixtures" / "app-data"
@@ -334,7 +334,7 @@ class FindBuild(unittest.TestCase):
         self.ipa = self.tmp / "App" / "xtool" / "App.ipa"
         self.ipa.parent.mkdir(parents=True)
         self.ipa.write_bytes(b"PK")
-        self.state = mock.patch.object(AD.common, "STATE_DIR", self.tmp / "state")
+        self.state = mock.patch.object(AD.appdirs, "STATE_DIR", self.tmp / "state")
         self.state.start()
         self.addCleanup(self.state.stop)
 
@@ -351,7 +351,7 @@ class FindBuild(unittest.TestCase):
     def test_renewals_fallback(self):
         (self.tmp / "state").mkdir()
         (self.tmp / "state" / "renewals.json").write_text(json.dumps({str(self.tmp / "App"): {"bundleId": "com.example.app"}}))
-        with mock.patch.dict(sys.modules, {"projects": None}):
+        with mock.patch.dict(sys.modules, {"iosstudio.features.projects": None}):
             b = AD.find_build("com.example.app", [])
         self.assertEqual(b["artifact"], str(self.ipa))
 
@@ -363,10 +363,10 @@ class DemoCommands(unittest.TestCase):
     WEATHER = "XTL-A1B2C3D4E5.com.example.weatherglance"
 
     def setUp(self):
-        import deviced_demo_core as core
-        from deviced_demo_features import appdata as demo
-        from deviced_demo_features import files as demo_files
-        from deviced_kit import FeatureRegistry
+        from iosstudio.device import deviced_demo_core as core
+        from iosstudio.device.demo_features import appdata as demo
+        from iosstudio.device.demo_features import files as demo_files
+        from iosstudio.device.deviced_kit import FeatureRegistry
         self.core, self.demo = core, demo
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -398,7 +398,7 @@ class DemoCommands(unittest.TestCase):
         return asyncio.run(r) if asyncio.iscoroutine(r) else r
 
     def code(self, cmd, a) -> str:
-        from common import HelperError
+        from iosstudio.core.output import HelperError
         with self.assertRaises(HelperError) as c:
             self.call(cmd, a)
         return c.exception.code
@@ -492,7 +492,7 @@ class DemoCommands(unittest.TestCase):
 
 
 class FakeAfc:
-    """AFC over a local folder: just the calls deviced_features/appdata.py and files.py make."""
+    """AFC over a local folder: just the calls features/appdata.py and files.py make."""
 
     def __init__(self, base: Path):
         self.base = base
@@ -555,17 +555,17 @@ except ImportError:
 
 @unittest.skipUnless(HAVE_PMD3, "needs pymobiledevice3 (the device daemon's venv)")
 class RealModule(unittest.IsolatedAsyncioTestCase):
-    """deviced_features/appdata.py against a fake container (FakeAfc) and a fake daemon. `prefs_hook` plays
+    """features/appdata.py against a fake container (FakeAfc) and a fake daemon. `prefs_hook` plays
     cfprefsd: it runs after each write and may put the old file back."""
 
     BID = "XTL-T.com.example.app"
     PREFS = "Library/Preferences/com.example.app.plist"
 
     async def asyncSetUp(self):
-        from deviced_features import appdata as real
-        from deviced_features import apps as A
-        from deviced_features import files as F
-        from deviced_kit import FeatureRegistry
+        from iosstudio.device.deviced_kit import FeatureRegistry
+        from iosstudio.device.features import appdata as real
+        from iosstudio.device.features import apps as A
+        from iosstudio.device.features import files as F
         self.real = real
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -675,7 +675,7 @@ class RealModule(unittest.IsolatedAsyncioTestCase):
 
     async def test_stop_waits_for_cfprefsd(self):
         self.pids[:] = [812]
-        from common import HelperError
+        from iosstudio.core.output import HelperError
         with self.assertRaises(HelperError) as c:
             await self.call("appdata.defaults.delete", {"bundleId": self.BID, "key": "blob"})
         self.assertEqual(c.exception.code, "app-running")
@@ -726,7 +726,7 @@ class RealModule(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((r["method"], r["refreshed"], r["refreshError"]["code"]), ("file", False, "no-build"))
         self.assertEqual(r["launchArgs"], ["-volume", "0.75"])
         self.assertEqual(self.prefs()["volume"], 0.75)
-        from common import HelperError
+        from iosstudio.core.output import HelperError
         self.build = {"artifact": "/p/App.ipa"}
         self.install_error = HelperError("profile-expired", "The app's profile expired.")
         r = await self.call("appdata.defaults.refresh", {"bundleId": self.BID})
@@ -752,7 +752,7 @@ class RealModule(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((done["removed"], done["refreshed"]), (dry["count"], True))
         self.assertFalse((self.base / "Documents/a.txt").exists())
         self.assertTrue((self.base / "Library/Preferences").is_dir())          # kept, emptied
-        from common import HelperError
+        from iosstudio.core.output import HelperError
         self.build = None
         with self.assertRaises(HelperError) as c:
             await self.call("appdata.reset", {"bundleId": self.BID, "mode": "reinstall"})

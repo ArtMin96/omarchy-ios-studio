@@ -1,4 +1,4 @@
-"""App console (helper/app_console.py): line splitting, buffer caps, rate cap, cursor reads and the
+"""App console (helper/iosstudio/device/app_console.py): line splitting, buffer caps, rate cap, cursor reads and the
 console.* commands' session lifecycle, with a fake backend instead of an iPhone.
 
     python -m pytest tests/helper/test_app_console.py
@@ -8,8 +8,8 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-import app_console as C
-from deviced_kit import FeatureRegistry
+from iosstudio.device import app_console as C
+from iosstudio.device.deviced_kit import FeatureRegistry
 
 
 class Splitting(unittest.TestCase):

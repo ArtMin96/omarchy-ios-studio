@@ -12,7 +12,7 @@ from unittest import mock
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from device_client import DeviceError
+from iosstudio.device.device_client import DeviceError
 from iosstudio_mcp import budget as B
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import device as D

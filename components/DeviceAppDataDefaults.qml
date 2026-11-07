@@ -89,7 +89,7 @@ ColumnLayout {
     root.app.toast("Copied the launch arguments", "ok")
   }
 
-  // ---- values (as helper/app_data.py's view() sends them: plain JSON, or {"$type": …} where JSON lacks the
+  // ---- values (as helper/iosstudio/features/app_data.py's view() sends them: plain JSON, or {"$type": …} where JSON lacks the
   // type or the value was clipped for display)
   function tag(v) { return v !== null && typeof v === "object" && !Array.isArray(v) ? v["$type"] || "" : "" }
   function kindOf(k) {

@@ -23,24 +23,24 @@ import "../Model.js" as Model
 //   reveal(p) · setAutoRenew(p, on) · convert(path)
 //   checks: { path: {state: "loading"|"ready"|"error", result, error, at} } · checkFor(p)
 //   check(p) (now) · checkSoon(p) (queued, skipped when fresh) · checkAll()   (`projects check`)
-//   run presets (`projects presets`, helper/run_presets.py): selectedPreset(p) · presetsOf(p)
+//   run presets (`projects presets`, helper/iosstudio/features/run_presets.py): selectedPreset(p) · presetsOf(p)
 //     loadPresets(p, onDone, onFail) · savePreset(p, preset, renameFrom, onDone, onFail)
 //     deletePreset(p, name, onDone, onFail) (asks first) · selectPreset(p, name|"", onDone, onFail)
 //     Run passes the selected one (--preset); build.preset is its name, for the run step and toast.
-//   editor setup (`editor status|setup`, helper/editor_setup.py), machine-wide: editorInfo, editorInfoError,
+//   editor setup (`editor status|setup`, helper/iosstudio/features/editor_setup.py), machine-wide: editorInfo, editorInfoError,
 //     editorInfoLoading, loadEditors(onDone, onFail), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
 //     (dry run unless confirm). Per project: editors: { path: {state, result: {bsp, ready, hint}, error, at} }
 //     editorFor(p) · editorStatus(p, …) (now) · editorStatusSoon(p) (queued, skipped when fresh)
 //   watch mode (app.watch, WatchService): showWatchBuild({path, name, ok, errors, warnings, duration, logFile,
 //     buildId, diagnostics, errorMessage, errorCode}) shows a finished compile-on-save build in the build panel (build.watch = true) and
 //     its Problems; skipped while a manual build runs (that one owns the panel). Emits watchBuildShown(ok).
-//   format and lint (`format`, `format-lint`, helper/format.py): formatPreview(p, onDone, onFail) (dry run: a bounded
+//   format and lint (`format`, `format-lint`, helper/iosstudio/features/format.py): formatPreview(p, onDone, onFail) (dry run: a bounded
 //     unified diff) · formatApply(p, onDone, onFail) (writes the files, toasts, lints again when that project has a
 //     lint result) · lints: { path: {state, result, error, at} } · lintFor(p) · lint(p, onDone, onFail) (now) ·
 //     lintLastSoon(p) (the saved result, `format-lint --last`, once per path) · lintFocus: a project whose style
 //     warnings the build panel shows instead of the last build ("" = the build's own project); showLint(p) sets it.
 //     Style warnings never count as build problems (errorCount/warningCount leave them out).
-//   Swift packages (`packages`, helper/packages.py): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
+//   Swift packages (`packages`, helper/iosstudio/features/packages.py): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
 //     onDone, onFail) (dry run unless confirm) · packagesAddProduct(p, id, products, target, onDone, onFail) ·
 //     packagesChanged(p) (re-checks the card and the editor status after Package.swift changed). add, update and
 //     resolve stream; ProjectPackagesSheet runs them.
@@ -588,7 +588,7 @@ Item {
     }, function(e) { app.toast(Model.errorMessage(e), "error") })
   }
 
-  // Build settings (prebuild command, env, open-file limit, allow generated): see helper/build_settings.py.
+  // Build settings (prebuild command, env, open-file limit, allow generated): see helper/iosstudio/features/build_settings.py.
   // A project whose xtool.yml is generated builds only once its settings allow it.
   function blocked(p) { return !!(p && p.generated && !(p.buildSettings && p.buildSettings.allowGenerated)) }
   // loadBuildSettings -> { settings, suggested: { settings, reasons } | null, openFilesError }
@@ -608,7 +608,7 @@ Item {
     }, function(e) { if (onFail) onFail(e) })
   }
 
-  // ------------------------------------------------------------ run presets (helper/run_presets.py)
+  // ------------------------------------------------------------ run presets (helper/iosstudio/features/run_presets.py)
   // Saved launch arguments, environment and language per project. `projects list` items carry
   // runPresets (each with `resolved`) and runPreset (the selected name or null); the selection is
   // stored by the helper, so it survives restarts.
@@ -691,7 +691,7 @@ Item {
     })
   }
 
-  // ------------------------------------------------------------ project check (helper/project_check.py)
+  // ------------------------------------------------------------ project check (helper/iosstudio/features/project_check.py)
   // Config mistakes xtool won't flag until late (misspelled xtool.yml keys, missing usage
   // descriptions, icon, entitlements, bundle id, version). Warnings only, under a second, never
   // changes files. Results per project path; reassigned (not mutated) so bindings update.
@@ -741,7 +741,7 @@ Item {
     check({ path: path }, next, next)
   }
 
-  // ------------------------------------------------------------ editor setup (helper/editor_setup.py)
+  // ------------------------------------------------------------ editor setup (helper/iosstudio/features/editor_setup.py)
   // Machine-wide: which editors (VS Code, Zed, Neovim) are installed and set up for Swift through
   // SourceKit-LSP (Settings › Code editor). Per project: whether completion works there yet (the build
   // server file), shown as a quiet hint on the card. Per-project answers are kept by path, like `checks`.
@@ -815,7 +815,7 @@ Item {
     editorStatus({ path: path }, next, next)
   }
 
-  // ------------------------------------------------------------ format and lint (helper/format.py)
+  // ------------------------------------------------------------ format and lint (helper/iosstudio/features/format.py)
   // swift-format (and SwiftLint when it's installed) on a project's Swift files. Formatting is a dry run
   // first (a bounded unified diff), then --apply. Lint results are style warnings ({category: "style",
   // file (absolute), line, col, rule, source}) kept per project path, like `checks`; the helper also saves
@@ -900,7 +900,7 @@ Item {
     }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
   }
 
-  // ------------------------------------------------------------ Swift packages (`packages`, helper/packages.py)
+  // ------------------------------------------------------------ Swift packages (`packages`, helper/iosstudio/features/packages.py)
   // One-shot calls; the long ones (add, update, resolve) stream and live in ProjectPackagesSheet.
   function packagesList(p, onDone, onFail) {
     var path = p && p.path ? p.path : p

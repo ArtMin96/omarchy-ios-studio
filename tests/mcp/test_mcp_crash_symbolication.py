@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import crash_symbols as S
-import device_crash
+from iosstudio.device import device_crash
+from iosstudio.features import crash_symbols as S
 from iosstudio_mcp import budget as B
 from iosstudio_mcp.tools import crashes as T
 from support.crash import ips

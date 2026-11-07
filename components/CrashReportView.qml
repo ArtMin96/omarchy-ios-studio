@@ -55,7 +55,7 @@ Item {
 
   readonly property string ownImage: item ? (item.process || "") : ""
 
-  // Crash symbolication (helper/crash_symbols.py): file:line for the app's frames, from the build that crashed.
+  // Crash symbolication (helper/iosstudio/features/crash_symbols.py): file:line for the app's frames, from the build that crashed.
   readonly property var sym: summary && summary.symbolication ? summary.symbolication : null
   readonly property string symLevel: !sym ? "" : (sym.status === "full" ? "ok" : (sym.status === "not-needed" ? "" : "warn"))
   readonly property string symNote: {

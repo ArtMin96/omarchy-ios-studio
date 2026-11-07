@@ -1,4 +1,4 @@
-"""Per-project build settings (helper/build_settings.py and the build path in helper/projects.py):
+"""Per-project build settings (helper/iosstudio/features/build_settings.py and the build path in helper/iosstudio/features/projects.py):
 validation, patches and diffs, open-file limits and suggestions from a project's own scripts. Builds through a fake
 xtool are in tests/cli/test_build_settings_cli.py. Stdlib only:
     python -m pytest tests/helper/test_build_settings.py
@@ -11,7 +11,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-import build_settings as B
+from iosstudio.features import build_settings as B
 
 INF = resource.RLIM_INFINITY
 

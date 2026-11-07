@@ -6,7 +6,7 @@ import qs.Ui
 import "../Model.js" as Model
 import ".."
 
-// "Packages…" sheet (projects slice): the Swift packages a project depends on (`packages`, helper/packages.py).
+// "Packages…" sheet (projects slice): the Swift packages a project depends on (`packages`, helper/iosstudio/features/packages.py).
 // One sheet, several views:
 //   list     the declared packages (name, URL or path, requirement, resolved version, who uses them) with Update
 //            and Remove per row; Add package… and Update all above; a warning with Resolve when some aren't

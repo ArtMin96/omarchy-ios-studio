@@ -7,7 +7,7 @@ import "../Model.js" as Model
 
 // "Build settings" sheet for one project (projects slice): the prebuild command, extra environment
 // variables, the open-file limit and whether a generated xtool.yml may be built. Stored per project by
-// the helper (`projects build-settings`, see helper/build_settings.py).
+// the helper (`projects build-settings`, see helper/iosstudio/features/build_settings.py).
 //   ProjectBuildSettingsSheet { id: bsSheet; app: page.app; svc: page.svc }
 //   bsSheet.openFor(project)
 Sheet {

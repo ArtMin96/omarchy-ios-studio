@@ -6,7 +6,7 @@ import qs.components
 import ".."
 import "../Model.js" as Model
 
-// Watch mode, compile on save (issue #7; helper/watch.py, docs/features/watch-mode.md).
+// Watch mode, compile on save (issue #7; helper/iosstudio/features/watch.py, docs/features/watch-mode.md).
 // One watcher per user: starting one stops the other, and agents (MCP ios_watch_start/stop) can
 // start or stop it too. Every change of the watcher is a snapshot in <runtime dir>/watch.json:
 //   {seq, pid, state: watching|changed|compiling|ok|failed|stopped, reason, message, project (name), path,

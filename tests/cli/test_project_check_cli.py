@@ -1,4 +1,4 @@
-"""The project check through helper/main.py: `projects check`, not-a-project, demo mode, and a compile-only build
+"""The project check through helper/run.py iosstudio: `projects check`, not-a-project, demo mode, and a compile-only build
 through a fake xtool with the pre-build warnings first."""
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class Cli(unittest.TestCase):
         self.env["IOS_STUDIO_XTOOL"] = str(write_exe(self.tmp / "xtool", FAKE_XTOOL))
 
     def helper(self, *args, env=None) -> list[dict]:
-        r = subprocess.run([sys.executable, str(ROOT / "helper" / "main.py"), *args], env=env or self.env,
+        r = subprocess.run([sys.executable, str(ROOT / "helper" / "run.py"), "iosstudio", *args], env=env or self.env,
                            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         return [json.loads(ln) for ln in r.stdout.splitlines() if ln.startswith("{")]
 
