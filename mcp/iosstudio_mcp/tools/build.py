@@ -35,8 +35,8 @@ Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="How to instal
                                                                   "when plugged in, else Wi-Fi")]
 Config = Annotated[Literal["debug", "release"], Field(description="Build configuration")]
 
-# The helper's build logs (helper/projects.py BUILD_LOGS); ios_build_log reads them directly.
-BUILD_LOGS = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ios-studio" / "build-logs"
+# The helper's build logs (helper/iosstudio/features/projects.py BUILD_LOGS); ios_build_log reads them directly.
+BUILD_LOGS = helper.appdirs.state_dir() / "build-logs"
 MAX_LOG_READ = 32 * 1024 * 1024    # a bigger log is read from its tail; line numbers stay those of the file
 
 LEVEL_RX = {"error": re.compile(r"\berror\b|\bfatal\b|\bfailed\b|\bfailure\b", re.I),

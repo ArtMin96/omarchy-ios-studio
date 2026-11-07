@@ -108,11 +108,8 @@ class Env:
 
     @classmethod
     def from_os(cls) -> "Env":
-        home = Path(os.environ.get("HOME") or Path.home())
-        return cls(home=home, config=Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config"),
-                   data=Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share"),
-                   path=os.environ.get("PATH", "/usr/bin"),
-                   state=Path(os.environ.get("XDG_STATE_HOME") or home / ".local/state") / "ios-studio")
+        return cls(home=Path.home(), config=appdirs.config_home(), data=appdirs.data_home(),
+                   path=os.environ.get("PATH", "/usr/bin"), state=appdirs.state_dir())
 
     def __post_init__(self) -> None:
         if self.state is None:
@@ -563,13 +560,9 @@ SDK_REASON = "xtool's iOS SDK isn't set up: finish it on the Toolchain page"
 
 
 def ios_sdk(env: Env) -> str | None:
-    """xtool's Darwin Swift SDK bundle (the same places setup.sdk_bundle_candidates checks), or None."""
-    for d in (env.config / "swiftpm/swift-sdks/darwin.artifactbundle",
-              env.home / ".config/swiftpm/swift-sdks/darwin.artifactbundle",
-              env.home / ".swiftpm/swift-sdks/darwin.artifactbundle"):
-        if d.is_dir():
-            return str(d)
-    return None
+    """xtool's Darwin Swift SDK bundle (appdirs.sdk_bundles), or None."""
+    d = appdirs.sdk_bundle(env.config, env.home)
+    return str(d) if d else None
 
 
 def bsp_status(project: Path, env: Env) -> dict:
@@ -1003,14 +996,7 @@ def editor_info(editor: str, env: Env, acts: list[dict] | None = None) -> dict:
 
 
 def _pending_note(pending: list[dict], env: Env) -> str:
-    return "Set up changes " + ", ".join(_tilde(a["path"], env) for a in pending if a["kind"] != "backup") + "."
-
-
-def _tilde(path: str, env: Env) -> str:
-    try:
-        return "~/" + str(Path(path).relative_to(env.home))
-    except ValueError:
-        return path
+    return "Set up changes " + ", ".join(appdirs.tilde(a["path"], env.home) for a in pending if a["kind"] != "backup") + "."
 
 
 def machine_status(env: Env | None = None) -> dict:

@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from mcp.server.mcpserver import Context
@@ -30,7 +29,7 @@ from mcp.server.mcpserver import Context
 from . import helper
 from .jobs import Job, JobManager
 
-DEVICE_STATE = Path.home() / ".local/state/ios-studio/device.json"
+DEVICE_STATE = helper.appdirs.state_dir() / "device.json"
 
 
 @dataclass

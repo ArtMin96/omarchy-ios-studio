@@ -35,7 +35,6 @@ LAUNCHER = appdirs.REPO / "bin" / "iosstudio-mcp"
 PYPROJECT = appdirs.REPO / "mcp" / "pyproject.toml"
 BACKUPS = appdirs.STATE_DIR / "backups"
 HOME = appdirs.HOME
-XDG_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
 DEMO_ENV = {"IOSSTUDIO_DEMO": "1"}
 PREPARE_TIMEOUT = 900    # seconds for the MCP server's first-time venv setup (downloads its Python packages)
 
@@ -52,18 +51,11 @@ def _venv() -> Path:
     env = os.environ.get("IOSSTUDIO_MCP_VENV")
     if env:
         return Path(env)
-    data = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
-    return data / "ios-studio" / "mcp-venv"
+    return appdirs.data_dir() / "mcp-venv"
 
 
 def _launcher() -> str:
     return str(LAUNCHER)
-
-
-def _tilde(p: str | Path | None) -> str:
-    s = str(p or "")
-    h = str(HOME)
-    return "~" + s[len(h):] if s == h or s.startswith(h + "/") else s
 
 
 def _which(names: tuple[str, ...]) -> str | None:
@@ -411,11 +403,12 @@ def _entry_json(kind: str, cmd: str, demo: bool) -> dict:
 
 def _clients() -> list[dict]:
     """id, name, how to detect it, where it keeps MCP servers and how iOS Studio registers there."""
-    crush_dir = XDG_CONFIG / "crush"
-    opencode_dir = XDG_CONFIG / "opencode"
+    xdg_config = appdirs.config_home()
+    crush_dir = xdg_config / "crush"
+    opencode_dir = xdg_config / "opencode"
     oc_file = next((opencode_dir / n for n in ("opencode.jsonc", "opencode.json")
                     if (opencode_dir / n).exists()), opencode_dir / "opencode.json")
-    zed_dir = XDG_CONFIG / "zed"
+    zed_dir = xdg_config / "zed"
     return [
         {"id": "claude", "name": "Claude Code", "bins": ("claude",), "dirs": (HOME / ".claude",),
          "file": HOME / ".claude.json", "format": "json", "path": ["mcpServers", SERVER], "cli": "claude",
@@ -533,14 +526,14 @@ def _snippet(c: dict, cmd: str) -> dict:
     if cid == "gemini":
         return {"kind": "shell", "text": f"gemini mcp add -s user --timeout 600000 {SERVER} {q}"}
     if cid == "codex":
-        return {"kind": "toml", "where": _tilde(c["file"]), "text": _toml_block(cmd, False)}
+        return {"kind": "toml", "where": appdirs.tilde(c["file"]), "text": _toml_block(cmd, False)}
     if cid == "crush":
-        return {"kind": "shell", "where": _tilde(c["file"]), "text": _crush_line(cmd, False)}
+        return {"kind": "shell", "where": appdirs.tilde(c["file"]), "text": _crush_line(cmd, False)}
     entry = _entry_json(c.get("entry", cid), cmd, False)
     wrapped: Any = entry
     for k in reversed(c["path"]):
         wrapped = {k: wrapped}
-    return {"kind": "json", "where": _tilde(c["file"]), "text": json.dumps(wrapped, indent=2)}
+    return {"kind": "json", "where": appdirs.tilde(c["file"]), "text": json.dumps(wrapped, indent=2)}
 
 
 def _method(c: dict) -> str:
@@ -554,15 +547,15 @@ def _describe(c: dict) -> dict:
     dir_found = next((str(d) for d in c["dirs"] if d.is_dir()), None)
     out: dict = {"id": c["id"], "name": c["name"], "installed": bool(binary or dir_found),
                  "binary": binary, "configDir": dir_found, "file": str(c["file"]),
-                 "fileShort": _tilde(c["file"]), "method": _method(c), "restartHint": c["restart"]}
+                 "fileShort": appdirs.tilde(c["file"]), "method": _method(c), "restartHint": c["restart"]}
     try:
         reg = _registration(c)
     except (JsoncError, tomllib.TOMLDecodeError, OSError) as exc:
         reg = {"registered": False, "command": None, "demo": False, "where": str(c["file"])}
         out["error"] = {"code": "config-unreadable",
-                        "message": f"{_tilde(c['file'])} couldn't be read ({exc}). Fix it by hand, then try again."}
+                        "message": f"{appdirs.tilde(c['file'])} couldn't be read ({exc}). Fix it by hand, then try again."}
     out.update(reg)
-    out["whereShort"] = _tilde(reg.get("where"))
+    out["whereShort"] = appdirs.tilde(reg.get("where"))
     cmd = reg.get("command")
     out["current"] = bool(reg["registered"] and cmd and _same_path(cmd, _launcher()))
     out["stale"] = bool(reg["registered"] and not out["current"])
@@ -587,8 +580,8 @@ def server_status() -> dict:
     have = _read(venv / ".iosstudio-deps").strip()
     py_ok = os.access(venv / "bin/python", os.X_OK)
     state = "ready" if py_ok and have == want else ("outdated" if py_ok else "missing")
-    return {"state": state, "ready": state == "ready", "launcher": _launcher(), "launcherShort": _tilde(_launcher()),
-            "venv": str(venv), "venvShort": _tilde(venv), "uv": bool(_which(("uv",))),
+    return {"state": state, "ready": state == "ready", "launcher": _launcher(), "launcherShort": appdirs.tilde(_launcher()),
+            "venv": str(venv), "venvShort": appdirs.tilde(venv), "uv": bool(_which(("uv",))),
             "launcherOk": os.access(LAUNCHER, os.X_OK)}
 
 
@@ -617,7 +610,7 @@ def _backup(cid: str, path: Path) -> Path | None:
 
 
 def _diff(path: Path, old: str, new: str) -> str:
-    name = _tilde(path)
+    name = appdirs.tilde(path)
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), name, name + " (after)"))
 
 
@@ -640,7 +633,7 @@ def _commit(cid: str, path: Path, old: str, new: str, verify) -> dict:
             target.unlink(missing_ok=True)
         if isinstance(exc, HelperError):
             raise
-        raise HelperError("config-write", f"Couldn't update {_tilde(path)}, so it was left as it was.",
+        raise HelperError("config-write", f"Couldn't update {appdirs.tilde(path)}, so it was left as it was.",
                           detail=repr(exc))
     return {"changed": True, "file": str(path), "backup": str(backup) if backup else None}
 
@@ -653,10 +646,10 @@ def _json_plan(c: dict, connect: bool, demo: bool) -> tuple[Path, str, str, Any]
     try:
         before = jsonc_load(old)
     except JsoncError as exc:
-        raise HelperError("config-unreadable", f"{_tilde(path)} has a mistake in it ({exc}), so iOS Studio "
+        raise HelperError("config-unreadable", f"{appdirs.tilde(path)} has a mistake in it ({exc}), so iOS Studio "
                           "won't touch it. Fix it by hand, or use Copy setup snippet.")
     if not isinstance(before, dict):
-        raise HelperError("config-unreadable", f"{_tilde(path)} isn't a settings object, so iOS Studio won't touch it.")
+        raise HelperError("config-unreadable", f"{appdirs.tilde(path)} isn't a settings object, so iOS Studio won't touch it.")
     expected = json.loads(json.dumps(before))
     node = expected
     for k in keypath[:-1]:
@@ -685,10 +678,10 @@ def _json_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
     try:
         got = jsonc_load(new)
     except JsoncError as exc:
-        raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {_tilde(path)}.",
+        raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {appdirs.tilde(path)}.",
                           detail=str(exc))
     if got != expected:
-        raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {_tilde(path)}, "
+        raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {appdirs.tilde(path)}, "
                           "so it changed nothing. Use Copy setup snippet to add it by hand.")
     plan = {"method": "file", "file": str(path), "diff": _diff(path, old, new), "changed": new != old}
     if dry:
@@ -696,7 +689,7 @@ def _json_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
 
     def verify(text: str) -> None:
         if jsonc_load(text) != expected:
-            raise HelperError("config-write", f"{_tilde(path)} didn't read back as expected, so it was restored.")
+            raise HelperError("config-write", f"{appdirs.tilde(path)} didn't read back as expected, so it was restored.")
     plan.update(_commit(c["id"], path, old, new, verify))
     return plan
 
@@ -787,7 +780,7 @@ def _toml_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
     try:
         before = tomllib.loads(old) if old.strip() else {}
     except tomllib.TOMLDecodeError as exc:
-        raise HelperError("config-unreadable", f"{_tilde(path)} has a mistake in it ({exc}), so iOS Studio "
+        raise HelperError("config-unreadable", f"{appdirs.tilde(path)} has a mistake in it ({exc}), so iOS Studio "
                           "won't touch it. Fix it by hand, or use Copy setup snippet.")
     expected = json.loads(json.dumps(before, default=str))
     servers = expected.setdefault("mcp_servers", {})
@@ -805,10 +798,10 @@ def _toml_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
         try:
             got = json.loads(json.dumps(tomllib.loads(text), default=str))
         except tomllib.TOMLDecodeError as exc:
-            raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {_tilde(path)}.",
+            raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {appdirs.tilde(path)}.",
                               detail=str(exc))
         if _drop_empty_servers(got, "mcp_servers") != expected:
-            raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {_tilde(path)} "
+            raise HelperError("config-write", f"iOS Studio couldn't work out a safe change to {appdirs.tilde(path)} "
                               "(the server may be set up in an unusual way there), so it changed nothing. "
                               "Edit it by hand, or use Copy setup snippet.")
     check(new)
@@ -842,13 +835,13 @@ def _crush_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
     def check(text: str) -> None:
         found = _crushrc_entries(text)
         if connect and (len(found) != 1 or not _same_path(found[0]["command"] or "", _launcher())):
-            raise HelperError("config-write", f"{_tilde(path)} didn't read back as expected.")
+            raise HelperError("config-write", f"{appdirs.tilde(path)} didn't read back as expected.")
         if not connect and found:
-            raise HelperError("config-write", f"iOS Studio couldn't remove itself from {_tilde(path)}.")
+            raise HelperError("config-write", f"iOS Studio couldn't remove itself from {appdirs.tilde(path)}.")
         if shutil.which("bash"):
             r = subprocess.run(["bash", "-n"], input=text, capture_output=True, text=True, timeout=10)
             if r.returncode != 0:
-                raise HelperError("config-write", f"The change would break {_tilde(path)}, so it wasn't made.",
+                raise HelperError("config-write", f"The change would break {appdirs.tilde(path)}, so it wasn't made.",
                                   detail=r.stderr)
     check(new)
     plan = {"method": "file", "file": str(path), "diff": _diff(path, old, new), "changed": new != old}
@@ -893,7 +886,7 @@ def _cli_apply(c: dict, connect: bool, demo: bool, dry: bool) -> dict:
     reg = _registration(c)
     if reg["registered"] != connect:
         raise HelperError("agent-cli", f"{c['name']} said yes, but iOS Studio can't see the change in "
-                          f"{_tilde(c['file'])}.")
+                          f"{appdirs.tilde(c['file'])}.")
     return plan
 
 
@@ -1016,7 +1009,7 @@ def test(flags: dict) -> int:
             raise HelperError("not-connected", f"{c['name']} isn't connected to iOS Studio yet.")
         cmd, demo, who = os.path.expanduser(reg["command"] or ""), demo or reg["demo"], c["name"]
         if not os.access(cmd, os.X_OK):
-            raise HelperError("stale", f"{c['name']} points to {_tilde(cmd)}, which doesn't exist anymore. "
+            raise HelperError("stale", f"{c['name']} points to {appdirs.tilde(cmd)}, which doesn't exist anymore. "
                               "Connect it again to fix that.")
     env = os.environ.copy()
     env.pop("IOSSTUDIO_DEMO", None)
@@ -1140,8 +1133,8 @@ def demo(action: str, flags: dict) -> int:
         cid = c["id"]
         clients.append({"id": cid, "name": c["name"], "installed": cid in installed, "method": _method(c),
                         "registered": cid in connected, "current": cid in connected, "stale": False, "demo": False,
-                        "command": launcher if cid in connected else None, "fileShort": _tilde(c["file"]),
-                        "whereShort": _tilde(c["file"]), "restartHint": c["restart"],
+                        "command": launcher if cid in connected else None, "fileShort": appdirs.tilde(c["file"]),
+                        "whereShort": appdirs.tilde(c["file"]), "restartHint": c["restart"],
                         "snippet": {"kind": "shell", "text": f"# demo mode\n{launcher}"}})
     return ok({"server": {"state": "ready", "ready": True, "launcherShort": launcher, "launcher": launcher,
                           "venvShort": "~/.local/share/ios-studio/mcp-venv", "uv": True, "launcherOk": True},

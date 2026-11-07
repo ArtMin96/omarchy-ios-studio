@@ -144,7 +144,7 @@ def tool_env(extra: dict | None = None) -> dict:
     # swift-bin's swift, never a mise/asdf shim; then our own ~/.local/bin (xtool, rcodesign, ipsw).
     env["PATH"] = f"/usr/bin:{LOCAL_BIN}:{env.get('PATH', '/usr/bin')}"
     # SwiftPM keeps SDKs under $XDG_CONFIG_HOME/swiftpm when it is set (Omarchy sets it).
-    env.setdefault("XDG_CONFIG_HOME", str(HOME / ".config"))
+    env.setdefault("XDG_CONFIG_HOME", str(appdirs.config_home()))
     env["NO_COLOR"] = "1"
     env.setdefault("LANG", "C.UTF-8")
     if extra:
@@ -349,9 +349,9 @@ def do_rmtree(p: Path, step_id=None, inside: tuple = (), exact: tuple = ()) -> i
         raise HelperError("unsafe-path", "iOS Studio refused to delete a path outside its own folders.", detail=str(p))
     size = 0 if p.is_symlink() else du(p)
     if DRY:
-        slog(step_id, f"would delete {_tilde(p)} ({fmt_bytes(size)})")
+        slog(step_id, f"would delete {appdirs.tilde(p)} ({fmt_bytes(size)})")
         return size
-    slog(step_id, f"deleting {_tilde(p)} ({fmt_bytes(size)})")
+    slog(step_id, f"deleting {appdirs.tilde(p)} ({fmt_bytes(size)})")
     if p.is_symlink() or p.is_file():
         p.unlink()
     else:
@@ -571,18 +571,6 @@ def sdk_extras_missing(bundle: Path) -> list[str]:
     if not os.access(bundle / "OpenAppleMacrosServer", os.X_OK):
         miss.append("macro server")
     return miss
-
-
-def sdk_bundle_candidates() -> list[Path]:
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
-    out = [cfg / "swiftpm/swift-sdks/darwin.artifactbundle", HOME / ".config/swiftpm/swift-sdks/darwin.artifactbundle",
-           HOME / ".swiftpm/swift-sdks/darwin.artifactbundle"]
-    seen, uniq = set(), []
-    for p in out:
-        if str(p) not in seen:
-            seen.add(str(p))
-            uniq.append(p)
-    return uniq
 
 
 def sdk_caches(stamp: str) -> list[dict]:
@@ -854,11 +842,11 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     if not ad:
         st, det = "missing", "Not downloaded yet"
     elif not head:
-        st, det = "done", f"Found at {_tilde(ad)}"
+        st, det = "done", f"Found at {appdirs.tilde(ad)}"
     elif head == APPLE_DEV_COMMIT:
-        st, det = "done", f"At the tested version {head[:7]} ({_tilde(ad)})"
+        st, det = "done", f"At the tested version {head[:7]} ({appdirs.tilde(ad)})"
     else:
-        st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} ({_tilde(ad)})"
+        st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} ({appdirs.tilde(ad)})"
     if ad and F["ad_dirty"][0] == 0 and F["ad_dirty"][1].strip():
         det += " · has local changes"
     steps.append(S("apple-dev", "iOS build scripts", "Toolchain",
@@ -904,7 +892,7 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     if best:
         st = "done"
         det = f"pymobiledevice3 {best[1]}" + ("" if best[1] == PYMD3_VERSION else f" (tested: {PYMD3_VERSION})") + \
-            ("" if best[0].startswith(str(VENV_DIR)) else f" · {_tilde(Path(best[0]).parent.parent)}")
+            ("" if best[0].startswith(str(VENV_DIR)) else f" · {appdirs.tilde(Path(best[0]).parent.parent)}")
     elif F["pymd3"]:
         st, det = "broken", "Installed, but broken (usually after a Python update). Repair recreates it"
     else:
@@ -944,7 +932,7 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     if sdk_rc == 0 and "is installed" in sdk_out and m:
         bundle = Path(m.group(1).strip())
     else:
-        for c in sdk_bundle_candidates():
+        for c in appdirs.sdk_bundles():
             if c.is_dir():
                 bundle = c
                 break
@@ -1095,12 +1083,6 @@ def last_device_developer_mode():
                 if isinstance(d.get(k), bool):
                     return d[k]
     return None
-
-
-def _tilde(p) -> str:
-    s = str(p)
-    h = str(HOME)
-    return "~" + s[len(h):] if s.startswith(h) else s
 
 
 def summarize(steps: list[dict]) -> dict:
@@ -1335,7 +1317,7 @@ def i_swift_hook(ctx: Ctx, step_id: str) -> None:
     OMARCHY_HOOK.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(HOOK_SRC, OMARCHY_HOOK)
     os.chmod(OMARCHY_HOOK, 0o755)
-    slog(step_id, f"installed the Omarchy hook {_tilde(OMARCHY_HOOK)} (keeps the hold through “omarchy refresh pacman”)")
+    slog(step_id, f"installed the Omarchy hook {appdirs.tilde(OMARCHY_HOOK)} (keeps the hold through “omarchy refresh pacman”)")
 
 
 def git(args: list, step_id: str, cwd=None, mutating=True, tail=None) -> int:
@@ -1349,7 +1331,7 @@ def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
         return ad
     d = APPLE_DEV_HOME
     if d.exists() and not (d / ".git").is_dir():
-        raise HelperError("apple-dev-path", f"{_tilde(d)} exists but isn't a download of the iOS build scripts. "
+        raise HelperError("apple-dev-path", f"{appdirs.tilde(d)} exists but isn't a download of the iOS build scripts. "
                           "Move it away, then try again.")
     do_mkdir(d.parent, step_id)
     tail: list = []
@@ -1388,7 +1370,7 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
         if complete(cand) and binary_has_old_ua(cand / "xtool") is False and not ctx.flags.get("force"):
             rc, _, _ = q([cand / "xtool", "--version"])
             if rc == 0:
-                slog(step_id, f"A working xtool with the sign-in fix is already built: {_tilde(cand)}")
+                slog(step_id, f"A working xtool with the sign-in fix is already built: {appdirs.tilde(cand)}")
                 do_symlink(cand / "xtool", link, step_id)
                 return
     need_space(APPLE_DEV_CACHE, 3_000_000_000, "building xtool")
@@ -1461,7 +1443,7 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     do_symlink(dest / "xtool", link, step_id)
     rc, out, _ = q([link, "--version"])
     must(rc, "build-failed", "The new xtool doesn't start.", step_id, [out])
-    slog(step_id, f"Installed {_tilde(dest)} ({out.strip()}, built from {build_commit[:7]})")
+    slog(step_id, f"Installed {appdirs.tilde(dest)} ({out.strip()}, built from {build_commit[:7]})")
 
 
 GIT_TIMEOUT = 60
@@ -1473,7 +1455,7 @@ def _git(src: Path, *args: str, input: bytes | None = None, env: dict | None = N
         return subprocess.run(["git", "-C", str(src), *args], input=input, env=env, capture_output=True,
                               timeout=GIT_TIMEOUT)
     except subprocess.TimeoutExpired:
-        raise HelperError("timeout", f"git {args[0]} took longer than {GIT_TIMEOUT} s in {_tilde(src)}.",
+        raise HelperError("timeout", f"git {args[0]} took longer than {GIT_TIMEOUT} s in {appdirs.tilde(src)}.",
                           fix("Try again", "setup", step="xtool"))
 
 
@@ -1545,7 +1527,7 @@ def _install_tarball_binary(url, sha, member, dest: Path, step_id, label):
                 shutil.copyfileobj(f, out)
             os.chmod(tmp, 0o755)
             os.replace(tmp, dest)
-    slog(step_id, f"installed {_tilde(dest)}")
+    slog(step_id, f"installed {appdirs.tilde(dest)}")
 
 
 def i_pymd3(ctx: Ctx, step_id: str) -> None:
@@ -1656,7 +1638,7 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
                 plist.write_bytes(data)
             except Exception:  # noqa: BLE001
                 slog(step_id, "couldn't record the Xcode version next to the SDK (only matters for App Store uploads)")
-            slog(step_id, f"SDK cache kept at {_tilde(cached)}")
+            slog(step_id, f"SDK cache kept at {appdirs.tilde(cached)}")
             cache = {"path": str(cached)}
         else:
             cache = {"path": str(SDK_CACHE / f"darwin-iPhoneOS{ctx.c['xcode']}.xtoolsdk")}
@@ -1934,25 +1916,25 @@ def cmd_info(flags: dict) -> int:
     qi = F["swift_qi"][1]
     pkgv = re.search(r"^Version\s*:\s*(\S+)", qi, re.M)
     items = [
-        item("xtool", "xtool", xv.split()[-1][:7] if xv else None, _tilde(xt_real) if xt_real else "Not installed",
+        item("xtool", "xtool", xv.split()[-1][:7] if xv else None, appdirs.tilde(xt_real) if xt_real else "Not installed",
              st_of("xtool"), hasFix=F["xtool_old_ua"] is False, step="xtool"),
         item("swift", "Swift", swift_ver, f"swift-bin {pkgv.group(1)}" if pkgv else "Not installed", st_of("swift"),
              held="swift-bin" in F["ignore"][1].split(), step="swift"),
         item("sdk", "iOS SDK", (sdk_ios_versions(c["bundle"]) or [None])[-1] if c.get("bundle") else None,
-             by["sdk"]["detail"], st_of("sdk"), path=_tilde(c["bundle"]) if c.get("bundle") else None,
+             by["sdk"]["detail"], st_of("sdk"), path=appdirs.tilde(c["bundle"]) if c.get("bundle") else None,
              stamp=sdk_stamp(c["bundle"]) if c.get("bundle") else None, wantedStamp=c["stamp"], step="sdk"),
         item("pymobiledevice3", "pymobiledevice3", c["pymd3"][1] if c.get("pymd3") else None,
-             (f"Python {c['pymd3'][2]} · {_tilde(Path(c['pymd3'][0]).parent.parent)}" if c.get("pymd3") else by["pymobiledevice3"]["detail"]),
+             (f"Python {c['pymd3'][2]} · {appdirs.tilde(Path(c['pymd3'][0]).parent.parent)}" if c.get("pymd3") else by["pymobiledevice3"]["detail"]),
              st_of("pymobiledevice3"), pinned=PYMD3_VERSION, step="pymobiledevice3"),
         item("rcodesign", "rcodesign", _first_ver(F["rcodesign"][1]) if F["rcodesign"][0] == 0 else None,
              "Signs App Store builds", st_of("rcodesign"), pinned=RCODESIGN_VERSION, step="rcodesign"),
         item("ipsw", "ipsw", _first_ver(F["ipsw"][1]) if F["ipsw"][0] == 0 else None, "Debugger helper (optional)",
              "ok" if F["ipsw"][0] == 0 else "missing", pinned=IPSW_VERSION, step="ipsw", optional=True),
         item("apple-dev", "omarchy-apple-dev", (c.get("apple_dev_head") or "")[:7] or None,
-             _tilde(c["apple_dev"]) if c.get("apple_dev") else "Not downloaded", st_of("apple-dev"),
+             appdirs.tilde(c["apple_dev"]) if c.get("apple_dev") else "Not downloaded", st_of("apple-dev"),
              pinned=APPLE_DEV_COMMIT[:7], step="apple-dev"),
     ]
-    caches = [dict(x, path=_tilde(x["path"])) for x in c.get("caches", [])]
+    caches = [dict(x, path=appdirs.tilde(x["path"])) for x in c.get("caches", [])]
     return ok({"items": items, "sdks": {"installed": sdk_ios_versions(c["bundle"]) if c.get("bundle") else [],
                                         "caches": caches, "xcodeNeeded": c["xcode"]},
                "summary": summarize(steps)})
@@ -2004,7 +1986,7 @@ def disk_items() -> list[dict]:
     active_lib = xt_real.parent if xt_real else None
     ad = find_apple_dev()
     stamp = apple_dev_pins(ad)["XTOOL_SDK_VERSION"]
-    bundle = next((b for b in sdk_bundle_candidates() if b.is_dir()), None)
+    bundle = appdirs.sdk_bundle()
     reg_vers = sdk_ios_versions(bundle) if bundle else []
     caches = sdk_caches(stamp)
     good_caches = [Path(x["path"]) for x in caches if x["current"] and x["complete"] and (not reg_vers or x["ios"] in reg_vers)]
@@ -2061,7 +2043,7 @@ def cmd_disk(flags: dict) -> int:
         sizes = dict(zip(all_paths, ex.map(lambda s: du(Path(s)), all_paths)))
     out = []
     for it in items:
-        ps = [{"path": _tilde(p), "size": sizes.get(str(p), 0)} for p in it["paths"]]
+        ps = [{"path": appdirs.tilde(p), "size": sizes.get(str(p), 0)} for p in it["paths"]]
         out.append({"id": it["id"], "name": it["name"], "size": sum(x["size"] for x in ps), "paths": ps,
                     "cleanable": bool(it["cleanable"] and ps and sum(x["size"] for x in ps) > 0), "safe": it.get("safe", False),
                     "note": it["note"]})
@@ -2097,7 +2079,7 @@ def cmd_clean(flags: dict) -> int:
             continue
         if item_id in ("project-builds", "build-trees") and p.name != ".build":
             continue
-        sprog(item_id, i / max(1, len(it["paths"])), f"Deleting {_tilde(p)}")
+        sprog(item_id, i / max(1, len(it["paths"])), f"Deleting {appdirs.tilde(p)}")
         freed += do_rmtree(p, item_id, inside=extra_roots)
     if item_id == "xip" and not DRY:
         st = load_state()
@@ -2126,7 +2108,7 @@ def cmd_remove_all(flags: dict) -> int:
     sprog(sid, 0.05, "Unregistering the iOS SDK")
     if Path("/usr/bin/swift").exists():
         run_stream(["/usr/bin/swift", "sdk", "remove", "darwin"], sid)
-    for b in sdk_bundle_candidates():
+    for b in appdirs.sdk_bundles():
         do_rmtree(b, sid)
     steps = [
         ("SDK copies", [SDK_CACHE]),
