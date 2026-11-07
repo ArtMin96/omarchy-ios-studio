@@ -316,8 +316,7 @@ def format_one(sf: list[str], root: Path, p: Path, timeout: float) -> dict:
     except OSError as exc:
         return {"file": r_path, "error": f"Can't read it ({exc.strerror or exc})."}
     try:
-        r = subprocess.run([*sf, "format", str(p)], capture_output=True, timeout=max(1.0, timeout),
-                           cwd=str(root), stdin=subprocess.DEVNULL)
+        r = common.run_group([*sf, "format", str(p)], max(1.0, timeout), text=False, cwd=str(root))
     except subprocess.TimeoutExpired:
         return {"file": r_path, "error": "swift-format took too long on this file.", "timeout": True}
     except OSError as exc:
@@ -541,8 +540,7 @@ def run_lint(root: Path, files: list[Path] | None = None, max_items: int = DEFAU
                 break
             chunk = [str(p) for p in files[i:i + LINT_CHUNK]]
             try:
-                r = subprocess.run([*sf, "lint", "--parallel", *chunk], capture_output=True, text=True,
-                                   timeout=left, cwd=str(root), stdin=subprocess.DEVNULL)
+                r = common.run_group([*sf, "lint", "--parallel", *chunk], left, cwd=str(root))
             except subprocess.TimeoutExpired:
                 timed_out = True
                 break
@@ -561,9 +559,8 @@ def run_lint(root: Path, files: list[Path] | None = None, max_items: int = DEFAU
             targets = [n for n in ("Package.swift", *SOURCE_DIRS) if (root / n).exists()]
         left = end - time.monotonic()
         try:
-            r = subprocess.run([lint_path, "lint", "--quiet", "--reporter", "json", "--force-exclude", *targets],
-                               capture_output=True, text=True, timeout=max(1.0, left), cwd=str(root),
-                               stdin=subprocess.DEVNULL)
+            r = common.run_group([lint_path, "lint", "--quiet", "--reporter", "json", "--force-exclude", *targets],
+                                 max(1.0, left), cwd=str(root))
             tools.append("swiftlint")
             found = parse_swiftlint_json(r.stdout, root)
             if not found and r.returncode not in (0, 2) and (r.stderr or "").strip():

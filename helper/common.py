@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -59,9 +61,15 @@ def fix(label: str, page: str, step: str | None = None, action: str | None = Non
 
 # ---------------------------------------------------------------- output
 
+_write_lock = threading.Lock()
+
+
 def _write(obj: dict) -> None:
-    sys.stdout.write(json.dumps(obj, separators=(",", ":"), default=str) + "\n")
-    sys.stdout.flush()
+    """One JSON line on stdout. Locked so lines from worker threads (heartbeats, readers) never interleave."""
+    line = json.dumps(obj, separators=(",", ":"), default=str) + "\n"
+    with _write_lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def ok(data: Any = None) -> int:
@@ -173,9 +181,66 @@ def run_cmd(argv: list[str], timeout: float = 60, input_text: str | None = None,
         raise HelperError("timeout", f"{Path(argv[0]).name} took too long to respond.")
 
 
+def kill_proc(proc: subprocess.Popen, reap: float = 5.0) -> None:
+    """SIGKILL a child — its whole process group when it leads one (started with start_new_session) — and reap it
+    (bounded: a process stuck in the kernel is left to init rather than hanging us)."""
+    if proc.poll() is not None:
+        return
+    try:
+        if os.getpgid(proc.pid) == proc.pid:
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=reap)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def wait_or_kill(proc: subprocess.Popen, timeout: float) -> int:
+    """proc.wait() with a ceiling: past `timeout` the child (and its group) is killed and TimeoutExpired raised."""
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_proc(proc)
+        raise
+
+
+def run_group(argv: list[str], timeout: float, *, input: str | bytes | None = None, text: bool = True,
+              cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True) in its own process group: on timeout (or any exception) the whole group
+    is killed — a driver like `swift format` leaves no tool running behind it — and TimeoutExpired re-raised."""
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, cwd=cwd, env=env,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(input, timeout=timeout)
+    except BaseException:
+        kill_proc(proc)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def tail_text(path: Path, max_bytes: int) -> str:
+    """The last `max_bytes` of a (possibly huge) text file without reading the rest; '' if it's missing."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read(max_bytes).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def stream_cmd(argv: list[str], env: dict | None = None, cwd: str | None = None,
-               on_line=None) -> int:
-    """Run, forwarding each output line as a log event (or to on_line). Returns exit code."""
+               on_line=None, timeout: float | None = None) -> int:
+    """Run, forwarding each output line as a log event (or to on_line). Returns exit code.
+
+    The child gets its own process group, killed whole on timeout, on an exception (cancel/SIGINT) and if it closes
+    its output but doesn't exit. Raises HelperError('timeout') past `timeout` seconds."""
     full_env = os.environ.copy()
     full_env["PATH"] = f"{LOCAL_BIN}:{full_env.get('PATH', '/usr/bin')}"
     full_env.setdefault("NO_COLOR", "1")
@@ -183,17 +248,40 @@ def stream_cmd(argv: list[str], env: dict | None = None, cwd: str | None = None,
         full_env.update(env)
     try:
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, env=full_env, cwd=cwd, stdin=subprocess.DEVNULL)
+                                bufsize=1, env=full_env, cwd=cwd, stdin=subprocess.DEVNULL,
+                                start_new_session=True)
     except FileNotFoundError:
         raise HelperError("missing-tool", f"{Path(argv[0]).name} isn't installed yet.",
                           fix("Open Setup", "setup"))
     assert proc.stdout is not None
-    for line in proc.stdout:
-        if on_line:
-            on_line(line.rstrip("\n"))
-        else:
-            log(line)
-    return proc.wait()
+    timed_out = threading.Event()
+    timer = None
+    if timeout is not None:
+        def expire() -> None:
+            timed_out.set()
+            kill_proc(proc, reap=0)
+        timer = threading.Timer(timeout, expire)
+        timer.daemon = True
+        timer.start()
+    try:
+        for line in proc.stdout:
+            if on_line:
+                on_line(line.rstrip("\n"))
+            else:
+                log(line)
+        rc = wait_or_kill(proc, 30)
+    except subprocess.TimeoutExpired:
+        rc = -9
+    except BaseException:
+        kill_proc(proc)
+        raise
+    finally:
+        if timer:
+            timer.cancel()
+        proc.stdout.close()
+    if timed_out.is_set():
+        raise HelperError("timeout", f"{Path(argv[0]).name} took longer than {int(timeout or 0)} s and was stopped.")
+    return rc
 
 
 def pymd3_python() -> str | None:
