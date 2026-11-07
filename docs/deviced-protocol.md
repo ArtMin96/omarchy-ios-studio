@@ -64,7 +64,7 @@ connection; other clients are unaffected. `{"all": true}` stops the daemon for e
 | `daemon.shutdown` | `{all?: bool}` | `{}`; detaches this client (or stops the daemon with `all`) |
 
 **Events.** Device-wide events (`devices`, `connection`, `deviceInfo`, `frame`, `mirror`, `pair`,
-`appIcon`, `appSizes`, `installProgress`, …) are broadcast to every client subscribed to them.
+`apps`, `appIcons`, `appSizes`, `installProgress`, …) are broadcast to every client subscribed to them.
 The default subscription is all events, which is what the GUI relies on. `syslog` and
 `syslogState` are per client: a client only gets entries for its own `syslog.start`, filtered by
 its own filters, whatever its subscription.
@@ -210,9 +210,10 @@ the tunnel is up.
 | `syslog` | `[SyslogEntry…]` (array!) | batched, see Syslog |
 | `syslogState` | `{running, udid, filters, dropped, reconnecting, error?}` | stream state change |
 | `pair` | Pair (below) | pairing flow progress |
-| `appIcon` | `{udid, bundleId, path}` | icon fetched in the background after `apps.list` |
+| `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list changed |
+| `appIcons` | `{udid, icons: {bundleId: path}}` | icons fetched in the background after `apps.list`, batched (at most every 250 ms or 10 icons) |
 | `installProgress` | `{path, percent, status}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing`, `done` (100) |
-| `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list` (sizes are slow to compute) |
+| `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list {sizes: true}` (sizes are slow to compute) |
 | `condition` | Condition + `reason` (see [Network conditions](#network-conditions)) | a condition was set or switched off |
 | `pcap` | Capture (see [Packet capture](#packet-capture)) | about once a second while capturing, and when it stops |
 | `metrics.sample` | `{sessionId, …Sample}` | about once a second per running metrics session |
@@ -287,7 +288,7 @@ Any field may be `null` when unknown (e.g. `battery` if the diagnostics service 
 
 | cmd | args | reply data |
 |---|---|---|
-| `apps.list` | `{udid?, system?: false, icons?: true, sizes?: bool}` | `[App…]` sorted by name (~0.7 s over Wi-Fi) |
+| `apps.list` | `{udid?, system?: false, icons?: true, sizes?: false, force?: false}` | `{apps: [App…] sorted by name, stale: bool, fetchedAt: epoch s}`; instant from the cache (see below) |
 | `app.launch` | `{bundleId, args?: [str], env?: {}, udid?, console?: false}` | `{bundleId, pid}` (mounts DDI first); `console: true` also captures stdout/stderr and adds `console` (see [App console](#app-console-console-used-by-logs--console-and-ios_app_console_read)) |
 | `app.kill` | `{bundleId, udid?}` | `{bundleId, killed: [pid…]}` |
 | `app.uninstall` | `{bundleId, udid?}` | `{bundleId}` (UI must confirm first) |
@@ -308,11 +309,24 @@ App:
 [Files](#files)); `debuggable` = signed with `get-task-allow` (a development build: its whole container
 can be opened).
 
-`size` (bytes, app + data) is `null` unless `sizes: true` was passed (which makes the reply ~9 s
-slower); with `sizes` omitted the daemon computes them in the background and sends `appSizes`.
-`sizes: false` skips that. `icon` is `null` when not cached yet; with `icons: true` the daemon fetches missing icons in the
-background (CoreDevice icon service) and sends one `appIcon` event per icon.
 `developer` = signed with a development profile (e.g. built with xtool).
+
+**The app list cache** (helper/deviced_features/app_index.py). The list is kept per device and kind
+(user apps / with `system`) in memory and in `~/.cache/ios-studio/apps-<udid>.json`, so the Phone page
+opens instantly, also right after a daemon restart. `running`/`pid` are always live (one process list
+per request). With no cache the daemon fetches now (one installation_proxy Lookup limited to the
+attributes above, `stale: false`). When the copy is older than 60 s, `force: true` was passed, or the
+phone reconnected / the active device changed, the reply is the cached copy with `stale: true` and the
+daemon refreshes it in the background; it sends `apps` only if the list changed. `app.install` and
+`app.uninstall` drop the cache, so the next `apps.list` is fetched fresh. `fetchedAt` is when the
+list was read from the phone. In `--once` mode the list is always fetched (no background work).
+
+`size` (bytes, app + data) is `null` until sizes are known. `sizes: true` computes them in the
+background (one Lookup of just the size attributes, ~9 s over Wi-Fi) and sends `appSizes`; they are
+cached for 10 minutes and merged into every reply meanwhile. Without `sizes: true` nothing is computed.
+`icon` is `null` when not cached yet; with `icons: true` the daemon fetches missing icons in the
+background (CoreDevice icon service, 3 connections at once) and sends them in batched `appIcons`
+events (the first icon at once, then at most every 250 ms or every 10 icons).
 
 ### Installing apps (`app.install`)
 

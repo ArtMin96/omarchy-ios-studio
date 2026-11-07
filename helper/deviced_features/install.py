@@ -1,4 +1,4 @@
-"""app.install (installProgress events), app.uninstall."""
+"""app.install (installProgress events), app.uninstall. Both invalidate the app list cache (app_index.INDEX)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 
 import device_link as link
-from deviced_core import classify, emit, err, icon_path, installed_apps
+from deviced_core import classify, emit, err, icon_path
+from deviced_features.app_index import INDEX, bundle_matches, device_fetcher
 
 
 def register(reg):
@@ -44,13 +45,11 @@ def register(reg):
             if isinstance(exc, asyncio.CancelledError):
                 raise
             raise link.install_error(exc, classify)
+        INDEX.invalidate(s.udid)
         installed = None
-        with contextlib.suppress(BaseException):
-            apps = await installed_apps(d.pmd3, rsd, application_type="User")
-            for k in sorted(apps):
-                if bid and (k == bid or k.endswith("." + bid)):
-                    installed = k
-                    break
+        with contextlib.suppress(Exception):   # refills the app list cache with the new app in it
+            apps, _, _ = await INDEX.list(s.udid, "User", device_fetcher(d.pmd3, rsd), sync=True)
+            installed = next((k for k in sorted(e["bundleId"] for e in apps) if bundle_matches(k, bid)), None)
         emit("installProgress", {"path": sp, "percent": 100, "status": "done"})
         with contextlib.suppress(OSError):
             if installed:
@@ -66,6 +65,7 @@ def register(reg):
         s, rsd = await d.rsd(a)
         async with d.pmd3.InstallationProxyService(lockdown=rsd) as ip:
             await ip.uninstall(bid)
+        INDEX.invalidate(s.udid)
         with contextlib.suppress(OSError):
             icon_path(s.udid, bid).unlink()
         return {"bundleId": bid}

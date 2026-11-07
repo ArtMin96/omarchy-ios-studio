@@ -1,4 +1,7 @@
-"""apps.list (+ appIcon / appSizes events), app.launch, app.kill, processes.list."""
+"""apps.list (+ apps / appIcons / appSizes events), app.launch, app.kill, processes.list.
+
+The app list itself is cached per device in deviced_features/app_index.py (INDEX); this module adds
+what changes all the time (running/pid) or lives elsewhere (icon files, sizes) to each reply."""
 from __future__ import annotations
 
 import asyncio
@@ -9,128 +12,113 @@ import time
 import uuid
 
 import device_link as link
-from deviced_core import dlog, emit, err, icon_path, installed_apps, is_connection_error, write_bytes
+import deviced_core as core
+from deviced_core import dlog, emit, err, icon_path, is_connection_error, write_bytes
+from deviced_features.app_index import INDEX, bundle_dir, compose, device_fetcher, fetch_icons, size_fetcher
 
 
-async def fetch_icons(d, s, bundle_ids: list[str]):
+async def running_pids(d, rsd) -> dict[str, int]:
+    """{app bundle dir: pid} of the running apps (empty if the process list isn't available)."""
+    out: dict[str, int] = {}
     try:
-        rsd = await s.get_rsd()
-        async with d.pmd3.IconService(rsd) as svc:
-            for bid in bundle_ids:
-                path = icon_path(s.udid, bid)
-                if path.exists():
-                    continue
-                try:
-                    icon = await asyncio.wait_for(svc.fetch_icon(bundle_identifier=bid, width=60, height=60, scale=2), 10)
-                except BaseException as exc:  # noqa: BLE001
-                    if is_connection_error(exc):
-                        raise
-                    continue
-                await asyncio.to_thread(write_bytes, path, icon.png_data)
-                emit("appIcon", {"udid": s.udid, "bundleId": bid, "path": str(path)})
+        async with d.pmd3.AppServiceService(rsd) as svc:
+            procs = await asyncio.wait_for(svc.list_processes(), 10)
     except asyncio.CancelledError:
         raise
     except BaseException as exc:  # noqa: BLE001
-        dlog(f"icons: {exc!r}")
+        dlog(f"apps: process list: {exc!r}")
+        return out
+    for p in procs:
+        url = p.get("executableURL")
+        path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
+        if ".app/" in path and "processIdentifier" in p:
+            out[bundle_dir(path)] = int(p["processIdentifier"])
+    return out
 
 
-async def fetch_sizes(d, s, kind: str):
+class _Icons:
+    def __init__(self, svc):
+        self.svc = svc
+
+    async def fetch(self, bid: str) -> bytes | None:
+        icon = await self.svc.fetch_icon(bundle_identifier=bid, width=60, height=60, scale=2)
+        return getattr(icon, "png_data", None)
+
+
+def _lazy_fetcher(d, s):
+    """A Fetch that resolves the session's current RSD when it runs (background refreshes outlive the request)."""
+    async def fetch(kind, bundle_ids=None):
+        return await device_fetcher(d.pmd3, await s.get_rsd())(kind, bundle_ids)
+    return fetch
+
+
+async def fetch_sizes(d, s, kind: str) -> dict:
     """Sizes are slow to compute (~9 s over Wi-Fi), so they follow apps.list as an event."""
     try:
-        rsd = await s.get_rsd()
-        apps = await installed_apps(d.pmd3, rsd,
-            application_type=kind, calculate_sizes=True)
-        sizes = {bid: int(i.get("StaticDiskUsage") or 0) + int(i.get("DynamicDiskUsage") or 0)
-                 for bid, i in apps.items() if i.get("StaticDiskUsage") is not None}
-        emit("appSizes", {"udid": s.udid, "sizes": sizes})
+        sizes = await size_fetcher(d.pmd3, await s.get_rsd())(kind)
     except asyncio.CancelledError:
         raise
     except BaseException as exc:  # noqa: BLE001
         dlog(f"sizes: {exc!r}")
+        return {}
+    INDEX.put_sizes(s.udid, kind, sizes)
+    emit("appSizes", {"udid": s.udid, "sizes": sizes})
+    return sizes
 
 
-async def app_pids(d, rsd, bundle_id: str) -> list[int]:
-    apps = await installed_apps(d.pmd3, rsd,
-        application_type="Any", bundle_identifiers=[bundle_id])
-    info = apps.get(bundle_id)
-    if not info:
+async def app_pids(d, s, rsd, bundle_id: str) -> list[int]:
+    info = await INDEX.lookup(s.udid, bundle_id, device_fetcher(d.pmd3, rsd))
+    if not info or info["bundleId"] != bundle_id:
         raise err("not-found", "That app isn't installed on your iPhone.")
-    app_path = (info.get("Path") or "").rstrip("/")
-    exe = info.get("CFBundleExecutable") or ""
+    app_dir = bundle_dir(info.get("path") or "")
+    exe = info.get("executable") or ""
     pids = []
     async with d.pmd3.AppServiceService(rsd) as svc:
         for p in await svc.list_processes():
             url = p.get("executableURL")
             path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
             path = path.removeprefix("file://")
-            if (app_path and path.startswith(app_path + "/")) or (exe and path.endswith(f".app/{exe}")):
+            if (app_dir and bundle_dir(path) == app_dir) or (exe and path.endswith(f".app/{exe}")):
                 if "processIdentifier" in p:
                     pids.append(int(p["processIdentifier"]))
     return sorted(set(pids))
 
 
 def register(reg):
-    tasks: dict[str, asyncio.Task | None] = {"icons": None, "sizes": None}
-
-    def idle(name: str) -> bool:
-        t = tasks[name]
-        return t is None or t.done()
-
     @reg.command("apps.list")
     async def c_apps_list(d, a):
         s, rsd = await d.rsd(a)
+        udid = s.udid
         kind = "Any" if a.get("system") else "User"
-        apps = await installed_apps(d.pmd3, rsd,
-            application_type=kind, calculate_sizes=bool(a.get("sizes", False)))
-        running: dict[str, int] = {}
-        with contextlib.suppress(BaseException):
-            async with d.pmd3.AppServiceService(rsd) as svc:
-                for p in await asyncio.wait_for(svc.list_processes(), 10):
-                    url = p.get("executableURL")
-                    path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
-                    if ".app/" in path and "processIdentifier" in p:
-                        running[path.split(".app/")[0].rstrip("/").removeprefix("file://") + ".app"] = int(p["processIdentifier"])
-        out = []
-        for bid, info in apps.items():
-            path = info.get("Path", "")
-            pid = None
-            for rp, rpid in running.items():
-                if path and (rp.endswith(path) or path.endswith(rp)):
-                    pid = rpid
-                    break
-            signer = info.get("SignerIdentity", "") or ""
-            icon = icon_path(s.udid, bid)
-            size = None
-            if info.get("StaticDiskUsage") is not None:
-                size = int(info.get("StaticDiskUsage") or 0) + int(info.get("DynamicDiskUsage") or 0)
-            out.append({
-                "bundleId": bid,
-                "name": info.get("CFBundleDisplayName") or info.get("CFBundleName") or bid,
-                "version": info.get("CFBundleShortVersionString", ""),
-                "build": info.get("CFBundleVersion", ""),
-                "developer": signer.startswith(("Apple Development", "iPhone Developer")) or bool(info.get("ProfileValidated") and "Development" in signer),
-                "signer": signer,
-                "removable": info.get("ApplicationType") == "User" or bool(info.get("IsRemovable", False)),
-                "hidden": "hidden" in (info.get("SBAppTags") or []),
-                "system": info.get("ApplicationType") == "System",
-                "executable": info.get("CFBundleExecutable", ""),
-                "path": path,
-                "size": size,
-                "icon": str(icon) if icon.exists() else None,
-                "running": pid is not None,
-                "pid": pid,
-                # Files tab: App Store apps that share Documents, and your builds (whole container)
-                "fileSharing": bool(info.get("UIFileSharingEnabled")),
-                "debuggable": bool((info.get("Entitlements") or {}).get("get-task-allow")),
-            })
-        out.sort(key=lambda x: (x["name"] or "").lower())
-        if a.get("sizes") is None and idle("sizes"):
-            tasks["sizes"] = asyncio.create_task(fetch_sizes(d, s, kind))
-        if a.get("icons", True):
+        fetch = _lazy_fetcher(d, s)
+
+        async def changed(_udid, k, apps):
+            running = await running_pids(d, await s.get_rsd())
+            emit("apps", {"udid": udid, "system": k == "Any",
+                          "apps": compose(apps, running, INDEX.sizes(udid, k), lambda bid: icon_path(udid, bid))})
+
+        (apps, stale, fetched_at), running = await asyncio.gather(
+            INDEX.list(udid, kind, fetch, force=bool(a.get("force")), sync=core.ONCE, on_change=changed),
+            running_pids(d, rsd))
+        sizes = INDEX.sizes(udid, kind)
+        if a.get("sizes") and sizes is None:
+            if core.ONCE:     # no background work in --once mode: the reply waits
+                sizes = await fetch_sizes(d, s, kind)
+            else:
+                INDEX.start(udid, f"sizes:{kind}", fetch_sizes(d, s, kind))
+        out = compose(apps, running, sizes, lambda bid: icon_path(udid, bid))
+        if a.get("icons", True) and not core.ONCE:
             missing = [x["bundleId"] for x in out if not x["icon"]]
-            if missing and idle("icons"):
-                tasks["icons"] = asyncio.create_task(fetch_icons(d, s, missing))
-        return out
+            if missing:
+                @contextlib.asynccontextmanager
+                async def open_icons():
+                    async with d.pmd3.IconService(await s.get_rsd()) as svc:
+                        yield _Icons(svc)
+
+                INDEX.start(udid, "icons", fetch_icons(
+                    udid, missing, open_icons, lambda bid: icon_path(udid, bid), write_bytes, emit,
+                    fatal=is_connection_error, log=dlog))
+        return {"apps": out, "stale": stale, "fetchedAt": round(fetched_at, 3)}
 
     @reg.command("app.launch")
     async def c_app_launch(d, a):
@@ -170,7 +158,7 @@ def register(reg):
         if not bid:
             raise err("bad-args", "Which app? (bundleId missing)")
         s, rsd = await d.rsd(a)
-        pids = await app_pids(d, rsd, bid)
+        pids = await app_pids(d, s, rsd, bid)
         async with d.pmd3.AppServiceService(rsd) as svc:
             for pid in pids:
                 await svc.send_signal_to_process(pid, int(signal.SIGKILL))
