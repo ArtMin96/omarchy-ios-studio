@@ -42,6 +42,7 @@ DEVICE_NEXT: dict[str, str] = {
     "timeout": "The iPhone was slow to answer. Make sure it's awake and unlocked, then retry "
                "(ios_device_list shows its connection).",
     "disconnected": "The device service restarted. Retry the call.",
+    "daemon-stopping": "The device service is restarting. Retry the call.",
     "daemon-unavailable": "The iPhone service couldn't start. Run ios_toolchain_check (pymobiledevice3 step), "
                           "or ask the user to open iOS Studio: ios_open_app(page='device').",
     # App containers (container.* in docs/deviced-protocol.md)
