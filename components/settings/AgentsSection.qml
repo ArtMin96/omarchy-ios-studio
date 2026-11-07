@@ -260,18 +260,11 @@ Card {
         anchors.bottomMargin: Style.spacing.lg
         spacing: Style.spacing.xxl
 
-        Rectangle {
-          implicitWidth: Style.space(32); implicitHeight: Style.space(32)
-          radius: Style.cornerRadius
-          color: row.c.registered ? Theme.levelFill("info") : Theme.surface
-          border.width: Style.normalBorderWidth
-          border.color: row.c.registered ? Util.alpha(Commons.Color.accent, 0.35) : Theme.hairline
-          Icon {
-            anchors.centerIn: parent
-            glyph: root.glyphs[row.c.id] || Model.Glyph.robot
-            size: Style.font.icon
-            color: row.c.registered ? Commons.Color.accent : (row.c.installed ? Commons.Color.foreground : Theme.dim)
-          }
+        IconTile {
+          Layout.alignment: Qt.AlignVCenter
+          glyph: root.glyphs[row.c.id] || Model.Glyph.robot
+          level: row.c.registered ? "info" : ""
+          glyphColor: row.c.registered ? Commons.Color.accent : (row.c.installed ? Commons.Color.foreground : Theme.dim)
         }
 
         ColumnLayout {

@@ -62,7 +62,7 @@ BorderSurface {
       spacing: Style.spacing.lg
 
       // The glyph shares the title's line (centred on it, not on title + subtitle);
-      // the subtitle hangs under the title text.
+      // the subtitle starts on the card's content edge, like the body below it.
       ColumnLayout {
         Layout.fillWidth: true
         spacing: 0
@@ -86,7 +86,6 @@ BorderSurface {
         }
         AppText {
           Layout.fillWidth: true
-          Layout.leftMargin: root.glyph !== "" ? glyphIcon.implicitWidth + Style.spacing.lg : 0
           visible: root.subtitle !== ""
           text: root.subtitle
           size: "small"

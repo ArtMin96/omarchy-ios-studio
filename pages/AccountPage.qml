@@ -285,7 +285,11 @@ PageFrame {
 
         ColumnLayout {
           id: hCol
-          anchors.fill: parent
+          // packed at the top: when the identity card beside it is taller, the spare room goes below
+          // Renew instead of opening a gap above it
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
           anchors.margins: Style.spacing.panelPadding
           spacing: Style.spacing.md
 
@@ -340,8 +344,8 @@ PageFrame {
             text: healthCard.h ? healthCard.h.detail : (page.svc.detailsError ? "Couldn't check signing right now." : "")
             tone: "dim"; wrapMode: Text.Wrap; size: "small"
           }
-          Item { Layout.fillHeight: true }
           ActionButton {
+            Layout.topMargin: Style.spacing.sm
             visible: !healthCard.loading && !!healthCard.e
             text: "Renew now"; glyph: Model.Glyph.sync
             kind: healthCard.lv === "warn" || healthCard.lv === "error" ? "primary" : "secondary"
