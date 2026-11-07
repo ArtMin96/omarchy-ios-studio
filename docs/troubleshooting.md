@@ -123,6 +123,26 @@ The ids in the list belong to the screen as it was read. If the app moved on sin
 
 App Store apps only show their Documents folder when they turn on file sharing, and this one doesn't. Your own apps, built in iOS Studio, always show their whole container.
 
+### App data: "Stop the app before changing its settings"
+
+A running app keeps its own copy of its settings and data in memory and writes it back, so iOS Studio never changes them while the app runs. Press Stop app (agents pass `stop_app=true`), then make the change. The app reads the new values the next time it starts.
+
+### App data: I changed a setting but the app still shows the old value
+
+iOS keeps a copy of each app's settings in memory, even after the app stops, and hands that copy to the app's next launch. Changing the file alone doesn't reach the app. So after a change iOS Studio installs your last build of the app over it (its data stays), and iOS then drops that copy. If the change says it was only written to the file, no build was found or installing it failed (for example, its 7-day profile expired). Build or renew the app (Projects › Run), then make the change again. To try a value right away, launch the app with the launch arguments shown (`-key value`); they apply to that launch only. The file as it was before each change is kept in `~/.cache/ios-studio/appdata/<bundle id>/backups/`.
+
+### App data: Reading right after Stop takes 10 seconds
+
+iOS saves a stopped app's last settings a few seconds after it stops (up to about 7 s on an iPhone 17 Pro). Data waits that long after a stop, so it never shows or edits a half-saved file.
+
+### App data: "Only your own apps … share their saved data"
+
+Settings and stores are only readable in development builds you installed from iOS Studio. App Store apps keep theirs private, and no setting changes that.
+
+### App data: Clean reinstall says there's no build
+
+Clean reinstall installs your last signed build of the app again, and none was found on this computer. Build the project once (Projects › Run, or `ios_build_start(action='ipa')`), then try again. Wipe data works without a build.
+
 ### "Packet capture needs a USB cable"
 
 The iPhone only shares its network traffic over a cable. Plug it in; the Start capture button turns on by itself.

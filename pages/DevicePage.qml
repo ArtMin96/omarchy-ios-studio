@@ -14,6 +14,25 @@ PageFrame {
   readonly property bool showDevice: !!svc.current && svc.connState !== "not-paired" && svc.status !== "needs-setup"
   property string tab: "apps"
   property int cursor: -1
+  // Apps › an app's details (DeviceAppDetailView) in place of the list: its bundle id ("" = the list), and
+  // the section last shown (Data or Files), kept for this session so the next app opens on it too
+  property string appDetail: ""
+  property string appSection: "defaults"     // defaults | stores | reset | files
+  property string appDataSection: "defaults" // the last of defaults/stores/reset, for section: "data" links
+  onAppSectionChanged: if (appSection !== "files") appDataSection = appSection
+
+  // section: defaults | stores | reset | files, or "data" for the last data section
+  function openApp(bundleId, section) {
+    if (section === "data") page.appSection = page.appDataSection
+    else if (["defaults", "stores", "reset", "files"].indexOf(section) >= 0) page.appSection = section
+    page.tab = "apps"
+    page.appDetail = bundleId || ""
+  }
+  function closeApp() {
+    var bid = page.appDetail
+    page.appDetail = ""
+    for (var i = 0; i < appsView.shown.length; i++) if (appsView.shown[i].bundleId === bid) page.cursor = i
+  }
 
   title: "iPhone"
   subtitle: showDevice ? "Apps, screen, files, network, performance, debugging and details of your iPhone." : "Pair your iPhone once and iOS Studio keeps it connected."
@@ -69,15 +88,31 @@ PageFrame {
     else if (p.action === "screenshot") { page.tab = "screen"; svc.screenshot() }
     else if (p.action === "compare") { page.tab = "screen"; screenView.pane = "compare" }
     else if (p.action === "mirror") { page.tab = "screen"; if (svc.connected && !svc.mirroring) svc.startMirror() }
-    else if (p.tab === "files" && ["media", "apps", "camera"].indexOf(p.action) >= 0) filesView.show(p.action)
+    else if (p.tab === "files" && ["media", "camera"].indexOf(p.action) >= 0) filesView.show(p.action)
+    // an app's details: {tab: "apps", app: bundleId, section: "data"|"files"}; the old Files › App files and
+    // App data links ("device:files:apps", "device:files:data", with an optional bundleId) land there too
+    else if (p.tab === "files" && (p.action === "apps" || p.action === "data")) {
+      var target = p.app || p.bundleId || ""
+      if (target) page.openApp(target, p.action === "data" ? "data" : "files")
+      else { page.tab = "apps"; page.appDetail = "" }
+    }
+    else if (p.tab === "apps" && (p.app || p.bundleId)) page.openApp(p.app || p.bundleId, p.section)
+    // a fix from the daemon ("Stop the app", e.g. appdata's app-running): the app whose details are open
+    else if (p.action === "stop-app") {
+      var open = page.appDetail ? svc.apps.filter(function(x) { return x.bundleId === page.appDetail })[0] : null
+      if (open) svc.stopApp(open)
+      else page.tab = "apps"
+    }
     if (svc.connected && svc.appsStatus === "unknown") svc.refreshApps()
   }
 
   function refresh() { svc.refresh() }
+  // Esc: from an app's details back to the list
+  function goBack() { if (page.appDetail !== "") page.closeApp() }
   function focusSearch() {
     if (!page.showDevice) return
     if (page.tab === "screen" && screenView.pane === "elements") { screenView.focusFilter(); return }
-    page.tab = "apps"; appsView.search.focusField()
+    page.tab = "apps"; page.appDetail = ""; appsView.search.focusField()
   }
 
   function handleKey(event) {
@@ -95,6 +130,14 @@ PageFrame {
       if (page.tab === "screen") return screenView.handleKey(a)   // Elements/Audit: j/k, Enter presses
       return false
     }
+    if (page.appDetail !== "") {
+      if (event.key === Qt.Key_Backspace) { page.closeApp(); return true }
+      var open = svc.apps.filter(function(x) { return x.bundleId === page.appDetail })[0]
+      if (!open) return false
+      if (event.text === "o") { svc.launchApp(open); return true }
+      if (a === "copy") { Util.execArgv(["wl-copy", open.bundleId]); app.toast("Copied " + open.bundleId); return true }
+      return false
+    }
     var n = appsView.shown.length
     if (n === 0) return false
     if (a === "down") { page.cursor = Math.min(n - 1, page.cursor + 1); return true }
@@ -103,7 +146,8 @@ PageFrame {
     if (a === "end") { page.cursor = n - 1; return true }
     var cur = appsView.current()
     if (!cur) return false
-    if (a === "activate") { svc.launchApp(cur); return true }
+    if (a === "activate") { page.openApp(cur.bundleId); return true }
+    if (event.text === "o") { svc.launchApp(cur); return true }
     if (a === "delete") { if (cur.removable) svc.uninstallApp(cur); return true }
     if (a === "copy") { Util.execArgv(["wl-copy", cur.bundleId]); app.toast("Copied " + cur.bundleId); return true }
     return false
@@ -177,10 +221,21 @@ PageFrame {
   DeviceAppsView {
     id: appsView
     Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "apps" && (page.svc.connected || page.svc.apps.length > 0)
+    visible: page.showDevice && page.tab === "apps" && page.appDetail === "" && (page.svc.connected || page.svc.apps.length > 0)
     app: page.app
     cursor: page.cursor
     onCursorMoved: function(i) { page.cursor = i }
+    onOpenApp: function(bid) { page.openApp(bid) }
+  }
+  DeviceAppDetailView {
+    Layout.fillWidth: true
+    visible: page.showDevice && page.tab === "apps" && page.appDetail !== "" && page.svc.connected
+    active: visible && page.app.page === "device"
+    app: page.app
+    bundleId: page.appDetail
+    section: page.appSection
+    onSectionPicked: function(s) { page.appSection = s }
+    onBack: page.closeApp()
   }
   DeviceScreenView {
     id: screenView

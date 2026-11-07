@@ -27,7 +27,8 @@ On the iPhone page you can:
 - watch the screen live, take screenshots and record short videos for bug reports
 - save a screenshot as a screen's baseline and compare later ones with it, with the changes highlighted (iPhone › Screen › Compare: baseline, current and diff side by side)
 - read the app on the screen as a list of buttons and texts, press them on the phone, and run Apple's accessibility audit
-- import photos and videos from the camera roll, browse your apps' files, and feed camera code test images
+- import photos and videos from the camera roll, and feed camera code test images
+- open an app for its details: browse and change its files, look inside what your own apps saved (UserDefaults, SwiftData and Core Data stores), edit a default, and reset an app to its first launch (iPhone › Apps › the app: Defaults, Stores, Reset and Files)
 - make the phone act as if it's on a slow network, running hot or with a slow GPU, and record an app's traffic over USB
 - measure an app's CPU, memory, energy and frame rate, with a report of anything unusual
 - capture a backtrace or stop at breakpoints in your own apps with LLDB
@@ -76,7 +77,7 @@ The [user guide](docs/guide.md) walks through each page. If something goes wrong
 
 ## AI agents
 
-iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can turn on compile on save and wait for the errors after each edit. It can check a project's settings for mistakes before building, and set up Zed, Neovim or VS Code for Swift completion. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can add a Swift package by URL and link it to the app, update packages and remove one (after showing the change to `Package.swift`). It can also read what your app prints while it runs. It can read the app's screen as data (the buttons and texts VoiceOver reads), press a button on your iPhone to check that a change works, and run Apple's accessibility audit. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
+iOS Studio comes with an MCP server, so coding agents can build, run and debug your iPhone apps. Open Settings › AI agents and click Connect next to Claude Code, Codex, opencode, Cursor, Gemini CLI, Crush or Zed. When a build fails, the agent gets each error sorted by kind (compiler, linker, Swift packages, signing, iPhone, toolchain or project settings) with a hint naming the tool that fixes it, so it rarely has to read the raw log. It can turn on compile on save and wait for the errors after each edit. It can check a project's settings for mistakes before building, and set up Zed, Neovim or VS Code for Swift completion. It can save run presets (launch arguments, environment, language) and launch your app with one, for example to check it in German. It can add a Swift package by URL and link it to the app, update packages and remove one (after showing the change to `Package.swift`). It can also read what your app prints while it runs. It can read the app's screen as data (the buttons and texts VoiceOver reads), press a button on your iPhone to check that a change works, and run Apple's accessibility audit. It can read an app's saved settings and SwiftData or Core Data stores, change a setting, and reset the app to its first launch. Agents can't sign in to your Apple ID or pair your phone for you, and they ask before they delete anything or change a project's build settings. See [docs/mcp.md](docs/mcp.md).
 
 ## Uninstall
 
@@ -97,6 +98,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 - [docs/features/screenshot-compare.md](docs/features/screenshot-compare.md) explains screenshot baselines and diffs: what counts as a change, what's ignored, where the files go and the agent tools.
 - [docs/features/ui-inspect.md](docs/features/ui-inspect.md) explains reading the screen's elements, pressing them and the accessibility audit: how it works, its limits and the agent tools.
 - [docs/features/packages.md](docs/features/packages.md) explains Swift package dependencies: listing, adding by URL, updating and removing, what is checked, and the agent tools.
+- [docs/features/app-data.md](docs/features/app-data.md) explains looking at and resetting an app's saved data: UserDefaults as JSON and editing a key, SwiftData and Core Data stores, wipe and clean reinstall, what needs the app stopped, and the agent tools.
 - To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Credits

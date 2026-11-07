@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>blob</key>
+	<data>
+	AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEy
+	MzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2Rl
+	ZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeY
+	mZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsc=
+	</data>
+	<key>empty</key>
+	<string></string>
+	<key>hasSeenOnboarding</key>
+	<true/>
+	<key>lastOpened</key>
+	<date>2026-11-06T08:30:00Z</date>
+	<key>launchCount</key>
+	<integer>7</integer>
+	<key>nested</key>
+	<dict>
+		<key>inner</key>
+		<dict>
+			<key>deep</key>
+			<array>
+				<integer>1</integer>
+				<real>2.5</real>
+				<false/>
+				<data>
+				AP8=
+				</data>
+			</array>
+		</dict>
+		<key>when</key>
+		<date>2020-02-29T23:59:59Z</date>
+	</dict>
+	<key>recent</key>
+	<array>
+		<string>a</string>
+		<string>b</string>
+	</array>
+	<key>userName</key>
+	<string>Alex</string>
+	<key>volume</key>
+	<real>0.5</real>
+</dict>
+</plist>

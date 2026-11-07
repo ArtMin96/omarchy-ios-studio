@@ -1,6 +1,6 @@
 # MCP server evaluation
 
-`evaluation.xml` holds fourteen questions in the format of the [mcp-builder](https://github.com/anthropics/skills/tree/main/skills/mcp-builder) evaluation guide. Each question is read-only and stands on its own, needs more than one fact, and has a single answer checked by string comparison. They run against demo mode (`IOSSTUDIO_DEMO=1`), whose made-up account, iPhone, projects, crash reports, camera roll, app files and metrics session always give the same answers. Question 13 starts a measurement (`ios_metrics_start`), which changes nothing on the phone; every other question only reads.
+`evaluation.xml` holds fifteen questions in the format of the [mcp-builder](https://github.com/anthropics/skills/tree/main/skills/mcp-builder) evaluation guide. Each question is read-only and stands on its own, needs more than one fact, and has a single answer checked by string comparison. They run against demo mode (`IOSSTUDIO_DEMO=1`), whose made-up account, iPhone, projects, crash reports, camera roll, app files and metrics session always give the same answers. Question 13 starts a measurement (`ios_metrics_start`), which changes nothing on the phone; every other question only reads.
 
 ## Run it with an agent
 
@@ -34,8 +34,9 @@ This run had no API key. Each question was solved by hand in an MCP client over 
 | 12 | Length of the newest camera roll video | `ios_media_list(kind='video')` | 1 | pass |
 | 13 | Longest hang in the weather app's metrics report | `ios_metrics_start`, `ios_metrics_summary` | 2 | pass |
 | 14 | Name of the weather app's exported CSV | `ios_files_list(depth=4)` | 1 | pass |
+| 15 | Completions in the habit tracker's SwiftData store | `ios_app_store` | 1 | pass |
 
-All 14 passed, with 1.3 calls per question on average. Questions 11 to 14 were added with the Network, Files and Performance tools and checked the same way, through the MCP Python SDK against `IOSSTUDIO_DEMO=1`.
+All 15 passed, with 1.3 calls per question on average. Questions 11 to 14 were added with the Network, Files and Performance tools, and question 15 with the App data tools (2026-11-07). They were checked the same way, through the MCP Python SDK against `IOSSTUDIO_DEMO=1`.
 
 The pass found these problems, which are now fixed:
 

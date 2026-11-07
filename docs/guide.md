@@ -58,9 +58,9 @@ If no phone is paired, the page offers two ways to pair: with a cable (any iPhon
 
 | Tab | What it does |
 |---|---|
-| Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. |
+| Apps | Lists installed apps, yours first. Open, stop or remove an app, or copy its bundle ID. Click an app for its details: its files and, for your own builds, its saved data. See [App details](#app-details) below. |
 | Screen | Watch the phone's screen, record short videos for bug reports, and take screenshots. Elements lists the buttons and texts of the app on screen and presses them; Audit runs Apple's accessibility audit; Compare checks a screen against a saved screenshot of it. See [Screen](#screen) below. |
-| Files | Import photos and videos from the camera roll, browse and change an app's files, and test camera code with files. See [Files](#files) below. |
+| Files | Import photos and videos from the camera roll, and test camera code with files. See [Files](#files) below. |
 | Location | Makes the phone think it's somewhere else. Pick a city or type coordinates. Restore real location puts it back. |
 | Network | Test how your app copes with a bad connection: make the whole phone act as if it's on Edge, 3G, LTE, DSL or a lossy network, or running hot, or with a slow GPU. Record an app's traffic over a USB cable and see which servers it talks to. See [Network](#network) below. |
 | Performance | Measures one app over time: CPU, memory, energy, frame rate, network, disk and battery, with a report of anything unusual. See [Measure how my app performs](#measure-how-my-app-performs). |
@@ -86,14 +86,22 @@ Take screenshot saves a full-resolution still. Save to Pictures and Copy image u
 
 The tabs beside the phone switch between this Live view, Elements and Audit, which read the app on the screen (see [Read the screen and check accessibility](#read-the-screen-and-check-accessibility)), and Compare, which checks the screen against a saved baseline (see [Check a screen against a baseline](#check-a-screen-against-a-baseline)).
 
+#### App details
+
+Click an app in Apps (or move to it and press Enter) to open its details in place of the list. The header shows the app's icon, name, bundle ID and version, with the same buttons as its row: open it on the iPhone, stop it while it runs, copy the bundle ID and remove it. Back, Esc or Backspace returns to the list. One switch below the header picks what you see, and the part you used last opens first:
+
+- Defaults, Stores and Reset, for your own builds: the app's saved settings and databases, and resetting it to its first launch. See [Look at and reset an app's data](#look-at-and-reset-an-apps-data).
+- Files, for your own builds (the whole container) and App Store apps that share files (only their Documents folder): save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete. An App Store app that shares files shows its files straight away, without the switch.
+
+App Store apps that don't share files have none of these, which the details say. If the app is removed or the iPhone disconnects, you're taken back to the list.
+
 #### Files
 
 ![iPhone › Files › Photos & videos](screenshots/files.png)
 
-Files has three parts, and nothing here ever changes the camera roll.
+Files has two parts, and nothing here ever changes the camera roll. An app's own files are in its details (see [App details](#app-details)).
 
 - Photos & videos shows the camera roll as thumbnails. Select some (Shift+click selects a range) and import them to a folder (`~/Pictures/iPhone` unless you pick another). HEIC photos can be saved as JPEG.
-- App files browses an app's files. Your own apps show their whole container; App Store apps show only their Documents folder, and only if they share files. Save files to this computer, add files with Add files or by dragging them onto the list, make folders and delete.
 - Camera test runs your app's camera code on test images and videos. See [Test camera code with files](#test-camera-code-with-files).
 
 #### Network
@@ -183,7 +191,7 @@ Press `?` in the app to see these.
 | `c` | Copy the highlighted value |
 | `?` | Show or hide the shortcut sheet |
 
-Projects also has `n` (new app), `a` (add a project), `b` (build panel), `B` (Check build), `w` (watch the highlighted project for changes, or stop), `F` (format the highlighted project), `L` (lint it) and `P` (its Swift packages); the shortcut sheet lists these under Projects. On the Device log and the Console, `Space` pauses. On iPhone › Screen › Elements, `Enter` presses the highlighted element on your iPhone, and on Audit it shows the issue's element; `s` takes a screenshot.
+Projects also has `n` (new app), `a` (add a project), `b` (build panel), `B` (Check build), `w` (watch the highlighted project for changes, or stop), `F` (format the highlighted project), `L` (lint it) and `P` (its Swift packages); the shortcut sheet lists these under Projects. On the Device log and the Console, `Space` pauses. On iPhone › Apps, `Enter` opens the highlighted app's details, `o` opens the app on the iPhone, `x` removes it and `c` copies its bundle ID; in the details `Backspace` or `Esc` goes back to the list. On iPhone › Screen › Elements, `Enter` presses the highlighted element on your iPhone, and on Audit it shows the issue's element; `s` takes a screenshot.
 
 ## Common tasks
 
@@ -263,6 +271,18 @@ Camera code is hard to test by pointing the phone at things. Files › Camera te
 3. On the iPhone page, open Files › Camera test. Pick the app, add images or videos (or drop them on the list) and press Run test.
 
 iOS Studio copies the files into the app's Documents/CameraTestInput, restarts the app with `-cameraTestMode 1`, waits for the app to write Documents/CameraTestOutput/done.json, and copies the results back. You get done.json, any images the app wrote, the app's log during the run and a warning if it crashed. If no done.json shows up before the timeout, the app is missing the hook or the launch argument.
+
+### Look at and reset an app's data
+
+![Apps › HabitTracker › Data › Stores](screenshots/app-data.png)
+
+When an app behaves oddly, look at what it has saved. On the iPhone page, open Apps and click the app: Defaults, Stores and Reset are in the switch under its header. Only your own builds have them: App Store apps keep their data private.
+
+- Defaults lists the app's UserDefaults keys with their type and value. Dictionaries and arrays open into JSON when you click them. Filter the keys, copy them all as JSON, add a key, or change or delete one. The app reads a change the next time it starts. Changing a key needs the app stopped, because a running app writes its own copy back over yours; Stop app does that. Saving or deleting a key takes about 10 to 20 seconds, and the sheet shows each step: iOS Studio waits for iOS to save the app's settings (a few seconds after it stops), writes the change, then installs the same build over the app, because iOS otherwise keeps handing the app its cached copy. The app's data stays. Without a build of the app on this computer only the file changes: the Defaults list then says the app may still see the old value and offers Copy launch arguments, which apply the value for one launch. If iOS puts an old value back later, the list says which key.
+- Stores lists the app's SwiftData, Core Data and SQLite files and their tables with row counts. Click a table to see its rows, 50 at a time. Hover a cut-off cell to read all of it. Core Data's own bookkeeping tables (`Z_METADATA`, `Z_PRIMARYKEY`, …) are hidden until you turn on Show internal tables under the list. Stores are only read, never changed.
+- Reset puts the app back to its first launch. Wipe data deletes everything in its container and keeps the app installed (it then installs the same build over the app, so iOS forgets the old settings). Clean reinstall removes the app with its data and installs your last build of it again. Both first show exactly what would be removed, and nothing goes until you press the red button.
+
+AI agents can do the same with `ios_app_defaults`, `ios_app_store` and `ios_app_reset` (see [mcp.md](mcp.md)). Details: [features/app-data.md](features/app-data.md).
 
 ### Debug my app on the iPhone
 

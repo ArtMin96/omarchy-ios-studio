@@ -56,4 +56,8 @@
       <question>The weather app keeps an exported CSV file somewhere in its container on the iPhone. What is that file's name?</question>
       <answer>forecast-2026-10-30.csv</answer>
    </qa_pair>
+   <qa_pair>
+      <question>The habit tracker app on the iPhone keeps its data in a SwiftData store. How many completions are saved in it? Answer with a number only.</question>
+      <answer>640</answer>
+   </qa_pair>
 </evaluation>
