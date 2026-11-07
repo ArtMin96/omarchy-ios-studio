@@ -30,10 +30,20 @@ Item {
   readonly property bool connected: connState === "connected" || connState === "locked"
   readonly property bool hasDevice: devices.length > 0
 
-  // apps
+  // apps. `apps` changes only when the list itself does (apps.list reply, `apps` event, launch/stop/remove);
+  // icons and sizes arrive later in batches and land in their own maps so a batch doesn't rebuild every
+  // view bound to `apps`. Their values are also written into the app objects in place (no change signal),
+  // so code reading `a.icon` / `a.size` sees them on its next evaluation.
   property var apps: []
+  property var appIcons: ({})              // bundleId -> icon path (appIcons / appIcon events)
+  property var appSizes: ({})              // bundleId -> bytes (appSizes, only after wantAppSizes())
   property string appsStatus: "unknown"    // unknown | loading | ready | error
   property var appsError: null
+  property bool appsStale: false           // the reply came from the daemon's cache; it refreshes in the background
+  property var appsFetchedAt: null         // when the daemon read the list from the iPhone (as the daemon sends it; null = unknown)
+  property double _sizesAskedAt: 0         // wantAppSizes(): once per device per sizesTtl
+  readonly property int sizesTtl: 600000
+  property string _appsKey: ""             // the list's content without icon/size, to skip no-op updates
   property var busyApps: ({})              // bundleId -> "launch" | "kill" | "uninstall"
 
   // profiles
@@ -258,18 +268,17 @@ Item {
         if (data.state === "failed" && was !== "failed" && data.error) root.app.toast(Model.errorMessage(data.error), "error")
       }
       break
-    case "appIcon":
-      _patchApp(data.bundleId, { icon: data.path })
+    case "apps":                                // the cached list changed after a background refresh
+      if (data && data.apps && _isCurrent(data.udid)) { _setApps(data.apps); root.appsStale = false }
+      break
+    case "appIcons":                            // batched: {udid, icons: {bundleId: path}}
+      if (data && data.icons && _isCurrent(data.udid)) _queueIcons(data.icons)
+      break
+    case "appIcon":                             // older daemons: one event per icon (coalesced below)
+      if (data && data.bundleId && data.path && _isCurrent(data.udid)) { var one = {}; one[data.bundleId] = data.path; _queueIcons(one) }
       break
     case "appSizes":
-      if (data && data.sizes) {
-        var list = root.apps.slice()
-        for (var i = 0; i < list.length; i++) {
-          var s = data.sizes[list[i].bundleId]
-          if (s !== undefined) list[i] = Object.assign({}, list[i], { size: s })
-        }
-        root.apps = list
-      }
+      if (data && data.sizes && _isCurrent(data.udid)) _mergeSizes(data.sizes)
       break
     case "condition":
       _onCondition(data || {})
@@ -311,9 +320,12 @@ Item {
       if (root._disconnectedAt > 0 && Date.now() - root._disconnectedAt > 20000)
         root.app.notify(name + " connected", "Over " + via, Model.Glyph.phone)
       root._disconnectedAt = 0
-      refreshInfo(true)
-      if (root.appsStatus !== "ready") refreshApps()
-      if (root.profilesStatus !== "ready") refreshProfiles()
+      // cheap first: the device's info, then the app list (served from the daemon's cache), and the
+      // provisioning profiles a little later (only the Profiles tab and its warning badge need them)
+      refreshInfo(true, function() {
+        if (root.appsStatus !== "ready") refreshApps()
+        if (root.profilesStatus !== "ready") profilesLater.restart()
+      })
     } else if (c.state !== "connected" && c.state !== "locked" && (prev === "connected" || prev === "locked")) {
       root._disconnectedAt = Date.now()
       root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
@@ -329,6 +341,8 @@ Item {
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
       root.info = ({}); root.apps = []; root.appsStatus = "unknown"; root.profiles = []; root.profilesStatus = "unknown"
+      root.appIcons = ({}); root.appSizes = ({}); root._appsKey = ""; root._sizesAskedAt = 0; root.appsStale = false
+      root._iconQueue = ({})
       root.lastShot = ""; root.framePath = ""; root.location = null
     }
     root.current = cur ? Object.assign({}, cur, root.info && root.info.udid === cur.udid ? root.info : {}, {
@@ -343,10 +357,68 @@ Item {
       if (list[i].bundleId === bundleId) {
         var copy = list.slice()
         copy[i] = Object.assign({}, list[i], patch)
-        root.apps = copy
+        _setApps(copy)
         return
       }
     }
+  }
+
+  function _isCurrent(udid) { return !udid || !root.current || udid === root.current.udid }
+
+  // A new list: keep the icons/sizes we know, take any the daemon put inline, and only reassign `apps`
+  // when something besides icon/size changed.
+  function _setApps(items) {
+    // plain JS objects (replies arrive as variant lists), so _writeInto can fill them in place
+    var list = []
+    for (var n = 0; n < items.length; n++) list.push(Object.assign({}, items[n]))
+    var icons = null, sizes = null
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], bid = a.bundleId
+      if (a.icon && root.appIcons[bid] !== a.icon) { if (!icons) icons = {}; icons[bid] = a.icon }
+      if (a.size && root.appSizes[bid] !== a.size) { if (!sizes) sizes = {}; sizes[bid] = a.size }
+    }
+    if (icons) root.appIcons = Object.assign({}, root.appIcons, icons)
+    if (sizes) root.appSizes = Object.assign({}, root.appSizes, sizes)
+    var key = JSON.stringify(list, function(k, v) { return k === "icon" || k === "size" ? undefined : v })
+    if (key === root._appsKey) return
+    for (var j = 0; j < list.length; j++) {
+      var b = list[j]
+      if (!b.icon && root.appIcons[b.bundleId]) b.icon = root.appIcons[b.bundleId]
+      if (!b.size && root.appSizes[b.bundleId]) b.size = root.appSizes[b.bundleId]
+    }
+    root._appsKey = key
+    root.apps = list
+  }
+
+  function _writeInto(field, map) {
+    var list = root.apps
+    for (var i = 0; i < list.length; i++) { var v = map[list[i].bundleId]; if (v !== undefined) list[i][field] = v }
+  }
+
+  // Icons arrive in batches (or one by one from older daemons): merge them into appIcons at most
+  // once per frame-ish tick, so N icons cost one map change, not N list rebuilds.
+  property var _iconQueue: ({})
+  function _queueIcons(icons) {
+    var q = root._iconQueue
+    for (var k in icons) q[k] = icons[k]
+    iconFlush.restart()
+  }
+  Timer {
+    id: iconFlush
+    interval: 50
+    onTriggered: {
+      var q = root._iconQueue, known = root.appIcons
+      root._iconQueue = ({})
+      for (var k in q) if (known[k] === q[k]) delete q[k]
+      if (Object.keys(q).length === 0) return
+      root.appIcons = Object.assign({}, root.appIcons, q)
+      root._writeInto("icon", q)
+    }
+  }
+
+  function _mergeSizes(sizes) {
+    root.appSizes = Object.assign({}, root.appSizes, sizes)
+    _writeInto("size", sizes)
   }
 
   function _setBusy(bundleId, what) {
@@ -395,7 +467,7 @@ Item {
     if (root.status === "needs-setup") { start(); return }
     if (!daemon.running) { start(); return }
     request("device.reconnect", {}, null)
-    if (root.connected) { refreshInfo(true); refreshApps(); refreshProfiles() }
+    if (root.connected) { refreshInfo(true); refreshApps(true); refreshProfiles() }
   }
 
   function reconnect() { request("device.reconnect", {}, null) }
@@ -407,27 +479,58 @@ Item {
     })
   }
 
-  function refreshInfo(fresh) {
+  // then(ok): called after the reply (connect uses it to ask for the app list next)
+  function refreshInfo(fresh, then) {
     request("device.info", { fresh: !!fresh }, function(ok, d) {
       if (ok) {
         root.info = d; root.location = d.location || null
         if (d.condition !== undefined) root.condition = d.condition ? Object.assign({ active: true }, d.condition) : null
         _updateCurrent()
       }
+      if (then) then(ok)
     })
   }
 
-  function refreshApps() {
+  // force: re-read the list from the iPhone instead of the daemon's cache (the Reload buttons).
+  // Sizes are slow on a real iPhone: they're only asked for through wantAppSizes().
+  function refreshApps(force) {
+    _listApps({ icons: true, force: !!force })
+  }
+
+  // Something shows or sorts by app sizes: ask once per device per sizesTtl (they come as an appSizes event).
+  function wantAppSizes() {
+    if (!root.connected || Date.now() - root._sizesAskedAt < root.sizesTtl) return
+    root._sizesAskedAt = Date.now()
+    _listApps({ icons: true, sizes: true })
+  }
+
+  function _listApps(args) {
     if (root.appsStatus !== "ready") root.appsStatus = "loading"
-    request("apps.list", { icons: true }, function(ok, d) {
+    request("apps.list", args, function(ok, d) {
       if (ok) {
-        // keep sizes we already know until the new appSizes event lands
-        var old = {}
-        for (var i = 0; i < root.apps.length; i++) old[root.apps[i].bundleId] = root.apps[i].size
-        for (var j = 0; j < d.length; j++) if (d[j].size === null && old[d[j].bundleId]) d[j].size = old[d[j].bundleId]
-        root.apps = d; root.appsStatus = "ready"; root.appsError = null
-      } else { root.appsError = d; if (root.appsStatus !== "ready") root.appsStatus = "error" }
+        // {apps, stale, fetchedAt}; older daemons answer with the bare list
+        var wrapped = !!d && d.apps !== undefined
+        root.appsStale = wrapped && !!d.stale
+        root.appsFetchedAt = wrapped && d.fetchedAt !== undefined ? d.fetchedAt : null
+        _setApps(wrapped ? d.apps : (d || []))
+        root.appsStatus = "ready"; root.appsError = null
+      } else {
+        root.appsError = d
+        if (root.appsStatus !== "ready") root.appsStatus = "error"
+        if (args.sizes) root._sizesAskedAt = 0
+      }
     })
+  }
+
+  // Profiles aren't needed to show the page: fetched a moment after the app list on connect.
+  Timer {
+    id: profilesLater
+    interval: 3000
+    onTriggered: if (root.connected && root.profilesStatus !== "ready" && root.profilesStatus !== "loading") root.refreshProfiles()
+  }
+  // The Profiles tab (or anything else that shows them) can call this to have them right away.
+  function wantProfiles() {
+    if (root.connected && root.profilesStatus !== "ready" && root.profilesStatus !== "loading") { profilesLater.stop(); refreshProfiles() }
   }
 
   function refreshProfiles() {
@@ -466,7 +569,7 @@ Item {
         request("app.uninstall", { bundleId: a.bundleId }, function(ok, d) {
           _setBusy(a.bundleId, "")
           if (ok) {
-            root.apps = root.apps.filter(function(x) { return x.bundleId !== a.bundleId })
+            _setApps(root.apps.filter(function(x) { return x.bundleId !== a.bundleId }))
             root.app.toast("Removed " + a.name, "ok")
           } else root.app.toast(Model.errorMessage(d), "error")
         })

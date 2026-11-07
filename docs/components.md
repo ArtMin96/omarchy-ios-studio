@@ -800,9 +800,21 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   readiness pills, plus fixes when something needs the user. Props: `app`; signals `openScreen()`,
   `devModeHelp()`.
 - **DeviceAppsView**: installed apps (search, launch, stop, remove). Stop keeps its slot (invisible) while an app
-  isn't running, so the row actions form fixed columns. Props: `app`, `cursor`, `devFirst`
-  (your own builds first); read-only `search` (the FilterField); `current()`; signals `cursorMoved(index)` and
-  `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor.
+  isn't running, so the row actions form fixed columns. Props: `app`, `cursor`, `sortBy` (`dev`: your own builds
+  first, `az`, `size`: largest first, which asks for sizes with `app.device.wantAppSizes()`); read-only `search`
+  (the FilterField), `shown` (the filtered, sorted apps); `current()`; signals `cursorMoved(index)` and
+  `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor; cursor moves scroll
+  the page to the row. The rows are a ListView inside the page's scroll: only the rows near the viewport exist, and
+  `shown` changes only with the list, the filter or the sort. Each row reads its icon and size from
+  `app.device.appIcons` / `app.device.appSizes` (bundle id → path / bytes), so a batch of icons rebinds images, not
+  rows.
+  DeviceService keeps the app list cheap: `apps` is reassigned only when the list itself changes (the `apps.list`
+  reply, the daemon's `apps` event, launch/stop/remove); icons (`appIcons` events, or per-app `appIcon` from older
+  daemons, merged every 50 ms) and sizes (`appSizes`) go into those maps and are also written into the app objects
+  in place, so `a.icon` / `a.size` reads elsewhere see them on their next evaluation. `refreshApps(force)` (the
+  Reload buttons pass `true`), `wantAppSizes()` (one `sizes: true` call per device per 10 minutes), `appsStale` /
+  `appsFetchedAt` from the reply. On connect it asks for `device.info` first, then `apps.list`, and the provisioning
+  profiles 3 s later; `wantProfiles()` fetches them right away.
 - **DeviceAppDetailView**: iPhone › Apps › an app, shown by DevicePage in place of the list (`appDetail`, the
   bundle id; `appSection`, the last section, kept for the session). Props: `app`, `bundleId`, `active`,
   `section` (`defaults`|`stores`|`reset`|`files`, falls back to one the app has); signals `back()` and
