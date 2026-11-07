@@ -315,6 +315,23 @@ function formatDuration(sec) {
   return h + " h" + (m ? " " + m + " min" : "")
 }
 
+// A countdown or stopwatch: "0:07", "4:59", "1:02:03" (seconds, floored). The one implementation for
+// timers in the UI; elapsed time since a start is clock(elapsedSeconds(startedAt)).
+function clock(sec) {
+  var s = Math.max(0, Math.floor(Number(sec) || 0))
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
+  var mm = h > 0 ? (m < 10 ? "0" : "") + m : String(m)
+  return (h > 0 ? h + ":" : "") + mm + ":" + (r < 10 ? "0" : "") + r
+}
+
+// Seconds since `t` (a Date, ms or s epoch, or an ISO string), never negative; NaN for no time.
+function elapsedSeconds(t, nowMs) {
+  var ms = t instanceof Date ? t.getTime() : _toMs(t)
+  if (!isFinite(ms)) return NaN
+  var now = nowMs === undefined ? Date.now() : nowMs
+  return Math.max(0, (now - ms) / 1000)
+}
+
 // Signing expiry: free-team profiles expire every 7 days.
 // -> { level: "ok"|"warn"|"error"|"info", text: "expires in 3 days", days }
 function expiryStatus(dateIso, nowMs) {
@@ -367,6 +384,7 @@ function errorMessage(err) {
   return String(err.message || err.code || "Something went wrong.")
 }
 
+// QML files can use Util.clamp from qs.Commons (also maps non-numbers to lo); this copy is for JS-only code.
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 
 function matches(haystack, query) {

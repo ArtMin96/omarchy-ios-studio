@@ -8,6 +8,8 @@ import "../Model.js" as Model
 
 // Owns the device daemon (bin/iosstudio-deviced, protocol: docs/deviced-protocol.md).
 //   app.device.request("apps.list", {}, function(ok, dataOrError) { … })
+//   app.device.fetch("apps.list", {}, function(data) { … }, function(err) { … })   // Cli.call's shape
+//   Resource { fetch: app.device.fetcher("profiles.list") }                        // see Resource.qml
 //   Connections { target: app.device; function onDaemonEvent(name, data) { … } }   // syslog, crash…
 Item {
   id: root
@@ -47,9 +49,17 @@ Item {
   property var busyApps: ({})              // bundleId -> "launch" | "kill" | "uninstall"
 
   // profiles
-  property var profiles: []
-  property string profilesStatus: "unknown"
-  property var profilesError: null
+  // The provisioning profiles on the phone, loaded on demand (wantProfiles) or a little after connecting.
+  // profiles / profilesStatus ("unknown" | "loading" | "ready" | "error") / profilesError are read-only
+  // views of it, kept for existing callers; new code can bind a StateView to profilesResource directly.
+  property Resource profilesResource: Resource {
+    active: root.connected
+    initial: []
+    fetch: root.fetcher("profiles.list")
+  }
+  readonly property var profiles: profilesResource.data || []
+  readonly property string profilesStatus: profilesResource.status === "idle" ? "unknown" : profilesResource.status
+  readonly property var profilesError: profilesResource.error
 
   // screen
   property bool mirroring: false
@@ -115,6 +125,19 @@ Item {
     root._pending = p
     daemon.write({ id: id, cmd: cmd, args: args || {} })
     return id
+  }
+
+  // request() with the (done(data), fail(error)) shape Cli.call and Resource use.
+  function fetch(cmd, args, done, fail, timeoutMs) {
+    return request(cmd, args, function(ok, d) {
+      if (ok) { if (done) done(d) } else if (fail) fail(d)
+    }, timeoutMs)
+  }
+
+  // A Resource fetch function: Resource { fetch: app.device.fetcher("profiles.list") }.
+  // args may be a function, read at each load.
+  function fetcher(cmd, args, timeoutMs) {
+    return function(done, fail) { root.fetch(cmd, typeof args === "function" ? args() : args, done, fail, timeoutMs) }
   }
 
   function _settle(id, ok, payload) {
@@ -324,7 +347,7 @@ Item {
       // provisioning profiles a little later (only the Profiles tab and its warning badge need them)
       refreshInfo(false, function() {
         if (root.appsStatus !== "ready") refreshApps()
-        if (root.profilesStatus !== "ready") profilesLater.restart()
+        if (root.profilesResource.status !== "ready") profilesLater.restart()
       })
     } else if (c.state !== "connected" && c.state !== "locked" && (prev === "connected" || prev === "locked")) {
       root._disconnectedAt = Date.now()
@@ -340,7 +363,7 @@ Item {
     for (var i = 0; i < root.devices.length; i++) if (root.devices[i].active) cur = root.devices[i]
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
-      root.info = ({}); root.apps = []; root.appsStatus = "unknown"; root.profiles = []; root.profilesStatus = "unknown"
+      root.info = ({}); root.apps = []; root.appsStatus = "unknown"; root.profilesResource.reset()
       root.appIcons = ({}); root.appSizes = ({}); root._appsKey = ""; root._sizesAskedAt = 0; root.appsStale = false
       root._iconQueue = ({})
       root.lastShot = ""; root.framePath = ""; root.location = null
@@ -526,20 +549,14 @@ Item {
   Timer {
     id: profilesLater
     interval: 3000
-    onTriggered: if (root.connected && root.profilesStatus !== "ready" && root.profilesStatus !== "loading") root.refreshProfiles()
+    onTriggered: if (root.profilesResource.status !== "ready") root.profilesResource.load()
   }
   // The Profiles tab (or anything else that shows them) can call this to have them right away.
   function wantProfiles() {
-    if (root.connected && root.profilesStatus !== "ready" && root.profilesStatus !== "loading") { profilesLater.stop(); refreshProfiles() }
+    if (root.connected && root.profilesResource.status !== "ready") { profilesLater.stop(); root.profilesResource.load() }
   }
 
-  function refreshProfiles() {
-    if (root.profilesStatus !== "ready") root.profilesStatus = "loading"
-    request("profiles.list", {}, function(ok, d) {
-      if (ok) { root.profiles = d; root.profilesStatus = "ready"; root.profilesError = null }
-      else { root.profilesError = d; if (root.profilesStatus !== "ready") root.profilesStatus = "error" }
-    })
-  }
+  function refreshProfiles() { root.profilesResource.load(true) }
 
   function launchApp(a) {
     _setBusy(a.bundleId, "launch")

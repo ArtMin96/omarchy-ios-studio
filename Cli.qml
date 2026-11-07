@@ -16,6 +16,10 @@ import Quickshell.Io
 // garbage, so callers can hand it straight to <ErrorState error: …>.
 //
 // opts (optional 5th arg): { timeout: ms (default 120000), program: [argv prefix] }
+//
+// For a Resource: cli.fetcher(argv, stdin, opts) returns its fetch function, (done, fail) => call(…).
+//   Resource { fetch: app.cli.fetcher(["account", "status"]) }
+//   Resource { fetch: app.cli.fetcher(() => ["projects", "list", "--root", root.dir]) }   // argv read at each load
 Item {
   id: root
   // Non-visual: hidden so a Layout it sits in doesn't give it a slot and a gap.
@@ -51,6 +55,15 @@ Item {
     p.running = true
     p.guardTimer.start()
     return true
+  }
+
+  // A Resource fetch function for this call. argv (and stdin) may be functions, read at each load.
+  function fetcher(argv, stdinText, opts) {
+    return function(done, fail) {
+      var a = typeof argv === "function" ? argv() : argv
+      var input = typeof stdinText === "function" ? stdinText() : stdinText
+      root.call(a, input, done, fail, opts)
+    }
   }
 
   // Parses the helper's stdout. Tolerates stray lines before the payload.

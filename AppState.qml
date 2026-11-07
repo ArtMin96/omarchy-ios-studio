@@ -79,6 +79,35 @@ Item {
     else console.log("toast:", level || "info", text)
   }
 
+  // A failed call's error ({code, message, …} or a string) as an error toast, optionally prefixed:
+  //   app.cli.call(argv, "", ok, app.toastError)    app.toastError(err, "Couldn't save")
+  function toastError(err, prefix) {
+    var msg = Model.errorMessage(err)
+    toast(prefix ? prefix + ": " + msg : msg, "error")
+  }
+
+  // Copy text to the clipboard and say so: copyText(bundleId) → "Copied com.example.app",
+  // copyText(path, "the path") → "Copied the path".
+  function copyText(text, label) {
+    var t = String(text === undefined || text === null ? "" : text)
+    Util.execArgv(["wl-copy", "--", t])
+    toast("Copied " + (label || (t.length > 60 ? t.substring(0, 57) + "…" : t)))
+  }
+
+  // Open a file or folder with its default app (xdg-open). showInFolder(file) opens the folder it's in.
+  // For a file:// URL (Image.source) use Util.fileUrl(path) from qs.Commons; is a program on PATH: the
+  // CommandCheck singleton (components/CommandCheck.qml).
+  function openPath(path) {
+    if (!path) return false
+    Util.execArgv(["xdg-open", String(path)])
+    return true
+  }
+  function showInFolder(file) {
+    var p = String(file || "")
+    var i = p.lastIndexOf("/")
+    return openPath(i > 0 ? p.substring(0, i) : p)
+  }
+
   // confirm({ title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel })
   // Returns a handle for closeConfirm(). A second dialog waits until the first is answered.
   function confirm(opts) {

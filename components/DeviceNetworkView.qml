@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import ".."
 import "../Model.js" as Model
 
 // iPhone › Network: simulate a slow network, heat or a throttled GPU (DVT condition inducer) and capture
@@ -16,9 +17,15 @@ ColumnLayout {
   property bool active: false               // the tab is on screen (DevicePage)
   readonly property bool wifi: (svc.current && svc.current.transport === "wifi") || svc.connection.transport === "wifi"
 
-  property var groups: []
-  property string listStatus: "unknown"     // unknown | loading | ready | error
-  property var listError: null
+  // the conditions the phone offers, reloaded each time the tab is shown
+  Resource {
+    id: conditions
+    active: root.active && root.svc.connected
+    autoLoad: true
+    initial: ({ groups: [] })
+    fetch: root.svc.fetcher("condition.list")
+  }
+  readonly property var groups: (conditions.data && conditions.data.groups) || []
   property string picked: ""                // profile id
   property int minutes: 5
   property bool applying: false
@@ -35,19 +42,6 @@ ColumnLayout {
   readonly property int remaining: cond ? Math.max(0, Math.round((cond.expiresAt || 0) - now)) : 0
 
   spacing: Style.spacing.huge
-
-  function clock(sec) {
-    var m = Math.floor(sec / 60), s = sec % 60
-    return m + ":" + (s < 10 ? "0" : "") + s
-  }
-
-  function load() {
-    if (root.listStatus !== "ready") root.listStatus = "loading"
-    root.svc.request("condition.list", {}, function(ok, d) {
-      if (ok) { root.groups = d.groups || []; root.listStatus = "ready"; root.listError = null }
-      else { root.listError = d; if (root.listStatus !== "ready") root.listStatus = "error" }
-    })
-  }
 
   function groupGlyph(kind) {
     return kind === "thermal" ? Model.Glyph.thermometer : kind === "gpu" ? Model.Glyph.chip : Model.Glyph.speed
@@ -69,7 +63,7 @@ ColumnLayout {
         root.svc.request("condition.set", { profile: p.id, timeoutS: root.minutes * 60, acceptWifiRisk: true }, function(ok, d) {
           root.applying = false
           if (ok) root.app.toast("Your iPhone now simulates " + p.name, "ok")
-          else root.app.toast(Model.errorMessage(d), "error")
+          else root.app.toastError(d)
         }, 60000)
       }
     })
@@ -80,21 +74,18 @@ ColumnLayout {
     root.svc.request("condition.clear", {}, function(ok, d) {
       root.clearing = false
       if (ok) root.app.toast("Your iPhone is back to normal", "ok")
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
   Timer { interval: 1000; repeat: true; running: root.active && root.svc.conditionActive; onTriggered: root.now = Date.now() / 1000 }
-  function activate() { root.now = Date.now() / 1000; if (root.svc.connected && root.listStatus !== "loading") load() }
-  onActiveChanged: if (active) activate()
-  Component.onCompleted: if (active) activate()
+  onActiveChanged: if (active) root.now = Date.now() / 1000
   Connections {
     target: root.svc
-    function onConnStateChanged() { if (root.active && root.svc.connected) root.load() }
     function onDaemonEvent(name, data) {
       if (name === "condition" || (name === "connection" && data && data.transport)) {
         root.now = Date.now() / 1000
-        if (name === "connection" && root.active && root.svc.connected) root.load()   // Wi-Fi rules follow the transport
+        if (name === "connection") conditions.load()   // Wi-Fi rules follow the transport
       }
     }
   }
@@ -136,7 +127,7 @@ ColumnLayout {
         ColumnLayout {
           spacing: Style.spacing.xxs
           Layout.alignment: Qt.AlignVCenter
-          AppText { Layout.alignment: Qt.AlignRight; text: root.clock(root.remaining); size: "title"; strong: true }
+          AppText { Layout.alignment: Qt.AlignRight; text: Model.clock(root.remaining); size: "title"; strong: true }
           AppText { Layout.alignment: Qt.AlignRight; text: "until it resets"; size: "caption"; tone: "dim" }
         }
         ActionButton {
@@ -179,78 +170,69 @@ ColumnLayout {
 
   QuietNote {
     Layout.fillWidth: true
-    visible: root.wifi && root.listStatus === "ready"
+    visible: root.wifi && conditions.status === "ready"
     glyph: Model.Glyph.wifi; level: "warn"
     title: "Your iPhone is connected over Wi-Fi"
     text: "Network conditions also slow down this computer's connection to the phone, and the two that cut the network off are only available over a USB cable. Heat and GPU states are fine either way."
   }
 
-  Skeleton {
+  StateView {
     Layout.fillWidth: true
-    visible: root.listStatus === "loading" || root.listStatus === "unknown"
-    lines: 6; rowHeight: Style.space(44); gap: Style.spacing.md
-  }
-  ErrorState {
-    Layout.fillWidth: true
-    visible: root.listStatus === "error"
     app: root.app
-    error: root.listError
-    title: "Couldn't read the conditions"
-    onRetry: root.load()
-  }
-  EmptyState {
-    Layout.fillWidth: true
-    visible: root.listStatus === "ready" && root.groups.length === 0
-    compact: true
-    glyph: Model.Glyph.speed
-    title: "No conditions offered"
-    text: "This iPhone doesn't offer any conditions to simulate."
-  }
+    resource: conditions
+    isEmpty: function(d) { return !d || !d.groups || d.groups.length === 0 }
+    errorTitle: "Couldn't read the conditions"
+    emptyGlyph: Model.Glyph.speed
+    emptyTitle: "No conditions offered"
+    emptyText: "This iPhone doesn't offer any conditions to simulate."
+    skeletonLines: 6; skeletonRowHeight: Style.space(44)
+    contentSpacing: Style.spacing.huge
 
-  Repeater {
-    model: root.listStatus === "ready" ? root.groups : []
-    delegate: ColumnLayout {
-      id: grp
-      required property var modelData
-      Layout.fillWidth: true
-      spacing: Style.spacing.xs
-      SectionHeader { Layout.fillWidth: true; text: grp.modelData.name; detail: String(grp.modelData.profiles.length) }
-      Repeater {
-        model: grp.modelData.profiles
-        delegate: ListRow {
-          id: row
-          required property var modelData
-          property bool hov: false
-          Layout.fillWidth: true
-          opacity: modelData.allowed ? 1 : 0.55
-          glyph: root.groupGlyph(grp.modelData.kind)
-          glyphColor: current ? Commons.Color.accent : Theme.dim
-          title: modelData.name
-          subtitle: modelData.summary || ""
-          current: root.picked === modelData.id
-          hasCursor: hov && modelData.allowed
-          onHovered: function(h) { row.hov = h }
-          onClicked: if (modelData.allowed) root.picked = modelData.id
-          trailing: [
-            StatusPill {
-              visible: !row.modelData.allowed
-              quiet: true; level: "error"; glyph: Model.Glyph.usb
-              text: "USB only"
-            },
-            StatusPill {
-              visible: root.svc.conditionActive && root.cond.profile === row.modelData.id
-              level: "warn"; text: "Active"
-            },
-            ActionButton {
-              visible: row.current && !(root.svc.conditionActive && root.cond.profile === row.modelData.id)
-              text: root.svc.conditionActive ? "Switch to this" : "Apply"
-              glyph: Model.Glyph.play; kind: "primary"; compact: true
-              enabled: root.svc.connected && !root.applying
-              busy: root.applying
-              tooltip: root.svc.conditionActive ? "Replaces the active condition" : ""
-              onClicked: root.apply()
-            }
-          ]
+    Repeater {
+      model: root.groups
+      delegate: ColumnLayout {
+        id: grp
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: Style.spacing.xs
+        SectionHeader { Layout.fillWidth: true; text: grp.modelData.name; detail: String(grp.modelData.profiles.length) }
+        Repeater {
+          model: grp.modelData.profiles
+          delegate: ListRow {
+            id: row
+            required property var modelData
+            property bool hov: false
+            Layout.fillWidth: true
+            opacity: modelData.allowed ? 1 : 0.55
+            glyph: root.groupGlyph(grp.modelData.kind)
+            glyphColor: current ? Commons.Color.accent : Theme.dim
+            title: modelData.name
+            subtitle: modelData.summary || ""
+            current: root.picked === modelData.id
+            hasCursor: hov && modelData.allowed
+            onHovered: function(h) { row.hov = h }
+            onClicked: if (modelData.allowed) root.picked = modelData.id
+            trailing: [
+              StatusPill {
+                visible: !row.modelData.allowed
+                quiet: true; level: "error"; glyph: Model.Glyph.usb
+                text: "USB only"
+              },
+              StatusPill {
+                visible: root.svc.conditionActive && root.cond.profile === row.modelData.id
+                level: "warn"; text: "Active"
+              },
+              ActionButton {
+                visible: row.current && !(root.svc.conditionActive && root.cond.profile === row.modelData.id)
+                text: root.svc.conditionActive ? "Switch to this" : "Apply"
+                glyph: Model.Glyph.play; kind: "primary"; compact: true
+                enabled: root.svc.connected && !root.applying
+                busy: root.applying
+                tooltip: root.svc.conditionActive ? "Replaces the active condition" : ""
+                onClicked: root.apply()
+              }
+            ]
+          }
         }
       }
     }
