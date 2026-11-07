@@ -285,7 +285,12 @@ GridLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.lg
         visible: !root.airplayView
+        // the button and the segmented limit share one height, so their edges and text line up
+        readonly property real rowH: Math.max(recBtn.implicitHeight, recLimitGroup.implicitHeight)
         ActionButton {
+          id: recBtn
+          compact: true
+          height: parent.rowH
           text: !root.recActive ? "Record" : (root.recNow.state === "finishing" ? "Saving…" : "Stop recording")
           glyph: root.recActive ? Model.Glyph.stop : Model.Glyph.dot
           kind: root.recActive ? "danger" : "secondary"
@@ -303,6 +308,7 @@ GridLayout {
         AppText { visible: !root.recActive; text: "Up to"; tone: "dim"; size: "small"; height: recLimitGroup.height; verticalAlignment: Text.AlignVCenter }
         ButtonGroupLite {
           id: recLimitGroup
+          height: parent.rowH
           visible: !root.recActive
           options: [{ value: "30", label: "30 s" }, { value: "60", label: "1 min" }, { value: "300", label: "5 min" }]
           value: String(root.recLimit)

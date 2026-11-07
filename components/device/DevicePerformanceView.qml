@@ -600,22 +600,37 @@ ColumnLayout {
         { key: "leaks", title: "Check for leaks", glyph: Model.Glyph.memory,
           text: "Scans the running app's memory for objects nothing points to any more. The app pauses for a few seconds. Your own apps only." }
       ]
+      // The three columns share the row's height; the filler pins each button to the bottom, so
+      // the buttons line up however long the text above them is.
       ColumnLayout {
+        id: check
         required property var modelData
+        readonly property bool isHitch: modelData.key === "hitch"
+        // why a button can't be pressed, shown next to it (not only in a tooltip)
+        readonly property string why: !root.svc.connected ? "" : !root.pickedApp ? "Pick an app first"
+                                      : isHitch && !root.running ? "Start measuring first" : ""
         Layout.fillWidth: true
+        Layout.preferredWidth: 1      // equal columns, whatever their text
+        Layout.fillHeight: true
         Layout.alignment: Qt.AlignTop
         spacing: Style.spacing.md
-        AppText { text: modelData.title; strong: true }
-        AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "dim"; text: modelData.text }
-        ActionButton {
-          compact: true
-          glyph: modelData.glyph
-          text: modelData.key === "hitch" ? (root.hitching ? "Tracking… " + Math.max(0, Math.round(root.sess.hitchTracking.until - root.nowMs / 1000)) + " s" : "Track hitches")
-              : modelData.key === "launch" ? "Profile launch" : "Check for leaks"
-          busy: modelData.key === "launch" ? root.profiling : modelData.key === "leaks" ? root.leaking : false
-          disabled: !(root.svc.connected && !!root.pickedApp && (modelData.key !== "hitch" || (root.running && !root.hitching && !!root.sess.pid)))
-          tooltip: modelData.key === "hitch" && !root.running ? "Start measuring first" : ""
-          onClicked: modelData.key === "hitch" ? root.trackHitches() : modelData.key === "launch" ? root.profileLaunch() : root.checkLeaks()
+        AppText { text: check.modelData.title; strong: true }
+        AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "dim"; text: check.modelData.text }
+        Item { Layout.fillHeight: true; visible: !root.narrow }
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.spacing.lg
+          ActionButton {
+            compact: true
+            glyph: check.modelData.glyph
+            text: check.isHitch ? (root.hitching ? "Tracking… " + Math.max(0, Math.round(root.sess.hitchTracking.until - root.nowMs / 1000)) + " s" : "Track hitches")
+                : check.modelData.key === "launch" ? "Profile launch" : "Check for leaks"
+            busy: check.modelData.key === "launch" ? root.profiling : check.modelData.key === "leaks" ? root.leaking : false
+            disabled: !(root.svc.connected && !!root.pickedApp && (!check.isHitch || (root.running && !root.hitching && !!root.sess.pid)))
+            tooltip: check.why
+            onClicked: check.isHitch ? root.trackHitches() : check.modelData.key === "launch" ? root.profileLaunch() : root.checkLeaks()
+          }
+          AppText { Layout.fillWidth: true; visible: check.why !== ""; text: check.why; size: "small"; tone: "faint"; elide: Text.ElideRight }
         }
       }
     }

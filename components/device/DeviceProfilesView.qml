@@ -15,7 +15,8 @@ ColumnLayout {
   readonly property var expired: svc.profiles.filter(function(p) { return p.expired })
   property bool showExpired: false
 
-  spacing: Style.spacing.lg
+  // the intro sits a section gap above the list, like the other tabs' text above their sections
+  spacing: Style.spacing.huge
 
   AppText {
     Layout.fillWidth: true
