@@ -230,13 +230,6 @@ def _python() -> list[str]:
     return argv
 
 
-def _pdeathsig() -> None:  # pragma: no cover - runs in the child
-    try:
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
-    except Exception:
-        pass
-
-
 def _backoff(first: float = 0.05, cap: float = 0.25):
     """Sleep intervals for a deadline poll: quick at first (the answer usually comes fast), then fewer wakeups."""
     d = first
@@ -625,7 +618,7 @@ class HelperBuild:
         self.argv = argv or [*_python(), *HELPER_MAIN, "build", kind, "--path", path,
                              "--build-id", build_id, *(extra or [])]
         self.proc = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=_pdeathsig,
+                                     stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=subproc.pdeathsig_term,
                                      close_fds=True)
         os.set_blocking(self.proc.stdout.fileno(), False)
         self.buf = b""
@@ -1197,7 +1190,7 @@ class DeviceSteps:
         try:
             p = subprocess.Popen([str(exe), "--once", cmd, json.dumps(args)], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                 start_new_session=True, preexec_fn=_pdeathsig)
+                                 start_new_session=True, preexec_fn=subproc.pdeathsig_term)
         except OSError as exc:
             return {"ok": False, "error": {"message": str(exc)}}
         self.job.once = p

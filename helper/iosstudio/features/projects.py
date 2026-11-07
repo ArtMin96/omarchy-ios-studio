@@ -26,12 +26,10 @@ import json
 import os
 import plistlib
 import re
-import select
 import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import time
 import zipfile
 from contextlib import contextmanager
@@ -48,7 +46,7 @@ BUILDS_FILE = appdirs.STATE_DIR / "builds.json"
 RENEWALS_FILE = appdirs.STATE_DIR / "renewals.json"
 BUILD_LOGS = appdirs.STATE_DIR / "build-logs"
 LOCK_DIR = appdirs.STATE_DIR / "locks"
-MAX_LINE = 64 * 1024     # longest build-output line kept whole
+MAX_LINE = subproc.MAX_LINE     # longest build-output line kept whole
 EXIT_GRACE = 60          # seconds a build may linger after closing its output
 TEMPLATES = appdirs.REPO / "templates"
 SYSTEMD_DIR = Path(os.environ.get("XDG_CONFIG_HOME", appdirs.HOME / ".config")) / "systemd/user"
@@ -155,21 +153,6 @@ def _xtool() -> str:
         raise HelperError("missing-xtool", "xtool, the tool that builds iPhone apps on Linux, isn't installed yet.",
                           fix("Install xtool", "setup", step="xtool"))
     return x
-
-
-def _xtool_env() -> dict:
-    env = os.environ.copy()
-    env.setdefault("XDG_CONFIG_HOME", str(appdirs.HOME / ".config"))
-    paths = [str(appdirs.LOCAL_BIN)]
-    swift = shutil.which("swift")
-    if swift:
-        paths.append(str(Path(os.path.realpath(swift)).parent))
-    paths += ["/usr/local/bin", "/usr/bin", "/bin"]
-    rest = [p for p in env.get("PATH", "").split(":") if p and p not in paths and "mise" not in p]
-    env["PATH"] = ":".join(paths + rest)
-    env["NO_COLOR"] = "1"
-    env["TERM"] = "dumb"
-    return env
 
 
 def _notify(title: str, body: str = "", urgency: str = "normal") -> None:
@@ -656,7 +639,7 @@ def cmd_new(flags: dict) -> int:
     xtool = subproc.which("xtool")
     used_xtool = False
     if xtool:
-        r = subproc.run_cmd([xtool, "new", name, "--skip-setup"], timeout=60, cwd=str(parent), env=_xtool_env())
+        r = subproc.run_cmd([xtool, "new", name, "--skip-setup"], timeout=60, cwd=str(parent), env=subproc.tool_env("xtool"))
         used_xtool = r.returncode == 0 and (dest / "Package.swift").is_file()
         if not used_xtool and dest.exists() and not any(dest.iterdir()):
             dest.rmdir()
@@ -749,7 +732,7 @@ TUI_EDITORS = {"nvim", "vim", "vi", "nano", "micro", "hx", "helix", "emacs"}
 def _spawn(argv: list[str], cwd: str | None = None) -> None:
     try:
         subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, env=_xtool_env())
+                         stderr=subprocess.DEVNULL, start_new_session=True, env=subproc.tool_env("xtool"))
     except OSError as exc:
         raise HelperError("launch-failed", f"Couldn't open {Path(argv[0]).name}.", fix("Choose editor", "settings"),
                           detail=str(exc))
@@ -976,63 +959,7 @@ def _child_setup(open_files: int | None = None) -> None:
     build_settings.raise_nofile(open_files)
 
 
-def _start_reaper(pgid: int) -> tuple[int, int]:
-    """Fork a watchdog that kills process group `pgid` once our end of a pipe closes.
-
-    The pipe closes when this helper exits for any reason (SIGKILL included), so the build's whole
-    tree (xtool -> swift-build -> swift-frontend...) never outlives us. Returns (reaper pid, write fd).
-    """
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:  # reaper
-        try:
-            os.close(w)
-            for fd in (0, 1):
-                try:
-                    os.dup2(os.open(os.devnull, os.O_RDWR), fd)
-                except OSError:
-                    pass
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-            signal.signal(signal.SIGHUP, signal.SIG_IGN)
-            while True:
-                try:
-                    if not os.read(r, 1):
-                        break
-                except InterruptedError:
-                    continue
-                except OSError:
-                    break
-            _kill_group(pgid)
-        finally:
-            os._exit(0)
-    os.close(r)
-    os.set_inheritable(w, False)
-    return pid, w
-
-
-def _kill_group(pgid: int, grace: float = 2.0) -> None:
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except PermissionError:
-        return
-    deadline = time.time() + grace
-    while time.time() < deadline:
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.1)
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-class Cancelled(Exception):
-    pass
+Cancelled = subproc.Cancelled
 
 
 class BuildRunner:
@@ -1063,15 +990,16 @@ class BuildRunner:
         self.started = _now()
         self.last_progress = 0.0
         self.waiting_device_since: float | None = None
-        self.proc: subprocess.Popen | None = None
         self.log_fh = open(log_file, "w", buffering=1)
         self._skip_cmdline = False
         self._prompts = 0
-        self.stdin_buf = b""
-        self.stdin_open = True
+        # stdin carries the UI's prompt answers and cancel; the child's stdin gets ours (write_child)
+        self.runner = subproc.Runner(lambda text: self.on_line(text), on_partial=lambda text: self.on_partial(text),
+                                     on_tick=self._check_device_wait, watch_stdin=True, tail_lines=1)
         self.raw = False            # True while the prebuild runs: log its output, parse nothing
         self.env: dict | None = None
         self.open_files: int | None = None
+        self.device_timeout = 90.0
 
     # ---- events
     def announce(self) -> None:
@@ -1329,122 +1257,38 @@ class BuildRunner:
         pid = f"p{self._prompts}"
         output.event("prompt", id=pid, kind=kind, message=message, options=options, **extra)
         while True:
-            while b"\n" in self.stdin_buf:
-                ln, self.stdin_buf = self.stdin_buf.split(b"\n", 1)
-                try:
-                    msg = json.loads(ln.decode() or "{}")
-                except json.JSONDecodeError:
-                    continue
-                if msg.get("cancel"):
-                    raise Cancelled()
-                if msg.get("prompt") == pid:
-                    return str(msg.get("value", ""))
-            if not self.stdin_open:
+            msg = self.runner.next_message()
+            if msg is None:
                 return str(extra.get("default", ""))
-            try:
-                chunk = os.read(sys.stdin.fileno(), 4096)
-            except InterruptedError:
-                continue
-            if not chunk:
-                self.stdin_open = False
-            self.stdin_buf += chunk
+            if msg.get("prompt") == pid:
+                return str(msg.get("value", ""))
+
+    @property
+    def proc(self) -> subprocess.Popen | None:
+        return self.runner.proc
 
     def write_child(self, text: str) -> None:
-        if self.proc and self.proc.stdin:
-            try:
-                self.proc.stdin.write(text.encode())
-                self.proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
+        self.runner.write(text)
+
+    def _check_device_wait(self) -> None:
+        if self.waiting_device_since and _now() - self.waiting_device_since > self.device_timeout \
+                and self.state.get("install") != "running":
+            raise HelperError("device-not-found",
+                              "Your iPhone didn't show up over the USB cable. Check the cable, unlock the "
+                              "phone and tap Trust if it asks.", fix("Open iPhone", "device"))
 
     # ---- run
     def run(self, argv: list[str], cwd: Path, device_timeout: float = 90) -> int:
-        env = self.env if self.env is not None else _xtool_env()
+        """Run one command to the end: own process group (setsid in _child_setup) with a reaper, so the whole
+        tree dies with us; {"cancel": true} on stdin or SIGTERM/SIGINT/SIGHUP raise Cancelled. A prebuild
+        command (raw) gets no input: a script that asks something reads EOF, not a hang."""
+        env = self.env if self.env is not None else subproc.tool_env("xtool")
         self.log_fh.write(f"$ {' '.join(shlex.quote(a) for a in argv)}\n  (in {cwd})\n")
         open_files = self.open_files
-        self.proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, preexec_fn=lambda: _child_setup(open_files), bufsize=0)
-        if self.raw:   # a prebuild command gets no input: a script that asks something reads EOF, not a hang
-            self.proc.stdin.close()
-            self.proc.stdin = None
-        pgid = self.proc.pid
-        reaper, reaper_fd = _start_reaper(pgid)
-
-        def on_signal(signum, _frame):
-            raise Cancelled()
-
-        old = {s: signal.signal(s, on_signal) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
-        out_fd = self.proc.stdout.fileno()
-        in_fd = sys.stdin.fileno()
-        buf = b""
-        try:
-            while True:
-                fds = [out_fd] + ([in_fd] if self.stdin_open else [])
-                try:
-                    ready, _, _ = select.select(fds, [], [], 0.5)
-                except InterruptedError:
-                    continue
-                if in_fd in ready:
-                    chunk = os.read(in_fd, 4096)
-                    if not chunk:
-                        self.stdin_open = False
-                    else:
-                        self.stdin_buf += chunk
-                        while b"\n" in self.stdin_buf:
-                            ln, self.stdin_buf = self.stdin_buf.split(b"\n", 1)
-                            try:
-                                msg = json.loads(ln.decode() or "{}")
-                            except json.JSONDecodeError:
-                                continue
-                            if msg.get("cancel"):
-                                raise Cancelled()
-                if out_fd in ready:
-                    chunk = os.read(out_fd, 65536)
-                    if not chunk:
-                        if buf:
-                            self.on_line(buf.decode(errors="replace"))
-                        break
-                    buf += chunk
-                    parts = re.split(rb"\r\n|\r|\n", buf)
-                    buf = parts.pop()
-                    for p in parts:
-                        self.on_line(p.decode(errors="replace"))
-                    if buf and self.on_partial(buf.decode(errors="replace")):
-                        buf = b""
-                    elif len(buf) > MAX_LINE:     # a newline-less flood: hand it on in pieces, don't grow forever
-                        self.on_line(buf[:MAX_LINE].decode(errors="replace"))
-                        buf = buf[MAX_LINE:]
-                if self.waiting_device_since and _now() - self.waiting_device_since > device_timeout \
-                        and self.state.get("install") != "running":
-                    raise HelperError("device-not-found",
-                                      "Your iPhone didn't show up over the USB cable. Check the cable, unlock the "
-                                      "phone and tap Trust if it asks.", fix("Open iPhone", "device"))
-            try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
-                rc = self.proc.wait(timeout=EXIT_GRACE)
-            except subprocess.TimeoutExpired:
-                raise HelperError("timeout", f"{Path(argv[0]).name} closed its output but didn't exit.")
-        except BaseException:
-            _kill_group(pgid)
-            subproc.kill_proc(self.proc)
-            raise
-        finally:
-            for s, h in old.items():
-                signal.signal(s, h)
-            try:
-                os.kill(reaper, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                os.waitpid(reaper, 0)
-            except ChildProcessError:
-                pass
-            os.close(reaper_fd)
-            # anything the build left behind in its group (it exited normally) goes too
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        return rc
+        self.device_timeout = device_timeout
+        return self.runner.run(argv, cwd=cwd, env=env, child_stdin=not self.raw, new_session=False,
+                               preexec_fn=lambda: _child_setup(open_files), reaper=True, signals=True,
+                               exit_grace=EXIT_GRACE, kill_grace=2.0)
 
     def close(self) -> None:
         try:
@@ -1546,7 +1390,7 @@ def _usb_udids() -> list[str]:
     if not x:
         return []
     try:
-        r = subproc.run_cmd([x, "devices", "--usb", "--no-wait"], timeout=8, env=_xtool_env())
+        r = subproc.run_cmd([x, "devices", "--usb", "--no-wait"], timeout=8, env=subproc.tool_env("xtool"))
     except HelperError:
         return []
     return re.findall(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9a-f]{40}", r.stdout)
@@ -1557,7 +1401,7 @@ def _auth_ok() -> bool:
     if not x:
         return False
     try:
-        r = subproc.run_cmd([x, "auth", "status"], timeout=20, env=_xtool_env())
+        r = subproc.run_cmd([x, "auth", "status"], timeout=20, env=subproc.tool_env("xtool"))
     except HelperError:
         return False
     return r.stdout.strip().startswith("Logged in.")
@@ -1655,7 +1499,7 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
             plan = ["prebuild"] + plan
         est = _estimate(str(p), kind)
         runner = BuildRunner(plan, interactive, log_file, est, ui_steps)
-        runner.env = build_settings.merged_env(_xtool_env(), bs)
+        runner.env = build_settings.merged_env(subproc.tool_env("xtool"), bs)
         runner.open_files = bs["openFiles"]
         output.event("build", kind=kind, path=str(p), project=product, bundleId=bundle, config=config, udid=udid, via=via,
                      logFile=str(log_file), estimate=est, plan=plan + ui_steps)

@@ -139,31 +139,10 @@ def fmt_dur(sec: float) -> str:
 
 # ------------------------------------------------------------------ processes
 
-def tool_env(extra: dict | None = None) -> dict:
-    env = os.environ.copy()
-    # swift-bin's swift, never a mise/asdf shim; then our own ~/.local/bin (xtool, rcodesign, ipsw).
-    env["PATH"] = f"/usr/bin:{LOCAL_BIN}:{env.get('PATH', '/usr/bin')}"
-    # SwiftPM keeps SDKs under $XDG_CONFIG_HOME/swiftpm when it is set (Omarchy sets it).
-    env.setdefault("XDG_CONFIG_HOME", str(HOME / ".config"))
-    env["NO_COLOR"] = "1"
-    env.setdefault("LANG", "C.UTF-8")
-    if extra:
-        env.update(extra)
-    return env
-
-
 def q(argv: list, timeout: float = 8, env: dict | None = None, cwd=None) -> tuple[int, str, str]:
-    """Quick read-only run. Never raises."""
-    try:
-        p = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=timeout,
-                           env=env or tool_env(), cwd=cwd, stdin=subprocess.DEVNULL)
-        return p.returncode, p.stdout, p.stderr
-    except FileNotFoundError:
-        return 127, "", "not found"
-    except subprocess.TimeoutExpired:
-        return 124, "", "timeout"
-    except OSError as exc:
-        return 126, "", str(exc)
+    """Quick read-only run: (rc, stdout, stderr). Never raises (127 not found, 124 timeout, 126 other)."""
+    r = subproc.run_cmd(argv, timeout=timeout, env=env or subproc.tool_env("setup"), cwd=cwd, check=False)
+    return r.returncode, r.stdout, r.stderr
 
 
 def _raise_nofile():
@@ -175,23 +154,15 @@ def _raise_nofile():
         pass
 
 
-_children: list[subprocess.Popen] = []
-
-
 def _on_term(signum, _frame):
-    for p in list(_children):
-        try:
-            p.terminate()
-        except OSError:
-            pass
-    sys.exit(130)
+    sys.exit(130)   # raised inside run_stream too: its Runner kills the running command on the way out
 
 
 BUILD_FRAC = re.compile(r"^\[(\d+)/(\d+)\]")
 PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s?%")
 
 
-MAX_LINE = 64 * 1024     # longest output line kept whole
+MAX_LINE = subproc.MAX_LINE     # longest output line kept whole
 EXIT_GRACE = 60          # seconds a command may linger after closing its output
 
 
@@ -208,85 +179,60 @@ def run_stream(argv: list, step_id: str | None, *, label: str = "", estimate: fl
         return 0
     lo, hi = frac_range
     start = time.time()
-    st = {"frac": None, "detail": label, "t": start}
+    st = {"frac": None, "detail": label, "t": start, "beat": start}
+    last_logged = ""
+
+    def beat():     # a heartbeat progress event every 2 s
+        now = time.time()
+        if now - st["beat"] < 2.0:
+            return
+        st["beat"] = now
+        el = now - start
+        frac = st["frac"]
+        eta = None
+        if frac is None and estimate:
+            frac = min(0.95, el / estimate)
+            eta = max(0, estimate - el)
+            detail = f"{st['detail'] or label} · {fmt_dur(el)} so far, usually about {fmt_dur(estimate)}"
+        else:
+            if frac and frac > 0.02:
+                eta = el / frac - el
+            detail = f"{st['detail'] or label} · {fmt_dur(el)}"
+        sprog(step_id, None if frac is None else lo + (hi - lo) * frac, detail, eta)
+
+    def on_line(line: str) -> None:
+        nonlocal last_logged
+        line = line.rstrip()
+        if not line:
+            return
+        if tail is not None:
+            tail.append(line)
+            del tail[:-60]
+        quiet = False
+        m = BUILD_FRAC.match(line)
+        if m and int(m.group(2)) > 0:
+            st["frac"] = int(m.group(1)) / int(m.group(2))
+        if parse:
+            res = parse(line, st)
+            quiet = res == "quiet"
+        elif PCT.search(line) and line.split("%")[0][:-6] == last_logged.split("%")[0][:-6]:
+            quiet = True  # a \r-redrawn percentage line: progress only
+        if PCT.search(line) and st["frac"] is None and parse is None:
+            try:
+                st["frac"] = float(PCT.search(line).group(1)) / 100
+            except ValueError:
+                pass
+        if not quiet:
+            slog(step_id, line)
+            last_logged = line
+
+    # Same process group as us (a pkexec/sudo child keeps working as before); killed on any exception.
     try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                env=env or tool_env(), cwd=cwd, preexec_fn=_raise_nofile)
+        return subproc.Runner(on_line, on_tick=beat).run(argv, env=env or subproc.tool_env("setup"), cwd=cwd,
+                                                         new_session=False, preexec_fn=_raise_nofile,
+                                                         exit_grace=EXIT_GRACE)
     except FileNotFoundError:
         raise HelperError("missing-tool", f"{Path(argv[0]).name} isn't installed yet.", fix("Open Setup", "setup"))
-    _children.append(proc)
-    stop = threading.Event()
-
-    def beat():
-        while not stop.wait(2.0):
-            el = time.time() - start
-            frac = st["frac"]
-            eta = None
-            if frac is None and estimate:
-                frac = min(0.95, el / estimate)
-                eta = max(0, estimate - el)
-                detail = f"{st['detail'] or label} · {fmt_dur(el)} so far, usually about {fmt_dur(estimate)}"
-            else:
-                if frac and frac > 0.02:
-                    eta = el / frac - el
-                detail = f"{st['detail'] or label} · {fmt_dur(el)}"
-            sprog(step_id, None if frac is None else lo + (hi - lo) * frac, detail, eta)
-
-    th = threading.Thread(target=beat, daemon=True)
-    th.start()
-    buf = b""
-    last_logged = ""
-    assert proc.stdout is not None
-    try:
-        while True:
-            chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
-            if not chunk:
-                break
-            buf += chunk
-            parts = re.split(rb"[\r\n]", buf)
-            buf = parts.pop()
-            if len(buf) > MAX_LINE:     # a newline-less flood: log it in pieces, don't grow forever
-                parts.append(buf[:MAX_LINE])
-                buf = buf[MAX_LINE:]
-            for raw in parts:
-                line = raw.decode("utf-8", "replace").rstrip()
-                if not line:
-                    continue
-                if tail is not None:
-                    tail.append(line)
-                    del tail[:-60]
-                quiet = False
-                m = BUILD_FRAC.match(line)
-                if m and int(m.group(2)) > 0:
-                    st["frac"] = int(m.group(1)) / int(m.group(2))
-                if parse:
-                    res = parse(line, st)
-                    quiet = res == "quiet"
-                elif PCT.search(line) and line.split("%")[0][:-6] == last_logged.split("%")[0][:-6]:
-                    quiet = True  # a \r-redrawn percentage line: progress only
-                if PCT.search(line) and st["frac"] is None and parse is None:
-                    try:
-                        st["frac"] = float(PCT.search(line).group(1)) / 100
-                    except ValueError:
-                        pass
-                if not quiet:
-                    slog(step_id, line)
-                    last_logged = line
-        if buf.strip():
-            slog(step_id, buf.decode("utf-8", "replace"))
-        try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
-            rc = subproc.wait_or_kill(proc, EXIT_GRACE)
-        except subprocess.TimeoutExpired:
-            raise HelperError("timeout", f"{Path(argv[0]).name} closed its output but didn't exit.")
-    except BaseException:
-        subproc.kill_proc(proc)
-        raise
-    finally:
-        stop.set()
-        th.join(timeout=3)
-        if proc in _children:
-            _children.remove(proc)
-    return rc
 
 
 def _shq(a: str) -> str:
@@ -1340,7 +1286,7 @@ def i_swift_hook(ctx: Ctx, step_id: str) -> None:
 
 def git(args: list, step_id: str, cwd=None, mutating=True, tail=None) -> int:
     return run_stream(["git", *args], step_id, mutating=mutating, cwd=cwd, tail=tail,
-                      env=tool_env({"GIT_TERMINAL_PROMPT": "0"}))
+                      env=subproc.tool_env("setup", {"GIT_TERMINAL_PROMPT": "0"}))
 
 
 def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
@@ -1417,7 +1363,7 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
         elif not fix_source_ok(src, sha):
             must(git(["-C", str(src), "checkout", "-q", "-f", "--detach", sha], step_id), "git", "Couldn't prepare xtool's source.", step_id)
             rc, date, _ = q(["git", "-C", src, "log", "-1", "--format=%aI", XTOOL_FIX_SHA])
-            env = tool_env({"GIT_COMMITTER_NAME": "iOS Studio", "GIT_COMMITTER_EMAIL": "setup@ios-studio.invalid",
+            env = subproc.tool_env("setup", {"GIT_COMMITTER_NAME": "iOS Studio", "GIT_COMMITTER_EMAIL": "setup@ios-studio.invalid",
                             "GIT_COMMITTER_DATE": date.strip()})
             rc = run_stream(["git", "-C", str(src), "-c", "commit.gpgsign=false", "cherry-pick", XTOOL_FIX_SHA], step_id, env=env, tail=tail)
             must(rc, "git", "Couldn't apply the xtool sign-in fix.", step_id, tail)
@@ -1429,7 +1375,7 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     ncpu = os.cpu_count() or 4
     est = max(300, min(1500, 7 * 60 * 16 / ncpu))
     swift_real = os.path.realpath("/usr/bin/swift") if Path("/usr/bin/swift").exists() else "/usr/bin/swift"
-    benv = tool_env({"PATH": f"{os.path.dirname(swift_real)}:/usr/bin:{LOCAL_BIN}:/bin"})
+    benv = subproc.tool_env("setup", {"PATH": f"{os.path.dirname(swift_real)}:/usr/bin:{LOCAL_BIN}:/bin"})
     tail = []
     rc = run_stream(["swift", "build", "-c", "release", "--product", "xtool", "-Xswiftc", "-no-toolchain-stdlib-rpath"],
                     step_id, label="Compiling xtool", estimate=est, env=benv, cwd=src, frac_range=(0.08, 0.92), tail=tail)
@@ -1448,7 +1394,7 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     stage.mkdir(parents=True)
     shutil.copy2(binp / "xtool", stage / "xtool")
     os.chmod(stage / "xtool", 0o755)
-    rc, ldd, _ = q(["ldd", stage / "xtool"], env=tool_env({"LD_LIBRARY_PATH": str(runtime)}))
+    rc, ldd, _ = q(["ldd", stage / "xtool"], env=subproc.tool_env("setup", {"LD_LIBRARY_PATH": str(runtime)}))
     for line in ldd.splitlines():
         m = re.search(r"=>\s*(\S+)", line)
         if m and m.group(1).startswith(str(runtime) + "/"):
@@ -1481,7 +1427,7 @@ def base_has_fix(src: Path, sha: str) -> bool:
     fd, index = tempfile.mkstemp()
     os.close(fd)
     try:
-        env = tool_env({"GIT_INDEX_FILE": index})
+        env = subproc.tool_env("setup", {"GIT_INDEX_FILE": index})
         if _git(src, "read-tree", sha, env=env).returncode != 0:
             return False
         diff = _git(src, "diff", f"{XTOOL_FIX_SHA}^", XTOOL_FIX_SHA).stdout
@@ -1608,7 +1554,7 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
     cache = ctx.c.get("good_cache")
     xip_path = ctx.flags.get("xip")
     xt = str(LOCAL_BIN / "xtool")
-    benv = tool_env({"PATH": f"{os.path.dirname(os.path.realpath('/usr/bin/swift'))}:/usr/bin:{LOCAL_BIN}:/bin"})
+    benv = subproc.tool_env("setup", {"PATH": f"{os.path.dirname(os.path.realpath('/usr/bin/swift'))}:/usr/bin:{LOCAL_BIN}:/bin"})
     tail: list = []
     if not cache or ctx.flags.get("rebuild"):
         xip = Path(xip_path) if xip_path else (Path(ctx.c["xip"]["path"]) if ctx.c.get("xip") and ctx.c["xip"].get("valid") else None)
