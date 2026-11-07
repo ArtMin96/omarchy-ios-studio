@@ -26,12 +26,11 @@ MAX_ITEMS = 64      # args / env entries shown per preset
 
 class PresetIn(BaseModel):
     """A preset as an agent passes it to ios_project_preset_set(action='save')."""
-    name: str = Field(min_length=1, max_length=40, description="Preset name, e.g. 'German' (unique per project, "
-                                                               "ignoring case)")
-    args: list[str] = Field(default_factory=list, description="Launch arguments, e.g. ['-ShowDebugMenu', 'YES']")
-    env: dict[str, str] = Field(default_factory=dict, description="Environment variables, e.g. {'API_ENV': 'staging'}")
-    language: str | None = Field(None, description="App language code, e.g. 'de' (adds -AppleLanguages (de))")
-    region: str | None = Field(None, description="Locale, e.g. 'de_DE' (adds -AppleLocale de_DE)")
+    name: str = Field(min_length=1, max_length=40, description="Unique per project, e.g. 'German'")
+    args: list[str] = Field(default_factory=list, description="Launch arguments")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    language: str | None = Field(None, description="e.g. 'de' (adds -AppleLanguages (de))")
+    region: str | None = Field(None, description="e.g. 'de_DE' (adds -AppleLocale de_DE)")
     ui_test_mode: bool = Field(False, description="Add the UI-test-mode launch argument")
 
     def to_helper(self) -> dict:
@@ -115,11 +114,9 @@ def register(mcp: MCPServer) -> None:
         name: Annotated[str | None, Field(description="Only this preset")] = None,
         max_bytes: MaxBytes = None,
     ) -> PresetsResult:
-        """Run presets of a project: saved launch arguments, environment variables, language/region and a
-        UI-test-mode flag, like Xcode scheme options. Each preset has `resolved` (the exact args and env a
-        launch gets), and the selected one (iOS Studio's Run button) is marked. Pass a preset's name as
-        `preset` to ios_run, ios_app_launch or ios_app_run_and_capture to launch with it. Save, delete or
-        select one with ios_project_preset_set. Read-only."""
+        """A project's run presets (saved launch args, env, language/region, UI-test flag; like Xcode scheme
+        options), each with `resolved` args/env and the selected one marked. Pass a name as `preset` to
+        ios_run, ios_app_launch or ios_app_run_and_capture. Change them with ios_project_preset_set."""
         return await _presets(ctx, project_path, "list", None, name, None, False, max_bytes)
 
     @tool(mcp, "Save, delete or select a run preset", kind="destructive")
@@ -127,26 +124,17 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         project_path: ProjectPath,
         action: Annotated[Literal["save", "delete", "select"], Field(
-            description="save: add or replace `preset`. delete: remove `name` (dry run unless confirm=true). "
-                        "select: make `name` the preset iOS Studio's Run button uses ('' clears it)")],
-        preset: Annotated[PresetIn | None, Field(description="save: the preset, e.g. {'name': 'German', 'language': "
-                                                             "'de', 'region': 'de_DE'}")] = None,
+            description="save `preset`, delete `name`, or select `name` for the app's Run button ('' clears)")],
+        preset: Annotated[PresetIn | None, Field(description="save: e.g. {'name': 'German', 'language': 'de'}")] = None,
         name: Annotated[str | None, Field(description="delete/select: the preset's name")] = None,
-        rename_from: Annotated[str | None, Field(description="save: the preset's old name when renaming it")] = None,
-        confirm: Annotated[bool, Field(description="delete: false = dry run. true only after the user agreed")] = False,
+        rename_from: Annotated[str | None, Field(description="save: old name when renaming")] = None,
+        confirm: Annotated[bool, Field(description="delete: false = dry run; true only after the user agreed")] = False,
         max_bytes: MaxBytes = None,
     ) -> PresetsResult:
-        """Change a project's run presets (list them with ios_project_presets).
-
-        - save: adds `preset`, or replaces the one with the same name (the result says replaced=true).
-          Rename with rename_from=<old name>. Example, the app in German:
-          ios_project_preset_set(project_path='WeatherGlance', action='save',
-              preset={'name': 'German', 'language': 'de', 'region': 'de_DE'})
-          then ios_run(project_path='WeatherGlance', preset='German').
-          language adds `-AppleLanguages (de)`, region adds `-AppleLocale de_DE`.
-        - delete: a dry run that changes nothing unless confirm=true; ask the user first.
-        - select: the preset iOS Studio's Run button uses (name='' clears it). Agents pass preset= instead.
-        Presets are stored in iOS Studio's settings, not in the project folder."""
+        """Change a project's run presets. save adds or replaces `preset` by name (rename_from to rename), then
+        launch with ios_run(preset=name); delete is a dry run until confirm=true (ask the user first); select
+        sets the app's Run button preset (agents pass preset= instead). Stored in iOS Studio's settings, not the
+        project."""
         return await _presets(ctx, project_path, action, preset, name, rename_from, confirm, max_bytes)
 
 

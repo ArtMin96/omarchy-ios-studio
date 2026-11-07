@@ -158,7 +158,7 @@ def dry_run(message: str, would: list[str], data: dict | None = None) -> ActionR
 
 # ------------------------------------------------------------------ smaller tools/list
 
-def _slim(schema: Any, required: frozenset = frozenset()) -> Any:
+def _slim(schema: Any) -> Any:
     """Schema noise off: `title` keywords and `default: null`; `anyOf` [X, null] with a plain X becomes X (an
     optional parameter is simply left out, so null isn't advertised; the server still accepts it), and long
     whitespace in descriptions is folded. What a call accepts is unchanged."""

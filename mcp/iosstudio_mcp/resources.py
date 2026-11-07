@@ -13,6 +13,7 @@ from .core import budget as B
 from .state import get_state, last_device_state
 
 MAX_TEXT = 100_000   # resources are capped too, with a pointer to the tool that pages through the rest
+GUIDE = Path(__file__).with_name("guide.md")   # the long version of the server's instructions
 
 
 def _tail(text: str, hint: str, cap: int = MAX_TEXT) -> str:
@@ -34,6 +35,15 @@ def _read_head(p: Path, hint: str, cap: int = MAX_TEXT) -> str:
 
 
 def register(mcp: MCPServer) -> None:
+
+    @mcp.resource("iosstudio://guide", name="guide", mime_type="text/markdown")
+    async def guide() -> str:
+        """How the iOS Studio tools fit together: builds, watch mode, packages, presets, jobs, the iPhone, screen
+        and UI, app data, debugger, performance, free-account limits and human-only steps."""
+        try:
+            return await asyncio.to_thread(_read_head, GUIDE, f"the whole guide is {GUIDE}")
+        except OSError:
+            raise ResourceError("The guide isn't in this install.")
 
     @mcp.resource("iosstudio://jobs/{job_id}/log", name="job-log", mime_type="text/plain")
     async def job_log(job_id: str, ctx: Context) -> str:

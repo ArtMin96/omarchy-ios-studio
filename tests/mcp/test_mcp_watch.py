@@ -255,7 +255,7 @@ class Registration(unittest.TestCase):
         from iosstudio_mcp import server
         names = {t.name for t in server.mcp._tool_manager.list_tools()}
         self.assertTrue({"ios_watch_start", "ios_watch_stop", "ios_watch_status"} <= names)
-        self.assertIn("ios_watch_start", server.INSTRUCTIONS)
+        self.assertIn("ios_watch_start", server.resources.GUIDE.read_text())
 
 
 if __name__ == "__main__":

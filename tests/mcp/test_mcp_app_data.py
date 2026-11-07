@@ -259,7 +259,7 @@ class Reset(Base):
 
     async def test_listed_in_server(self):
         from iosstudio_mcp import server
-        self.assertIn("ios_app_reset", server.INSTRUCTIONS)
+        self.assertIn("ios_app_reset", server.resources.GUIDE.read_text())
         from iosstudio_mcp.tools import MODULES
         self.assertIn("app_data", MODULES)
 

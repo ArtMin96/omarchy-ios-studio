@@ -26,8 +26,8 @@ from ..core import budget as B
 from ..core.budget import Budgeted
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import Udid
-from ..core.registry import MAX_WAIT, tool
+from ..core.params import MaxBytes, OptJobId, Udid, WaitSeconds
+from ..core.registry import tool
 from ..models import Out
 from ..state import AppState, get_state
 
@@ -36,7 +36,7 @@ Metric = Literal["cpu", "mem", "rss", "threads", "wakeups", "faults", "diskR", "
                  "eDisplay", "eLoc", "eOverhead", "thermal", "fps", "gpu", "gpuMem", "netRx", "netTx", "batt", "battMw",
                  "sysCpu", "hitchMs"]
 NO_SESSION = {"not-found": "ios_metrics_start starts a new session."}
-SessionId = Annotated[str, Field(description="From ios_metrics_start, e.g. 'm1'")]
+SessionId = Annotated[str, Field(description="From ios_metrics_start")]
 UNITS = {"cpu": "%", "mem": "MB", "rss": "MB", "threads": "", "energy": "", "fps": "fps", "gpu": "%", "netRx": "KB/s",
          "netTx": "KB/s", "diskR": "KB/s", "diskW": "KB/s", "wakeups": "/s", "battMw": "mW"}
 SUMMARY_SERIES = ("cpu", "mem", "rss", "threads", "wakeups", "diskW", "netRx", "netTx", "energy", "fps", "gpu", "battMw")
@@ -228,24 +228,17 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Start measuring an app", kind="write", open_world=True)
     async def ios_metrics_start(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App to measure, e.g. 'com.example.myapp' (the installed "
-                                                           "XTL-<TEAM>. form and the display name work too). It's "
-                                                           "followed across relaunches")] = None,
-        pid: Annotated[int | None, Field(description="Instead of bundle_id: one process id (ios_process_list); not "
-                                                     "followed after it exits")] = None,
-        sets: Annotated[list[Set] | None, Field(description="What to sample. Default: process (CPU, memory, threads, "
-                                                            "disk, wakeups), energy, graphics (display FPS, GPU), "
-                                                            "network, battery, events (hangs, jetsam, crashes, "
-                                                            "watchdog, thermal). 'hitches' adds 60 s of frame "
-                                                            "hitch tracking (heavy)")] = None,
+        bundle_id: Annotated[str | None, Field(description="App to measure (bundle id or name); followed across "
+                                                           "relaunches")] = None,
+        pid: Annotated[int | None, Field(description="Instead of bundle_id: one process id")] = None,
+        sets: Annotated[list[Set] | None, Field(description="What to sample (default: all but 'hitches', which is "
+                                                            "heavy)")] = None,
         interval_ms: Annotated[int, Field(ge=1000, le=10000, description="Sample interval")] = 1000,
         udid: Udid = None,
     ) -> MetricsSession:
-        """Start sampling an app's performance on the iPhone about once a second (kept ~1 hour). It doesn't
-        change the app. Let the user exercise the app for a minute or two, then call ios_metrics_summary for
-        stats and plain-language anomalies (possible leak, CPU spikes, FPS drops, hangs, jetsam kills), and
-        ios_metrics_stop when done (it returns the final summary). The app need not be running yet: the
-        session waits for it and follows relaunches."""
+        """Sample an app's CPU, memory, energy, FPS, network and battery about once a second (kept ~1 hour;
+        the app is not changed and need not be running yet). Let the user exercise it, then
+        ios_metrics_summary for stats and anomalies; ios_metrics_stop when done."""
         state = get_state(ctx)
         if not bundle_id and pid is None:
             raise ToolError("Pass bundle_id (or pid). ios_app_list shows installed apps.")
@@ -268,8 +261,7 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Stop measuring", kind="write", idempotent=True, open_world=True)
     async def ios_metrics_stop(ctx: Context, session_id: SessionId) -> MetricsSummary:
-        """Stop a metrics session and return its final summary (the data stays readable for a while with
-        ios_metrics_summary / ios_metrics_series / ios_metrics_events)."""
+        """Stop a metrics session and return its final summary (its data stays readable for a while)."""
         state = get_state(ctx)
         d = await dcall(state, "metrics.stop", {"sessionId": session_id}, timeout=30,
                         hints=NO_SESSION)
@@ -277,9 +269,8 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Performance summary", kind="read_remote")
     async def ios_metrics_summary(ctx: Context, session_id: SessionId) -> MetricsSummary:
-        """Stats of a metrics session so far: min/avg/p95/max per key series, the memory trend (MB/min with
-        R², flagged as a likely leak when it keeps growing), CPU spikes, display FPS drops, hitches, battery
-        drain and energy by component, plus plain-language anomalies, worst first. About 1-2 KB."""
+        """Stats of a metrics session so far: min/avg/p95/max per series, memory trend (likely leak), CPU
+        spikes, FPS drops, hitches, battery and energy, plus plain-language anomalies, worst first."""
         state = get_state(ctx)
         snap = await dcall(state, "metrics.snapshot", {"sessionId": session_id}, timeout=30,
                            hints=NO_SESSION)
@@ -289,15 +280,11 @@ def register(mcp: MCPServer) -> None:
     async def ios_metrics_series(
         ctx: Context,
         session_id: SessionId,
-        metric: Annotated[Metric, Field(description="cpu (% of one core), mem (footprint MB), rss, threads, wakeups "
-                                                    "(/s), faults, diskR/diskW (KB/s), energy and its parts eCpu, "
-                                                    "eGpu, eNet, eDisplay, eLoc, eOverhead, thermal, fps (whole "
-                                                    "display), gpu (%), gpuMem (MB), netRx/netTx (KB/s), batt (%), "
-                                                    "battMw, sysCpu, hitchMs")] = "mem",
-        points: Annotated[int, Field(ge=2, le=60, description="Buckets to downsample to")] = 30,
+        metric: Annotated[Metric, Field(description="cpu (% of one core), mem (MB), fps (whole display), gpu (%), "
+                                                    "net*/disk* (KB/s), batt (%)")] = "mem",
+        points: Annotated[int, Field(ge=2, le=60, description="Buckets")] = 30,
     ) -> MetricsSeries:
-        """One metric over the session, downsampled to at most 60 buckets with min/avg/max per bucket, plus
-        the path of a CSV with every sample of every metric (for plotting or a closer look)."""
+        """One metric over the session in ≤ 60 buckets (min/avg/max), plus a CSV path with every sample."""
         state = get_state(ctx)
         d = await dcall(state, "metrics.series", {"sessionId": session_id, "metric": metric, "points": points},
                         timeout=30, hints=NO_SESSION)
@@ -327,19 +314,14 @@ def register(mcp: MCPServer) -> None:
     async def ios_metrics_events(
         ctx: Context,
         session_id: SessionId,
-        cursor: Annotated[int | None, Field(ge=0, description="next_cursor from the previous call (0 = from the "
-                                                              "start)")] = None,
+        cursor: Annotated[int | None, Field(ge=0, description="next_cursor of the previous call (0 = start)")] = None,
         limit: Annotated[int, Field(ge=1, le=100, description="Max events")] = 40,
         kinds: Annotated[list[Literal["hang", "jetsam", "thermal", "crash", "watchdog", "hitch", "exit", "launch",
                                       "note"]] | None, Field(description="Only these kinds")] = None,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        max_bytes: MaxBytes = None,
     ) -> MetricsEvents:
-        """Events of a metrics session by cursor: hang, jetsam (killed for memory), crash, watchdog, thermal,
-        hitch (with duration), exit/launch of the app. A page holds at most `limit` events and stays under
-        12 KB (max_bytes raises it); next_cursor always points right after the last event returned, so
-        reading on with it never skips one. Hang rows need Hang Detection on (iPhone Settings › Developer ›
-        Hang Detection)."""
+        """Events of a metrics session, paged by cursor: hang, jetsam, crash, watchdog, thermal, hitch, app
+        exit/launch. Hangs need Hang Detection on (iPhone Settings › Developer)."""
         state = get_state(ctx)
         page = await dcall(state, "metrics.read", {"sessionId": session_id, "kind": "events",
                                                    "cursor": cursor if cursor is not None else 0, "limit": 500},
@@ -373,17 +355,15 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Profile an app's launch", kind="write", open_world=True)
     async def ios_launch_profile(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="The app to relaunch and time, e.g. 'com.example.myapp'"
-                                                           )] = None,
-        confirm: Annotated[bool, Field(description="false (default) = dry run; true = quit and relaunch the app now")] = False,
-        job_id: Annotated[str | None, Field(description="Poll an earlier call's job instead of starting one")] = None,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait this long for the result")] = 20,
+        bundle_id: Annotated[str | None, Field(description="App to relaunch and time")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run; true = quit and relaunch it now")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> ProfileJob:
-        """Time an app's launch: quits it, relaunches it, and reports the loader (dyld) and static-initializer
-        time before main() plus the time to the first frame. Loader timing works for your own
-        development-signed apps. Unsaved state in the app is lost, so ask the user, then confirm=true. Runs
-        as a job: if state is 'running', call again with job_id."""
+        """Time an app's launch: quit, relaunch, and report loader (dyld) and initializer time before main()
+        and time to first frame (loader timing: your own apps). Unsaved state is lost: ask the user, then
+        confirm=true. A job: state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             return await _wait_job(state, ctx, state.jobs.get(job_id, "launch-profile"), wait_seconds)
@@ -404,16 +384,15 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Check an app for memory leaks", kind="write", open_world=True)
     async def ios_memory_leaks(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="A running app of yours, e.g. 'com.example.myapp'")] = None,
-        confirm: Annotated[bool, Field(description="false (default) = dry run; true = scan now (the app pauses "
-                                                   "for a few seconds)")] = False,
-        job_id: Annotated[str | None, Field(description="Poll an earlier call's job instead of starting one")] = None,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait this long for the result")] = 20,
+        bundle_id: Annotated[str | None, Field(description="A running app of yours")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run; true = scan now (the app pauses)")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> ProfileJob:
-        """Scan a running app's heap for leaked objects (a memory graph, like Xcode's): leak count and the
-        saved .memgraph file. Only your own development-signed apps; the app pauses for a few seconds while
-        it's scanned, so ask the user, then confirm=true. Runs as a job: poll with job_id."""
+        """Scan a running app of yours for leaked objects (a memory graph, like Xcode's): leak count and the
+        .memgraph file. The app pauses a few seconds: ask the user, then confirm=true. A job: call again with
+        job_id."""
         state = get_state(ctx)
         if job_id:
             return await _wait_job(state, ctx, state.jobs.get(job_id, "memory-leaks"), wait_seconds)

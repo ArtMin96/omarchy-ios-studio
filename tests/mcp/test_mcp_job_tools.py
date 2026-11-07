@@ -322,7 +322,7 @@ class OneIdName(unittest.TestCase):
                 for x in schema:
                     yield from keys(x)
         for t in mcp._tool_manager.list_tools():
-            self.assertNotIn("build_id", set(keys(t.output_schema or {})), t.name)
+            self.assertNotIn("build_id", set(keys(t.fn_metadata.output_schema or {})), t.name)
 
 
 if __name__ == "__main__":

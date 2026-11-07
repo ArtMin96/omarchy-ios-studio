@@ -36,7 +36,7 @@ from ..core import budget as B
 from ..core import deadline
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import MaxBytes, ProjectPath, Udid
+from ..core.params import MaxBytes, OptJobId, ProjectPath, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, fit_page, to_result, tool
 from ..models import Out, iso
 from ..state import AppState, get_state
@@ -49,8 +49,7 @@ IMAGE_BYTES = 80_000      # ... and its size cap
 SHOTS_PAGE = 20           # matrix shots per page
 HELPER_TIMEOUT = 90       # a pure-Python compare of a full-size screenshot takes a few seconds
 
-ScreenName = Annotated[str, Field(min_length=1, max_length=60, description="Screen name the baseline is saved "
-                                                                           "under, e.g. 'Home' or 'settings-dark'")]
+ScreenName = Annotated[str, Field(min_length=1, max_length=60, description="Baseline name, e.g. 'Home'")]
 
 
 # ------------------------------------------------------------------ models
@@ -113,12 +112,11 @@ class BaselinesResult(B.Budgeted, Out):
 
 class ConfigIn(BaseModel):
     """An inline launch config for ios_screenshot_matrix (like a run preset, not saved)."""
-    name: str | None = Field(None, max_length=40, description="Label and folder name, e.g. 'German' (default: the "
-                                                              "language)")
-    language: str | None = Field(None, description="App language, e.g. 'de' (-AppleLanguages (de))")
-    region: str | None = Field(None, description="Locale, e.g. 'de_DE' (-AppleLocale de_DE)")
-    args: list[str] = Field(default_factory=list, description="Launch arguments")
-    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    name: str | None = Field(None, max_length=40, description="Label (default: the language)")
+    language: str | None = Field(None, description="e.g. 'de'")
+    region: str | None = Field(None, description="e.g. 'de_DE'")
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
     ui_test_mode: bool = False
 
     def to_helper(self) -> dict:
@@ -129,10 +127,9 @@ class ConfigIn(BaseModel):
 class NameIn(BaseModel):
     """A screen to capture after launch. press navigates there first (from the previous screen)."""
     name: str = Field(min_length=1, max_length=60)
-    press: str | None = Field(None, max_length=200, description="Label or accessibility identifier to press first "
-                                                                "(as ios_ui_press(label=...))")
-    wait: float | None = Field(None, ge=0, le=30, description="Seconds to wait before the capture (default 1.5 "
-                                                              "after a press, else 0)")
+    press: str | None = Field(None, max_length=200, description="Label or identifier to press first")
+    wait: float | None = Field(None, ge=0, le=30, description="Seconds before the capture (default 1.5 after a "
+                                                              "press, else 0)")
 
 
 class MatrixShot(Out):
@@ -407,29 +404,22 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         project_path: ProjectPath,
         name: ScreenName,
-        save_baseline: Annotated[bool, Field(description="Save this screenshot as the baseline of `name` "
-                                                         "(replacing an older one) instead of comparing")] = False,
-        threshold: Annotated[float, Field(ge=0, le=100, description="Percent of pixels that may change before the "
-                                                                    "verdict is 'changed'")] = 0.1,
-        tolerance: Annotated[int, Field(ge=0, le=255, description="Per-channel difference a pixel may have and still "
-                                                                  "count as the same (compression noise)")] = 24,
-        mask_top: Annotated[int | None, Field(ge=0, le=4000, description="Pixels at the top to ignore; default: the "
-                                                                         "status bar (54 pt on Face ID iPhones)")] = None,
-        include_image: Annotated[bool, Field(description="Also return the diff image (or the saved baseline), "
-                                                         f"at most {IMAGE_DIM} px and {IMAGE_BYTES // 1000} KB")] = False,
-        shot_path: Annotated[str | None, Field(description="Compare this PNG (e.g. a matrix shot) instead of taking "
-                                                           "a screenshot")] = None,
+        save_baseline: Annotated[bool, Field(description="Save as the baseline of `name` instead of comparing")] = False,
+        threshold: Annotated[float, Field(ge=0, le=100, description="Changed-pixel % above which the verdict is "
+                                                                    "'changed'")] = 0.1,
+        tolerance: Annotated[int, Field(ge=0, le=255, description="Per-channel difference still counted as the "
+                                                                  "same")] = 24,
+        mask_top: Annotated[int | None, Field(ge=0, le=4000, description="Top pixels to ignore (default: the status "
+                                                                         "bar)")] = None,
+        include_image: Annotated[bool, Field(description="Also return the diff (or baseline) image")] = False,
+        shot_path: Annotated[str | None, Field(description="Compare this PNG instead of a new screenshot")] = None,
         udid: Udid = None,
         max_bytes: MaxBytes = None,
     ) -> Annotated[CallToolResult, CompareResult]:
-        """Visual regression check: take a screenshot of the iPhone and compare it with the saved baseline of
-        this screen, or save it as that baseline (save_baseline=true). Returns diff_percent, a verdict (same /
-        changed / no-baseline / size-mismatch), the changed regions in pixels (biggest first), and file paths:
-        current_path (the screenshot), baseline_path and diff_path (the screenshot dimmed with changed pixels
-        pink and regions boxed). The status bar (clock, battery) is ignored, and so is slight compression noise.
-        No image bytes unless include_image=true. Typical loop: save_baseline=true before a change, then the
-        same call without it after rebuilding. Baselines are per project; list them with ios_screenshot_baselines
-        and delete one with ios_screenshot_baseline_delete."""
+        """Visual regression check: screenshot the iPhone and compare it with this screen's baseline (or save
+        it as the baseline with save_baseline=true, e.g. before a change). Returns diff_percent, a verdict, the
+        changed regions and current/baseline/diff image paths; the status bar is ignored. No image bytes unless
+        include_image=true. Baselines are per project (ios_screenshot_baselines)."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         if shot_path:
@@ -481,8 +471,8 @@ def register(mcp: MCPServer) -> None:
         project_path: ProjectPath,
         max_bytes: MaxBytes = None,
     ) -> BaselinesResult:
-        """The saved screenshot baselines of a project: name, size, when, which iPhone. Baselines live in iOS
-        Studio's data folder, not in the project; ios_screenshot_baseline_delete removes one. Read-only."""
+        """A project's saved screenshot baselines: name, size, date, iPhone. Kept in iOS Studio's data folder,
+        not the project; ios_screenshot_baseline_delete removes one."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         pname = str(p.get("name") or p["path"])
@@ -501,12 +491,11 @@ def register(mcp: MCPServer) -> None:
     async def ios_screenshot_baseline_delete(
         ctx: Context,
         project_path: ProjectPath,
-        name: Annotated[str, Field(min_length=1, description="The baseline's name (ios_screenshot_baselines lists "
-                                                             "them)")],
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+        name: Annotated[str, Field(min_length=1, description="Baseline name (ios_screenshot_baselines)")],
+        confirm: Annotated[bool, Field(description="false = dry run; true after the user agreed")] = False,
     ) -> BaselinesResult:
-        """Delete one screenshot baseline of a project and its kept compare runs. A dry run that changes nothing
-        unless confirm=true; ask the user first."""
+        """Delete one screenshot baseline and its kept compare runs. A dry run unless confirm=true; ask the user
+        first."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         pname = str(p.get("name") or p["path"])
@@ -529,34 +518,24 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Screenshot matrix", kind="write", open_world=True)
     async def ios_screenshot_matrix(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Project folder or name (needed to start; not with "
-                                                              "job_id)")] = None,
-        presets: Annotated[list[str] | None, Field(description="Run preset names of the project (ios_project_presets), "
-                                                               "one launch each")] = None,
-        configs: Annotated[list[ConfigIn] | None, Field(description="Inline launch configs, e.g. [{'name': 'French', "
-                                                                    "'language': 'fr', 'region': 'fr_FR'}]")] = None,
-        names: Annotated[list[str | NameIn] | None, Field(description="Screens to capture after each launch, in order, "
-                                                                      "e.g. ['Home', {'name': 'Settings', 'press': "
+        project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")] = None,
+        presets: Annotated[list[str] | None, Field(description="Run preset names, one launch each")] = None,
+        configs: Annotated[list[ConfigIn] | None, Field(description="Inline launch configs")] = None,
+        names: Annotated[list[str | NameIn] | None, Field(description="Screens to capture after each launch, e.g. "
+                                                                      "['Home', {'name': 'Settings', 'press': "
                                                                       "'Settings'}]; default ['launch']")] = None,
         bundle_id: Annotated[str | None, Field(description="Default: the project's bundle id")] = None,
-        settle_seconds: Annotated[float, Field(ge=0, le=30, description="Wait after each launch before the first "
-                                                                        "capture")] = 3.0,
-        job_id: Annotated[str | None, Field(description="Follow up a matrix started earlier (its job_id)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT)] = MAX_WAIT,
-        offset: Annotated[int, Field(ge=0, description="Finished: first shot of the page")] = 0,
+        settle_seconds: Annotated[float, Field(ge=0, le=30, description="Wait after each launch")] = 3.0,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
+        offset: Annotated[int, Field(ge=0, description="First shot of the page (finished matrix)")] = 0,
         udid: Udid = None,
         max_bytes: MaxBytes = None,
     ) -> MatrixStatus:
-        """Screenshot set over launch configs, e.g. every screen in several languages for App Store
-        screenshots or a localization check. For each config (run presets by name and/or inline configs with
-        language, region, args, env; presets first) the installed app is launched with it, and after
-        settle_seconds each name in `names` is captured in order; a name with press=<label> presses that
-        element first (as ios_ui_press), so screens are reached by chaining presses from the launch screen.
-        One PNG per config x name in a set folder plus manifest.json (full_output_path). At most 12 configs
-        and 12 names. A background job: returns state='running' and a job_id; call again with it to wait or
-        page shots with offset; ios_job_cancel stops it. Partial results stay. At the end the app is relaunched
-        plainly if it was running before, else stopped. Needs the app installed (ios_run) and the phone
-        unlocked; it relaunches the app, so unsaved state in it is lost."""
+        """Screenshots of several screens over launch configs (presets and/or inline language/region/args),
+        e.g. every screen in each language. Per config the installed app is relaunched (unsaved state is lost)
+        and each name captured in order; press=<label> navigates first. PNGs + manifest.json; ≤ 12 configs x 12
+        names. A job: state='running' + job_id, call again with job_id (offset pages shots)."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "matrix")

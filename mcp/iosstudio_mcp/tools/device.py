@@ -40,7 +40,7 @@ from ..backends.projects import merge_launch, resolve_preset
 from ..core import budget as B
 from ..core.job_status import job_result, settle, shared_job
 from ..core.jobs import Job
-from ..core.params import BundleId, PresetName, Udid
+from ..core.params import BundleId, OptJobId, PresetName, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import (
     ActionResult,
@@ -101,13 +101,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "List iPhones", kind="read_remote")
     async def ios_device_list(ctx: Context) -> DeviceList:
-        """iPhones this computer knows (paired over USB and/or Wi-Fi), which one is active, and its
-        connection state (connected / locked / unreachable / not-paired…).
-
-        Use it when a device tool fails or before choosing a udid. Every other device tool defaults to
-        the active iPhone; switch with ios_device_select. Pairing a new phone is a human step
-        (ios_open_app(page='device')).
-        """
+        """Paired iPhones (USB/Wi-Fi), which one is active and its connection state. Use it when a device tool
+        fails or before choosing a udid; switch with ios_device_select. Pairing is a human step
+        (ios_open_app(page='device'))."""
         state = get_state(ctx)
         devs = await dcall(state, "devices.list", timeout=15) or []
         conn = hub(state).get("connection") or {}
@@ -131,12 +127,10 @@ def register(mcp: MCPServer) -> None:
     async def ios_device_info(
         ctx: Context,
         udid: Udid = None,
-        fresh: Annotated[bool, Field(description="Re-read battery, storage and disk-image state from the phone "
-                                                 "(slower)")] = False,
+        fresh: Annotated[bool, Field(description="Re-read battery, storage and disk image (slower)")] = False,
     ) -> DeviceDetails:
-        """Details of the iPhone: model, iOS version, battery, free storage, Developer Mode, developer disk
-        image (DDI), lock state and pairing. Use before installing (iOS version / space) or when launches
-        fail (Developer Mode off or DDI not mounted: call ios_device_prepare)."""
+        """The iPhone's model, iOS version, battery, free storage, Developer Mode, developer disk image (DDI),
+        lock state and pairing. If launches fail (Developer Mode off, DDI not mounted): ios_device_prepare."""
         state = get_state(ctx)
         d = await dcall(state, "device.info", {"fresh": fresh}, udid=udid, timeout=45) or {}
         bat = d.get("battery") or {}
@@ -162,8 +156,8 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         udid: Annotated[str, Field(description="udid from ios_device_list")],
     ) -> DeviceList:
-        """Make another paired iPhone the active one; device tools, ios_run and the iOS Studio window
-        then use it. Shared with the window (last choice wins). Returns the updated device list."""
+        """Make another paired iPhone the active one for device tools, ios_run and the iOS Studio window
+        (shared; last choice wins). Returns the device list."""
         state = get_state(ctx)
         await dcall(state, "device.select", {"udid": udid}, timeout=30,
                     hints={"not-found": "Call ios_device_list for valid udids."})
@@ -171,9 +165,8 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Reconnect iPhone", kind="write", idempotent=True, open_world=True)
     async def ios_device_reconnect(ctx: Context, udid: Udid = None) -> DeviceList:
-        """Drop and reopen the connection to the iPhone now (skips the retry back-off). Use after the user
-        woke/unlocked the phone or joined the same Wi-Fi, or when calls time out. Returns the device list
-        a few seconds later; poll ios_device_list if it still says connecting."""
+        """Reopen the connection to the iPhone now (skips the retry back-off): after the user unlocked it or
+        joined the same Wi-Fi, or when calls time out. Returns the device list a few seconds later."""
         state = get_state(ctx)
         await dcall(state, "device.reconnect", udid=udid, timeout=20)
         for _ in range(16):
@@ -187,15 +180,14 @@ def register(mcp: MCPServer) -> None:
     async def ios_device_prepare(
         ctx: Context,
         udid: Udid = None,
-        mount: Annotated[bool, Field(description="Mount the developer disk image if it isn't (downloads it from "
-                                                 "Apple; needs internet). false = only report")] = True,
-        reveal_developer_mode: Annotated[bool, Field(description="If Developer Mode is off, make its switch appear "
-                                                                 "in the phone's Settings (USB only)")] = True,
+        mount: Annotated[bool, Field(description="Mount the disk image if needed (downloads; false: only "
+                                                 "report)")] = True,
+        reveal_developer_mode: Annotated[bool, Field(description="Show the Developer Mode switch in Settings "
+                                                                 "(USB only)")] = True,
     ) -> DevicePrepare:
-        """Check and fix what launching apps, logs and location need: Developer Mode on, and the developer
-        disk image (DDI) mounted. Mounts the DDI itself; Developer Mode can only be turned on by the human
-        on the phone, so `human_steps` lists exactly what to tell them. Call it when a launch fails with
-        developer-mode-off or ddi, or before the first run on a new iPhone."""
+        """Check and fix what launches, logs and location need: Developer Mode on and the developer disk image
+        (DDI) mounted. Mounts the DDI (a slow mount keeps going: call again); Developer Mode is turned on by
+        the human (`human_steps` says how). Call it when a launch fails with developer-mode-off or ddi."""
         state = get_state(ctx)
         actions, human, nxt = [], [], []
         job_id = None
@@ -241,18 +233,17 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "List installed apps", kind="read_remote")
     async def ios_app_list(
         ctx: Context,
-        scope: Annotated[Literal["own", "all"], Field(description="own: development-signed apps (yours, e.g. built "
-                                                                  "here); all: every user app")] = "own",
-        include_system: Annotated[bool, Field(description="With scope='all', include Apple's system apps")] = False,
-        query: Annotated[str | None, Field(description="Case-insensitive filter on name or bundle id")] = None,
-        offset: Annotated[int, Field(ge=0, description="Skip this many apps (pagination)")] = 0,
-        limit: Annotated[int, Field(ge=1, le=200, description="Max apps to return")] = 50,
+        scope: Annotated[Literal["own", "all"], Field(description="own: your development builds; all: every "
+                                                                  "user app")] = "own",
+        include_system: Annotated[bool, Field(description="scope='all': also Apple's apps")] = False,
+        query: Annotated[str | None, Field(description="Filter on name or bundle id")] = None,
+        offset: Annotated[int, Field(ge=0, description="Skip this many apps")] = 0,
+        limit: Annotated[int, Field(ge=1, le=200, description="Max apps")] = 50,
         udid: Udid = None,
     ) -> AppList:
-        """Apps installed on the iPhone: name, bundle id AS INSTALLED, version, whether it's your
-        development build, and whether it's running (pid). Free teams install com.example.app as
-        XTL-<TEAM>.com.example.app; the app tools accept either form. Free Apple IDs allow at most 3 own
-        apps per iPhone (`own_apps`)."""
+        """Apps on the iPhone: name, bundle id as installed (free teams: XTL-<TEAM>.<id>; app tools accept either
+        form), version, whether it's your build, and pid if running. Free Apple IDs allow 3 own apps per
+        iPhone (`own_apps`)."""
         state = get_state(ctx)
         items = await apps(state, udid, system=include_system and scope == "all")
         own = sum(1 for a in items if a.get("developer"))
@@ -276,22 +267,16 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Install app", kind="write", open_world=True)
     async def ios_app_install(
         ctx: Context,
-        path: Annotated[str | None, Field(description="A signed .ipa file or .app folder, e.g. "
-                                                      "'~/Projects/MyApp/xtool/MyApp.ipa'")] = None,
-        project_path: Annotated[str | None, Field(description="Instead of path: install this project's last signed "
+        path: Annotated[str | None, Field(description="A signed .ipa file or .app folder")] = None,
+        project_path: Annotated[str | None, Field(description="Instead of path: this project's last signed "
                                                               "build")] = None,
-        job_id: Annotated[str | None, Field(description="Wait for an install started earlier (from a result with "
-                                                        "state='running') instead of starting one")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for the install "
-                                                                           "before returning state='running'")] = 20,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> AppInstallStatus:
-        """Install an already signed .ipa/.app on the iPhone over the current connection (Wi-Fi or USB);
-        ~10 s for a typical app, with progress notifications. Replaces an installed copy and keeps its data.
-        Runs in the background: if it takes longer than wait_seconds (≤25) the result has state='running'
-        and a job_id; call again with job_id to keep waiting (ios_job_cancel stops it). To build AND install, use ios_run
-        instead. Fails with app-limit when a free Apple ID already has 3 apps on the phone. Then
-        ios_app_launch or ios_app_run_and_capture."""
+        """Install a signed .ipa/.app on the iPhone (~10 s; keeps the app's data). A job: state='running' +
+        job_id, call again with job_id. To build and install use ios_run. Fails with app-limit when a free
+        Apple ID already has 3 apps on the phone."""
         state = get_state(ctx)
         last = [-1.0]
 
@@ -312,21 +297,17 @@ def register(mcp: MCPServer) -> None:
     async def ios_app_launch(
         ctx: Context,
         bundle_id: BundleId,
-        args: Annotated[list[str] | None, Field(description="Launch arguments, e.g. ['-UITestMode', 'YES']")] = None,
-        env: Annotated[dict[str, str] | None, Field(description="Environment variables for the process")] = None,
-        console: Annotated[bool, Field(description="Also capture what the app prints (stdout/stderr, Swift "
-                                                   "print()) for ios_app_console_read. Restarts it if running")] = False,
+        args: Annotated[list[str] | None, Field(description="Launch arguments")] = None,
+        env: Annotated[dict[str, str] | None, Field(description="Environment variables")] = None,
+        console: Annotated[bool, Field(description="Capture print() output for ios_app_console_read")] = False,
         udid: Udid = None,
         preset: PresetName = None,
-        project_path: Annotated[str | None, Field(description="With preset: the app's project (name or path). "
-                                                              "Default: the listed project that builds bundle_id")] = None,
+        project_path: Annotated[str | None, Field(description="With preset: the app's project (default: found "
+                                                              "from bundle_id)")] = None,
     ) -> AppLaunchResult:
-        """Open an installed app on the iPhone and return its pid. A running copy is ended and started
-        again, so the launch arguments and environment always apply (unsaved state in it is lost). The
-        phone must be unlocked. console=true also captures its print() output (read it with
-        ios_app_console_read). To also capture its logs and catch a crash, prefer ios_app_run_and_capture.
-        preset='<name>' launches with a run preset of the app's project (ios_project_presets): its args come
-        first, then `args`, and `env` overrides its environment."""
+        """Open an installed app and return its pid. A running copy is restarted so args and env apply
+        (unsaved state is lost). The phone must be unlocked. For logs and crashes too, prefer
+        ios_app_run_and_capture. preset= uses a run preset of the app's project; `env` overrides its env."""
         state = get_state(ctx)
         how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id) if preset else None
         args, env = merge_launch(how, args, env)
@@ -349,8 +330,7 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Stop app", kind="write", idempotent=True, open_world=True)
     async def ios_app_kill(ctx: Context, bundle_id: BundleId, udid: Udid = None) -> ActionResult:
-        """Terminate a running app on the iPhone (like swiping it away; unsaved state in the app is lost).
-        Does nothing if it isn't running."""
+        """Stop a running app (like swiping it away; unsaved state is lost). Nothing if it isn't running."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         res = await dcall(state, "app.kill", {"bundleId": app["bundleId"]}, udid=udid, timeout=30) or {}
@@ -362,13 +342,12 @@ def register(mcp: MCPServer) -> None:
     async def ios_app_uninstall(
         ctx: Context,
         bundle_id: BundleId,
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed to delete the "
-                                                   "app and its data")] = False,
+        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
         udid: Udid = None,
     ) -> ActionResult:
-        """Delete an app AND ALL ITS DATA from the iPhone. Cannot be undone. Call with confirm=false first:
-        it changes nothing and says exactly what would be removed. Ask the user, and only if they agree
-        call again with confirm=true. Typical reason: a free Apple ID hit its 3-app limit."""
+        """Delete an app AND ALL ITS DATA from the iPhone; cannot be undone. confirm=false (default) only says
+        what would go; ask the user, then repeat with confirm=true. Typical reason: a free Apple ID's 3-app
+        limit."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         what = f"{app.get('name')} ({app['bundleId']}, version {app.get('version') or '?'})"
@@ -382,13 +361,13 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "List processes", kind="read_remote")
     async def ios_process_list(
         ctx: Context,
-        apps_only: Annotated[bool, Field(description="Only app processes (not system daemons)")] = True,
-        query: Annotated[str | None, Field(description="Case-insensitive filter on name or bundle id")] = None,
-        limit: Annotated[int, Field(ge=1, le=200, description="Max processes to return")] = 50,
+        apps_only: Annotated[bool, Field(description="Only apps, not system daemons")] = True,
+        query: Annotated[str | None, Field(description="Filter on name or bundle id")] = None,
+        limit: Annotated[int, Field(ge=1, le=200, description="Max processes")] = 50,
         udid: Udid = None,
     ) -> ProcessList:
-        """Processes running on the iPhone: pid, name and bundle id. Use it to check whether an app is still
-        alive, or to find a pid for ios_logs_start(pid=...)."""
+        """Processes on the iPhone (pid, name, bundle id): is an app still alive, or a pid for
+        ios_logs_start(pid=...)."""
         state = get_state(ctx)
         items = await dcall(state, "processes.list", {"appsOnly": apps_only}, udid=udid, timeout=40) or []
         if query:
@@ -405,19 +384,16 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Screenshot", kind="read_remote", idempotent=False)
     async def ios_screenshot(
         ctx: Context,
-        max_dimension: Annotated[int, Field(ge=256, le=B.IMG_MAX_DIM, description="Downscale so the long edge is "
-                                                                                 "at most this many pixels")] = B.IMG_MAX_DIM,
-        format: Annotated[Literal["jpeg", "png"], Field(description="jpeg is ~10x smaller; png is sent only if it "
-                                                                    "fits 350 KB, else jpeg")] = "jpeg",
-        quality: Annotated[int, Field(ge=30, le=95, description="Starting JPEG quality; steps down to 65 and 50 "
-                                                                "if the image is over 350 KB")] = 80,
-        inline: Annotated[bool, Field(description="false: return only the saved file's path, no image")] = True,
+        max_dimension: Annotated[int, Field(ge=256, le=B.IMG_MAX_DIM, description="Max long edge in "
+                                                                                 "pixels")] = B.IMG_MAX_DIM,
+        format: Annotated[Literal["jpeg", "png"], Field(description="png only if it fits 350 KB")] = "jpeg",
+        quality: Annotated[int, Field(ge=30, le=95, description="Starting JPEG quality")] = 80,
+        inline: Annotated[bool, Field(description="false: only the saved file's path")] = True,
         udid: Udid = None,
     ) -> Annotated[CallToolResult, ScreenshotInfo]:
-        """Capture the iPhone's screen and return it as an image, plus the saved file path, so you can see
-        what the app shows. The image is at most 1568 px on the long edge and 350 KB (JPEG, quality stepping
-        down from 80 until it fits); width, height and bytes are reported. inline=false returns only the
-        path. The phone must be unlocked with the screen on. If your client can't show images, open the path."""
+        """The iPhone's screen as an image (≤ 1568 px, ≤ 350 KB) plus the saved file's path, to see what the app
+        shows. The phone must be unlocked with the screen on. If your client can't show images, open the
+        path."""
         state = get_state(ctx)
         shot = await dcall(state, "screenshot", udid=udid, timeout=MAX_WAIT) or {}
         src = Path(str(shot.get("path") or ""))
@@ -455,13 +431,12 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Simulate location", kind="write", idempotent=True, open_world=True)
     async def ios_location_set(
         ctx: Context,
-        lat: Annotated[float, Field(ge=-90, le=90, description="Latitude, e.g. 38.7223")],
-        lon: Annotated[float, Field(ge=-180, le=180, description="Longitude, e.g. -9.1393")],
+        lat: Annotated[float, Field(ge=-90, le=90, description="Latitude")],
+        lon: Annotated[float, Field(ge=-180, le=180, description="Longitude")],
         udid: Udid = None,
     ) -> LocationResult:
-        """Make the iPhone report a simulated GPS position (for testing location features). Needs Developer
-        Mode and the developer disk image (mounted automatically). Temporary: it lasts only while the
-        iOS Studio device service runs, see the result message. Undo with ios_location_clear."""
+        """Make the iPhone report a simulated GPS position. Needs Developer Mode (the disk image is mounted
+        automatically). Lasts while iOS Studio's device service runs; undo with ios_location_clear."""
         state = get_state(ctx)
         res = await dcall(state, "location.set", {"lat": lat, "lon": lon}, udid=udid, timeout=90) or {}
         return LocationResult(active=True, lat=res.get("lat", lat), lon=res.get("lon", lon),

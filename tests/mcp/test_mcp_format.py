@@ -219,7 +219,7 @@ class Registration(unittest.TestCase):
         from iosstudio_mcp.tools import MODULES
         self.assertIn("format", MODULES)
         from iosstudio_mcp import server
-        self.assertIn("ios_format", server.INSTRUCTIONS)
+        self.assertIn("ios_format", server.resources.GUIDE.read_text())
 
 
 if __name__ == "__main__":

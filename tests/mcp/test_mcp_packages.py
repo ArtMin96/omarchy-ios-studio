@@ -289,7 +289,7 @@ class Registration(unittest.TestCase):
         from iosstudio_mcp.tools import MODULES
         self.assertIn("packages", MODULES)
         from iosstudio_mcp import server
-        self.assertIn("ios_package_add", server.INSTRUCTIONS)
+        self.assertIn("ios_package_add", server.resources.GUIDE.read_text())
         mcp = FakeMCP()
         T.register(mcp)
         self.assertEqual(set(mcp.tools), {"ios_package_list", "ios_package_add", "ios_package_update",

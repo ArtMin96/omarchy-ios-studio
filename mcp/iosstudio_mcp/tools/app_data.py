@@ -26,7 +26,7 @@ from ..core.errors import rehint
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
 from ..core.params import BundleId, MaxBytes, OptJobId, Udid, WaitSeconds
-from ..core.registry import MAX_WAIT, fit_page, tool
+from ..core.registry import fit_page, tool
 from ..models import Out
 from ..state import AppState, get_state
 
@@ -381,12 +381,11 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         bundle_id: BundleId,
         key: Annotated[str | None, Field(description="Only this key, whole")] = None,
-        max_bytes: Annotated[int | None, Field(ge=3000, le=B.MAX_BYTES, description="Output budget")] = None,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> AppDefaults:
-        """An app's UserDefaults (Library/Preferences/<bundle id>.plist) as JSON with each key's type, for your
-        own development builds. Bounded: the full JSON goes to full_output_path when it doesn't fit. Change a
-        key with ios_app_defaults_set. Read-only."""
+        """An app's UserDefaults as JSON with each key's type (your own development builds). What doesn't fit
+        goes to full_output_path. Change a key with ios_app_defaults_set."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         bid = app["bundleId"]
@@ -438,34 +437,27 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Change an app's UserDefaults", kind="destructive", idempotent=True, open_world=True)
     async def ios_app_defaults_set(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
         action: Annotated[Literal["set", "delete", "refresh"],
-                          Field(description="set or delete one key, or refresh: install the last build over the "
-                                            "app after changes made with refresh=false")] = "set",
+                          Field(description="refresh: reinstall the last build after refresh=false changes")] = "set",
         key: Annotated[str | None, Field(description="set/delete: the key")] = None,
-        value: Annotated[Any, Field(description="set: the new value as JSON (string, number, bool, array, object, "
-                                                "or a tagged {'$type': 'date'|'data', ...})")] = None,
+        value: Annotated[Any, Field(description="set: the value as JSON (or tagged {'$type': 'date'|'data', ...})")] = None,
         type: Annotated[Literal["string", "int", "float", "bool", "date", "data", "json"] | None,
-                        Field(description="set: store the value as this type (date: ISO 8601 text; data: base64; "
-                                          "json: text holding JSON). Default: from the JSON type")] = None,
-        confirm: Annotated[bool, Field(description="set/delete: false = dry run showing old -> new. true only after "
-                                                   "the user agreed")] = False,
-        stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running (otherwise a "
-                                                    "running app is an error)")] = False,
-        refresh: Annotated[bool, Field(description="set/delete: install the app's last signed build over it "
-                                                   "afterwards (keeps its data) so iOS drops its cached settings and "
-                                                   "the app sees the change. false for several changes in a row; "
-                                                   "then action='refresh' once")] = True,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a change started earlier")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
-                                                                           "state='running'")] = 20,
+                        Field(description="set: store as this type (date: ISO 8601; data: base64). Default: from "
+                                          "the JSON")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run (old -> new); true only after the user "
+                                                   "agreed")] = False,
+        stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
+        refresh: Annotated[bool, Field(description="Reinstall the last build afterwards so the app sees the change "
+                                                   "(false for several changes, then action='refresh')")] = True,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> AppDefaults:
-        """Set or delete one UserDefaults key of your own development build (read them with ios_app_defaults).
-        A dry run (previous -> new) unless confirm=true, and never while the app runs (stop_app=true stops it).
-        iOS keeps a cached copy of an app's settings, so a change also installs the app's last signed build over
-        it (its data stays); then the app sees it on its next launch. That takes about 20 s and runs as a job:
-        state='running' + job_id, call again with job_id."""
+        """Set or delete one UserDefaults key of your own development build. A dry run (old -> new) unless
+        confirm=true; never while the app runs (stop_app=true stops it). The app's last signed build is then
+        installed over it (data kept) so iOS drops its cached settings: a ~20 s job, state='running' + job_id,
+        call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-defaults")
@@ -524,11 +516,10 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Read an app's SwiftData / Core Data stores", kind="read_remote")
     async def ios_app_store(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
-        store: Annotated[str | None, Field(description="Store path or file name from the summary. Default: the "
-                                                       "store that has `table`")] = None,
-        table: Annotated[str | None, Field(description="Table or entity name ('ZITEM' or 'Item'). Without it: "
-                                                       "a summary of every store")] = None,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
+        store: Annotated[str | None, Field(description="Store path or name from the summary (default: the one "
+                                                       "with `table`)")] = None,
+        table: Annotated[str | None, Field(description="Table or entity ('ZITEM' or 'Item'); omit for the summary")] = None,
         offset: Annotated[int, Field(ge=0, description="First row")] = 0,
         limit: Annotated[int, Field(ge=1, le=200, description="Rows per page")] = 20,
         max_bytes: MaxBytes = None,
@@ -536,10 +527,9 @@ def register(mcp: MCPServer) -> None:
         wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> StoreResult:
-        """Read-only look at an app's SwiftData / Core Data / SQLite stores (your own builds). Without table:
-        each store's tables, entities, row counts and columns; with table: a page of rows. Stores are copied
-        here and opened read-only. A big store can take longer than a call: state='running' + job_id, call
-        again with job_id."""
+        """An app's SwiftData / Core Data / SQLite stores, read-only (your own builds). Without table: each
+        store's tables, entities, row counts and columns; with table: a page of rows. A big store can outlast a
+        call: state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-store")
@@ -564,25 +554,20 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Reset an app's data", kind="destructive", open_world=True)
     async def ios_app_reset(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
-        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe: delete Documents, Library and tmp "
-                                                                        "contents; reinstall: uninstall, then install "
-                                                                        "the last signed build")] = "wipe",
-        confirm: Annotated[bool, Field(description="false = dry run listing what would be removed. true only after "
-                                                   "the user agreed")] = False,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
+        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe: empty Documents, Library, tmp; "
+                                                                        "reinstall: uninstall + install last build")] = "wipe",
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
-        project_path: Annotated[str | None, Field(description="reinstall: install this project's last signed build "
-                                                              "(default: found from the bundle id)")] = None,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a reset started earlier")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
-                                                                           "state='running'")] = 20,
+        project_path: Annotated[str | None, Field(description="reinstall: use this project's last signed build")] = None,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> ResetResult:
-        """Reset one of your own apps to first-launch state. wipe deletes everything in its Documents, Library
-        (preferences, caches, Application Support: SwiftData / Core Data stores) and tmp, keeping the folders;
-        reinstall uninstalls it and installs the last signed build again. Cannot be undone: with confirm=false
-        (default) it lists what would go; ask the user, then repeat with confirm=true. The app must be stopped
-        (stop_app=true stops it)."""
+        """Reset one of your own apps to first-launch state: wipe empties Documents, Library (settings,
+        SwiftData / Core Data stores) and tmp; reinstall reinstalls the last signed build. Cannot be undone:
+        confirm=false (default) lists what would go; ask the user, then confirm=true. A job: state='running' +
+        job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-reset")
