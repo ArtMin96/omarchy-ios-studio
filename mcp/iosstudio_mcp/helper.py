@@ -71,9 +71,9 @@ NEXT_BY_CODE: dict[str, str] = {
     "build-failed": "Call ios_build_diagnostics and ios_build_log(grep='error') for the failing lines.",
     "compile-errors": "Call ios_build_diagnostics for file:line errors, fix them, then rebuild.",
     "needs-certificate": "The signing certificate must be replaced; this needs the human's decision. "
-                         "Retry the build and answer its prompt with ios_build_respond only after asking them.",
+                         "Retry the build and answer its prompt with ios_job_respond only after asking them.",
     "signing-failed": "Call ios_signing_status and ios_build_log(grep='error') to see why signing failed.",
-    "busy": "Another build of this project is running. Check ios_build_status, or wait and retry.",
+    "busy": "Another build of this project is running. Check ios_job_status, or wait and retry.",
     "pacman-locked": "A package manager is running. Wait for it to finish, then retry.",
     "network": "Check the internet connection, then retry.",
     "timeout": "Retry; if it keeps happening, check ios_status.",
