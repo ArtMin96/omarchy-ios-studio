@@ -368,7 +368,7 @@ ColumnLayout {
           AppText {
             id: noticeTitle
             Layout.fillWidth: true
-            text: notice.title; strong: true; wrapMode: Text.WordWrap
+            text: notice.title; strong: true; wrapMode: Text.Wrap
             HoverHandler { id: noticeHover }
             PanelToolTip { visible: noticeHover.hovered && (noticeTitle.truncated || notice.detail !== ""); text: notice.detail !== "" ? notice.detail : notice.title }
           }
@@ -376,7 +376,7 @@ ColumnLayout {
         AppText {
           Layout.fillWidth: true
           Layout.leftMargin: Style.font.icon + Style.spacing.lg
-          visible: notice.text !== ""; text: notice.text; size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+          visible: notice.text !== ""; text: notice.text; size: "small"; tone: "dim"; wrapMode: Text.Wrap
         }
         ActionButton {
           Layout.leftMargin: Style.font.icon + Style.spacing.lg

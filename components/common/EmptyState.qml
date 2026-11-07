@@ -59,7 +59,7 @@ Item {
       text: root.title
       size: root.compact ? "title" : "heading"
       strong: true
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
     }
     AppText {
       Layout.fillWidth: true
@@ -67,7 +67,7 @@ Item {
       horizontalAlignment: Text.AlignHCenter
       text: root.text
       tone: "dim"
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
       lineHeight: 1.25
     }
     Row {

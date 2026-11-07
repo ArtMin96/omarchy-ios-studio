@@ -41,8 +41,8 @@ Item {
       Layout.fillWidth: true
       Layout.alignment: Qt.AlignTop
       spacing: Style.spacing.xxs
-      AppText { id: titleText; Layout.fillWidth: true; text: root.title; tone: "dim"; wrapMode: Text.WordWrap }
-      AppText { Layout.fillWidth: true; visible: root.text !== ""; text: root.text; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+      AppText { id: titleText; Layout.fillWidth: true; text: root.title; tone: "dim"; wrapMode: Text.Wrap }
+      AppText { Layout.fillWidth: true; visible: root.text !== ""; text: root.text; size: "small"; tone: "faint"; wrapMode: Text.Wrap }
     }
   }
 }

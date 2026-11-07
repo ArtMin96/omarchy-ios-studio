@@ -241,7 +241,7 @@ ColumnLayout {
 
     AppText {
       Layout.fillWidth: true
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
       tone: "dim"
       Layout.bottomMargin: Style.spacing.md
       text: "Save a screenshot of a screen as its baseline, then compare the iPhone's screen against it after a change. The status bar is ignored."
@@ -358,8 +358,8 @@ ColumnLayout {
         Layout.alignment: Qt.AlignTop
         Layout.topMargin: Math.max(0, (verdictPill.implicitHeight - resultMetrics.height) / 2)
         spacing: Style.spacing.xxs
-        AppText { id: resultLine; Layout.fillWidth: true; text: root.resultText; wrapMode: Text.WordWrap }
-        AppText { Layout.fillWidth: true; visible: root.resultNotes !== ""; text: root.resultNotes; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+        AppText { id: resultLine; Layout.fillWidth: true; text: root.resultText; wrapMode: Text.Wrap }
+        AppText { Layout.fillWidth: true; visible: root.resultNotes !== ""; text: root.resultNotes; size: "small"; tone: "faint"; wrapMode: Text.Wrap }
       }
     }
 

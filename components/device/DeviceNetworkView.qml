@@ -120,7 +120,7 @@ ColumnLayout {
           }
           AppText {
             Layout.fillWidth: true
-            wrapMode: Text.WordWrap; tone: "dim"
+            wrapMode: Text.Wrap; tone: "dim"
             text: root.cond ? (root.cond.groupName + (root.cond.summary ? " · " + root.cond.summary : "")
                                + ". The whole iPhone is affected.") : ""
           }
@@ -154,7 +154,7 @@ ColumnLayout {
     AppText { text: "Test how your app copes"; size: "heading"; strong: true }
     AppText {
       Layout.fillWidth: true
-      wrapMode: Text.WordWrap; tone: "dim"
+      wrapMode: Text.Wrap; tone: "dim"
       text: "Make the iPhone act as if it's on a slow network, running hot or with a slow GPU. Pick one below; only one is on at a time, and it always switches itself off."
     }
     RowLayout {

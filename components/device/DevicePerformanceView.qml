@@ -347,7 +347,7 @@ ColumnLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.lg
       Icon { glyph: Model.Glyph.warn; color: Theme.warn; size: Style.font.icon }
-      AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "dim"; text: modelData }
+      AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "dim"; text: modelData }
     }
   }
 
@@ -395,7 +395,7 @@ ColumnLayout {
               color: Theme.levelColor(modelData.level === "info" ? "" : modelData.level)
               size: Style.font.icon
             }
-            AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: modelData.text }
+            AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.text }
           }
         }
         QuietNote {
@@ -407,7 +407,7 @@ ColumnLayout {
         }
         Skeleton { Layout.fillWidth: true; visible: !root.stats; lines: 3; rowHeight: Style.space(18); gap: Style.spacing.md }
         AppText {
-          Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "faint"
+          Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "faint"
           text: "Hangs are reported only when Hang Detection is on: on the iPhone, open Settings › Developer › Hang Detection. Frame rate is for the whole screen, not only your app."
         }
       }
@@ -470,7 +470,7 @@ ColumnLayout {
           visible: text !== ""
           size: "small"; tone: "dim"
           Layout.maximumWidth: Style.space(360)
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
           text: {
             var e = root.stats && root.stats.energy && root.stats.energy.byComponent
             if (!e) return ""
@@ -606,7 +606,7 @@ ColumnLayout {
         Layout.alignment: Qt.AlignTop
         spacing: Style.spacing.md
         AppText { text: modelData.title; strong: true }
-        AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "dim"; text: modelData.text }
+        AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "dim"; text: modelData.text }
         ActionButton {
           compact: true
           glyph: modelData.glyph
@@ -660,7 +660,7 @@ ColumnLayout {
       }
     }
     AppText {
-      Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "faint"
+      Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "faint"
       visible: !!root.profile && !!root.profile.note
       text: root.profile && root.profile.note ? root.profile.note : ""
     }
@@ -674,7 +674,7 @@ ColumnLayout {
     glyph: Model.Glyph.memory
     glyphColor: root.leakReport && root.leakReport.leakCount ? Theme.warn : Theme.success
     actions: [ IconButton { glyph: Model.Glyph.close; tooltip: "Hide"; onClicked: root.leakReport = null } ]
-    AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: root.leakReport ? root.leakReport.verdict : "" }
+    AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.leakReport ? root.leakReport.verdict : "" }
     Repeater {
       model: root.leakReport && root.leakReport.leaks ? root.leakReport.leaks : []
       RowLayout {

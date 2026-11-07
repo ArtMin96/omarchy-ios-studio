@@ -145,11 +145,11 @@ PageFrame {
       ColumnLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.lg
-        AppText { Layout.fillWidth: true; text: "Sign in with your Apple ID"; size: "title"; strong: true; wrapMode: Text.WordWrap }
+        AppText { Layout.fillWidth: true; text: "Sign in with your Apple ID"; size: "title"; strong: true; wrapMode: Text.Wrap }
         AppText {
           Layout.fillWidth: true
           text: "iPhones only run apps signed by Apple. iOS Studio uses your Apple ID to get that signature, the same way Xcode does on a Mac. Your everyday Apple ID is fine: you don't need to pay for a developer account."
-          tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2
+          tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2
         }
         GridLayout {
           Layout.fillWidth: true
@@ -158,11 +158,11 @@ PageFrame {
           columnSpacing: Style.spacing.lg
           rowSpacing: Style.spacing.md
           Icon { glyph: Model.Glyph.timer; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "With a free account, apps stay signed for 7 days. Renewing takes one click."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "With a free account, apps stay signed for 7 days. Renewing takes one click."; wrapMode: Text.Wrap }
           Icon { glyph: Model.Glyph.phone; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "Up to 3 of your own apps on each iPhone at a time."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "Up to 3 of your own apps on each iPhone at a time."; wrapMode: Text.Wrap }
           Icon { glyph: Model.Glyph.shieldCheck; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "Your password goes straight to Apple, and you'll confirm with a code on your iPhone."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "Your password goes straight to Apple, and you'll confirm with a code on your iPhone."; wrapMode: Text.Wrap }
         }
         RowLayout {
           Layout.topMargin: Style.spacing.md
@@ -338,7 +338,7 @@ PageFrame {
             Layout.fillWidth: true
             visible: !healthCard.loading
             text: healthCard.h ? healthCard.h.detail : (page.svc.detailsError ? "Couldn't check signing right now." : "")
-            tone: "dim"; wrapMode: Text.WordWrap; size: "small"
+            tone: "dim"; wrapMode: Text.Wrap; size: "small"
           }
           Item { Layout.fillHeight: true }
           ActionButton {
@@ -364,7 +364,7 @@ PageFrame {
       Layout.fillWidth: true
       visible: page.svc.keyMode
       text: "You're signed in with an App Store Connect API key. iOS Studio can build and upload with it, but certificates, profiles and devices are only listed for Apple ID sign-ins."
-      tone: "dim"; wrapMode: Text.WordWrap
+      tone: "dim"; wrapMode: Text.Wrap
     }
 
     // ---------------------------------------------------- free-account limits
@@ -410,7 +410,7 @@ PageFrame {
               }
             }
             ProgressTrack { Layout.fillWidth: true; visible: modelData.used >= 0; value: parent.frac; level: parent.lv }
-            AppText { Layout.fillWidth: true; text: modelData.note; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+            AppText { Layout.fillWidth: true; text: modelData.note; size: "small"; tone: "faint"; wrapMode: Text.Wrap }
           }
         }
       }
@@ -469,7 +469,7 @@ PageFrame {
           Layout.topMargin: Style.spacing.sm
           visible: !!sec.section && sec.section.ok && sec.list.length === 0
           text: modelData.empty
-          tone: "faint"; wrapMode: Text.WordWrap
+          tone: "faint"; wrapMode: Text.Wrap
         }
 
         Repeater {
@@ -535,7 +535,7 @@ PageFrame {
       AppText {
         Layout.fillWidth: true
         text: "Signing out removes your Apple ID from this computer. Apps already on your iPhone keep working until their signing runs out, and your certificate stays with Apple."
-        tone: "dim"; wrapMode: Text.WordWrap; size: "small"
+        tone: "dim"; wrapMode: Text.Wrap; size: "small"
       }
       ActionButton {
         text: "Sign out"; glyph: Model.Glyph.linkOff; kind: "danger"

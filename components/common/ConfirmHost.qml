@@ -114,8 +114,8 @@ Item {
         ColumnLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
-          AppText { Layout.fillWidth: true; text: root.title; size: "heading"; strong: true; wrapMode: Text.WordWrap }
-          AppText { Layout.fillWidth: true; visible: root.message !== ""; text: root.message; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.25 }
+          AppText { Layout.fillWidth: true; text: root.title; size: "heading"; strong: true; wrapMode: Text.Wrap }
+          AppText { Layout.fillWidth: true; visible: root.message !== ""; text: root.message; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.25 }
         }
       }
       RowLayout {

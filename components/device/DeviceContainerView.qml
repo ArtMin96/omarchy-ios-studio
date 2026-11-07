@@ -370,7 +370,7 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: root.status === "ready"
     text: "Click to select, double-click a folder to open it. Drag files from your desktop onto the list to copy them in."
-    size: "caption"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "caption"; tone: "faint"; wrapMode: Text.Wrap
     horizontalAlignment: Text.AlignRight
   }
 

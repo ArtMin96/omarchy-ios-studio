@@ -7,7 +7,7 @@ import "../common"
 import "../../core"
 import "../../lib/Model.js" as Model
 
-// "Packages…" sheet (projects slice): the Swift packages a project depends on (`packages`, helper/iosstudio/features/packages.py).
+// "Packages…" sheet (projects slice): the Swift packages a project depends on (`packages`, helper/iosstudio/features/packages/).
 // One sheet, several views:
 //   list     the declared packages (name, URL or path, requirement, resolved version, who uses them) with Update
 //            and Remove per row; Add package… and Update all above; a warning with Resolve when some aren't
@@ -685,7 +685,7 @@ Sheet {
       Layout.fillWidth: true
       readonly property bool showProblem: (root.urlTouched || root.addTried) && root.urlProblem !== "" && root.urlText !== "" || (root.addTried && root.urlProblem !== "")
       text: showProblem ? root.urlProblem : root.isLocal ? "A local package: used as it is on disk, with no version." : "A Git URL (https:// or git@), or a local folder path."
-      size: "small"; tone: showProblem ? "warn" : "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: showProblem ? "warn" : "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -723,7 +723,7 @@ Sheet {
               : root.rule === "exact" ? "This version only; Update keeps it."
               : root.rule === "branch" ? "The newest commit on a branch."
               : "One commit, pinned."
-        size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+        size: "small"; tone: "faint"; wrapMode: Text.Wrap
       }
     }
 
@@ -744,7 +744,7 @@ Sheet {
         Layout.fillWidth: true
         readonly property bool showProblem: root.addTried && root.versionProblem !== "" || (root.versionText !== "" && root.versionProblem !== "")
         text: showProblem ? root.versionProblem : root.rule === "branch" || root.rule === "revision" ? "Pinned in Package.resolved when it's fetched." : "A tag like 1.2.0. Empty: the newest."
-        size: "small"; tone: showProblem ? "warn" : "faint"; wrapMode: Text.WordWrap
+        size: "small"; tone: showProblem ? "warn" : "faint"; wrapMode: Text.Wrap
       }
     }
   }
@@ -765,7 +765,7 @@ Sheet {
     AppText {
       Layout.fillWidth: true
       text: "The package's library is linked to this target, so its code can import it."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -839,7 +839,7 @@ Sheet {
       Layout.fillWidth: true
       visible: !!root.job && root.job.state === "cancelled"
       text: "Cancelled. Package.swift and Package.resolved are back as they were."
-      tone: "dim"; wrapMode: Text.WordWrap
+      tone: "dim"; wrapMode: Text.Wrap
     }
   }
 
@@ -1005,7 +1005,7 @@ Sheet {
       title: "Remove " + root.pkgName(root.removing) + " from Package.swift"
       AppText {
         Layout.fillWidth: true
-        tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+        tone: "dim"; size: "small"; wrapMode: Text.Wrap
         text: root.removeTargetDeps.length
               ? "Also unlinks it from " + root.removeTargetDeps.map(root.targetDepText).join(", ") + ". Code that imports it stops compiling."
               : "No target uses it."

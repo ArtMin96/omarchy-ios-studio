@@ -195,7 +195,7 @@ Sheet {
         Layout.fillWidth: true
         spacing: Style.spacing.xxs
         AppText { id: headText; Layout.fillWidth: true; text: Model.plural(root.changedCount, "file") + " would change"; strong: true; elide: Text.ElideRight }
-        AppText { Layout.fillWidth: true; text: root.summaryDetail(); tone: "dim"; size: "small"; wrapMode: Text.WordWrap }
+        AppText { Layout.fillWidth: true; text: root.summaryDetail(); tone: "dim"; size: "small"; wrapMode: Text.Wrap }
       }
     }
 
@@ -232,7 +232,7 @@ Sheet {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             text: Model.plural(root.fileErrors.length, "file") + " couldn't be read and stay as they are"
-            wrapMode: Text.WordWrap
+            wrapMode: Text.Wrap
           }
         }
         Repeater {

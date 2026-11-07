@@ -186,8 +186,8 @@ PageFrame {
           Layout.fillWidth: true
           Layout.alignment: Qt.AlignVCenter
           spacing: Style.spacing.sm
-          AppText { Layout.fillWidth: true; text: page.next.title; size: "heading"; strong: true; wrapMode: Text.WordWrap }
-          AppText { Layout.fillWidth: true; text: page.next.text; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
+          AppText { Layout.fillWidth: true; text: page.next.title; size: "heading"; strong: true; wrapMode: Text.Wrap }
+          AppText { Layout.fillWidth: true; text: page.next.text; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2 }
           ActionButton {
             Layout.topMargin: Style.spacing.md
             visible: !page.wide && !!page.next.cta
@@ -466,7 +466,7 @@ PageFrame {
         Layout.fillWidth: true
         visible: page.acct.signedIn && !idCard.e
         text: page.acct.detailsLoading ? "Checking your signing…" : "No apps signed yet. Signing starts the first time you run an app."
-        tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+        tone: "dim"; size: "small"; wrapMode: Text.Wrap
       }
       Item { Layout.fillHeight: true }
     }

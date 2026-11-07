@@ -143,8 +143,8 @@ ColumnLayout {
       Layout.fillWidth: true
       Layout.alignment: Qt.AlignTop
       spacing: Style.spacing.xxs
-      AppText { id: lineTitle; Layout.fillWidth: true; text: line.title; tone: line.titleTone; wrapMode: Text.WordWrap }
-      AppText { Layout.fillWidth: true; visible: line.detail !== ""; text: line.detail; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+      AppText { id: lineTitle; Layout.fillWidth: true; text: line.title; tone: line.titleTone; wrapMode: Text.Wrap }
+      AppText { Layout.fillWidth: true; visible: line.detail !== ""; text: line.detail; size: "small"; tone: "faint"; wrapMode: Text.Wrap }
       MetaFlow { Layout.fillWidth: true; visible: line.detailParts.length > 0; parts: line.detailParts }
     }
   }
@@ -174,7 +174,7 @@ ColumnLayout {
       Layout.fillWidth: true
       text: (root.fixable === root.total ? (root.total === 1 ? "Formatting fixes it" : "Formatting fixes all of them")
                                          : "Formatting fixes " + root.fixable + " of these") + "."
-      tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+      tone: "dim"; size: "small"; wrapMode: Text.Wrap
     }
     ActionButton {
       text: "Format project…"
@@ -239,6 +239,6 @@ ColumnLayout {
     visible: root.shown && !root.failed && !!root.result && (root.result.truncated === true || root.result.timed_out === true)
     text: root.result && root.result.timed_out ? "The check stopped after its time limit; these are the files it got to."
           : "Showing " + root.items.length + " of " + root.total + ". Fix these and check again to see the rest."
-    tone: "faint"; size: "small"; wrapMode: Text.WordWrap
+    tone: "faint"; size: "small"; wrapMode: Text.Wrap
   }
 }

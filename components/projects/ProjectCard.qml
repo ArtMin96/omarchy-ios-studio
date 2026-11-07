@@ -329,7 +329,7 @@ BorderSurface {
       text: root.project.note || ""
       tone: "warn"
       size: "small"
-      wrapMode: Text.WordWrap
+      wrapMode: Text.Wrap
     }
 
     ProjectCheckView {

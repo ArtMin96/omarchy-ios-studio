@@ -80,7 +80,7 @@ CursorSurface {
           Layout.maximumWidth: root.value !== "" && root.titleLines === 1 ? implicitWidth : -1
           text: root.title
           tone: root.titleMuted ? "faint" : "primary"
-          wrapMode: root.titleLines > 1 ? Text.WordWrap : Text.NoWrap
+          wrapMode: root.titleLines > 1 ? Text.Wrap : Text.NoWrap
           maximumLineCount: root.titleLines
           elide: Text.ElideRight
         }

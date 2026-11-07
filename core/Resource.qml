@@ -12,7 +12,8 @@ import QtQuick
 //     fetch: app.device.fetcher("profiles.list")             // or app.cli.fetcher(["account", "status"])
 //   }
 //   profiles.load()          // fetch unless fresh (within ttl) or already loading
-//   profiles.load(true)      // fetch even if fresh (Reload buttons, retry)
+//   profiles.load(true)      // fetch even if fresh (Reload buttons, retry, after a change); while a fetch
+//                            // runs, one more fetch follows it (the running one may predate the change)
 //   profiles.invalidate()    // the data is out of date: the next load() fetches (and loads now if autoLoad)
 //   profiles.set(list)       // replace the data locally (after a change you made), counts as fresh
 //   profiles.reset()         // forget everything (device switched); a reply still in flight is dropped
@@ -42,11 +43,12 @@ QtObject {
 
   property int _gen: 0                      // bumped by reset(): replies from before it are dropped
   property bool _stale: false               // invalidate() called
+  property bool _reloadQueued: false        // load(true) while busy: fetch once more when this one settles
 
   // Returns true when a fetch started.
   function load(force) {
     if (!root.active || typeof root.fetch !== "function") return false
-    if (root.busy) return false
+    if (root.busy) { if (force) root._reloadQueued = true; return false }
     if (!force && !root._stale && root.loaded && root.ttl > 0 && Date.now() - root.loadedAt < root.ttl) return false
     var gen = root._gen
     root.busy = true
@@ -63,6 +65,7 @@ QtObject {
         root.status = "ready"
         root.busy = false
         root.succeeded(d)
+        root._runQueued()
       }, function(e) {
         if (settled || gen !== root._gen) return
         settled = true
@@ -70,12 +73,22 @@ QtObject {
         if (root.status !== "ready") root.status = "error"
         root.busy = false
         root.failed(root.error)
+        root._runQueued()
       })
     } catch (ex) {
       console.warn("Resource fetch threw:", ex)
-      if (!settled) { settled = true; root.busy = false; root.error = { code: "internal", message: String(ex) }; if (root.status !== "ready") root.status = "error" }
+      if (!settled) { settled = true; root.busy = false; root.error = { code: "internal", message: String(ex) }; if (root.status !== "ready") root.status = "error"; root._runQueued() }
     }
     return true
+  }
+
+  // After a fetch settles: the load(true) that arrived while it ran (one, however many were asked).
+  // Deferred so a reply handler finishes before the next fetch starts.
+  function _runQueued() {
+    if (!root._reloadQueued) return
+    root._reloadQueued = false
+    var gen = root._gen
+    Qt.callLater(function() { if (gen === root._gen) root.load(true) })
   }
 
   function invalidate() {
@@ -94,6 +107,7 @@ QtObject {
   function reset() {
     root._gen++
     root.busy = false
+    root._reloadQueued = false
     root.data = root.initial
     root.error = null
     root.loadedAt = 0

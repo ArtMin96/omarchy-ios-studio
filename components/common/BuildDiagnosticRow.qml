@@ -97,7 +97,7 @@ CursorSurface {
       RowLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.md
-        AppText { id: msg; Layout.fillWidth: true; text: root.diag.message || ""; wrapMode: Text.WordWrap; maximumLineCount: 4; elide: Text.ElideRight }
+        AppText { id: msg; Layout.fillWidth: true; text: root.diag.message || ""; wrapMode: Text.Wrap; maximumLineCount: 4; elide: Text.ElideRight }
         Badge {
           id: chip
           // Centred on the first line, like the glyph.
@@ -112,13 +112,13 @@ CursorSurface {
         Layout.fillWidth: true
         visible: text !== ""
         text: (root.diag.details || []).slice(0, 3).join("\n")
-        tone: "faint"; size: "small"; wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight
+        tone: "faint"; size: "small"; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
       }
       AppText {
         Layout.fillWidth: true
         visible: !!root.diag.hint
         text: root.diag.hint || ""
-        tone: "dim"; size: "small"; wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight
+        tone: "dim"; size: "small"; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
       }
       RowLayout {
         Layout.fillWidth: true

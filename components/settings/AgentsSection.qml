@@ -158,7 +158,7 @@ Card {
       AppText { Layout.fillWidth: true; text: "iOS Studio server"; size: "subtitle" }
       AppText {
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap; lineHeight: 1.2
+        wrapMode: Text.Wrap; lineHeight: 1.2
         size: "small"; tone: "dim"
         text: root.preparing ? "Getting the server ready. This takes a few seconds, longer the first time."
             : root.prepareError ? "The server isn't ready yet."
@@ -376,7 +376,7 @@ Card {
         AppText { Layout.fillWidth: true; text: "You stay in charge"; tone: "primary" }
         AppText {
           Layout.fillWidth: true
-          wrapMode: Text.WordWrap; lineHeight: 1.2
+          wrapMode: Text.Wrap; lineHeight: 1.2
           size: "small"; tone: "dim"
           text: "Agents can't sign in to your Apple ID, pair your iPhone or delete anything on their own. Those steps open here in iOS Studio for you, and anything that removes something asks you first."
         }

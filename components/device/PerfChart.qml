@@ -404,7 +404,7 @@ ColumnLayout {
           visible: !!tip.ev
           Layout.fillWidth: true
           Layout.maximumWidth: Style.space(236)
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
           text: tip.ev ? tip.ev.text : ""
           size: "small"
           tone: tip.ev && (tip.ev.kind === "jetsam" || tip.ev.kind === "crash" || tip.ev.kind === "watchdog") ? "error"

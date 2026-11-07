@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -23,6 +24,7 @@ Button {
   horizontalPadding: Style.spacing.md
   verticalPadding: Style.spacing.md
   implicitWidth: implicitHeight
+  Layout.minimumWidth: root.implicitWidth      // never squeezed by a filling neighbour in a RowLayout
   opacity: enabled && !disabled ? 1 : 0.4
 
   // disabled: presses stop here; hover still reaches the button for its tooltip.

@@ -7,7 +7,7 @@ import "../common"
 import "../../lib/Model.js" as Model
 
 // Settings › Code editor: which editor "Open in editor" uses, and Swift completion and inline errors
-// (SourceKit-LSP) set up once per computer for VS Code, Zed and Neovim (helper/iosstudio/features/editor_setup.py,
+// (SourceKit-LSP) set up once per computer for VS Code, Zed and Neovim (helper/iosstudio/features/editor_setup/,
 // `editor status` / `editor setup --editor X [--confirm]`, through app.projects).
 //   EditorSection { Layout.fillWidth: true; app: page.app }
 // Set up first shows the dry run under the row (Create / Update / Keep / Back up) and only Apply
@@ -178,7 +178,7 @@ Card {
     Layout.bottomMargin: Style.spacing.md
     visible: !!root.info && root.lspPath === ""
     text: "SourceKit-LSP wasn't found. It comes with the Swift toolchain: install that on the Setup page first."
-    size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+    size: "small"; tone: "warn"; wrapMode: Text.Wrap
   }
 
   // Width probe for the rows' button slot (hidden, so the layout skips it).
@@ -219,7 +219,7 @@ Card {
       text: root.installed.length === 0
             ? "No supported editor found. Install VS Code, Zed or Neovim, then press Check again."
             : "Not installed: " + root.missing.map(function(e) { return e.name }).join(", ")
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 }

@@ -124,7 +124,7 @@ ColumnLayout {
         text: img.status === Image.Error ? "The image couldn't be read" : root.placeholder
         size: "small"; tone: "faint"
         horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
       }
     }
 

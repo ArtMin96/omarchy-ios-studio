@@ -20,7 +20,7 @@ Item {
     width: Math.min(parent.width - Style.spacing.huge * 2, Style.space(420))
     spacing: Style.spacing.lg
     Spinner { Layout.alignment: Qt.AlignHCenter; size: Style.font.display }
-    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.text; size: "subtitle"; wrapMode: Text.WordWrap }
-    AppText { Layout.fillWidth: true; visible: root.detail !== ""; horizontalAlignment: Text.AlignHCenter; text: root.detail; tone: "dim"; size: "small"; wrapMode: Text.WordWrap }
+    AppText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.text; size: "subtitle"; wrapMode: Text.Wrap }
+    AppText { Layout.fillWidth: true; visible: root.detail !== ""; horizontalAlignment: Text.AlignHCenter; text: root.detail; tone: "dim"; size: "small"; wrapMode: Text.Wrap }
   }
 }

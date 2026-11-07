@@ -41,7 +41,7 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.alignment: Qt.AlignVCenter
         text: modelData.text
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         tone: modelData.done ? "dim" : "primary"
       }
     }

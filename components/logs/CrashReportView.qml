@@ -157,7 +157,7 @@ Item {
           Layout.fillWidth: true
           visible: text !== ""
           text: root.explain(root.summary, root.item)
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
         }
         KeyValueList {
           Layout.fillWidth: true
@@ -223,7 +223,7 @@ Item {
           AppText {
             Layout.fillWidth: true
             text: root.symNote
-            size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+            size: "small"; tone: "dim"; wrapMode: Text.Wrap
           }
         }
       }

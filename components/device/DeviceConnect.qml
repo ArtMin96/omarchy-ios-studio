@@ -38,11 +38,11 @@ ColumnLayout {
       Layout.alignment: Qt.AlignVCenter
       spacing: Style.spacing.lg
 
-      AppText { text: "Connect your iPhone"; size: "displayLarge"; strong: true; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+      AppText { text: "Connect your iPhone"; size: "displayLarge"; strong: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
       AppText {
         Layout.fillWidth: true
         Layout.maximumWidth: Style.space(520)
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         tone: "dim"
         text: "There's no iOS Simulator on Linux, so your iPhone is where your apps run. Pair it once — after that iOS Studio finds it on its own, over the cable or over Wi-Fi."
       }

@@ -5,7 +5,7 @@ import qs.Commons
 import "../core"
 import "../lib/Model.js" as Model
 
-// Watch mode, compile on save (issue #7; helper/iosstudio/features/watch.py, docs/features/watch-mode.md).
+// Watch mode, compile on save (issue #7; helper/iosstudio/features/watch/, docs/features/watch-mode.md).
 // One watcher per user: starting one stops the other, and agents (MCP ios_watch_start/stop) can
 // start or stop it too. Every change of the watcher is a snapshot in <runtime dir>/watch.json:
 //   {seq, pid, state: watching|changed|compiling|ok|failed|stopped, reason, message, project (name), path,
@@ -43,8 +43,8 @@ Item {
   property real now: Date.now()
   property var lastError: null
 
-  readonly property string runtimeDir: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") || "/tmp")
-                                       + "/" + (app.demo !== "" ? "ios-studio-demo" : "ios-studio")
+  // watch.json lives in the daemon's runtime folder (helper/iosstudio/features/watch/runtime.py: client.runtime_dir()).
+  readonly property string runtimeDir: app.device.runtimeDir
 
   readonly property string autoRunBlocker: {
     var p = app.projects

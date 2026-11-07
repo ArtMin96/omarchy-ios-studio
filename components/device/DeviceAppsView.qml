@@ -157,7 +157,7 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: root.svc.apps.length > 0
     text: "Enter opens details · o opens on the iPhone · x removes · c copies the bundle ID"
-    size: "caption"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "caption"; tone: "faint"; wrapMode: Text.Wrap
     horizontalAlignment: Text.AlignRight
   }
 }

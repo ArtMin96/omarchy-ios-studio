@@ -21,7 +21,14 @@ Item {
   // Demo mode (`ios-studio --demo`): made-up data from the helper and daemon, and its own
   // settings/state so your real ones are neither shown nor changed.
   readonly property string demo: Quickshell.env("IOSSTUDIO_DEMO") || ""
-  readonly property string demoDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ios-studio-demo"
+  readonly property string demoDir: xdgRuntimeDir + "/ios-studio-demo"     // demo_art.demo_dir() in the helper
+  // The runtime folder, the helper's rule (helper/iosstudio/device/client.py runtime_base): $IOSSTUDIO_RUNTIME_DIR, else
+  // $XDG_RUNTIME_DIR, else /run/user/<uid>. The daemon's own paths (socket folder, log, watch.json) come
+  // from its `ready` event: use device.runtimeDir / device.logPath, which fall back to this until then.
+  readonly property string xdgRuntimeDir: Quickshell.env("XDG_RUNTIME_DIR") || (_uid !== "" ? "/run/user/" + _uid : "/tmp")
+  readonly property string runtimeDir: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || xdgRuntimeDir) + (demo !== "" ? "/ios-studio-demo" : "/ios-studio")
+  readonly property string _uid: { var m = /^Uid:\s+(\d+)/m.exec(procStatus.text()); return m ? m[1] : "" }
+  FileView { id: procStatus; path: "/proc/self/status"; blockLoading: true; printErrors: false }
   readonly property string configDir: demo !== "" ? demoDir + "/config" : home + "/.config/ios-studio"
   readonly property string stateDir: demo !== "" ? demoDir + "/state" : home + "/.local/state/ios-studio"
   readonly property string cacheDir: demo !== "" ? demoDir + "/cache" : home + "/.cache/ios-studio"

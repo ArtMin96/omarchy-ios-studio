@@ -247,7 +247,7 @@ Item {
           spacing: Style.spacing.xl
           AppText {
             Layout.fillWidth: true
-            wrapMode: Text.WordWrap
+            wrapMode: Text.Wrap
             text: {
               var r = root.result
               if (!r || !r.ok) return ""

@@ -178,7 +178,7 @@ GridLayout {
           StatusPill { visible: root.liveText !== ""; level: root.svc.mirrorActive === "stream" ? "ok" : "info"; text: root.liveText; showGlyph: false }
           Item { Layout.fillWidth: true }
         }
-        AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; tone: "dim"; text: root.description }
+        AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; tone: "dim"; text: root.description }
       }
 
       // how it's shown
@@ -243,14 +243,14 @@ GridLayout {
             Layout.fillWidth: true
             visible: uxplay.running
             text: "Waiting for your iPhone: open Control Center › Screen Mirroring and pick “iOS Studio”. Same Wi-Fi needed."
-            size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+            size: "small"; tone: "dim"; wrapMode: Text.Wrap
           }
         }
         AppText {
           Layout.fillWidth: true
           visible: !root.uxplayInstalled
           text: "AirPlay needs the free UxPlay receiver. Setup installs it in a few minutes."
-          size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+          size: "small"; tone: "faint"; wrapMode: Text.Wrap
         }
       }
 
@@ -262,7 +262,7 @@ GridLayout {
         Icon { glyph: Model.Glyph.info; color: root.svc.mirrorNotice !== "" ? Theme.levelColor("warn") : Theme.faint; Layout.alignment: Qt.AlignTop }
         AppText {
           Layout.fillWidth: true
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
           size: "small"
           tone: root.svc.mirrorNotice !== "" ? "dim" : "faint"
           text: root.svc.mirrorNotice !== "" ? root.svc.mirrorNotice
@@ -313,7 +313,7 @@ GridLayout {
         Layout.fillWidth: true
         visible: root.airplayView
         text: "Recording works with the Smooth and Screenshots views."
-        size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+        size: "small"; tone: "faint"; wrapMode: Text.Wrap
       }
 
       ErrorState {
@@ -332,7 +332,7 @@ GridLayout {
         spacing: Style.spacing.md
         AppText {
           Layout.fillWidth: true
-          wrapMode: Text.WordWrap
+          wrapMode: Text.Wrap
           text: !root.recDone ? "" : (root.recNow.placeholder ? (root.recNow.notice || "")
                 : "Saved a " + Model.clock(root.recNow.seconds) + " video (" + Model.formatBytes(root.recNow.bytes) + ", "
                   + (root.recNow.mode === "stream" ? "smooth" : "from screenshots") + ")")

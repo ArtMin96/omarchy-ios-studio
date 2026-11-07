@@ -37,15 +37,20 @@ Rectangle {
   property string filter: ""
   property string levelFilter: ""
   property string emptyText: "Nothing logged yet."
-  readonly property int count: _all.length
+  readonly property int count: _count
   readonly property int shownCount: lineModel.count
   property alias toolbarExtra: extraSlot.data
 
   signal lineCopied(string text)
   signal copiedAll(int count)
 
+  // The buffers are changed in place (push / splice), never copied per flush (like LogSyslogView):
+  // a copy of the 5000-line buffer every 80 ms is real work on a busy stream. _count mirrors
+  // _all.length for bindings; `seq` numbers lines so trimming knows which rows left the buffer.
   property var _all: []
   property var _pending: []
+  property int _count: 0
+  property int _seq: 0
 
   function guessLevel(t) {
     var s = String(t)
@@ -59,10 +64,10 @@ Rectangle {
     if (item === null || item === undefined) return null
     if (typeof item === "object") {
       var t = String(item.text === undefined ? "" : item.text)
-      return { text: t, level: item.level || guessLevel(t), meta: item.meta ? String(item.meta) : "" }
+      return { seq: ++root._seq, text: t, level: item.level || guessLevel(t), meta: item.meta ? String(item.meta) : "" }
     }
     var s = String(item)
-    return { text: s, level: guessLevel(s), meta: "" }
+    return { seq: ++root._seq, text: s, level: guessLevel(s), meta: "" }
   }
 
   function append(text, level, meta) {
@@ -85,6 +90,7 @@ Rectangle {
   function clear() {
     root._all = []
     root._pending = []
+    root._count = 0
     lineModel.clear()
   }
 
@@ -141,22 +147,25 @@ Rectangle {
     if (root.paused || root._pending.length === 0) return
     var batch = root._pending
     root._pending = []
-    var all = root._all.concat(batch)
+    var all = root._all
+    for (var j = 0; j < batch.length; j++) all.push(batch[j])
     var drop = all.length - root.maxLines
-    if (drop > 0) all = all.slice(drop)
-    root._all = all
-    // trim the display model from the front, then append what passes
     if (drop > 0) {
-      var extra = lineModel.count + batch.length - root.maxLines
-      if (extra > 0) lineModel.remove(0, Math.min(extra, lineModel.count))
+      var cut = all[drop - 1].seq
+      all.splice(0, drop)
+      // drop the rows that left the buffer from the front of the display model
+      var n = 0
+      while (n < lineModel.count && lineModel.get(n).seq <= cut) n++
+      if (n > 0) lineModel.remove(0, n)
     }
+    root._count = all.length
     var add = []
     for (var i = 0; i < batch.length; i++) if (_passes(batch[i])) add.push(batch[i])
     if (add.length) lineModel.append(add)
     if (root.follow) list.positionViewAtEnd()
   }
 
-  onLinesChanged: { root._all = []; root._pending = []; lineModel.clear(); appendMany(root.lines || []); _flushNow() }
+  onLinesChanged: { clear(); appendMany(root.lines || []); _flushNow() }
   function _flushNow() { flush.stop(); _flush() }
   // Typing in the filter re-filters up to maxLines lines: once typing pauses, not per key.
   onFilterChanged: filterDebounce.restart()

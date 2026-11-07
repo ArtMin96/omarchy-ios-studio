@@ -19,7 +19,7 @@ ColumnLayout {
 
   AppText {
     Layout.fillWidth: true
-    wrapMode: Text.WordWrap
+    wrapMode: Text.Wrap
     tone: "dim"
     text: "A provisioning profile lets one of your apps run on this iPhone. With a free Apple ID each one lasts 7 days — when it runs out the app stops opening until you run it again from Projects."
   }

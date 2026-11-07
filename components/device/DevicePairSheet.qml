@@ -54,7 +54,7 @@ Sheet {
         }
       }
     }
-    AppText { Layout.fillWidth: true; text: "The iPhone asks for it after you tap this computer in Paired Macs."; size: "small"; tone: "faint"; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap }
+    AppText { Layout.fillWidth: true; text: "The iPhone asks for it after you tap this computer in Paired Macs."; size: "small"; tone: "faint"; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
   }
 
   // ---- code shown on the phone, typed here (rare PIN flows)
@@ -87,7 +87,7 @@ Sheet {
     visible: root.svc.pairing
     spacing: Style.spacing.lg
     Spinner { size: Style.font.body; running: root.svc.pairing; color: Commons.Color.accent }
-    AppText { Layout.fillWidth: true; text: root.ev.message || "Working…"; tone: "dim"; size: "small"; wrapMode: Text.WordWrap }
+    AppText { Layout.fillWidth: true; text: root.ev.message || "Working…"; tone: "dim"; size: "small"; wrapMode: Text.Wrap }
   }
 
   // ---- outcome

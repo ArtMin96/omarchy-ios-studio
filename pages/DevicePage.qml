@@ -415,7 +415,7 @@ PageFrame {
           ]
         }
         AppText {
-          Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "faint"
+          Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "faint"
           text: "Don't see Developer Mode? Plug the iPhone in and press “Show the switch”, or run one of your apps once from Projects."
         }
         footer: [
