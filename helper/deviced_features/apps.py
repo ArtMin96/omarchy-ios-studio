@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import posixpath
 import signal
+import time
 import uuid
 
 import device_link as link
@@ -173,6 +174,8 @@ def register(reg):
         async with d.pmd3.AppServiceService(rsd) as svc:
             for pid in pids:
                 await svc.send_signal_to_process(pid, int(signal.SIGKILL))
+        if pids:    # app data waits for cfprefsd to save a just-killed app's settings (deviced_features/appdata.py)
+            s.tunnel_data.setdefault("app.killed", {})[bid] = time.monotonic()
         return {"bundleId": bid, "killed": pids}
 
     @reg.command("processes.list")

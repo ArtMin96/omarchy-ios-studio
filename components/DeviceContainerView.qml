@@ -6,8 +6,8 @@ import qs.Commons as Commons
 import qs.Ui
 import "../Model.js" as Model
 
-// Files › App files: browse an app's container on the iPhone, copy files out ("Save to…") and in
-// (Add files, or drag files from the desktop onto the list), make folders, delete.
+// iPhone › Apps › an app › Files: browse the app's container on the iPhone, copy files out ("Save to…")
+// and in (Add files, or drag files from the desktop onto the list), make folders, delete.
 // Your own builds expose the whole container; App Store apps only Documents, when they share files.
 // Daemon: container.list/pull/push/mkdir/delete, transfer.cancel.
 ColumnLayout {
@@ -15,6 +15,8 @@ ColumnLayout {
   required property var app
   readonly property var svc: app.device
   property bool active: false
+  property bool showReload: true            // false when the host's row already has a reload
+  property string fixedApp: ""              // the app whose container this shows (a developer build or one that shares files)
 
   readonly property var candidates: svc.apps.filter(function(a) { return a.developer || a.fileSharing })
   property string bundleId: ""
@@ -39,6 +41,7 @@ ColumnLayout {
 
   onActiveChanged: if (active) _ensure()
   onCandidatesChanged: if (active) _ensure()
+  onFixedAppChanged: { root.bundleId = ""; root.listing = null; root.path = ""; root.status = "unknown"; root.selected = ({}); if (active) _ensure() }
   Connections {
     target: root.svc
     function onConnStateChanged() { if (root.active && root.svc.connected && root.status !== "ready") root.open(root.path) }
@@ -50,17 +53,13 @@ ColumnLayout {
   function _ensure() {
     if (root.svc.connected && root.svc.appsStatus === "unknown") root.svc.refreshApps()
     if (root.current) { if (root.status === "unknown") open(""); return }
-    var want = root.app.setting("filesApp", "")
-    var pick = root.candidates.filter(function(a) { return a.bundleId === want })[0]
-             || root.candidates.filter(function(a) { return a.developer })[0] || root.candidates[0]
-    if (pick) choose(pick.bundleId)
+    if (root.fixedApp && root.candidates.some(function(a) { return a.bundleId === root.fixedApp })) choose(root.fixedApp)
   }
 
   function choose(bid) {
     if (bid === root.bundleId && root.status === "ready") return
     root.bundleId = bid
     root.listing = null
-    root.app.setSetting("filesApp", bid)
     open("")
   }
 
@@ -83,7 +82,8 @@ ColumnLayout {
   }
 
   function crumbs() {
-    var out = [{ label: root.rootPath === "/" ? (root.current ? root.current.name : "Container") : "Documents", path: root.rootPath }]
+    // a neutral root: the app's name is already in the header above
+    var out = [{ label: root.rootPath === "/" ? "Container" : "Documents", path: root.rootPath }]
     if (!root.listing) return out
     var rest = root.path.substring(root.rootPath.length).split("/").filter(function(x) { return x !== "" })
     var acc = root.rootPath === "/" ? "" : root.rootPath
@@ -183,68 +183,47 @@ ColumnLayout {
     onAccepted: root.push(selectedFiles.map(function(u) { return decodeURIComponent(String(u).replace(/^file:\/\//, "")) }), false)
   }
 
-  // ---- no apps that share files
-  EmptyState {
-    Layout.fillWidth: true
-    visible: root.svc.appsStatus === "ready" && root.candidates.length === 0
-    compact: true
-    glyph: Model.Glyph.folder
-    title: "No app on this iPhone shares files"
-    text: "Your own apps (built here) always do. App Store apps only when their developer turns on file sharing."
-    actionText: "Open Projects"; actionGlyph: Model.Glyph.hammer
-    onAction: root.app.nav("projects")
-  }
-  Skeleton { Layout.fillWidth: true; visible: root.svc.appsStatus === "loading" && root.candidates.length === 0; lines: 4; rowHeight: Style.space(40); gap: Style.spacing.md }
-
-  // ---- app picker + toolbar
+  // ---- up, breadcrumb, what this container is, reload
   RowLayout {
     Layout.fillWidth: true
-    visible: root.candidates.length > 0
-    spacing: Style.spacing.lg
-    Dropdown {
-      showLabel: false
-      Layout.preferredWidth: Style.space(280)
-      value: root.bundleId
-      options: root.candidates.map(function(a) { return { value: a.bundleId, label: a.name + (a.developer ? "  ·  yours" : "  ·  Documents") } })
-      onChanged: function(v) { root.choose(v) }
+    visible: !!root.bundleId
+    spacing: Style.spacing.md
+    IconButton { id: upButton; Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.arrowUp; tooltip: "Up one folder"; enabled: root.status === "ready" && root.path !== root.rootPath; onClicked: root.up() }
+    Flow {
+      Layout.fillWidth: true
+      Layout.alignment: Qt.AlignVCenter
+      spacing: Style.spacing.md
+      Repeater {
+        model: root.crumbs()
+        delegate: Row {
+          required property var modelData
+          required property int index
+          spacing: Style.spacing.md
+          height: upButton.implicitHeight     // each crumb line as tall as the Up button, so they share a centre line
+          Icon { visible: index > 0; anchors.verticalCenter: parent.verticalCenter; glyph: Model.Glyph.chevronRight; size: Style.font.caption; color: Theme.faint }
+          AppText {
+            id: crumbText
+            anchors.verticalCenter: parent.verticalCenter
+            text: modelData.label
+            tone: modelData.path === root.path ? "primary" : "dim"
+            strong: modelData.path === root.path
+            font.underline: crumbHover.hovered && modelData.path !== root.path
+            HoverHandler { id: crumbHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: if (modelData.path !== root.path) root.open(modelData.path) }
+          }
+        }
+      }
     }
     StatusPill {
+      Layout.alignment: Qt.AlignTop
+      Layout.topMargin: (upButton.implicitHeight - implicitHeight) / 2
       visible: !!root.current
       quiet: true
       level: "info"
       glyph: root.current && root.current.developer ? Model.Glyph.developer : Model.Glyph.folder
       text: root.current && root.current.developer ? "Whole container" : "Documents only"
     }
-    Item { Layout.fillWidth: true }
-    IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload this folder"; busy: root.status === "loading"; enabled: !!root.bundleId; onClicked: root.open(root.path) }
-  }
-
-  // ---- breadcrumb + actions
-  Flow {
-    Layout.fillWidth: true
-    visible: root.candidates.length > 0 && !!root.bundleId
-    spacing: Style.spacing.md
-    IconButton { glyph: Model.Glyph.arrowUp; tooltip: "Up one folder"; enabled: root.status === "ready" && root.path !== root.rootPath; onClicked: root.up() }
-    Repeater {
-      model: root.crumbs()
-      delegate: Row {
-        required property var modelData
-        required property int index
-        spacing: Style.spacing.md
-        height: crumbText.implicitHeight + Style.spacing.sm * 2
-        Icon { visible: index > 0; anchors.verticalCenter: parent.verticalCenter; glyph: Model.Glyph.chevronRight; size: Style.font.caption; color: Theme.faint }
-        AppText {
-          id: crumbText
-          anchors.verticalCenter: parent.verticalCenter
-          text: modelData.label
-          tone: modelData.path === root.path ? "primary" : "dim"
-          strong: modelData.path === root.path
-          font.underline: crumbHover.hovered && modelData.path !== root.path
-          HoverHandler { id: crumbHover; cursorShape: Qt.PointingHandCursor }
-          TapHandler { onTapped: if (modelData.path !== root.path) root.open(modelData.path) }
-        }
-      }
-    }
+    IconButton { visible: root.showReload; Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.refresh; tooltip: "Reload this folder"; busy: root.status === "loading"; enabled: !!root.bundleId; onClicked: root.open(root.path) }
   }
 
   Flow {

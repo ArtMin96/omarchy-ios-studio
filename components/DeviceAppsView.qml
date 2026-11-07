@@ -5,7 +5,8 @@ import qs.Commons as Commons
 import qs.Ui
 import "../Model.js" as Model
 
-// Installed apps on the iPhone: search, launch, stop, remove. The page owns the cursor.
+// Installed apps on the iPhone: search, launch, stop, remove; click a row for the app's details
+// (DeviceAppDetailView: its data and files). The page owns the cursor.
 ColumnLayout {
   id: root
   required property var app
@@ -14,6 +15,7 @@ ColumnLayout {
   property alias search: searchField
   property bool devFirst: true
   signal cursorMoved(int index)
+  signal openApp(string bundleId)
 
   readonly property var shown: {
     var q = searchField.text
@@ -85,7 +87,7 @@ ColumnLayout {
           return p.join("  ·  ")
         }
         onHovered: function(h) { if (h) root.cursorMoved(index) }
-        onDoubleClicked: root.svc.launchApp(modelData)
+        onClicked: root.openApp(modelData.bundleId)
 
         leading: [
           Item {
@@ -108,10 +110,16 @@ ColumnLayout {
           }
         ]
         trailing: [
-          StatusPill { visible: row.modelData.developer && !row.narrow; quiet: true; level: "info"; glyph: Model.Glyph.developer; text: "Yours"; anchors.verticalCenter: parent ? parent.verticalCenter : undefined },
-          StatusPill { visible: row.modelData.running; quiet: true; level: "ok"; glyph: Model.Glyph.dot; text: "Running"; anchors.verticalCenter: parent ? parent.verticalCenter : undefined },
+          // the pills get a real gap between them (the trailing row's spacing is for icon buttons)
+          Row {
+            spacing: Style.spacing.xl
+            anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+            StatusPill { visible: row.modelData.developer && !row.narrow; quiet: true; level: "info"; glyph: Model.Glyph.developer; text: "Yours"; anchors.verticalCenter: parent.verticalCenter }
+            StatusPill { visible: row.modelData.running; quiet: true; level: "ok"; glyph: Model.Glyph.dot; text: "Running"; anchors.verticalCenter: parent.verticalCenter }
+          },
           IconButton { glyph: Model.Glyph.play; tooltip: "Open on iPhone"; busy: row.busy === "launch"; enabled: row.busy === ""; onClicked: root.svc.launchApp(row.modelData) },
-          IconButton { glyph: Model.Glyph.stop; tooltip: "Stop"; visible: row.modelData.running; busy: row.busy === "kill"; enabled: row.busy === ""; onClicked: root.svc.stopApp(row.modelData) },
+          // Stop keeps its slot while the app isn't running, so ▶, ■, copy and trash stay in fixed columns
+          IconButton { glyph: Model.Glyph.stop; tooltip: row.modelData.running ? "Stop" : ""; opacity: row.modelData.running ? 1 : 0; busy: row.busy === "kill"; enabled: row.modelData.running && row.busy === ""; onClicked: root.svc.stopApp(row.modelData) },
           IconButton { glyph: Model.Glyph.copy; tooltip: "Copy bundle ID"; visible: !row.narrow; onClicked: { Util.execArgv(["wl-copy", row.modelData.bundleId]); root.app.toast("Copied " + row.modelData.bundleId) } },
           IconButton { glyph: Model.Glyph.trash; tooltip: "Remove from iPhone"; danger: true; visible: row.modelData.removable; busy: row.busy === "uninstall"; enabled: row.busy === ""; onClicked: root.svc.uninstallApp(row.modelData) }
         ]
@@ -122,8 +130,8 @@ ColumnLayout {
   AppText {
     Layout.fillWidth: true
     visible: root.svc.apps.length > 0
-    text: "Enter opens the app · x removes it · c copies the bundle ID"
-    size: "caption"; tone: "faint"
+    text: "Enter opens details · o opens on the iPhone · x removes · c copies the bundle ID"
+    size: "caption"; tone: "faint"; wrapMode: Text.WordWrap
     horizontalAlignment: Text.AlignRight
   }
 }

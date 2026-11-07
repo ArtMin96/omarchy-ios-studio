@@ -155,7 +155,14 @@ var Glyph = {
   // Swift packages (ProjectPackagesSheet)
   packages: g(0xF0431),     // puzzle: Packages…
   checkboxOn: g(0xF0132),
-  checkboxOff: g(0xF0131)
+  checkboxOff: g(0xF0131),
+  // app data (DeviceAppDataView)
+  database: g(0xF01BC),
+  table: g(0xF04EB),
+  eraser: g(0xF01FE),       // Wipe data…
+  reinstall: g(0xF099B),    // restore: Clean reinstall…
+  json: g(0xF0626),         // code-json: Copy as JSON
+  arrowLeft: g(0xF004D)     // back from an app's details
 }
 
 // Sidebar order. `service` names the AppState property whose `summary`

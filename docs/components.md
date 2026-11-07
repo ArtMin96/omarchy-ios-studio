@@ -118,7 +118,7 @@ cloudDownload broom bell bellOff eye eyeOff filter star dots window apps package
 sparkles terminal layers briefcase idCard xml network speed thermometer chip record setup phoneLink bug settings
 robot testTube asterisk hexagon consoleLine cursorArrow starFour lightning speedometer chart translate tune, and for the UI inspector inspect accessibility tap text textbox toggle slider
 header tab list element linkVariant (element roles) and contrast textSize clipped hitArea label (audit issue types), and compare imagePlus
-(screenshot compare), and editorSetup fileCode (Settings › Code editor).
+(screenshot compare), editorSetup fileCode (Settings › Code editor), and database table eraser reinstall json arrowLeft (iPhone › Apps › an app's details).
 
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
@@ -799,9 +799,79 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **DeviceHero**: the iPhone page's header: the drawn phone with the latest screen, name, battery, storage and
   readiness pills, plus fixes when something needs the user. Props: `app`; signals `openScreen()`,
   `devModeHelp()`.
-- **DeviceAppsView**: installed apps (search, launch, stop, remove). Props: `app`, `cursor`, `devFirst`
-  (your own builds first); read-only `search` (the FilterField); `current()`; signal `cursorMoved(index)`. The page
-  owns the cursor.
+- **DeviceAppsView**: installed apps (search, launch, stop, remove). Stop keeps its slot (invisible) while an app
+  isn't running, so the row actions form fixed columns. Props: `app`, `cursor`, `devFirst`
+  (your own builds first); read-only `search` (the FilterField); `current()`; signals `cursorMoved(index)` and
+  `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor.
+- **DeviceAppDetailView**: iPhone › Apps › an app, shown by DevicePage in place of the list (`appDetail`, the
+  bundle id; `appSection`, the last section, kept for the session). Props: `app`, `bundleId`, `active`,
+  `section` (`defaults`|`stores`|`reset`|`files`, falls back to one the app has); signals `back()` and
+  `sectionPicked(section)`. The header has an outlined back button on the content edge, the icon, name, bundle ID
+  (cut in the middle when it must be), version and size, the Yours and Running pills (hidden when narrow) and the
+  row's actions (open, stop, copy bundle ID, remove; Stop keeps its slot, invisible, while the app isn't running, so
+  the others never move). Under it, one ButtonGroupLite: Defaults | Stores | Reset
+  (developer apps) | Files (developer apps, or App Store apps with `fileSharing`), with reload at the row's right
+  end (kept, invisible, on Reset). A Files-only app shows its files without the switch (and the container's own
+  reload); an app with neither gets a QuietNote. When the app leaves `app.device.apps` or the iPhone disconnects
+  it toasts and emits `back()`. Deep links: `nav("device", {tab: "apps", app: bundleId, section})`, where section is
+  one of the four or `"data"` (the last of Defaults/Stores/Reset, `appDataSection`); the old `device:files:apps`
+  and `device:files:data` (with an optional `bundleId`) land here too, and a `{page: "device", action: "stop-app"}`
+  fix stops the app whose details are open. Keys (DevicePage): `Enter` opens the cursor row's details, `o`
+  launches it, `Backspace`/`Esc` go back. It holds:
+  - **DeviceContainerView**: the app's container (`container.*`) for `fixedApp` (a developer build or an App
+    Store app that shares files): Up, breadcrumbs (the root is "Container", or "Documents" for App Store apps;
+    the header already names the app), the Whole container / Documents only pill and reload (`showReload`) on one
+    line, Add files (file dialog), New folder,
+    Save to… (folder dialog), Delete (through `app.confirm`), and a `DropArea` that copies files dropped from
+    the desktop into the open folder. A push that would overwrite asks first.
+  - **DeviceAppDataView**: the saved data of `fixedApp`, one of your own builds (`appdata.*`, see
+    [features/app-data.md](features/app-data.md)): shows `pane` (`defaults`|`stores`|`reset`, picked in the
+    details' switch). Public `stopApp()`, `reload()`, `waitLeft()` (ms until 10 s after the app was last seen
+    to stop, from `app.device.apps`), `norm(reply)`
+    (daemon lists as plain JS arrays, so `Array.isArray` and `JSON.stringify` work), and read-only `current`,
+    `running`, `stopping`, `appName` for its parts. Don't store a reply in a property called `data`: that is
+    every Item's default property, and the pane would lose its children.
+    - **DeviceAppDataDefaults**: the UserDefaults keys sorted, each with a type chip (the reply's `types`:
+      `string int float bool date data dict array uid`) and a one-line preview; dictionaries and arrays expand
+      to pretty JSON (the chevron slot is only kept when a shown row can expand). Filter field, New key, Copy as JSON (wl-copy, fetched whole with `full: true` when values
+      were shortened), edit and delete (through `app.confirm`). Edits and deletes are disabled with the reason
+      while the app runs; **DeviceAppDataRunning** (a quiet strip with a warn glyph and Stop app, props `view`,
+      `text`) says so. Binary `data` values can't be edited. The footer drops the plist path when it's short of room.
+    - **DeviceAppDataEditSheet**: a Sheet for one key: key (new keys only, warns before replacing one), type,
+      value (a switch for Boolean, a text area for String and JSON with a scrollbar when it's taller than the box,
+      a field with Now for Date, in local time), checked as you type. `begin(key, value, type)` (`""` = new key),
+      `remove(key)` (after the delete's confirm: the sheet shows only the progress), `existing` (the saved keys),
+      `refresh` (default true; false sends `refresh: false`), signal `saved(key, reply)`. While a change runs
+      (10 to 20 s) the form stays visible but disabled, Esc, the scrim and × don't close it (`dismissible: false`),
+      Cancel is disabled, and a ProgressTrack on the content edges shows the step: "Waiting for iOS to save
+      X's settings…" (until 10 s after the app stopped, from DeviceAppDataView's `waitLeft()`), "Writing…", then
+      "Reinstalling X…". The bar moves (indeterminate) and the right caption counts seconds until an
+      `installProgress` event brings a percent above 0 (over Wi-Fi none comes), then it shows the percent. A faint two-line note says the change
+      reinstalls the same build and the data stays. Dictionaries and arrays are sent as `type: "json"`; a value
+      shortened for display is fetched whole before the sheet opens.
+      DeviceAppDataDefaults turns the reply into: a two-line toast ("Saved “key”." / "X sees it on next launch",
+      or "Open X again to see it" when it was stopped) for `method: "reinstall"` and `verified`; a Notice strip
+      (warn glyph on the title's first line, Copy launch arguments when `launchArgs`, dismiss) for `method:
+      "file"` with `refreshError.message` or `warning`, or when `verified` is false; "was already gone" for
+      `none`. A read shows "Waiting for iOS to save the app's settings…" (LoadingState, or a spinner line over
+      the list) while it's waited out, and a Notice names the keys in `reverted`.
+    - **DeviceAppDataStores**: store picker (a Dropdown when there are several), kind, size and folder (the
+      folder goes when the line is short), the table list with row counts and a Show internal tables switch under
+      it (Core Data's `Z_*` bookkeeping, hidden by default), and the open table 50 rows at a time with
+      Previous/Next. Rows are asked for by the store's phone `path`.
+    - **DeviceAppDataGrid**: one page of rows. Props: `columns` (`[{name, type, meta?, date?}]`; `meta` columns get
+      a quieter header; numeric columns, by SQLite type and not dates, are right-aligned in the header, type line
+      and cells), `rows` (arrays in column order, or objects keyed by column name), `offset` (for the row
+      numbers), `maxHeight`. The header and row numbers stay put while the cells scroll both ways; both
+      scrollbars show whenever there is more and sit in their own lanes, so they never cover a cell. Column
+      widths follow the header and the longest cells (within limits); long cells end in … and show in full in a
+      tooltip; numbers are right-aligned, `NULL` and blobs faint, Core Data dates in local time.
+    - **DeviceAppDataReset**: Wipe data… and Clean reinstall… cards (buttons the same width; on narrow cards the
+      button goes under the text). Each opens a Sheet that runs the dry run (`confirm: false`), lists what goes
+      (count, files, size, the capped item list), then a danger button runs it with `confirm: true, stopApp: true`
+      and toasts the result; while it runs a ProgressTrack shows "Deleting N items…" and then the install from
+      `installProgress` (a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
+      `warning`). Signal `done()`: the other panes reload on their next show.
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
   copyable), Profiles tab (read-only, expired ones behind `showExpired`) and Location tab (a simulated GPS
   location from presets or latitude/longitude). Props: `app`.
@@ -832,16 +902,11 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   active condition and the capture state live in `app.device` (`condition`, `conditionActive`, `capture`,
   `capturing`), so the page header pill, the tab badge and the sidebar badge follow them on every page.
 - **DeviceFilesView**: the iPhone › Files tab. Props: `app`, `active` (the tab is showing; the parts load on
-  first show), `section` (`media`, `apps`, `camera`; remembered in the `filesSection` setting); `show(section)`.
-  Deep link: `nav("device:files:camera")`. It holds the three parts below, each with the same `app` and
-  `active` props:
+  first show), `section` (`media`, `camera`; remembered in the `filesSection` setting); `show(section)`. Deep
+  link: `nav("device:files:camera")`. It holds the two parts below, each with the same `app` and `active` props:
   - **DeviceMediaView**: the camera roll as a thumbnail grid (`media.list` in pages of 120, `media.thumb`
     four at a time), click and Shift+click selection, and import (`media.pull`) to the `mediaImportDir`
     setting (default `~/Pictures/iPhone`) with the `mediaConvertHeic` switch.
-  - **DeviceContainerView**: an app's container (`container.*`): an app picker limited to apps that share
-    files and your own builds (`filesApp` setting), breadcrumbs, Add files (file dialog), New folder,
-    Save to… (folder dialog), Delete (through `app.confirm`), and a `DropArea` that copies files dropped from
-    the desktop into the open folder. A push that would overwrite asks first.
   - **DeviceCameraTestView**: the camera test form and run (`cameratest.run`): app, test files (file dialog
     or drop), launch arguments, environment and timeout (settings `cameraTestApp`, `cameraTestInputs`,
     `cameraTestArgs`, `cameraTestEnv`, `cameraTestTimeout`), live steps, then `done.json`, output images,

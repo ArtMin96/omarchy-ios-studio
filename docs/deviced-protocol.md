@@ -1035,6 +1035,115 @@ reply comes when the run ends, so give the request `timeout + ~60 s`. The app-si
 valid JSON. `logLines` keeps the last 400 lines; `syslog.txt` has all of them. Step ids: `check`,
 `clear`, `push`, `launch`, `wait`, `pull`, `crashes`.
 
+### App data (`appdata.*`), used by iPhone › Apps › an app › Data and the MCP app data tools
+
+An app's UserDefaults and SwiftData / Core Data / SQLite stores, and resets to first launch. Your own
+development builds only (house_arrest VendContainer, like `container.*`); any other app is `not-developer`.
+Implementation: `helper/deviced_features/appdata.py` (demo twin `helper/deviced_demo_features/appdata.py`),
+shared logic in `helper/app_data.py`. See [features/app-data.md](features/app-data.md).
+
+| cmd | args | reply data |
+|---|---|---|
+| `appdata.defaults` | `{bundleId, full?: false, udid?}` | `{bundleId, path, exists, running, keys: n, values: {key: JSON}, types: {key: type}, truncated, size, format: "binary"\|"xml", waited?, reverted?: [{key, expected, actual}]}` |
+| `appdata.defaults.set` | `{bundleId, key, value, type?, stopApp?: false, refresh?: true, artifact?, dryRun?: false, udid?}` | Change (below); `dryRun` → `{ok: false, dryRun: true, running, existed, previous?, value, type, …}` and nothing is written |
+| `appdata.defaults.delete` | `{bundleId, key, stopApp?, refresh?: true, artifact?, dryRun?, udid?}` | Change (below), without `value`/`type`/`launchArgs` |
+| `appdata.defaults.refresh` | `{bundleId, stopApp?, artifact?, udid?}` | `{ok, bundleId, stopped, refreshed, artifact?, refreshError?, warning?}`: after changes made with `refresh: false` |
+| `appdata.stores` | `{bundleId, udid?}` | `{bundleId, running, stores: [Store…]}`: SwiftData first, then Core Data, then plain SQLite |
+| `appdata.rows` | `{bundleId, store (phone path), table (name, or entity name), offset?: 0, limit?: 50 (≤200), udid?}` | `{bundleId, store, table, columns: [{name, type, date?}], rows: [[cell…]], offset, limit, total, more}` |
+| `appdata.reset` | `{bundleId, mode: "wipe"\|"reinstall", confirm?: false, stopApp?: false, refresh?: true (wipe), artifact?, project?, udid?}` | dry run: `{dryRun: true, mode, bundleId, running, items: [{path, size, kind: "file"\|"dir", files, category}], count, files, bytes, truncated, project?, projectPath?, artifact?}`; confirm: `{dryRun: false, mode, bundleId, removed, failed, bytes, stopped, reinstalled, refreshed? (wipe), refreshError?, warning?, artifact?, project?, seconds}` |
+
+Change (`defaults.set` / `defaults.delete`):
+
+```json
+{"ok": true, "bundleId": "XTL-ABCDE12345.dev.example.app", "key": "note", "path": "/Library/Preferences/<bundle id>.plist",
+ "existed": true, "previous": "hello", "previousType": "string", "value": "edited", "type": "string",
+ "stopped": true, "waited": 10.0, "backup": "<home>/.cache/ios-studio/appdata/<bundle id>/backups/….plist",
+ "needsRelaunch": true, "attempts": 1, "refreshed": true, "artifact": "<project>/xtool/App.ipa",
+ "verified": true, "method": "reinstall"}
+```
+
+`method` is one of:
+
+- `reinstall`: the file was changed and the app's last signed build installed over it, so the app sees the
+  change on its next launch.
+- `file`: only the file changed, because of `refresh: false`, no build, or a failed install
+  (`refreshError {code, message}`). Then `warning` says iOS may hand the app its cached copy, and
+  `launchArgs` (e.g. `["-note", "edited"]`) apply a string, number or bool value for one launch through
+  `app.launch` `args`.
+- `none`: a delete of a key that isn't there.
+
+The other fields:
+
+- `verified`: the file read back holds the change (`null` if it couldn't be read).
+- `attempts`: writes made. A write cfprefsd overwrote is made again, up to 3 times.
+- `waited`: seconds spent waiting for cfprefsd after a kill.
+
+Store: `{name, path, size, kind: "swiftdata"|"coredata"|"sqlite", cached, tables: [{name, entity?, rows,
+columns: [{name, type, meta?}], meta}], error?: {code, message}}`. A store that can't be read keeps its
+place with `error` (`bad-store`, `too-big`), and the others still show.
+
+Values (`appdata.defaults`): plist types that JSON lacks are tagged, so a value read can be written back
+unchanged: `{"$type": "data", "base64", "size"}`, `{"$type": "date", "iso": "…Z"}`, `{"$type": "uid", "value"}`,
+`{"$type": "float", "value": "inf"|"-inf"|"nan"}`, and a dictionary with its own `$type` key becomes
+`{"$type": "dict", "value": {…}}`. Without `full`, strings over 2,000 characters, Data over 48 bytes and
+arrays or dictionaries over 200 items come back as `{"$type": "string"|"data"|"array"|"dict", "truncated":
+true, "preview", "length"|"size"|"count"}`, and keys stop after about 256 KB of JSON (`truncated: true`). A
+shortened value is refused on write (`truncated-value`). `full: true` returns everything, up to the 8 MB
+file limit.
+
+`type` on set: `string`, `int`, `float`, `bool` (also "yes"/"no", 1/0), `date` (ISO 8601, a bare date is
+midnight UTC), `data` (base64) or `json` (text that holds JSON). Without it the JSON type decides, and text
+stays text. The file keeps its format (binary or XML); a new file is binary.
+
+Cells (`appdata.rows`): numbers, null and short text as they are; text over 256 characters is
+`{"$type": "text", "preview", "length", "truncated": true}`; blobs are `{"$type": "blob", "size", "hex"}` (the
+first 16 bytes, `truncated` when longer); in SwiftData and Core Data stores a `TIMESTAMP` column (seconds
+since 2001) is `{"$type": "date", "iso", "raw"}` and its column has `date: true`. Rows come in primary key
+order (rowid without one). An unknown table is `no-table`.
+
+Rules:
+- Every command opens its own house_arrest connection. A kept one goes stale when the app is killed or
+  installed, and then reads as "no file" (seen on an iPhone). An AFC error is retried once on a new connection
+  a second later, and an empty result within 30 s of a kill or an install is read again after 1.5 s.
+- Writes (`defaults.set`, `defaults.delete`, `defaults.refresh`, `reset` with `confirm`) never happen while
+  the app runs: they fail with `app-running` unless `stopApp: true`, which kills it first and waits for it to
+  exit. The fix is `{"label": "Stop the app", "page": "device", "tab": "apps", "app": <bundle id>, "section":
+  "data", "action": "stop-app"}`. A failed running check is an error too, never taken as "stopped".
+- cfprefsd (the iPhone's settings service) saves a killed app's last settings 2 to 7 s after the kill, not at
+  the kill (measured on an iPhone). So reads, writes and wipes within 10 s of a kill wait out the rest of that
+  time (`waited`). `app.kill` records the time for any client, and so does `stopApp`. Then the file must be
+  unchanged for 1 s before it's read for a change.
+- cfprefsd also keeps the app's settings in memory after it exits, hands that copy to the next launch and
+  writes it back over the file. Waiting (60 s tried), rewriting the file in place, or deleting it and writing a
+  new one don't change that. Installing the app's signed build over itself (an upgrade, which keeps the
+  container) does. So `refresh` (on by default) installs the newest signed build of the bundle id after the
+  write (`artifact`, or the same search as `reinstall`). Every defaults write is remembered in
+  `~/.cache/ios-studio/appdata/<bundle id>/writes.json`. When a later `appdata.defaults` finds a key back at
+  its old value, it lists it once in `reverted`.
+- A defaults write reads the file again, changes one key, saves the old file to
+  `~/.cache/ios-studio/appdata/<bundle id>/backups/` (the newest 10) and writes the new one as
+  `<name>.iosstudio-new`, then renames it over the old one.
+- The preferences file is `Library/Preferences/<bundle id>.plist` (installed id, then the id without the
+  `XTL-<TEAM>.` prefix).
+- Stores are files ending in `.store`, `.sqlite`, `.sqlite3` or `.db` under `Library/Application Support` and
+  `Documents`, pulled with their `-wal`/`-shm` into `~/.cache/ios-studio/appdata/<bundle id>/<key>/`. The copy
+  is checkpointed (WAL folded in) and then opened only with `mode=ro&immutable=1`. It's pulled again only when
+  a file's size or mtime changed (`cached: true` otherwise). A failed pull leaves no temp folder. Copies of
+  stores the app no longer has are deleted, and only the 5 most recently used apps keep a cache. Stores over
+  1 GB are `too-big`.
+- `appdata.rows` reads the copy that `appdata.stores` made, and pulls just that store when there's none
+  (`no-store` when it's gone from the phone).
+- `appdata.reset` is a dry run unless `confirm`. `wipe` deletes everything inside `Documents`, `Library` and
+  `tmp`, then (with `refresh`, the default) installs the last build over the app so cfprefsd drops the old
+  settings too. It keeps the folders iOS expects (`Documents`, `Library`, `Library/Preferences`, `Library/Caches`,
+  `Library/Application Support`, `tmp`); entries the phone denies are skipped and listed in `failed`. `items`
+  lists the 200 biggest. `reinstall` uninstalls the app (iOS deletes the whole container) and installs
+  `artifact`, or else the newest signed `.ipa` built for this bundle id (build history, then renewals, then
+  the projects' `xtool/<product>.ipa`). With none it's `no-build` (fix → Projects, `action: "build"`). A
+  reinstall can take a minute over Wi-Fi and sends `installProgress` events like `app.install`.
+- Other errors: `bad-args`, `bad-value`, `bad-type`, `bad-plist`, `too-big`, plus the AFC errors of
+  `container.*` (`not-found`, `denied`, `no-space`).
+
 ### Debugging (`debug.*`), used by iPhone › Debug and the `debug` helper group
 
 LLDB on the user's own (development-signed) apps. The daemon only provides the plumbing: it
