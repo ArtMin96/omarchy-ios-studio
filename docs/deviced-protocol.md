@@ -687,15 +687,15 @@ documentation address ranges.
 
 | cmd | args | reply data |
 |---|---|---|
-| `profiles.list` | `{udid?}` | `[{name, uuid, appId, team, teamName, created, expires, expired, devices, isXcodeManaged}]` newest expiry first; `created/expires` are epoch seconds |
+| `profiles.list` | `{udid?}` | `[{name, uuid, appId, team, teamName, created, expires, expired, devices, isXcodeManaged, getTaskAllow, certSha1}]` newest expiry first; `created/expires` are epoch seconds; `certSha1` lists the SHA-1 (hex) of each developer certificate in the profile |
 
 ### Pairing
 
 | cmd | args | reply data |
 |---|---|---|
 | `pair.status` | – | `{records: [{udid, wifi: bool, usb: bool, path}], usb: [udid…]}` |
-| `pair.start` | `{method: "usb" \| "wifi", udid?, timeout?: 300}` (`timeout` in seconds, Wi-Fi only) | `{started: true}`; progress comes as `pair` events |
-| `pair.code` | `{code}` | `{}`; only when a `pair` event asked for `need-code` |
+| `pair.start` | `{method: "usb" \| "wifi", udid?, timeout?: 300}` (`timeout` in seconds, Wi-Fi only) | `{started: true, method}` (the method used; without one: `usb` when a cable is in, else `wifi`); progress comes as `pair` events; `bad-args` for another method |
+| `pair.code` | `{code}` | `{}`; only when a `pair` event asked for `need-code`, otherwise `bad-args` |
 | `pair.cancel` | – | `{}` |
 
 - `usb`: needs the phone on a cable. Lockdown pairing (the phone shows **Trust This Computer**;
@@ -825,12 +825,14 @@ CrashItem:
 
 ```json
 {"name": "/MyApp-2026-11-01-142233.ips", "file": "MyApp-2026-11-01-142233.ips",
- "process": "MyApp", "date": "2026-11-01T14:22:33", "ts": 1730456553.0,
- "kind": "crash", "retired": false}
+ "process": "MyApp", "date": "2026-11-01T14:22:33+01:00", "ts": 1793539353.0,
+ "dateLocal": false, "kind": "crash", "retired": false}
 ```
 
 `kind` ∈ `crash`, `resource` (cpu/wakeups/disk writes), `jetsam`, `hang`, `other`; derived from the
-file name. `flush` (default true) first moves reports still pending on the phone into the list.
+file name. `date` is the phone's wall-clock time from the file name, with its UTC offset when the
+phone's time zone is known; otherwise it has no offset, `dateLocal` is true and `ts` assumes the
+computer's zone. `flush` (default true) first moves reports still pending on the phone into the list.
 
 `crash.pull` copies the file to `~/.cache/ios-studio/crashes/<udid>/<file>` (re-used when already
 pulled) and parses the `.ips` header + body:

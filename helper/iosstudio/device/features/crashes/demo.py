@@ -18,10 +18,12 @@ def crash_items(now: float | None = None) -> list:
         stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime(ts))
         proc = "WeatherGlance" if i != 1 else "HabitTracker"
         out.append({"name": f"/{proc}-{stamp}.ips", "file": f"{proc}-{stamp}.ips", "process": proc,
-                    "date": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)), "ts": ts, "kind": "crash", "retired": False})
+                    "date": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)), "ts": ts, "dateLocal": True, "kind": "crash",
+                    "retired": False})
     ts = now - 50 * 3600
     out.append({"name": "/JetsamEvent-demo.ips", "file": "JetsamEvent-demo.ips", "process": "JetsamEvent",
-                "date": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)), "ts": ts, "kind": "jetsam", "retired": False})
+                "date": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)), "ts": ts, "dateLocal": True, "kind": "jetsam",
+                "retired": False})
     return out
 
 

@@ -247,9 +247,6 @@ class Parity(RealHarness, DemoHarness, unittest.IsolatedAsyncioTestCase):
         for cmd in ("ddi.status", "ddi.mount", "devmode.status", "devmode.reveal"):
             self.assertEqual(await self.d.dispatch(cmd, {}), await self.b.dispatch(cmd, {}), cmd)
 
-    # BUG: features/profiles/demo.py builds its entries by hand and lacks link.profile_summary()'s
-    # getTaskAllow and certSha1 keys, so demo mode shows less than a real phone.
-    @unittest.expectedFailure
     async def test_profile_keys(self):
         real = await self.d.dispatch("profiles.list", {})
         demo = await self.b.dispatch("profiles.list", {})

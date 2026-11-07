@@ -71,10 +71,11 @@ def register(reg):
             try:
                 step("check", "running")
                 await asyncio.sleep(demo_delay(0.3))
-                info, _, _, base = F._access({"bundleId": bid})
-                if not info["developer"]:
+                # Like real: every App Store app is not-dev-app (before files' no-file-sharing check).
+                if not F._app(bid)["developer"]:
                     raise HelperError("not-dev-app", "Camera tests need one of your own apps, built and installed from "
                                       "iOS Studio. This one is from the App Store.")
+                info, _, _, base = F._access({"bundleId": bid})
                 exe = info["executable"]
                 step("check", "done", info["name"])
                 step("clear", "running")

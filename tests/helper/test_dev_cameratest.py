@@ -326,9 +326,6 @@ class DemoCameraTest(DemoHarness, unittest.IsolatedAsyncioTestCase):
             await self.b.dispatch("cameratest.run", self.demo_args(bundleId="com.example.podcasts"))
         self.assertEqual(cm.exception.code, "not-dev-app")
 
-    # BUG: features/cameratest/demo.py checks the app through files' _access(), which answers no-file-sharing for
-    # an App Store app without file sharing; the real daemon answers not-dev-app for every App Store app.
-    @unittest.expectedFailure
     async def test_app_store_app_without_sharing(self):
         with self.assertRaises(HelperError) as cm:
             await self.b.dispatch("cameratest.run", self.demo_args(bundleId="com.example.citytransit"))

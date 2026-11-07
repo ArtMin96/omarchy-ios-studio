@@ -284,8 +284,6 @@ class Parity(RealHarness, DemoHarness, unittest.IsolatedAsyncioTestCase):
         await self.setup_demo()
         self.connect()
 
-    # BUG: features/crashes/demo.py builds crash.list items by hand without core.classify()'s `dateLocal` key.
-    @unittest.expectedFailure
     async def test_list_item_keys(self):
         self.mgr.paths = ["/WeatherGlance-2026-11-01-101010.ips"]
         real = await self.d.dispatch("crash.list", {})
@@ -296,7 +294,7 @@ class Parity(RealHarness, DemoHarness, unittest.IsolatedAsyncioTestCase):
         self.mgr.paths = ["/WeatherGlance-2026-11-01-101010.ips"]
         real = (await self.d.dispatch("crash.list", {}))[0]
         demo = (await self.b.dispatch("crash.list", {}))[0]
-        self.assertEqual(set(real) - set(demo), {"dateLocal"})
+        self.assertEqual(set(real), set(demo))
         for k in demo:
             self.assertIs(type(demo[k]), type(real[k]), k)
 
