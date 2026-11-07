@@ -18,108 +18,29 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.builds import history, make_installer
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.job_status import job_status, start_and_wait, wait_with_progress
+from ..core.params import MaxBytes, ProjectPath, Udid, WaitSeconds
+from ..core.registry import dry_run, page_of, tool
 from ..jobs import Job
 from ..models import ActionResult, BuildHistory, BuildStatus, DiagGroup, DiagnosticsPage, HistoryEntry, LogPage
-from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ, ann, dry_run, job_status, page_of, start_and_wait, tool, wait_with_progress
-from .projects import ProjectPath
+from ..state import AppState, get_state
 
 BuildId = Annotated[str, Field(description="Id from ios_build_start / ios_run / ios_project_renew / "
                                            "ios_toolchain_install, e.g. 'b-1'")]
-WaitSeconds = Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: return as soon as the job finishes "
-                                                                  "or needs input, or after this many seconds")]
-Udid = Annotated[str | None, Field(description="iPhone udid; default: the active iPhone")]
 Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="How to install: auto prefers the USB cable "
                                                                   "when plugged in, else Wi-Fi")]
 Config = Annotated[Literal["debug", "release"], Field(description="Build configuration")]
-MaxBytes = Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                         "structuredContent together (default 12000 bytes)")]
 
-DEMO_INSTALL_SECONDS = 1.5
 # The helper's build logs (helper/projects.py BUILD_LOGS); ios_build_log reads them directly.
 BUILD_LOGS = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ios-studio" / "build-logs"
 MAX_LOG_READ = 32 * 1024 * 1024    # a bigger log is read from its tail; line numbers stay those of the file
 
 LEVEL_RX = {"error": re.compile(r"\berror\b|\bfatal\b|\bfailed\b|\bfailure\b", re.I),
             "warning": re.compile(r"\berror\b|\bwarning\b|\bfatal\b|\bfailed\b|\bfailure\b", re.I)}
-
-
-# ------------------------------------------------------------------ install after a Wi-Fi build
-
-def make_installer(state: AppState, launch: bool):
-    """Finisher for run/install/renew jobs: the helper builds and signs; installing over Wi-Fi (and
-    launching) is done by the app's device daemon, which the device client reaches."""
-
-    async def launch_installed(job: Job, r: dict, udid: str | None, bundle: str | None) -> None:
-        """Open the installed app with the run's launch args/env (its preset's). Installed fine + launch
-        failed stays green with the error in the step and next_steps, as in the app."""
-        if not (launch and bundle and udid and state.launch_app) or r.get("launched"):
-            return
-        job.set_step("launch", "Launching", "running", owner="mcp")
-        job.current_step = "launch"
-        job.touch()
-        how = r.get("launch") if isinstance(r.get("launch"), dict) else {}
-        extra = {k: how[k] for k in ("args", "env") if how.get(k)}   # the run preset's, if any
-        try:
-            res = await state.launch_app(udid, bundle, **extra) or {}
-        except ToolError as exc:
-            job.set_step("launch", "Launching", "failed", error=str(exc))
-            job.next_steps.append(f"Installed, but it didn't open: {exc}")
-        else:
-            job.set_step("launch", "Launching", "done")
-            r.update(launched=True, pid=res.get("pid"))
-        job.touch()
-
-    async def finish(job: Job) -> None:
-        r = job.result or {}
-        how = r.get("launch") if isinstance(r.get("launch"), dict) else {}
-        udid, ipa = r.get("udid") or how.get("udid"), r.get("ipa")
-        bundle = how.get("bundleId") or r.get("bundleId")
-        if r.get("installed"):
-            # Installed by the helper (USB: `xtool dev run` installs but never launches): launch it here.
-            job.check_cancel()
-            await launch_installed(job, r, udid, bundle)
-            return
-        if not r.get("needsInstall"):
-            return
-        if helper.demo_mode() and state.install_app is None:
-            job.check_cancel()
-            job.set_step("install", "Installing", "running", owner="mcp")
-            job.touch()
-            await asyncio.sleep(DEMO_INSTALL_SECONDS)
-            job.set_step("install", "Installing", "done")
-            r.update(installed=True, needsInstall=False)
-            job.check_cancel()
-            if launch:
-                job.set_step("launch", "Launching", "done")
-                r.update(launched=True, pid=4242)
-            job.next_steps.append("Demo mode: the install and launch were simulated.")
-            return
-        if state.install_app is None or not ipa or not udid:
-            job.next_steps.append(
-                f"Built and signed {ipa or 'the app'}, but installing over Wi-Fi needs the device tools, which "
-                "aren't available in this server. Plug the iPhone in and rerun with via='usb', or ask the user "
-                "to press Run in iOS Studio (ios_open_app(page='projects')).")
-            return
-        job.check_cancel()
-        job.set_step("install", "Installing", "running", owner="mcp")
-        job.current_step = "install"
-        job.touch()
-        await state.install_app(udid, ipa, job)
-        job.set_step("install", "Installing", "done")
-        r.update(installed=True, needsInstall=False)
-        try:
-            await helper.call("projects", "record-install",
-                              {"path": job.project_path, "udid": udid, "via": "wifi", "ipa": ipa})
-        except ToolError:
-            pass
-        job.check_cancel()
-        await launch_installed(job, r, udid, bundle)
-        job.touch()
-
-    return finish
 
 
 async def start_build(state: AppState, ctx: Context, project_path: str, action: str, config: str,
@@ -168,19 +89,9 @@ async def _latest_log_file(project_path: str) -> str | None:
     """The log file of a project's newest build: straight from builds.json (no helper process), or from
     the helper in demo mode, whose history is made up."""
     if helper.demo_mode():
-        hist = await _history(project_path, 1)
+        hist = await history(project_path, 1)
         return hist[0].get("logFile") if hist else None
     return await asyncio.to_thread(_latest_in_builds_file, project_path)
-
-
-async def _history(project_path: str | None, limit: int) -> list[dict]:
-    flags = {"limit": max(limit, 50)}
-    if project_path:
-        flags["path"] = project_path
-    data = await helper.call("build", "history", flags)
-    builds = [b for b in data.get("builds") or [] if not project_path or b.get("path") == project_path]
-    builds.sort(key=lambda b: b.get("time") or 0, reverse=True)
-    return builds[:limit]
 
 
 async def _newer_history(job: Job, project_path: str) -> dict | None:
@@ -189,7 +100,7 @@ async def _newer_history(job: Job, project_path: str) -> dict | None:
     if not job.finished or not job.ended:
         return None
     try:
-        hist = await _history(project_path, 1)
+        hist = await history(project_path, 1)
     except ToolError:
         return None
     h = hist[0] if hist else None
@@ -199,7 +110,7 @@ async def _newer_history(job: Job, project_path: str) -> dict | None:
 
 async def _watch_build(build_id: str) -> dict:
     """The build history entry of a watch-mode build (w-N, see tools/watch.py)."""
-    for b in await _history(None, 300):
+    for b in await history(None, 300):
         if b.get("buildId") == build_id:
             return b
     raise ToolError(f"No watch build '{build_id}' in the build history (it keeps the latest 300 builds). "
@@ -339,7 +250,7 @@ def log_note(r: dict, total: int, grep: str | None) -> str | None:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Start build", read_only=False, destructive=False, idempotent=False, open_world=True))
+    @tool(mcp, "Start build", kind="write", open_world=True)
     async def ios_build_start(
         ctx: Context,
         project_path: ProjectPath,
@@ -364,8 +275,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, action, config, udid, via, wait_seconds)
 
-    @tool(mcp, annotations=ann("Build, install and launch", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Build, install and launch", kind="write", open_world=True)
     async def ios_run(
         ctx: Context,
         project_path: ProjectPath,
@@ -391,7 +301,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds, preset)
 
-    @tool(mcp, annotations=READ("Build status"))
+    @tool(mcp, "Build status", kind="read")
     async def ios_build_status(
         ctx: Context,
         build_id: BuildId,
@@ -413,7 +323,7 @@ def register(mcp: MCPServer) -> None:
         await wait_with_progress(state, job, wait_seconds, ctx)
         return job_status(job, verbose=verbose)
 
-    @tool(mcp, annotations=READ("Build diagnostics"))
+    @tool(mcp, "Build diagnostics", kind="read")
     async def ios_build_diagnostics(
         ctx: Context,
         build_id: Annotated[str | None, Field(description="A job from this session, or a watch build 'w-N' "
@@ -468,7 +378,7 @@ def register(mcp: MCPServer) -> None:
                     h.get("project"), h.get("result")
             else:
                 job = None
-                hist = await _history(p["path"], 1)
+                hist = await history(p["path"], 1)
                 if not hist:
                     raise ToolError(f"{p.get('name')} has no builds yet. Start one with ios_build_start.")
                 h = hist[0]
@@ -533,7 +443,7 @@ def register(mcp: MCPServer) -> None:
                                truncated=nxt_off is not None, omitted=len(entries) - len(page),
                                note=note).with_budget(max_bytes)
 
-    @tool(mcp, annotations=READ("Build log"))
+    @tool(mcp, "Build log", kind="read")
     async def ios_build_log(
         ctx: Context,
         build_id: Annotated[str | None, Field(description="A job from this session (live output)")] = None,
@@ -635,8 +545,7 @@ def register(mcp: MCPServer) -> None:
                        truncated=bool(note), omitted=max(0, candidates - r["returned_lines"]), note=note,
                        full_output_path=full).with_budget(max_bytes, links)
 
-    @tool(mcp, annotations=ann("Answer build prompt", read_only=False, destructive=True, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Answer build prompt", kind="destructive", open_world=True)
     async def ios_build_respond(
         ctx: Context,
         build_id: BuildId,
@@ -668,7 +577,7 @@ def register(mcp: MCPServer) -> None:
         await wait_with_progress(state, job, 2, ctx)
         return job_status(job)
 
-    @tool(mcp, annotations=ann("Cancel build", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, "Cancel build", kind="write", idempotent=True)
     async def ios_build_cancel(ctx: Context, build_id: BuildId) -> BuildStatus:
         """Stop a running build or job and everything it started (xtool, swift-build), and wait until it
         has stopped. Cancelled before the install step, nothing is installed or launched; cancelled while
@@ -678,7 +587,7 @@ def register(mcp: MCPServer) -> None:
         job = await state.jobs.cancel(state.jobs.get(build_id))
         return job_status(job)
 
-    @tool(mcp, annotations=READ("Build history"))
+    @tool(mcp, "Build history", kind="read")
     async def ios_build_history(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Only this project's builds")] = None,
@@ -689,7 +598,7 @@ def register(mcp: MCPServer) -> None:
         time, duration, error/warning counts, error message and log_file (pass it to ios_build_log)."""
         state = get_state(ctx)
         path = (await resolve_project(state, project_path))["path"] if project_path else None
-        builds = await _history(path, 200)
+        builds = await history(path, 200)
         if result != "any":
             builds = [b for b in builds if b.get("result") == result]
         out, _ = page_of(builds, 0, limit, HistoryEntry.from_entry)
@@ -698,7 +607,7 @@ def register(mcp: MCPServer) -> None:
                             note=f"Showing the newest {len(out)} of {len(builds)}; narrow with project_path or "
                                  "result." if more else None)
 
-    @tool(mcp, annotations=ann("Clean build folders", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Clean build folders", kind="destructive", idempotent=True)
     async def ios_build_clean(
         ctx: Context,
         project_path: ProjectPath,

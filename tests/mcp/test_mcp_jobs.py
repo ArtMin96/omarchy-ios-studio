@@ -15,8 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio_mcp import budget as B
 from iosstudio_mcp import jobs as J
+from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.jobs import Job, JobManager
 from iosstudio_mcp.tools import build as TB
 

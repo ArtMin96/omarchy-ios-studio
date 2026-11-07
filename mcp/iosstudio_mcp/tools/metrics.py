@@ -21,17 +21,19 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
-from ..budget import Budgeted
+from ..backends.device import dcall, resolve_app
+from ..core import budget as B
+from ..core.budget import Budgeted
+from ..core.params import Udid
+from ..core.registry import MAX_WAIT, tool
 from ..models import Out
 from ..state import AppState, get_state
-from . import MAX_WAIT, READ_REMOTE, ann, tool
-from .device import Udid, dcall, resolve_app
 
 Set = Literal["process", "energy", "graphics", "network", "battery", "events", "hitches"]
 Metric = Literal["cpu", "mem", "rss", "threads", "wakeups", "faults", "diskR", "diskW", "energy", "eCpu", "eGpu", "eNet",
                  "eDisplay", "eLoc", "eOverhead", "thermal", "fps", "gpu", "gpuMem", "netRx", "netTx", "batt", "battMw",
                  "sysCpu", "hitchMs"]
+NO_SESSION = {"not-found": "ios_metrics_start starts a new session."}
 SessionId = Annotated[str, Field(description="From ios_metrics_start, e.g. 'm1'")]
 UNITS = {"cpu": "%", "mem": "MB", "rss": "MB", "threads": "", "energy": "", "fps": "fps", "gpu": "%", "netRx": "KB/s",
          "netTx": "KB/s", "diskR": "KB/s", "diskW": "KB/s", "wakeups": "/s", "battMw": "mW"}
@@ -249,8 +251,7 @@ def _fmt_event(seq: int, e: dict) -> str:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Start measuring an app", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Start measuring an app", kind="write", open_world=True)
     async def ios_metrics_start(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App to measure, e.g. 'com.example.myapp' (the installed "
@@ -291,27 +292,26 @@ def register(mcp: MCPServer) -> None:
                             "user to open it. Sampling starts when it runs.")
         return _session(d, steps)
 
-    @tool(mcp, annotations=ann("Stop measuring", read_only=False, destructive=False, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Stop measuring", kind="write", idempotent=True, open_world=True)
     async def ios_metrics_stop(ctx: Context, session_id: SessionId) -> MetricsSummary:
         """Stop a metrics session and return its final summary (the data stays readable for a while with
         ios_metrics_summary / ios_metrics_series / ios_metrics_events)."""
         state = get_state(ctx)
         d = await dcall(state, "metrics.stop", {"sessionId": session_id}, timeout=30,
-                        not_found="ios_metrics_start starts a new session.")
+                        hints=NO_SESSION)
         return _summary({"session": d, "stats": d.get("summary")})
 
-    @tool(mcp, annotations=READ_REMOTE("Performance summary"))
+    @tool(mcp, "Performance summary", kind="read_remote")
     async def ios_metrics_summary(ctx: Context, session_id: SessionId) -> MetricsSummary:
         """Stats of a metrics session so far: min/avg/p95/max per key series, the memory trend (MB/min with
         R², flagged as a likely leak when it keeps growing), CPU spikes, display FPS drops, hitches, battery
         drain and energy by component, plus plain-language anomalies, worst first. About 1-2 KB."""
         state = get_state(ctx)
         snap = await dcall(state, "metrics.snapshot", {"sessionId": session_id}, timeout=30,
-                           not_found="ios_metrics_start starts a new session.")
+                           hints=NO_SESSION)
         return _summary(snap)
 
-    @tool(mcp, annotations=READ_REMOTE("Metric over time"))
+    @tool(mcp, "Metric over time", kind="read_remote")
     async def ios_metrics_series(
         ctx: Context,
         session_id: SessionId,
@@ -326,7 +326,7 @@ def register(mcp: MCPServer) -> None:
         the path of a CSV with every sample of every metric (for plotting or a closer look)."""
         state = get_state(ctx)
         d = await dcall(state, "metrics.series", {"sessionId": session_id, "metric": metric, "points": points},
-                        timeout=30, not_found="ios_metrics_start starts a new session.")
+                        timeout=30, hints=NO_SESSION)
         raw = d.get("buckets") or []
         t0 = raw[0]["t0"] if raw else None
         buckets = [Bucket(t=int(b["t0"] - t0), min=b["min"], avg=b["avg"], max=b["max"]) for b in raw]
@@ -349,7 +349,7 @@ def register(mcp: MCPServer) -> None:
             out.next_steps.append("No samples of this metric yet: is the app running and is its set enabled?")
         return out.with_budget(None, [link] if link else None)
 
-    @tool(mcp, annotations=READ_REMOTE("Performance events"))
+    @tool(mcp, "Performance events", kind="read_remote")
     async def ios_metrics_events(
         ctx: Context,
         session_id: SessionId,
@@ -369,7 +369,7 @@ def register(mcp: MCPServer) -> None:
         state = get_state(ctx)
         page = await dcall(state, "metrics.read", {"sessionId": session_id, "kind": "events",
                                                    "cursor": cursor if cursor is not None else 0, "limit": 500},
-                           timeout=30, not_found="ios_metrics_start starts a new session.")
+                           timeout=30, hints=NO_SESSION)
         first = int(page.get("cursor") or 0)
         rows: list[tuple[int, str]] = []       # (cursor after this event, rendered line)
         nxt = first
@@ -396,8 +396,7 @@ def register(mcp: MCPServer) -> None:
                              next_cursor=nxt, has_more=has_more, missed=int(page.get("missed") or 0), events=lines,
                              note=note, truncated=bool(fit.omitted), next_steps=steps).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Profile an app's launch", read_only=False, destructive=True, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Profile an app's launch", kind="write", open_world=True)
     async def ios_launch_profile(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="The app to relaunch and time, e.g. 'com.example.myapp'"
@@ -428,8 +427,7 @@ def register(mcp: MCPServer) -> None:
         return await _run_job(state, ctx, "launch-profile", "ios_launch_profile", "metrics.launchProfile", a,
                               wait_seconds, 120)
 
-    @tool(mcp, annotations=ann("Check an app for memory leaks", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Check an app for memory leaks", kind="write", open_world=True)
     async def ios_memory_leaks(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="A running app of yours, e.g. 'com.example.myapp'")] = None,

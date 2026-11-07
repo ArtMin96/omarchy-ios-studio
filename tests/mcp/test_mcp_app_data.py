@@ -21,10 +21,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 import app_data as AD
 from common import HelperError
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.backends import device as D
+from iosstudio_mcp.core import budget as B
+from iosstudio_mcp.core.errors import device_error
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import app_data as T
-from iosstudio_mcp.tools import device as D
 from support.mcp_fakes import FakeMCP, size_of
 
 HABITS = "XTL-A1B2C3D4E5.com.example.habits"
@@ -65,7 +66,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
             mod.register(m)
             m.commit()
         mcp = FakeMCP()
-        with mock.patch.object(T, "tool", lambda m, **k: m.tool(**k)):
+        with mock.patch.object(T, "tool", lambda m, *a, **k: m.tool(**k)):
             T.register(mcp)
         self.tools = mcp.tools
         self.state = AppState()
@@ -73,7 +74,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.calls: list = []
         self.delay = 0.0
 
-    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, not_found=None):
+    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, hints=None):
         self.calls.append((cmd, dict(args or {})))
         slow = cmd == "appdata.reset" and (args or {}).get("confirm") or \
             cmd.startswith("appdata.defaults.") and not (args or {}).get("dryRun")
@@ -83,8 +84,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
             r = self.reg.lookup(cmd)(None, dict(args or {}))
             return await r if asyncio.iscoroutine(r) else r
         except HelperError as exc:      # what the real dcall makes of a DeviceError
-            raise D.device_tool_error(SimpleNamespace(code=exc.code, message=exc.message, fix=exc.fix,
-                                                      detail=exc.detail)) from None
+            raise device_error(SimpleNamespace(code=exc.code, message=exc.message, fix=exc.fix,
+                                               detail=exc.detail), hints) from None
 
     def patches(self):
         return mock.patch.object(T, "dcall", self.dcall), mock.patch.object(D, "dcall", self.dcall)
@@ -96,10 +97,10 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     async def call_wrapped(self, name, **kw):
         """Through the real @tool wrapper (to_result + budget), as the server runs it."""
-        from iosstudio_mcp.tools import tool as real_tool
+        from iosstudio_mcp.core.registry import tool as real_tool
         rec = FakeMCP()
         a, b = self.patches()
-        with mock.patch.object(T, "tool", lambda m, **k: real_tool(rec, **k)), a, b:
+        with mock.patch.object(T, "tool", lambda m, *a, **k: real_tool(rec, *a, **k)), a, b:
             T.register(rec)
             return await rec.tools[name](self.ctx, **kw)
 

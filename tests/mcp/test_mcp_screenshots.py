@@ -20,7 +20,7 @@ from unittest import mock
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import screenshots as T
 from support import ROOT
@@ -48,7 +48,7 @@ class Ctx(SimpleNamespace):
 class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         mcp = FakeMCP()
-        with mock.patch.object(T, "tool", lambda m, **k: m.tool(**k)):   # the bare functions: models, not results
+        with mock.patch.object(T, "tool", lambda m, *a, **k: m.tool(**k)):   # the bare functions: models, not results
             T.register(mcp)
         self.tools = mcp.tools
         self.state = AppState()
@@ -79,7 +79,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
             raise r
         return r
 
-    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, not_found=None):
+    async def dcall(self, state, cmd, args=None, *, timeout=60.0, udid=None, hints=None):
         self.dcalls.append((cmd, dict(args or {})))
         if cmd == "screenshot":
             return {"path": str(FIX / "base.png"), "width": 120, "height": 260}

@@ -29,14 +29,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent
 from pydantic import BaseModel, Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.device import apps, dcall, launch, match_app
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath, Udid
+from ..core.registry import MAX_WAIT, fit_page, to_result, tool
 from ..models import Out, iso
-from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, ann, fit_page, to_result, tool
-from .build import MaxBytes
-from .device import Udid, apps, dcall, launch, match_app
-from .projects import ProjectPath
+from ..state import AppState, get_state
 
 log = logging.getLogger("iosstudio.screenshots")
 
@@ -405,8 +405,7 @@ async def on_shutdown(state: AppState) -> None:
 
 def register(mcp: MCPServer) -> None:
 
-    @mcp.tool(annotations=ann("Compare screenshot with baseline", read_only=False, destructive=False,
-                              idempotent=False, open_world=True))
+    @tool(mcp, "Compare screenshot with baseline", kind="write", open_world=True)
     async def ios_screenshot_compare(
         ctx: Context,
         project_path: ProjectPath,
@@ -479,7 +478,7 @@ def register(mcp: MCPServer) -> None:
                                                mime_type=f"image/{fmt}"))
         return res
 
-    @tool(mcp, annotations=ann("Screenshot baselines", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Screenshot baselines", kind="destructive", idempotent=True)
     async def ios_screenshot_baselines(
         ctx: Context,
         project_path: ProjectPath,
@@ -524,8 +523,7 @@ def register(mcp: MCPServer) -> None:
                                 ).with_budget(max_bytes)
         return fit_page(model, "baselines", 0, lambda k, e: f"Showing {k} of {len(items)}; raise max_bytes.")
 
-    @tool(mcp, annotations=ann("Screenshot matrix", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Screenshot matrix", kind="write", open_world=True)
     async def ios_screenshot_matrix(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Project folder or name (needed to start; not with "

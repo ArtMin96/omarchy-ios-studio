@@ -23,12 +23,16 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.crashes import crash_detail
+from ..backends.device import client, dcall, hub, resolve_app
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.errors import device_error
+from ..core.params import BundleId, Udid
+from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
 from ..models import ActionResult, CrashDetail, Out
-from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
-from .device import Udid, _hub, client, dcall, device_tool_error, resolve_app
+from ..state import AppState, get_state
 
 log = logging.getLogger("iosstudio.files")
 
@@ -37,9 +41,6 @@ LIST_DIRS = 60           # folders ios_files_list opens at most per call
 FILES_SHOWN = 20         # local paths listed in a transfer status
 LOG_SHOWN = 30           # key log lines in a camera test result
 RESULTS_SHOWN = 8        # sample entries from done.json
-
-BundleId = Annotated[str, Field(description="App bundle id as installed, e.g. 'com.example.app' or "
-                                            "'XTL-<TEAM>.com.example.app' (ios_app_list shows it)")]
 
 
 # ------------------------------------------------------------------ models
@@ -178,7 +179,7 @@ def _jobs(state: AppState) -> dict[str, FJob]:
     jobs = state.extras.get("files.jobs")
     if jobs is None:
         jobs = state.extras["files.jobs"] = {}
-        hub = _hub(state)
+        h = hub(state)
 
         def listener(name: str, data: Any) -> None:
             if not isinstance(data, dict):
@@ -193,7 +194,7 @@ def _jobs(state: AppState) -> dict[str, FJob]:
                 if j:
                     j.steps[str(data.get("step"))] = data
                     j.changed.set()
-        hub["listeners"].append(listener)
+        h["listeners"].append(listener)
     return jobs
 
 
@@ -214,7 +215,7 @@ async def _start(state: AppState, kind: str, prefix: str, cmd: str, args: dict, 
             job.result = await dev.request(cmd, a, timeout=timeout) or {}
         except Exception as exc:  # noqa: BLE001  kept for the status
             job.raw_error = exc
-            job.error = device_tool_error(exc) if exc.__class__.__name__ == "DeviceError" else exc
+            job.error = device_error(exc) if exc.__class__.__name__ == "DeviceError" else exc
         finally:
             job.changed.set()
     jobs[jid] = job
@@ -389,7 +390,6 @@ async def _camera_status(state: AppState, job: FJob, max_bytes: int | None) -> C
     lines = key_log_lines(list(r.get("logLines") or []), LOG_SHOWN)
     crash = None
     if r.get("newCrashes"):
-        from .crashes import crash_detail
         try:
             crash = await crash_detail(state, r["newCrashes"][0]["name"])
             crash.next_steps = []
@@ -431,7 +431,7 @@ async def _camera_status(state: AppState, job: FJob, max_bytes: int | None) -> C
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("List camera roll"))
+    @tool(mcp, "List camera roll", kind="read_remote")
     async def ios_media_list(
         ctx: Context,
         kind: Annotated[Literal["all", "photo", "video"], Field(description="Only photos or only videos")] = "all",
@@ -464,7 +464,7 @@ def register(mcp: MCPServer) -> None:
                                   note=f"Showing {len(page)} of {total}; call again with offset={nxt_off}."
                                   if nxt_off else None), "items", offset)
 
-    @tool(mcp, annotations=ann("Import from camera roll", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Import from camera roll", kind="write", idempotent=True, open_world=True)
     async def ios_media_pull(
         ctx: Context,
         ids: Annotated[list[str] | None, Field(description="Item ids from ios_media_list, e.g. "
@@ -506,7 +506,7 @@ def register(mcp: MCPServer) -> None:
         await _wait(job, wait_seconds, ctx)
         return _transfer_status(job)
 
-    @tool(mcp, annotations=READ_REMOTE("List app files"))
+    @tool(mcp, "List app files", kind="read_remote")
     async def ios_files_list(
         ctx: Context,
         bundle_id: BundleId,
@@ -572,7 +572,7 @@ def register(mcp: MCPServer) -> None:
                                   omitted=len(entries) - len(page)), "entries", offset,
                         lambda k, end: f"Showing {k} of {len(entries)}; call again with offset={end}.{more}")
 
-    @tool(mcp, annotations=ann("Copy app files to this computer", read_only=False, idempotent=True, open_world=True))
+    @tool(mcp, "Copy app files to this computer", kind="write", idempotent=True, open_world=True)
     async def ios_files_pull(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App bundle id (not needed when polling)")] = None,
@@ -604,8 +604,7 @@ def register(mcp: MCPServer) -> None:
         await _wait(job, wait_seconds, ctx)
         return _transfer_status(job)
 
-    @tool(mcp, annotations=ann("Copy files into an app", read_only=False, destructive=True, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Copy files into an app", kind="destructive", open_world=True)
     async def ios_files_push(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App bundle id (not needed when polling)")] = None,
@@ -653,7 +652,7 @@ def register(mcp: MCPServer) -> None:
                                               "call with confirm=true."])
         return _transfer_status(job)
 
-    @tool(mcp, annotations=ann("Delete app files", read_only=False, destructive=True, idempotent=True, open_world=True))
+    @tool(mcp, "Delete app files", kind="destructive", idempotent=True, open_world=True)
     async def ios_files_delete(
         ctx: Context,
         bundle_id: BundleId,
@@ -696,7 +695,7 @@ def register(mcp: MCPServer) -> None:
                             + (f" {len(failed)} couldn't be deleted." if failed else ""),
                             data={"bundle_id": bid, "deleted": r.get("deleted") or [], "failed": failed})
 
-    @tool(mcp, annotations=ann("Run camera test", read_only=False, destructive=False, idempotent=False, open_world=True))
+    @tool(mcp, "Run camera test", kind="write", open_world=True)
     async def ios_camera_test(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Your app's bundle id, e.g. 'com.example.myapp'. Not needed "

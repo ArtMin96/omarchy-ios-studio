@@ -20,11 +20,12 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
+from ..backends.device import dcall
+from ..core import budget as B
+from ..core.params import Udid
+from ..core.registry import fit_page, page_of, tool
 from ..models import Out
 from ..state import AppState, get_state
-from . import READ_REMOTE, ann, fit_page, page_of, tool
-from .device import Udid, dcall
 
 TREE_MAX = 400           # the daemon's cap on elements per walk
 TEXT_CUT = 120           # characters kept of a label, value, hint or identifier
@@ -231,7 +232,7 @@ async def _walk(state: AppState, udid: str | None, bundle_id: str | None, max_el
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("Read the screen's UI tree"))
+    @tool(mcp, "Read the screen's UI tree", kind="read_remote")
     async def ios_ui_tree(
         ctx: Context,
         udid: Udid = None,
@@ -319,8 +320,7 @@ def register(mcp: MCPServer) -> None:
         model.truncated = model.next_cursor is not None or not complete
         return model
 
-    @tool(mcp, annotations=ann("Press a UI element", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Press a UI element", kind="write", open_world=True)
     async def ios_ui_press(
         ctx: Context,
         element_id: Annotated[str | None, Field(description="Element id from ios_ui_tree, e.g. 'e12'")] = None,
@@ -380,7 +380,7 @@ def register(mcp: MCPServer) -> None:
                 if after.get("complete") is False else None) if x) or None,
             next_steps=steps)
 
-    @tool(mcp, annotations=READ_REMOTE("Accessibility audit"))
+    @tool(mcp, "Accessibility audit", kind="read_remote")
     async def ios_a11y_audit(
         ctx: Context,
         udid: Udid = None,

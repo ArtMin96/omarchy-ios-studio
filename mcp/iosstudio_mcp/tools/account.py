@@ -8,8 +8,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.builds import make_installer
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.job_status import start_and_wait
+from ..core.params import ProjectPath, Udid, WaitSeconds
+from ..core.registry import dry_run, tool
 from ..models import (
     AccountStatus,
     ActionResult,
@@ -22,10 +27,7 @@ from ..models import (
     SigningStatus,
     iso,
 )
-from ..state import get_state, resolve_project
-from . import READ, READ_REMOTE, ann, dry_run, start_and_wait, tool
-from .build import Udid, WaitSeconds, make_installer
-from .projects import ProjectPath
+from ..state import get_state
 
 SIGN_IN = ("Signing in needs the human: ask them to sign in with their Apple ID in iOS Studio "
            "(ios_open_app(page='account')). Never ask for their password or 2FA code yourself.")
@@ -43,7 +45,7 @@ def _profiles(details: dict) -> list[Profile]:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("Apple ID status"))
+    @tool(mcp, "Apple ID status", kind="read_remote")
     async def ios_account_status(
         refresh: Annotated[bool, Field(description="Fetch fresh team, certificate and profile lists from Apple "
                                                    "(5-15 s). Default: the cached copy")] = False,
@@ -98,7 +100,7 @@ def register(mcp: MCPServer) -> None:
             out.next_steps.append("Cached details may be outdated; refresh=true fetches them from Apple.")
         return out
 
-    @tool(mcp, annotations=READ("Signing status"))
+    @tool(mcp, "Signing status", kind="read")
     async def ios_signing_status(ctx: Context) -> SigningStatus:
         """When each app's signing expires on the iPhone, and how renewal is set up.
 
@@ -145,8 +147,7 @@ def register(mcp: MCPServer) -> None:
                              for k in ("installed", "enabled", "next", "last", "lastResult") if k in timer},
             renewal_due=due[:B.LIST_CAP], renewal_due_total=len(due), next_steps=nxt[:B.LIST_CAP])
 
-    @tool(mcp, annotations=ann("Renew app signing", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Renew app signing", kind="write", open_world=True)
     async def ios_project_renew(
         ctx: Context,
         project_path: ProjectPath,
@@ -169,7 +170,7 @@ def register(mcp: MCPServer) -> None:
                                     prefix="r", wait_seconds=wait_seconds, project_path=p["path"],
                                     project=p.get("name"), finisher=make_installer(state, launch=False))
 
-    @tool(mcp, annotations=ann("Automatic renewal", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Automatic renewal", kind="destructive", idempotent=True)
     async def ios_project_autorenew(
         ctx: Context,
         action: Annotated[Literal["status", "enable", "disable"],
@@ -204,8 +205,7 @@ def register(mcp: MCPServer) -> None:
         return ActionResult(done=True, message=f"Automatic renewal {'enabled' if action == 'enable' else 'disabled'}.",
                             data=data)
 
-    @tool(mcp, annotations=ann("Sign out of Apple ID", read_only=False, destructive=True, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Sign out of Apple ID", kind="destructive", idempotent=True, open_world=True)
     async def ios_account_logout(
         confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
         reset_2fa: Annotated[bool, Field(description="Also forget the trusted 2FA session")] = False,

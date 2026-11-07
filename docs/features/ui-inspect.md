@@ -218,7 +218,7 @@ Not checked yet:
 matching, the change summary, audit types and issues), `helper/deviced_features/ui.py` (`ui.tree`,
 `ui.press`, `ui.audit`: the session, targeting the app, the walk, the press),
 `helper/deviced_demo_features/ui.py` (the demo screens), `mcp/iosstudio_mcp/tools/ui_inspect.py`
-(`ios_ui_tree`, `ios_ui_press`, `ios_a11y_audit`), `mcp/iosstudio_mcp/tools/device.py` (next steps for
+(`ios_ui_tree`, `ios_ui_press`, `ios_a11y_audit`), `mcp/iosstudio_mcp/core/errors.py` (next steps for
 the error codes), `components/DeviceInspectView.qml`, `components/DeviceInspectRow.qml`,
 `components/DeviceScreenView.qml` (the tabs), `components/DevicePhoneFrame.qml` (`highlight`),
 `pages/DevicePage.qml` (keys), `services/DeviceService.qml` (60 s timeouts for `ui.*`), `Model.js`

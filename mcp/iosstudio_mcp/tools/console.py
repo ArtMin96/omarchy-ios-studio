@@ -7,22 +7,18 @@ Pure helpers (fmt_line, select_lines, page) are used by tests and by ios_app_run
 """
 from __future__ import annotations
 
-import asyncio
-import time
 from typing import Annotated, ClassVar, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
+from ..backends.console import FETCH, cursors, daemon_read, fmt_line
+from ..core import budget as B
+from ..core.params import Udid
+from ..core.registry import MAX_WAIT, tool
 from ..models import Out
-from ..state import AppState, get_state
-from . import MAX_WAIT, READ_REMOTE, tool
-from .device import Udid, dcall
-
-FETCH = 5000          # entries per daemon read (its maximum)
-TAG = {"stderr": "[stderr] ", "meta": "[studio] "}
+from ..state import get_state
 
 Stream = Literal["all", "stdout", "stderr"]
 
@@ -51,32 +47,7 @@ class ConsoleRead(B.Budgeted, Out):
     next_steps: list[str] = Field(default_factory=list)
 
 
-class ConsoleSummary(Out):
-    session_id: str | None = None
-    captured: int = Field(0, description="Lines the app printed during the capture")
-    stderr: int = 0
-    dropped: int = 0
-    streams: str | None = None
-    lines_omitted: int = 0
-    error: str | None = Field(None, description="Why there's no console output")
-
-
 # ------------------------------------------------------------------ pure helpers
-
-def fmt_line(seq: int | None, e: dict, cut: int = B.LINE_CUT) -> str:
-    try:
-        ts = float(e.get("ts"))
-        t = time.strftime("%H:%M:%S", time.localtime(ts)) + f".{int((ts % 1) * 1000):03d}"
-    except (TypeError, ValueError):
-        t = "--:--:--"
-    text = str(e.get("text") or "")
-    if len(text) > cut:
-        text = text[:cut] + f" …[+{len(text) - cut}]"
-    if e.get("cut"):
-        text += f" …[line cut, +{e['cut']} bytes]"
-    head = f"{seq} " if seq is not None else ""
-    return f"{head}{t} {TAG.get(str(e.get('stream')), '')}{text}"
-
 
 def stream_ok(e: dict, stream: str) -> bool:
     s = e.get("stream")
@@ -99,78 +70,11 @@ def page(entries: list[tuple[int, dict]], limit: int, room: int, newest: bool = 
     return pg.items, sum(n for _, n in shown_rows), len(rendered) - len(pg.items)
 
 
-def select_lines(entries: list[dict], max_lines: int, room: int, cut: int = B.LINE_CUT) -> tuple[list[str], int]:
-    """For a capture summary: every line if it fits, else the stderr lines (up to a third) plus the latest
-    ones, in time order. Returns (rendered lines, entries left out)."""
-    rows = B.fold_repeats(list(enumerate(entries)), key=lambda ie: (ie[1].get("stream"), ie[1].get("text")))
-    keep: set[int] = set()
-    errs = [i for i, ((_, e), _) in enumerate(rows) if e.get("stream") == "stderr"]
-    keep.update(errs[:max(1, max_lines // 3)])
-    for i in range(len(rows) - 1, -1, -1):
-        if len(keep) >= max_lines:
-            break
-        keep.add(i)
-    chosen = sorted(keep)
-    rendered = [fmt_line(None, rows[i][0][1], cut) + (f" ×{rows[i][1]}" if rows[i][1] > 1 else "") for i in chosen]
-    pg = B.take(rendered, len(rendered), room, from_end=True)
-    shown = sum(rows[i][1] for i in chosen[pg.start:pg.start + len(pg.items)])
-    return pg.items, len(entries) - shown
-
-
-# ------------------------------------------------------------------ daemon access
-
-def _cursors(state: AppState) -> dict[str, int]:
-    return state.extras.setdefault("console.cursors", {})
-
-
-async def daemon_read(state: AppState, target: dict, cursor: int | None, limit: int = FETCH, wait: float = 0,
-                      udid: str | None = None) -> dict:
-    a = dict(target)
-    a.update(limit=limit, wait=wait)
-    if cursor is not None:
-        a["cursor"] = cursor
-    return await dcall(state, "console.read", a, udid=udid, timeout=wait + 20,
-                       not_found="Launch the app with the console on: ios_app_launch(bundle_id, console=true) or "
-                                 "ios_app_run_and_capture(bundle_id).") or {}
-
-
-async def read_all(state: AppState, session_id: str, udid: str | None = None, newest: int = FETCH) -> dict:
-    """The newest `newest` lines of a session (for a capture summary)."""
-    head = await daemon_read(state, {"sessionId": session_id}, 10 ** 12, limit=1, udid=udid)
-    total = int((head.get("session") or {}).get("lines") or 0)
-    return await daemon_read(state, {"sessionId": session_id}, max(0, total - newest), limit=newest, udid=udid)
-
-
-async def capture_summary(state: AppState, launch_result: dict, udid: str | None, max_lines: int,
-                          room: int) -> tuple[ConsoleSummary, list[str], list[dict]]:
-    """After a capture: (summary, rendered lines within `room`, every line read) for run-and-capture."""
-    con = (launch_result or {}).get("console") or {}
-    if not con.get("sessionId"):
-        err = con.get("error") or {}
-        msg = err.get("message") if isinstance(err, dict) else str(err)
-        return ConsoleSummary(error=B.clip(msg or "The console wasn't captured.", B.ERROR_CUT)), [], []
-    sid = con["sessionId"]
-    await asyncio.sleep(0.3)   # the daemon batches lines every 0.1 s; a partial line waits ~1 s
-    try:
-        pg = await read_all(state, sid, udid)
-    except ToolError as exc:
-        return ConsoleSummary(session_id=sid, error=B.clip(str(exc), B.ERROR_CUT)), [], []
-    entries = [e for e in pg.get("entries") or [] if isinstance(e, dict)]
-    sess = pg.get("session") or {}
-    lines, left_out = select_lines(entries, max_lines, room) if entries else ([], 0)
-    captured = int(sess.get("lines") or len(entries))
-    _cursors(state)[sid] = int(pg.get("nextCursor") or 0)
-    return (ConsoleSummary(session_id=sid, captured=captured,
-                           stderr=sum(1 for e in entries if e.get("stream") == "stderr"),
-                           dropped=int(sess.get("dropped") or 0), streams=sess.get("streams"),
-                           lines_omitted=max(0, captured - len(entries) + left_out)), lines, entries)
-
-
 # ------------------------------------------------------------------ tool
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("Read app console"))
+    @tool(mcp, "Read app console", kind="read_remote")
     async def ios_app_console_read(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="The app, e.g. 'com.example.myapp': its latest console "
@@ -215,7 +119,7 @@ def register(mcp: MCPServer) -> None:
         if newest and cursor is None:
             cur = max(start, total - (FETCH if filtering else limit))
         else:
-            cur = _cursors(state).get(sid, 0) if cursor is None else cursor
+            cur = cursors(state).get(sid, 0) if cursor is None else cursor
         fetch = FETCH if filtering else limit
         wait = wait_seconds if cur >= total and sess.get("running") else 0
         pg = await daemon_read(state, target, cur, limit=fetch, wait=wait, udid=udid)
@@ -236,7 +140,7 @@ def register(mcp: MCPServer) -> None:
             sel = matches[:limit]
             nxt = sel[shown - 1][0] + 1 if shown else base
         skipped = len(matches) - shown if newest else 0
-        _cursors(state)[sid] = nxt
+        cursors(state)[sid] = nxt
         total = int(sess.get("lines") or total)
         more = nxt < total
         running = bool(sess.get("running"))

@@ -193,9 +193,9 @@ Unknown names fail as they would for real, and a demo Run echoes the preset's ar
 
 `helper/run_presets.py` (fields, `normalize`, `validate`, `resolve`, storage, `act`),
 `helper/projects.py` (`projects presets`, `_launch_preset` and the `launch` data of `build run`),
-`helper/demo.py` (demo presets), `mcp/iosstudio_mcp/tools/run_presets.py` (`ios_project_presets`,
-`resolve_preset`, `merge_launch`), `mcp/iosstudio_mcp/tools/build.py` (`preset` on `ios_run`, the launch
-in `make_installer`), `tools/device.py` and `tools/logs.py` (`preset` on `ios_app_launch` and
+`helper/demo.py` (demo presets), `mcp/iosstudio_mcp/tools/run_presets.py` (`ios_project_presets`),
+`mcp/iosstudio_mcp/backends/projects.py` (`resolve_preset`, `merge_launch`), `mcp/iosstudio_mcp/tools/build.py`
+(`preset` on `ios_run`), `mcp/iosstudio_mcp/backends/builds.py` (the launch in `make_installer`), `tools/device.py` and `tools/logs.py` (`preset` on `ios_app_launch` and
 `ios_app_run_and_capture`), `services/ProjectService.qml` (the preset API, `--preset` on Run),
 `components/RunSplitButton.qml`, `components/RunPresetsSheet.qml`, `components/ProjectCard.qml`,
 `components/BuildPanel.qml`, `Model.js` (the preset helpers). Tests: `tests/helper/test_run_presets.py`, `tests/cli/test_run_presets_cli.py` and

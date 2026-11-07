@@ -13,7 +13,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 import app_console as C
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.backends import console as BC
+from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import console as T
 from support.mcp_fakes import FakeMCP
@@ -28,7 +29,7 @@ def make_session(n: int, text=lambda i: f"line {i}", stream=lambda i: "stdout") 
 
 
 def fake_daemon(sess: C.ConsoleSession, calls: list):
-    async def dcall(state, cmd, args=None, *, timeout=60.0, udid=None, not_found=None):
+    async def dcall(state, cmd, args=None, *, timeout=60.0, udid=None, hints=None):
         calls.append((cmd, dict(args or {})))
         assert cmd == "console.read"
         page = sess.ring.read(args.get("cursor"), limit=args.get("limit") or 500)
@@ -39,12 +40,12 @@ def fake_daemon(sess: C.ConsoleSession, calls: list):
 class Helpers(unittest.TestCase):
     def test_fmt_line(self):
         e = {"ts": 0, "stream": "stderr", "text": "x" * 500, "cut": 12}
-        line = T.fmt_line(7, e, cut=100)
+        line = BC.fmt_line(7, e, cut=100)
         self.assertTrue(line.startswith("7 "))
         self.assertIn("[stderr] ", line)
         self.assertIn("…[+400]", line)
         self.assertIn("line cut, +12 bytes", line)
-        self.assertNotIn("[stderr]", T.fmt_line(None, {"ts": 0, "stream": "out", "text": "hi"}))
+        self.assertNotIn("[stderr]", BC.fmt_line(None, {"ts": 0, "stream": "out", "text": "hi"}))
 
     def test_page_folds_repeats_and_respects_room(self):
         entries = [(i, {"ts": 0, "stream": "out", "text": "same" if i < 10 else f"n{i}"}) for i in range(40)]
@@ -59,7 +60,7 @@ class Helpers(unittest.TestCase):
 
     def test_select_lines_keeps_stderr_and_the_latest(self):
         entries = [{"ts": 0, "stream": "stderr" if i == 3 else "stdout", "text": f"l{i}"} for i in range(100)]
-        lines, left_out = T.select_lines(entries, max_lines=10, room=10_000)
+        lines, left_out = BC.select_lines(entries, max_lines=10, room=10_000)
         self.assertEqual(len(lines), 10)
         self.assertIn("[stderr] l3", lines[0])
         self.assertTrue(lines[-1].endswith("l99"))
@@ -76,7 +77,7 @@ class ReadTool(unittest.IsolatedAsyncioTestCase):
 
     async def read(self, sess, **kw):
         calls: list = []
-        with mock.patch.object(T, "dcall", fake_daemon(sess, calls)):
+        with mock.patch.object(BC, "dcall", fake_daemon(sess, calls)):
             res = await self.tool(self.ctx, **{"bundle_id": "com.example.app", **kw})
         text = "".join(c.text for c in res.content if getattr(c, "text", None))
         return res.structured_content, text, calls

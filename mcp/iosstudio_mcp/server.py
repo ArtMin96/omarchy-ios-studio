@@ -4,7 +4,6 @@ stdout carries the MCP protocol only; all logging goes to stderr (IOSSTUDIO_MCP_
 """
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
@@ -13,9 +12,9 @@ from contextlib import asynccontextmanager
 
 from mcp.server.mcpserver import MCPServer
 
-from . import __version__, prompts, resources
+from . import __version__, prompts, resources, tools
+from .core.registry import slim_schemas
 from .state import AppState
-from .tools import MODULES, slim_schemas
 
 log = logging.getLogger("iosstudio")
 
@@ -49,21 +48,7 @@ iOS Studio builds, signs, installs and debugs iPhone apps on this Linux computer
 """
 
 
-def _load_modules() -> list:
-    mods = []
-    for name in MODULES:
-        full = f"{__package__}.tools.{name}"
-        try:
-            mods.append(importlib.import_module(full))
-        except ModuleNotFoundError as exc:
-            if exc.name == full:   # optional module missing from this install
-                log.debug("tool module %s not present", name)
-                continue
-            raise
-    return mods
-
-
-TOOL_MODULES = _load_modules()
+TOOL_MODULES = tools.load()
 
 
 @asynccontextmanager
@@ -97,8 +82,7 @@ def create_server() -> MCPServer:
     mcp = MCPServer("iosstudio", title="iOS Studio", version=__version__, instructions=INSTRUCTIONS,
                     website_url="https://github.com/ArtMin96/omarchy-ios-studio", lifespan=lifespan,
                     log_level=os.environ.get("IOSSTUDIO_MCP_LOG", "INFO").upper())
-    for mod in TOOL_MODULES:
-        mod.register(mcp)
+    tools.register(mcp, TOOL_MODULES)
     prompts.register(mcp)
     resources.register(mcp)
     slim_schemas(mcp)

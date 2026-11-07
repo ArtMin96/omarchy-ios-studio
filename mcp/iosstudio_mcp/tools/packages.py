@@ -11,14 +11,15 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.job_status import wait_with_progress
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import MAX_WAIT, fit_page, tool
 from ..jobs import Job
 from ..models import ErrorInfo, Out
-from ..state import get_state, resolve_project
-from . import MAX_WAIT, READ, ann, fit_page, tool, wait_with_progress
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 PRODUCTS_CAP = 30
 CHANGES_CAP = 50
@@ -287,7 +288,7 @@ def _success(action: str, p: dict, data: dict, **common: Any) -> PackageResult:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("List Swift packages"))
+    @tool(mcp, "List Swift packages", kind="read")
     async def ios_package_list(
         ctx: Context,
         project_path: ProjectPath,
@@ -324,8 +325,7 @@ def register(mcp: MCPServer) -> None:
         return fit_page(model, "packages", 0, lambda k, end: f"Showing {k} of {total} packages; raise max_bytes "
                                                              "for more.")
 
-    @tool(mcp, annotations=ann("Add a Swift package", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Add a Swift package", kind="write", open_world=True)
     async def ios_package_add(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
@@ -412,8 +412,7 @@ def register(mcp: MCPServer) -> None:
             return _err_result("add-product", p, exc.error).with_budget(max_bytes)
         return _success("add-product", p, data).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Update Swift packages", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Update Swift packages", kind="write", open_world=True)
     async def ios_package_update(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
@@ -430,8 +429,7 @@ def register(mcp: MCPServer) -> None:
         and puts Package.resolved back."""
         return await _resolve_like(ctx, "update", project_path, package, job_id, wait_seconds, max_bytes)
 
-    @tool(mcp, annotations=ann("Resolve Swift packages", read_only=False, destructive=False, idempotent=True,
-                               open_world=True))
+    @tool(mcp, "Resolve Swift packages", kind="write", idempotent=True, open_world=True)
     async def ios_package_resolve(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
@@ -464,7 +462,7 @@ def register(mcp: MCPServer) -> None:
         await wait_with_progress(state, job, wait_seconds, ctx)
         return _job_view(job, action, name, p).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Remove a Swift package", read_only=False, destructive=True, idempotent=False))
+    @tool(mcp, "Remove a Swift package", kind="destructive")
     async def ios_package_remove(
         ctx: Context,
         project_path: ProjectPath,

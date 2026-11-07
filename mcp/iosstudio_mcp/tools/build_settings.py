@@ -10,10 +10,11 @@ from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core.params import ProjectPath
+from ..core.registry import tool
 from ..models import Out
-from ..state import get_state, resolve_project
-from . import ann, tool
-from .projects import ProjectPath
+from ..state import get_state
 
 
 class BuildSettings(Out):
@@ -54,7 +55,7 @@ def _suggested(data: dict) -> tuple[BuildSettings | None, list[str]]:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Project build settings", read_only=False, idempotent=True))
+    @tool(mcp, "Project build settings", kind="write", idempotent=True)
     async def ios_project_build_settings(
         ctx: Context,
         project_path: ProjectPath,

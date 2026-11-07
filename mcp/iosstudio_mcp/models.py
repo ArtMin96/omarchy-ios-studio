@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .budget import ERROR_CUT, LIST_CAP, Budgeted, clip, clip_data
+from .core.budget import ERROR_CUT, LIST_CAP, Budgeted, clip, clip_data
 from .helper import tilde
 
 

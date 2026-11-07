@@ -357,7 +357,7 @@ class JobManager:
         if len(job.lines) > FINISHED_LINES:
             if not job.info.get("logFile") and not job.info.get("spillFile"):
                 try:
-                    from . import budget as B
+                    from .core import budget as B
                     path, _, _ = B.spill("\n".join(job.lines), "build-logs", f"{job.id}.log")
                     job.info["spillFile"] = path
                     job.info["spillFirstLine"] = job.first_line
