@@ -5,7 +5,7 @@
     page_of(...)                one byte-budgeted page of a list for offset-paginated tools
     fit_page(...)               trim a paged list until the whole result fits its budget
     dry_run(...)                the ActionResult a destructive tool returns when confirm is false
-    slim_schemas(mcp)           drop schema noise (titles, null defaults) from every tool's published schemas
+    slim_schemas(mcp)           a smaller tools/list: folded descriptions, slim input schemas, no outputSchema
 """
 from __future__ import annotations
 
@@ -158,74 +158,47 @@ def dry_run(message: str, would: list[str], data: dict | None = None) -> ActionR
 
 # ------------------------------------------------------------------ smaller tools/list
 
-def _slim(schema: Any, output: bool) -> Any:
-    """Schema noise off: `title` keywords, `default: null`, and in output schemas every default. `anyOf`
-    [X, null] with a plain X becomes X with "type": [T, "null"]. Validation is unchanged."""
+def _slim(schema: Any, required: frozenset = frozenset()) -> Any:
+    """Schema noise off: `title` keywords and `default: null`; `anyOf` [X, null] with a plain X becomes X (an
+    optional parameter is simply left out, so null isn't advertised; the server still accepts it), and long
+    whitespace in descriptions is folded. What a call accepts is unchanged."""
     if isinstance(schema, list):
-        return [_slim(x, output) for x in schema]
+        return [_slim(x) for x in schema]
     if not isinstance(schema, dict):
         return schema
     out: dict = {}
     for k, v in schema.items():
-        if k in ("properties", "$defs", "definitions") and isinstance(v, dict):
-            out[k] = {name: _slim(sub, output) for name, sub in v.items()}
+        if k == "properties" and isinstance(v, dict):
+            req = frozenset(schema.get("required") or ())
+            out[k] = {name: _slim_param(sub, name in req) for name, sub in v.items()}
+        elif k in ("$defs", "definitions") and isinstance(v, dict):
+            out[k] = {name: _slim(sub) for name, sub in v.items()}
         elif k == "title" and isinstance(v, str):
             continue
-        elif k == "default" and (v is None or output):
+        elif k == "default" and v is None:
             continue
+        elif k == "description" and isinstance(v, str):
+            out[k] = " ".join(v.split())
         else:
-            out[k] = _slim(v, output)
-    any_of = out.get("anyOf")
-    if isinstance(any_of, list) and len(any_of) == 2 and {"type": "null"} in any_of:
+            out[k] = _slim(v)
+    return out
+
+
+def _slim_param(schema: Any, required: bool) -> Any:
+    out = _slim(schema)
+    any_of = out.get("anyOf") if isinstance(out, dict) else None
+    if not required and isinstance(any_of, list) and len(any_of) == 2 and {"type": "null"} in any_of:
         other = next(x for x in any_of if x != {"type": "null"})
-        t = other.get("type")
-        if isinstance(t, str) and "$ref" not in other and "anyOf" not in other:
-            merged = {**other, "type": [t, "null"]}
-            if "enum" in merged:
-                merged["enum"] = [*merged["enum"], None]
-            out.pop("anyOf")
-            out = {**merged, **out}
+        out = {**{k: v for k, v in out.items() if k != "anyOf"}, **other}
     return out
-
-
-def _shallow(schema: dict, owner: str) -> dict:
-    """The same top-level shape with nested models typed as plain objects: it accepts exactly what the full
-    schema accepts at the top level and points to the tool that publishes the full one."""
-    def flat(s: Any) -> Any:
-        if isinstance(s, dict):
-            if "$ref" in s:
-                return {"type": "object"}
-            return {k: ({n: flat(x) for n, x in v.items()} if k == "properties" else flat(v))
-                    for k, v in s.items() if not (k == "description" and isinstance(v, str))}
-        if isinstance(s, list):
-            return [flat(x) for x in s]
-        return s
-    out = {k: flat(v) for k, v in schema.items() if k != "$defs"}
-    out["description"] = f"Same result as {owner}; its outputSchema has the nested fields."
-    return out
-
-
-# Tools whose output model is shared publish the full schema once, on the tool named here (else the first).
-CANONICAL = {"JobStatus": "ios_job_status", "DeviceList": "ios_device_list"}
 
 
 def slim_schemas(mcp: MCPServer) -> None:
-    """Smaller tools/list: drop titles and null defaults everywhere and defaults in output schemas, and
-    publish a shared output model's nested definitions once (see CANONICAL)."""
-    tools = mcp._tool_manager.list_tools()
-    by_model: dict[Any, list] = {}
-    for t in tools:
-        t.parameters = _slim(t.parameters, output=False)
-        if t.fn_metadata.output_schema is not None:
-            t.fn_metadata.output_schema = _slim(t.fn_metadata.output_schema, output=True)
-            by_model.setdefault(t.fn_metadata.output_model, []).append(t)
-    for model, group in by_model.items():
-        if len(group) < 2 or not group[0].fn_metadata.output_schema.get("$defs"):
-            continue
-        name = getattr(model, "__name__", "")
-        owner = CANONICAL.get(name) or group[0].name
-        for t in group:
-            if t.name != owner:
-                t.fn_metadata.output_schema = _shallow(t.fn_metadata.output_schema, owner)
-    for t in tools:
-        t.__dict__.pop("output_schema", None)   # cached_property: re-read the slim one
+    """Smaller tools/list (docs/mcp.md, "For tool authors"): descriptions folded to one line, input schemas
+    without noise (see _slim), and no published outputSchema. A model never sees an outputSchema (function
+    calling sends name, description and input schema only) and reads the result itself, so the schemas only
+    cost every client bytes; results are still checked against the tool's Pydantic model on the server."""
+    for t in mcp._tool_manager.list_tools():
+        t.description = " ".join((t.description or "").split())
+        t.parameters = _slim(t.parameters)
+        t.__dict__["output_schema"] = None      # Tool.output_schema is a cached_property: published as none
