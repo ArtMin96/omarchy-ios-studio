@@ -111,6 +111,59 @@ stdin, `restart()`; signals `event(obj)`, `finished(ok, data, error)`, `exited(c
 `{event: "log", text, stream}`. Lines are capped at 512 KiB. Every other event (`notice` included)
 passes through unchanged.
 
+## Loading data: Resource + StateView
+
+Use these instead of hand-rolling `xStatus: "unknown"` + Skeleton/ErrorState/EmptyState for each list.
+`Resource.qml` (next to `Cli.qml`, import `".."` from `components/` and `services/`) holds one piece of
+backend data and its state; `StateView` (components/) shows the right state for it.
+
+```qml
+Resource {
+  id: conditions
+  active: root.active && app.device.connected     // never loads while false
+  autoLoad: true                                  // load() whenever it becomes active
+  ttl: 0                                          // ms a load stays fresh; 0 = every load() fetches
+  initial: ({ groups: [] })                       // data before the first load and after reset()
+  fetch: app.device.fetcher("condition.list")     // or app.cli.fetcher(["account", "status"])
+}
+StateView {
+  Layout.fillWidth: true
+  app: root.app; resource: conditions
+  isEmpty: d => !d.groups.length                  // default: null or []
+  errorTitle: "Couldn't read the conditions"
+  emptyGlyph: Model.Glyph.speed; emptyTitle: "No conditions offered"; emptyText: "…"
+  skeletonLines: 6; skeletonRowHeight: Style.space(44); contentSpacing: Style.spacing.huge
+  Repeater { model: conditions.data.groups; delegate: … }    // the content, in a ColumnLayout
+}
+```
+
+| Resource | |
+|---|---|
+| `status` | `"idle"` (nothing yet) · `"loading"` (first load) · `"ready"` · `"error"` (failed with no data) |
+| `data`, `error`, `loadedAt`, `busy`, `loaded` | A reload keeps `status: "ready"` and the old data and sets `busy`; a failed reload keeps the data and sets `error`. |
+| `load(force)` | Fetches unless inactive, already loading (de-dup) or loaded within `ttl` (skipped with `force`). Returns whether it started. |
+| `invalidate()`, `set(data)`, `reset()` | Next `load()` fetches (loads now with `autoLoad`) · replace the data locally · forget everything; a reply still in flight is dropped (device switched). |
+| `fetch` | Any `function(done(data), fail(error))`. Adapters: `app.device.fetcher(cmd, args?, timeoutMs?)`, `app.cli.fetcher(argv, stdin?, opts?)`; `args`/`argv` may be functions, read at each load. `app.device.fetch(cmd, args, done, fail)` is `request()` with that callback shape. |
+| signals | `succeeded(data)`, `failed(error)` |
+
+StateView: `phase` is `"loading" | "error" | "empty" | "ready"`; data already loaded stays on screen while it
+reloads. Retry calls `retry()` when set, else `resource.load(true)`. Other properties: `compact` (empty state,
+default true), `errorCompact`, `emptyActionText`/`emptyActionGlyph` + `onEmptyAction`, `skeletonGap`.
+First users: DeviceNetworkView (condition list), DeviceService `profilesResource` (provisioning profiles;
+`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it). Tests: `tests/qml/tst_resource.qml`
+(`qmltestrunner`, run by pytest).
+
+## Shared helpers
+
+| | |
+|---|---|
+| `app.toastError(err, prefix?)` | Error toast with `Model.errorMessage(err)`: `app.cli.call(argv, "", ok, app.toastError)`. |
+| `app.copyText(text, label?)` | `wl-copy` + "Copied <label or text>". |
+| `app.openPath(path)`, `app.showInFolder(file)` | `xdg-open` the path · the folder a file is in. |
+| `Model.clock(sec)`, `Model.elapsedSeconds(t, nowMs?)` | `"4:59"`, `"1:02:03"` for timers and countdowns · seconds since a time (Date, s/ms epoch, ISO). |
+| `Util.fileUrl(path)` (qs.Commons) | `file://` URL with each segment encoded, for `Image.source`; use it instead of `"file://" + path`. |
+| `Util.clamp` (qs.Commons), `CommandCheck` (components/) | Clamp in QML · is a program on PATH (`CommandCheck.check(name)`, `CommandCheck.found[name]`). |
+
 ## Model.js
 
 `Model.Glyph.*` (Nerd Font glyphs): home rocket apple account phone hammer build play pause stop logs
