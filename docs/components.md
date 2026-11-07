@@ -380,7 +380,9 @@ Repeater {
 ## PageTabs
 
 In-page tabs with an accent underline: `tabs: [{key, label, glyph?, count?, level?}]`, `current`,
-`cursorIndex`; `selected(key)`.
+`cursorIndex`; `selected(key)`. Labels never truncate: when the tabs don't fit, their padding tightens
+first; if they still don't fit, the strip scrolls sideways (wheel or drag) with faded edges, and the
+`current` tab is scrolled into view whenever it changes, so a page's ←/→ keys always land on a visible tab.
 ```qml
 PageTabs { Layout.fillWidth: true; tabs: [{key: "live", label: "Live"}, {key: "crashes", label: "Crashes", count: 2, level: "warn"}]; current: page.tab; onSelected: function(k) { page.tab = k } }
 ```
