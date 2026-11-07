@@ -86,7 +86,7 @@ A snapshot (`watch` event, `watch.json`, `watch status` data):
 
 - `state`: `watching` (idle), `changed` (waiting for the debounce, or for another build of the project), `compiling`, `ok`, `failed`, `stopped`; `watch status` says `off` when there's no recent watcher.
 - `reason`: what this snapshot is about: `started`, `changed`, `build-started`, `build-log`, `progress` (about once a second while compiling, with `progress: {fraction, detail}`), `superseding`, `superseded`, `busy`, `build-finished`, `run`, `owners`, `settings`, `stopped`.
-- `lastBuild`: the latest finished build (ok or failed; cancelled ones only count in `superseded`). `diagnostics` holds the first 5, errors first, then warnings; the whole list is in the build history (`ios_build_diagnostics(build_id='w-2')`).
+- `lastBuild`: the latest finished build (ok or failed; cancelled ones only count in `superseded`). `diagnostics` holds the first 5, errors first, then warnings; the whole list is in the build history (`ios_build_diagnostics(job_id='w-2')`).
 - `run` (auto-run): `{state: checking|building|installing|launching|launched|failed|skipped, message, buildId, forBuild, bundleId?, errorCode?}`. `buildId` is the run's own build (its own `w-N` in the history); `forBuild` is the clean compile it follows (`lastBuild.id` at the time), so the two can be shown together.
 - `mode`: `inotify`, or `poll` with `modeReason` (the inotify watch limit is reached, or inotify isn't available). See [troubleshooting](../troubleshooting.md#watch-mode-says-checking-files-every-second).
 - When stopped: `stoppedAt` and `stopReason`: `stopped` (asked), `replaced` (another project), `no-owner` (the app and agent that used it are gone), `project-gone`, `watcher-died`.

@@ -7,7 +7,7 @@ same loop to check their own UI changes, and the matrix mode captures a set of s
 or launch configs, for example for App Store screenshots.
 
 In the app it's iPhone › Screen › Compare (see [Check a screen against a baseline](../guide.md#check-a-screen-against-a-baseline)); agents use
-`ios_screenshot_compare`, `ios_screenshot_baselines` and `ios_screenshot_matrix` (see [mcp.md](../mcp.md)).
+`ios_screenshot_compare`, `ios_screenshot_baselines` (list), `ios_screenshot_baseline_delete` (a dry run until `confirm=true`) and `ios_screenshot_matrix` (see [mcp.md](../mcp.md)).
 
 ## What counts as a change
 
@@ -92,10 +92,10 @@ iOS Studio launch does), and after `settle_seconds` (3 by default) the names are
 press or capture is recorded with its error and the matrix goes on. The result is one PNG per config and
 name in `matrix/<time>/<config>/<name>.png` and a `manifest.json` with the resolved configs and every shot.
 
-It runs as a job in the MCP server: the first call returns `state: "running"` and a `matrix_id`; calling
-again with it waits (25 s per call at most). While it runs the reply is a few counters; once it's done it
+It runs as a job in the MCP server: the first call returns `state: "running"` and a `job_id`; calling
+again with `job_id` waits (25 s per call at most). While it runs the reply is a few counters; once it's done it
 lists the shots 20 at a time (`offset=` for the next page, or read the manifest at `full_output_path`).
-`cancel=true` stops it and keeps the shots taken so far, as does a failure. At the end the app is put back:
+`ios_job_cancel(job_id)` stops it and keeps the shots taken so far, as does a failure. At the end the app is put back:
 relaunched without the matrix's arguments if it was running before, stopped if it wasn't
 (`app_restored` says which). Ending the agent's session cancels a running matrix.
 

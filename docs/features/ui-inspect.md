@@ -180,7 +180,8 @@ ios_a11y_audit(bundle_id=…)               accessibility issues on this screen
 - `ios_a11y_audit(bundle_id=, types=, max_issues=50)`: `counts` per type (most frequent first),
   `total`, and up to `max_issues` (200 at most) issues with label, frame and details, grouped by type.
   `types` takes the slugs above. `supported` and `unsupported` say what the phone checked, and
-  `timed_out=true` marks partial results.
+  `timed_out=true` marks partial results. The audit runs as a job: a call that runs out of time returns
+  `state: "running"` and a `job_id`; call `ios_a11y_audit(job_id=…)` again for the result.
 
 Pass `bundle_id` to all three, so a call fails with `wrong-app` instead of reading or pressing another
 app. Errors carry the code and a next step, such as "Call ios_ui_tree again and use a fresh id" for
@@ -214,13 +215,13 @@ Not checked yet:
 
 ## Code
 
-`helper/ui_inspect.py` (no device: plain JSON from the phone's objects, the walk, elements, label
-matching, the change summary, audit types and issues), `helper/deviced_features/ui.py` (`ui.tree`,
+`helper/iosstudio/features/ui_inspect.py` (no device: plain JSON from the phone's objects, the walk, elements, label
+matching, the change summary, audit types and issues), `helper/iosstudio/device/features/ui/real.py` (`ui.tree`,
 `ui.press`, `ui.audit`: the session, targeting the app, the walk, the press),
-`helper/deviced_demo_features/ui.py` (the demo screens), `mcp/iosstudio_mcp/tools/ui_inspect.py`
+`helper/iosstudio/device/features/ui/demo.py` (the demo screens), `mcp/iosstudio_mcp/tools/ui_inspect.py`
 (`ios_ui_tree`, `ios_ui_press`, `ios_a11y_audit`), `mcp/iosstudio_mcp/core/errors.py` (next steps for
-the error codes), `components/DeviceInspectView.qml`, `components/DeviceInspectRow.qml`,
-`components/DeviceScreenView.qml` (the tabs), `components/DevicePhoneFrame.qml` (`highlight`),
-`pages/DevicePage.qml` (keys), `services/DeviceService.qml` (60 s timeouts for `ui.*`), `Model.js`
+the error codes), `components/device/DeviceInspectView.qml`, `components/device/DeviceInspectRow.qml`,
+`components/device/DeviceScreenView.qml` (the tabs), `components/device/DevicePhoneFrame.qml` (`highlight`),
+`pages/DevicePage.qml` (keys), `services/DeviceService.qml` (60 s timeouts for `ui.*`), `lib/Model.js`
 (glyphs). Tests: `tests/helper/test_ui_inspect.py` and `tests/mcp/test_mcp_ui_inspect.py`, with fixtures in
 `tests/fixtures/ui-inspect/`.

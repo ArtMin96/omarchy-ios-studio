@@ -85,12 +85,19 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 2. Open Settings › Uninstall iOS Studio, or run `ios-studio --uninstall`. It removes the launcher entry, the icon, the `ios-studio` command, the theme hook and iOS Studio's Hyprland rules and shortcut. It also turns off automatic re-signing and disconnects any AI agents you connected, then quits.
 3. Delete the app folder. Settings › About shows where it is; with the install above it's `~/.local/share/omarchy-ios-studio`. Your settings and history stay in `~/.config/ios-studio`, `~/.local/state/ios-studio` and `~/.local/share/ios-studio` until you delete them.
 
+## Architecture
+
+iOS Studio is a Quickshell (QML) window on top of a small Python helper, a background service that holds the one
+connection to your iPhone, and an MCP server for AI agents. [ARCHITECTURE.md](ARCHITECTURE.md) explains how they fit
+together. To work on iOS Studio itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## More
 
 - [docs/guide.md](docs/guide.md) walks through every page, and [docs/troubleshooting.md](docs/troubleshooting.md) explains the common errors.
 - [docs/mcp.md](docs/mcp.md) covers the AI agent tools, and [docs/features/app-console.md](docs/features/app-console.md) how the app console captures `print()`.
 - [docs/camera-testing.md](docs/camera-testing.md) has the hook for testing camera code with files.
-- [docs/development.md](docs/development.md) explains how the app is built, how to run it from source and how to run the tests.
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains how to run iOS Studio from source, run the tests and add a feature; [docs/development.md](docs/development.md) is the detailed reference.
+- [docs/features/](docs/features/README.md) has one page per feature: how it works, its limits and the agent tools.
 - [docs/features/project-build-settings.md](docs/features/project-build-settings.md) explains build settings for projects that build through their own scripts.
 - [docs/features/project-check.md](docs/features/project-check.md) explains the project check: what each check looks for and when it runs.
 - [docs/features/run-presets.md](docs/features/run-presets.md) explains run presets: what each field passes to the app, where they're stored and how agents use them.

@@ -28,7 +28,7 @@ compile-only checks), `helper/iosstudio/features/projects/build.py` calls `crash
 3. copies it to `~/.cache/ios-studio/symbols/<uuid>/` and runs `dsymutil` on it. Swift on Linux leaves
    the debug info in the `.o` files, so the dSYM has to be made now, while they exist.
 
-Reading a report (`crash.pull`), `helper/crash_symbols.py`:
+Reading a report (`crash.pull`), `helper/iosstudio/features/crash_symbols.py`:
 
 1. picks the images inside the app bundle (`…/Bundle/Application/…/MyApp.app/…`); system libraries
    stay as the report has them,
@@ -71,8 +71,8 @@ to clear it; nothing else depends on it.
   folder, resolve. Rebuilding the same code with the same settings usually gives the same UUID.
 - System frames are not resolved; the device names most of them already.
 - Release builds keep function names only.
-- Check by hand: `python3 helper/crash_symbols.py symbolicate <report.ips>` and
-  `python3 helper/crash_symbols.py remember <project> [product] [config]`.
+- Check by hand: `python3 helper/run.py iosstudio.features.crash_symbols symbolicate <report.ips>` and
+  `python3 helper/run.py iosstudio.features.crash_symbols remember <project> [product] [config]`.
 
 ## Tests
 
