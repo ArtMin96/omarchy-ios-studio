@@ -11,7 +11,9 @@ PageFrame {
   id: page
   required property var app
   readonly property var svc: app.device
-  // A device to show: known, and either connected or at least paired somehow.
+  // A device to show: known, and either connected or at least paired somehow. On a cold open
+  // svc.current is the iPhone seen last until the daemon's discovery has finished (DeviceService
+  // `discovered`), so the pairing steps only show once it has looked and found none.
   readonly property bool showDevice: !!svc.current && svc.connState !== "not-paired" && svc.status !== "needs-setup"
   property string tab: "apps"
   property int cursor: -1
@@ -208,7 +210,7 @@ PageFrame {
 
   ColumnLayout {
     Layout.fillWidth: true
-    visible: page.showDevice && !page.svc.connected && page.tab !== "info"
+    visible: page.showDevice && !page.svc.connected && page.tab !== "info" && !appsView.visible
     EmptyState {
       Layout.fillWidth: true
       compact: true
@@ -223,7 +225,10 @@ PageFrame {
   DeviceAppsView {
     id: appsView
     Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "apps" && page.appDetail === "" && (page.svc.connected || page.svc.apps.length > 0)
+    // Not connected yet, the cached list (or its skeleton while it comes, which is at once on a cold open)
+    // stands in; the hero's pill says it's connecting.
+    visible: page.showDevice && page.tab === "apps" && page.appDetail === ""
+             && (page.svc.connected || page.svc.apps.length > 0 || page.svc.appsStatus === "loading" || !page.svc.discovered)
     app: page.app
     cursor: page.cursor
     onCursorMoved: function(i) { page.cursor = i }

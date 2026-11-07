@@ -31,6 +31,16 @@ Item {
   readonly property bool connected: connState === "connected" || connState === "locked"
   readonly property bool hasDevice: devices.length > 0
 
+  // Cold open: until the daemon's first discovery pass has answered (`discovered`), the iPhone seen last
+  // stands in for `current` (marked `known: true`), so the page shows it with "Connecting…" and its cached
+  // app list instead of the pairing steps. From the daemon's state file (docs/deviced-protocol.md, "State
+  // file") at start, afterwards the last `current` (a daemon restart). Only a pass that found no iPhone
+  // brings up the pairing steps.
+  property bool discovered: false
+  property var _known: null
+  FileView { id: lastDeviceFile; path: root.app.stateDir + "/device.json"; blockLoading: true; printErrors: false }
+  function _knownFromState() { return Model.knownDevice(lastDeviceFile.text()) }
+
   // apps. `apps` changes only when the list itself does (apps.list reply, `apps` event, launch/stop/remove);
   // icons and sizes arrive later in batches and land in their own maps so a batch doesn't rebuild every
   // view bound to `apps`. Their values are also written into the app objects in place (no change signal),
@@ -191,6 +201,12 @@ Item {
     }
     onExited: function(code) {
       root.daemonReady = false
+      root.discovered = false                   // the next daemon looks again; keep showing this iPhone meanwhile
+      if (root.current) {
+        root._known = Object.assign({}, root.current, { known: true })
+        root.connection = { state: "connecting", message: "Connecting…", local: true }
+        root._lastState = ""
+      }
       root._failAll({ code: "unreachable", message: "The iPhone service restarted. Try again." })
       root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
       root.condition = null                     // the daemon's exit switched it off
@@ -239,6 +255,14 @@ Item {
   function start() {
     root.status = "loading"
     root.error = null
+    root.discovered = false
+    if (!root.current) {
+      root._known = root._known || _knownFromState()
+      if (root._known) {
+        _updateCurrent()
+        root.connection = { state: "connecting", message: "Connecting…", local: true }
+      }
+    }
     root._failedStarts = 0
     root._readySinceStart = false
     daemon.autoRestart = true
@@ -263,6 +287,9 @@ Item {
       root.pmd3Version = data && data.pymobiledevice3 ? data.pymobiledevice3 : ""
       root.status = "ready"
       root.error = null
+      _discover()
+      // the app list is served from the daemon's cache right away (stale) even before the tunnel is up
+      if (root.current && root.appsStatus !== "ready" && root.appsStatus !== "loading") refreshApps()
       break
     case "devices":
       root.devices = data || []
@@ -303,6 +330,9 @@ Item {
       break
     case "apps":                                // the cached list changed after a background refresh
       if (data && data.apps && _isCurrent(data.udid)) { root.appsResource.set(_setApps(data.apps)); root.appsStale = false }
+      break
+    case "appsRunning":                         // apps launched/stopped elsewhere (MCP, CLI): {udid, running: {bundleId: pid|null}}
+      if (data && data.running && _isCurrent(data.udid)) _patchRunning(data.running)
       break
     case "appIcons":                            // batched: {udid, icons: {bundleId: path}}
       if (data && data.icons && _isCurrent(data.udid)) _queueIcons(data.icons)
@@ -356,7 +386,7 @@ Item {
       // cheap first: the device's info, then the app list (served from the daemon's cache), and the
       // provisioning profiles a little later (only the Profiles tab and its warning badge need them)
       refreshInfo(false, function() {
-        if (root.appsStatus !== "ready") refreshApps()
+        if (root.appsStatus !== "ready" && root.appsStatus !== "loading") refreshApps()   // usually asked for at `ready`
         if (root.profilesResource.status !== "ready") profilesLater.restart()
       })
     } else if (c.state !== "connected" && c.state !== "locked" && (prev === "connected" || prev === "locked")) {
@@ -368,9 +398,26 @@ Item {
     }
   }
 
+  // devices.list waits for the daemon's first discovery pass (deviced-protocol.md, "Rules"), so its
+  // reply says discovery is done: from then on an empty `current` means there's no iPhone to show.
+  function _discover() {
+    request("devices.list", {}, function(ok, d) {
+      // the daemon went away before answering: the next one's `ready` asks again
+      if (!ok && d && (d.code === "unreachable" || d.code === "not-ready")) return
+      if (ok && Array.isArray(d)) root.devices = d
+      root.discovered = true
+      _updateCurrent()
+      if (!root.current && root.connection.local)
+        root.connection = { state: "idle", message: "No iPhone selected" }
+    })
+  }
+
   function _updateCurrent() {
     var cur = null
     for (var i = 0; i < root.devices.length; i++) if (root.devices[i].active) cur = root.devices[i]
+    if (!cur && !root.discovered && root._known) {
+      cur = Model.mergeKnownDevice(root._known, root.devices)   // the daemon's cached copy may be newer
+    }
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
       root.info = ({}); root.appsResource.reset(); root._appsArgs = ({}); root._appsGen++; root.profilesResource.reset()
@@ -394,6 +441,13 @@ Item {
         return
       }
     }
+  }
+
+  // Running flags from an appsRunning event: one new list, with only the apps whose state changed
+  // copied (the rest are the same objects, icons and sizes included); nothing changes when none did.
+  function _patchRunning(running) {
+    var copy = Model.patchRunning(root.apps, running)
+    if (copy) root.appsResource.set(_setApps(copy))
   }
 
   function _isCurrent(udid) { return !udid || !root.current || udid === root.current.udid }

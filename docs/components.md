@@ -923,7 +923,12 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   an entry of `summary.symbolication.frames` or null, `mine`; signal `clicked()`): a resolved app frame shows
   its function with file:line below, and a click opens it in the editor; under them, the symbolication status.
 - **DeviceConnect**: "Connect your iPhone", shown when no paired iPhone is known: cable or Wi-Fi. Props: `app`;
-  signal `pairRequested(method)`.
+  signal `pairRequested(method)`. Not on a cold open while the daemon starts and looks for the phone: until
+  its first discovery pass has answered (`app.device.discovered`, from a `devices.list` sent at `ready`, which
+  the daemon only answers after that pass), `app.device.current` is the iPhone seen last (`known: true`; from
+  the daemon's `device.json` state file, or the previous `current` after a daemon restart) with a local
+  "Connecting…" connection, so the page shows its hero and cached app list. Only a pass that found no iPhone
+  shows these steps.
 - **DevicePairSheet**: the pairing sheet, driven by the daemon's `pair` events (`app.device.pair`). Props: `app`;
   `begin(method)` with `"usb"` or `"wifi"`.
 - **DeviceSteps**: numbered instructions for pairing and Developer Mode. `steps: [{text, done?, active?}]`.
@@ -954,8 +959,13 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   daemons, merged every 50 ms) and sizes (`appSizes`) go into those maps and are also written into the app objects
   in place, so `a.icon` / `a.size` reads elsewhere see them on their next evaluation. `refreshApps(force)` (the
   Reload buttons pass `true`), `wantAppSizes()` (one `sizes: true` call per device per 10 minutes), `appsStale` /
-  `appsFetchedAt` from the reply. On connect it asks for `device.info` first, then `apps.list`, and the provisioning
-  profiles 3 s later; `wantProfiles()` fetches them right away.
+  `appsFetchedAt` from the reply. `apps.list` goes out as soon as the daemon is `ready` and an iPhone is known (the
+  daemon answers from its cache, `stale: true`, before the tunnel is up), so the list shows while it connects; on
+  connect it asks for `device.info`, then `apps.list` unless the list is loaded or loading, and the provisioning
+  profiles 3 s later; `wantProfiles()` fetches them right away. An `appsRunning` event (`{udid, running:
+  {bundleId: pid|null}}`, apps launched or stopped by the MCP server or the CLI) sets `running`/`pid` with
+  `Model.patchRunning`: one new list in which only the changed apps are copies, nothing when none changed;
+  without the event, the `apps` event still carries running-state changes.
 - **DeviceAppDetailView**: iPhone › Apps › an app, shown by DevicePage in place of the list (`appDetail`, the
   bundle id; `appSection`, the last section, kept for the session). Props: `app`, `bundleId`, `active` (asks
   `app.device.wantAppSizes()` when it turns on or the app changes; the icon and size come from
