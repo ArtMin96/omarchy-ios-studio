@@ -1,4 +1,4 @@
-"""Screenshot compare (helper/screenshots.py): the pure-Python PNG codec, diffs, the status-bar mask, regions,
+"""Screenshot compare (helper/iosstudio/features/screenshots.py): the pure-Python PNG codec, diffs, the status-bar mask, regions,
 storage (save/list/compare/delete, pruning, cleanup), matrix plans and manifests (the CLI and demo mode:
 tests/cli/test_screenshots_cli.py).
 
@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import common
-import screenshots as S
+from iosstudio.core import appdirs, output
+from iosstudio.features import screenshots as S
 from support import ROOT
 
 FIX = ROOT / "tests" / "fixtures" / "screenshots"
@@ -71,12 +71,12 @@ class Codec(unittest.TestCase):
                          b"\x0a\x0b\x0c\x01\x02\x03")
 
     def test_bad_images(self):
-        with self.assertRaises(common.HelperError) as cm:
+        with self.assertRaises(output.HelperError) as cm:
             S._png_decode(b"GIF89a....", Path("x.gif"))
         self.assertEqual(cm.exception.code, "bad-image")
         bad = bytearray((FIX / "base.png").read_bytes())
         bad[24] = 1        # bit depth 1
-        with self.assertRaises(common.HelperError):
+        with self.assertRaises(output.HelperError):
             S._png_decode(bytes(bad), Path("x.png"))
 
 
@@ -181,7 +181,7 @@ class Storage(unittest.TestCase):
         t = Path(self.tmp.name)
         self.proj = t / "MyApp"
         self.proj.mkdir()
-        self.patches = [mock.patch.object(common, "DATA_DIR", t / "data"), pure(),
+        self.patches = [mock.patch.object(appdirs, "DATA_DIR", t / "data"), pure(),
                         mock.patch.dict(os.environ, {"IOSSTUDIO_DEMO": ""})]
         for p in self.patches:
             p.start()
@@ -200,8 +200,8 @@ class Storage(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             try:
                 S.GROUPS["screenshots"][action](f)
-            except common.HelperError as exc:
-                common.fail(exc.code, exc.message)
+            except output.HelperError as exc:
+                output.fail(exc.code, exc.message)
         return json.loads(buf.getvalue().strip().splitlines()[-1])
 
     def test_save_list_compare_delete(self):
@@ -289,10 +289,10 @@ class Storage(unittest.TestCase):
         import contextlib
         import io
 
-        import projects
+        from iosstudio.features import projects
         self.cli("save", name="Home", shot=str(FIX / "base.png"))
         state = Path(self.tmp.name) / "state"
-        with mock.patch.object(common, "STATE_DIR", state), \
+        with mock.patch.object(appdirs, "STATE_DIR", state), \
                 mock.patch.object(projects, "PROJECTS_FILE", state / "projects.json"), \
                 contextlib.redirect_stdout(io.StringIO()) as buf:
             projects.cmd_remove({"path": str(self.proj)})
@@ -325,10 +325,10 @@ class Storage(unittest.TestCase):
         self.assertEqual(len(man["shots"]), 2)
         self.assertEqual(man["shots"][1]["error"], "Launch failed")
         self.assertEqual(b["count"], 2)
-        with self.assertRaises(common.HelperError) as cm:
+        with self.assertRaises(output.HelperError) as cm:
             S.plan_configs(str(self.proj), ["Nope"])
         self.assertEqual(cm.exception.code, "unknown-preset")
-        with self.assertRaises(common.HelperError):
+        with self.assertRaises(output.HelperError):
             S.plan_names(["a", "A"])
         self.assertEqual(man["state"], "running")
         fin = S.matrix_finish(self.d, plan["set_id"], "cancelled", None, "stopped (it wasn't running before)")
@@ -340,7 +340,7 @@ class Storage(unittest.TestCase):
         self.assertEqual(fin["state"], "cancelled")
         S.matrix_finish(self.d, plan["set_id"], "failed", "Launch failed: locked.")
         self.assertEqual(json.loads(Path(plan["manifest_path"]).read_text())["error"], "Launch failed: locked.")
-        with self.assertRaises(common.HelperError):
+        with self.assertRaises(output.HelperError):
             S.matrix_finish(self.d, plan["set_id"], "running")
         self.assertEqual(S.plan_configs(str(self.proj), None)[0]["key"], "default")
         self.assertEqual(S.plan_names(None)[0]["name"], "launch")

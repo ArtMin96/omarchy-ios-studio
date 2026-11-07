@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
 HELPER = ROOT / "bin" / "iosstudio-helper"
-HELPER_PY = [sys.executable, str(ROOT / "helper" / "main.py")]   # the helper without the bin/ wrapper
+HELPER_PY = [sys.executable, str(ROOT / "helper" / "run.py"), "iosstudio"]   # the helper without the bin/ wrapper
 
 XDG_VARS = ("XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME")
 

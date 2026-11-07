@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import build_settings as B
+from iosstudio.features import build_settings as B
 from support import ROOT, isolated_env, write_exe
 from support.fakes import FAKE_XTOOL, GENERATE
 

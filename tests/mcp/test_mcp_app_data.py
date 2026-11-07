@@ -1,7 +1,7 @@
 """MCP side of app data (mcp/iosstudio_mcp/tools/app_data.py): ios_app_defaults read under the byte budget with
 full_output_path, dry runs before set/delete, the app-running next step, ios_app_store summary and paging,
 ios_app_reset dry run and its job. dcall is routed to the demo daemon's feature modules (real made-up data in a
-temp folder), so the whole path from tool to helper/app_data.py runs.
+temp folder), so the whole path from tool to helper/iosstudio/features/app_data.py runs.
 
 Needs the MCP server's dependencies (the dev venv; skipped otherwise):
     python -m pytest tests/mcp/test_mcp_app_data.py
@@ -19,8 +19,8 @@ from unittest import mock
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-import app_data as AD
-from common import HelperError
+from iosstudio.core.output import HelperError
+from iosstudio.features import app_data as AD
 from iosstudio_mcp.backends import device as D
 from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.core.errors import device_error
@@ -34,11 +34,11 @@ WEATHER = "XTL-A1B2C3D4E5.com.example.weatherglance"
 
 class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        import deviced_demo_core as core
-        from deviced_demo_features import appdata as demo
-        from deviced_demo_features import apps as demo_apps
-        from deviced_demo_features import files as demo_files
-        from deviced_kit import FeatureRegistry
+        from iosstudio.device import deviced_demo_core as core
+        from iosstudio.device.demo_features import appdata as demo
+        from iosstudio.device.demo_features import apps as demo_apps
+        from iosstudio.device.demo_features import files as demo_files
+        from iosstudio.device.deviced_kit import FeatureRegistry
         self.core, self.demo = core, demo
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)

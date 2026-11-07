@@ -1,6 +1,6 @@
 """MCP side of the app console (mcp/iosstudio_mcp/tools/console.py): line rendering, the capture
 summary's selection, and ios_app_console_read's cursor paging and output budget against a fake daemon
-that serves a real helper/app_console.py session.
+that serves a real helper/iosstudio/device/app_console.py session.
 
 Needs the MCP server's dependencies (the dev venv; skipped otherwise):
     python -m pytest tests/mcp/test_mcp_console.py
@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import app_console as C
+from iosstudio.device import app_console as C
 from iosstudio_mcp.backends import console as BC
 from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.state import AppState

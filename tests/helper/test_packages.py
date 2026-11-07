@@ -1,4 +1,4 @@
-"""Swift package dependencies (helper/packages.py, helper/package_manifest.py): Package.resolved v1, v2 and v3
+"""Swift package dependencies (helper/iosstudio/features/packages.py, helper/iosstudio/features/package_manifest.py): Package.resolved v1, v2 and v3
 (real files in tests/fixtures/packages/), version rules from `dump-package` (captured output), the list merge
 (declared packages + pins + target dependencies, bare-name products), resolved diffs (`changes`), product picking,
 URL and version checks, swift output -> progress, the remove edit on many manifest shapes (fixtures in
@@ -16,8 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import package_manifest as M
-import packages as P
+from iosstudio.features import package_manifest as M
+from iosstudio.features import packages as P
 from support import ROOT
 
 FIX = ROOT / "tests/fixtures/packages"

@@ -1,4 +1,4 @@
-"""Watch mode (helper/watch.py): the debounce/supersede scheduler on a fake clock, which files count as a change,
+"""Watch mode (helper/iosstudio/features/watch.py): the debounce/supersede scheduler on a fake clock, which files count as a change,
 atomic saves seen through real inotify in a temp folder, the polling fallback, the watcher loop with fake builds
 (supersede, busy retry, auto-run skips), the lock and stale-lock detection and owners. The CLI, demo mode and
 compiles through the real `build compile` with a fake xtool are in tests/cli/test_watch_cli.py. Stdlib only:
@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-import watch as W
+from iosstudio.features import watch as W
 from support.projects import app_project as make_project
 from support.projects import atomic_save
 
@@ -560,7 +560,7 @@ class RuntimeDirTests(unittest.TestCase):
     """XDG_RUNTIME_DIR unset (the MCP SDK's stdio_client drops it): /run/user/<uid> when it's ours, else /tmp."""
 
     def setUp(self):
-        import device_client
+        from iosstudio.device import device_client
         self.dc = device_client
         self.env = {k: v for k, v in os.environ.items() if k not in ("XDG_RUNTIME_DIR", "IOSSTUDIO_RUNTIME_DIR")}
 

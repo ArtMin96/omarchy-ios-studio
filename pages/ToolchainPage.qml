@@ -3,8 +3,8 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Toolchain: what's installed (versions, SDKs), how much disk each piece
 // takes, safe cleanup, and removing everything.

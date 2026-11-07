@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Toolchain slice service: versions (`toolchain info`), disk usage (`toolchain disk`),
 // cleanup (`toolchain clean --item`) and removal (`toolchain remove-all`).

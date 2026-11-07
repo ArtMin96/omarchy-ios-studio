@@ -1,4 +1,4 @@
-"""UI inspection (helper/ui_inspect.py): raw payload conversion, the focus walk, element shaping,
+"""UI inspection (helper/iosstudio/features/ui_inspect.py): raw payload conversion, the focus walk, element shaping,
 label matching, tree diffs, audit normalization; plus the demo daemon's ui.* commands.
 
     python -m pytest tests/helper/test_ui_inspect.py
@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import unittest
 
-import ui_inspect as U
+from iosstudio.features import ui_inspect as U
 from support import ROOT
 
 FIX = ROOT / "tests" / "fixtures" / "ui-inspect"
@@ -297,9 +297,9 @@ class DemoCommands(unittest.TestCase):
     """The demo feature module, called directly through a registry (no daemon process)."""
 
     def setUp(self):
-        import deviced_demo_core as core
-        from deviced_demo_features import ui as demo_ui
-        from deviced_kit import FeatureRegistry
+        from iosstudio.device import deviced_demo_core as core
+        from iosstudio.device.demo_features import ui as demo_ui
+        from iosstudio.device.deviced_kit import FeatureRegistry
         self.core, self.mod = core, demo_ui
         self.saved_running = set(core.running)
         self.saved_state = {k: (set(v) if isinstance(v, set) else list(v) if isinstance(v, list) else v)
@@ -328,7 +328,7 @@ class DemoCommands(unittest.TestCase):
         self.assertEqual(out["after"]["count"], tree["count"] + 1)
 
     def test_errors(self):
-        from common import HelperError
+        from iosstudio.core.output import HelperError
         self.core.running.discard(self.mod.HABITS)
         with self.assertRaises(HelperError) as c:
             self.call("ui.tree", {"bundleId": "com.example.habits"})

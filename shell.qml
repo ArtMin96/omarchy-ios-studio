@@ -7,8 +7,12 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "Model.js" as Model
+import "components/common"
+import "core"
+// Pages load by URL (Loader below); importing their folder makes Quickshell scan them, and through
+// their imports the components/ folders, so those resolve at runtime.
+import "pages"
+import "lib/Model.js" as Model
 
 ShellRoot {
   id: shell

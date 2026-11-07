@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Owns the device daemon (bin/iosstudio-deviced, protocol: docs/deviced-protocol.md).
 //   app.device.request("apps.list", {}, function(ok, dataOrError) { … })

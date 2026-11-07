@@ -34,7 +34,7 @@ def _crash_dirs() -> list[Path]:
     if helper.demo_mode():
         try:
             import importlib.util
-            spec = importlib.util.spec_from_file_location("iosstudio_demo_art", helper.REPO / "helper" / "demo_art.py")
+            spec = importlib.util.spec_from_file_location("iosstudio_demo_art", helper.REPO / "helper" / "iosstudio" / "demo" / "demo_art.py")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             dirs.insert(0, Path(mod.demo_dir()) / "crashes")

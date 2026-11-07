@@ -1,4 +1,4 @@
-"""Crash symbolication (helper/crash_symbols.py): Mach-O UUIDs, the symbol cache and its pruning, matching
+"""Crash symbolication (helper/iosstudio/features/crash_symbols.py): Mach-O UUIDs, the symbol cache and its pruning, matching
 a .ips report's images to a kept build and resolving app frames to file:line. Stdlib only:
     python -m pytest tests/helper/test_crash_symbolication.py
 
@@ -17,8 +17,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import crash_symbols as S
-import device_crash
+from iosstudio.device import device_crash
+from iosstudio.features import crash_symbols as S
 from support.crash import APP, DWARF, FIX, OFF_FIRST, UUID, ips
 
 
@@ -33,7 +33,7 @@ class TempCache(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="symb-"))
         self.cache = self.tmp / "symbols"
         self.patches = [mock.patch.object(S, "CACHE", self.cache), mock.patch.object(S, "INDEX", self.cache / "index.json"),
-                        mock.patch.object(S.common, "STATE_DIR", self.tmp / "state")]
+                        mock.patch.object(S.appdirs, "STATE_DIR", self.tmp / "state")]
         for p in self.patches:
             p.start()
 
@@ -218,7 +218,7 @@ class Demo(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": tmp}):
             try:
                 import importlib
-                mod = importlib.import_module("deviced_demo_features.crashes")
+                mod = importlib.import_module("iosstudio.device.demo_features.crashes")
             except Exception as exc:  # noqa: BLE001
                 self.skipTest(f"demo daemon modules not importable here ({exc})")
             with mock.patch.object(mod, "DIR", Path(tmp)):
@@ -231,13 +231,13 @@ class Demo(unittest.TestCase):
 
 
 class DaemonPull(TempCache):
-    """crash.pull (helper/deviced_features/crashes.py) on a report that is already on this computer."""
+    """crash.pull (helper/iosstudio/device/features/crashes.py) on a report that is already on this computer."""
 
     def pull(self, local: Path) -> dict:
         import asyncio
         import importlib
         try:
-            mod = importlib.import_module("deviced_features.crashes")
+            mod = importlib.import_module("iosstudio.device.features.crashes")
         except Exception as exc:  # noqa: BLE001
             self.skipTest(f"daemon modules not importable here ({exc})")
         commands = {}

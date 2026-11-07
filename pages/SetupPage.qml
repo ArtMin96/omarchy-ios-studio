@@ -4,8 +4,8 @@ import QtQuick.Dialogs
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Setup: the guided onboarding wizard. Every piece iOS Studio needs, grouped,
 // in install order, with one "Install everything" and per-step Install/Repair.

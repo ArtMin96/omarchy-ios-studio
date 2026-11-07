@@ -41,7 +41,7 @@ class Cli(unittest.TestCase):
             proj = str(Path.home() / "Developer" / "WeatherGlance")
             lst = self.run_helper("list", "--project", proj, env=env)["data"]["baselines"]
             self.assertEqual([b["name"] for b in lst], ["Home", "Today"])
-            import demo_art
+            from iosstudio.demo import demo_art
             with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": t}):
                 shot = demo_art.phone_screen(Path(t) / "shot.png")
             home = self.run_helper("compare", "--project", proj, "--name", "Home", "--shot", str(shot), env=env)["data"]

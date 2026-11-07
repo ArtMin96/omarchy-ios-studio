@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import unittest
 
-import diagnostics as D
+from iosstudio.features import diagnostics as D
 from iosstudio_mcp.core import budget as B
 from iosstudio_mcp.core.job_status import job_next_steps
 from iosstudio_mcp.core.jobs import Job

@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Apple ID / developer team state (account slice).
 //   status    "unknown" | "loading" | "ready" | "needs-setup" | "error"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from iosstudio_mcp import budget as B
+from iosstudio_mcp.core import budget as B
 
 
 class FakeMCP:

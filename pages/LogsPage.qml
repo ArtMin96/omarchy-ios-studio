@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/logs"
+import "../lib/Model.js" as Model
 
 // Logs (logs slice): live device log, crash reports, build logs.
 PageFrame {

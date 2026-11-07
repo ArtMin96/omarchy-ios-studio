@@ -1,4 +1,4 @@
-"""Editor setup through helper/main.py: demo mode, a compile-only build writing .bsp/xtool.json before `done`, new
+"""Editor setup through helper/run.py iosstudio: demo mode, a compile-only build writing .bsp/xtool.json before `done`, new
 projects marked and given VS Code files, the real CLI on a temp home."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import editor_setup as E
+from iosstudio.features import editor_setup as E
 from support import ROOT
 
 
@@ -22,7 +22,7 @@ class Cli(unittest.TestCase):
             env["IOSSTUDIO_DEMO"] = "1"
         else:
             env.pop("IOSSTUDIO_DEMO", None)
-        out = subprocess.run([sys.executable, str(ROOT / "helper/main.py"), *args], capture_output=True, text=True,
+        out = subprocess.run([sys.executable, str(ROOT / "helper/run.py"), "iosstudio", *args], capture_output=True, text=True,
                              env=env, timeout=30)
         return json.loads(out.stdout.strip().splitlines()[-1])
 
@@ -65,7 +65,7 @@ class Cli(unittest.TestCase):
             (proj / "xtool.yml").write_text("version: 1\nbundleID: com.example.App\n")
             full = {**os.environ, **env}
             full.pop("IOSSTUDIO_DEMO", None)
-            r = subprocess.run([sys.executable, str(ROOT / "helper/main.py"), "build", "compile", "--path", str(proj)],
+            r = subprocess.run([sys.executable, str(ROOT / "helper/run.py"), "iosstudio", "build", "compile", "--path", str(proj)],
                                capture_output=True, text=True, env=full, timeout=60, stdin=subprocess.DEVNULL)
             done = json.loads(r.stdout.strip().splitlines()[-1])
             self.assertTrue(done["ok"], done)

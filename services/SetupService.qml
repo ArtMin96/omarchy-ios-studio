@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Setup slice service. Owns `setup check` (step states), the install stream
 // (`setup install --step/--all`), its prompts, and the Xcode .xip watcher.

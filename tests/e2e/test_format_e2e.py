@@ -8,7 +8,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-import format as F
+from iosstudio.features import format as F
 from support.projects import project_with_files as make_project
 from support.swift_format import TempHome
 

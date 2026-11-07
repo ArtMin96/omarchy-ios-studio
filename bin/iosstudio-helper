@@ -2,6 +2,6 @@
 # iOS Studio helper: one JSON object (or JSON lines for streaming commands) on stdout.
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # Compiled modules go to the user's cache (not the repo), so a call doesn't recompile every import.
-# -I ignores PYTHON* variables, hence -X.
+# -I ignores PYTHON* variables, hence -X. helper/run.py puts helper/ on sys.path and runs `python -m iosstudio`.
 pycache="${XDG_CACHE_HOME:-$HOME/.cache}/ios-studio/pycache"
-exec /usr/bin/python3 -I -X pycache_prefix="$pycache" "$here/../helper/main.py" "$@"
+exec /usr/bin/python3 -I -X pycache_prefix="$pycache" "$here/../helper/run.py" iosstudio "$@"
