@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,9 @@ REPO = Path(os.environ.get("IOSSTUDIO_REPO") or Path(__file__).resolve().parents
 HELPER = REPO / "bin" / "iosstudio-helper"
 APP_LAUNCHER = REPO / "bin" / "ios-studio"
 HOME = Path.home()
+if str(REPO / "helper") not in sys.path:      # the helper's stdlib-only `iosstudio.core` (one set of path rules)
+    sys.path.append(str(REPO / "helper"))
+from iosstudio.core import appdirs  # noqa: E402,F401  (tools use helper.appdirs)
 
 
 def demo_mode() -> bool:

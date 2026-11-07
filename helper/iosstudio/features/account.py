@@ -63,7 +63,7 @@ def using_fake_xtool() -> bool:
 def xtool_env() -> dict:
     env = {"NO_COLOR": "1"}
     if not os.environ.get("XDG_CONFIG_HOME"):
-        env["XDG_CONFIG_HOME"] = str(appdirs.HOME / ".config")
+        env["XDG_CONFIG_HOME"] = str(appdirs.config_home())
     return env
 
 
@@ -400,8 +400,7 @@ def get_status() -> dict:
 
 
 def xtool_data_dir() -> Path:
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or (appdirs.HOME / ".config"))
-    return base / "xtool" / "data"
+    return appdirs.config_home() / "xtool" / "data"
 
 
 def cmd_status(flags: dict) -> int:

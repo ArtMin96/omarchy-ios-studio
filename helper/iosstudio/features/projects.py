@@ -49,7 +49,6 @@ LOCK_DIR = appdirs.STATE_DIR / "locks"
 MAX_LINE = 64 * 1024     # longest build-output line kept whole
 EXIT_GRACE = 60          # seconds a build may linger after closing its output
 TEMPLATES = appdirs.REPO / "templates"
-SYSTEMD_DIR = Path(os.environ.get("XDG_CONFIG_HOME", appdirs.HOME / ".config")) / "systemd/user"
 UNIT = "ios-studio-renew"
 
 SKIP_DIRS = {"node_modules", ".build", ".git", "xtool", "DerivedData", "Pods", ".swiftpm", "build",
@@ -155,7 +154,7 @@ def _xtool() -> str:
 
 def _xtool_env() -> dict:
     env = os.environ.copy()
-    env.setdefault("XDG_CONFIG_HOME", str(appdirs.HOME / ".config"))
+    env.setdefault("XDG_CONFIG_HOME", str(appdirs.config_home()))
     paths = [str(appdirs.LOCAL_BIN)]
     swift = shutil.which("swift")
     if swift:
@@ -1932,7 +1931,8 @@ def cmd_renew_due(flags: dict) -> int:
 
 
 def _unit_paths() -> tuple[Path, Path]:
-    return SYSTEMD_DIR / f"{UNIT}.service", SYSTEMD_DIR / f"{UNIT}.timer"
+    systemd = appdirs.config_home() / "systemd/user"
+    return systemd / f"{UNIT}.service", systemd / f"{UNIT}.timer"
 
 
 def _unit_texts() -> tuple[str, str]:

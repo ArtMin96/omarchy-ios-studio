@@ -183,9 +183,9 @@ def find_tool(name: str) -> str | None:
     found = shutil.which(name)
     if found:
         return found
-    sdk = Path(os.environ.get("XDG_CONFIG_HOME", appdirs.HOME / ".config")) / "swiftpm/swift-sdks/darwin.artifactbundle"
-    cand = sdk / "toolset/bin" / name
-    return str(cand) if cand.is_file() else None
+    sdk = appdirs.sdk_bundle()
+    cand = sdk / "toolset/bin" / name if sdk else None
+    return str(cand) if cand and cand.is_file() else None
 
 
 def demangle(names: list[str]) -> dict[str, str]:
