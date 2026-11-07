@@ -54,6 +54,8 @@ Item {
     return ""
   }
 
+  readonly property bool narrow: width > 0 && width < Style.space(480)
+
   readonly property string ownImage: item ? (item.process || "") : ""
 
   // Crash symbolication (helper/iosstudio/features/crash_symbols.py): file:line for the app's frames, from the build that crashed.
@@ -121,12 +123,16 @@ Item {
           }
           AppText {
             Layout.fillWidth: true
-            text: root.item ? [svc.kindLabel(root.item.kind), new Date(root.item.ts * 1000).toLocaleString(Qt.locale(), "dddd d MMMM, HH:mm:ss"), Model.relativeTime(root.item.ts)].join(" · ") : ""
+            // shorter forms in a smaller pane, so the line fits instead of eliding the date
+            text: !root.item ? "" : [svc.kindLabel(root.item.kind),
+                    new Date(root.item.ts * 1000).toLocaleString(Qt.locale(), root.width < Style.space(640) ? "d MMM, HH:mm" : "dddd d MMMM, HH:mm:ss"),
+                    root.narrow ? "" : Model.relativeTime(root.item.ts)].filter(function(p) { return p !== "" }).join(" · ")
             size: "small"; tone: "dim"; elide: Text.ElideRight
           }
         }
-        ActionButton { text: "Copy"; glyph: Model.Glyph.copy; enabled: root.path !== ""; onClicked: root.copy() }
-        ActionButton { text: "Save"; glyph: Model.Glyph.save; enabled: root.path !== ""; onClicked: root.save() }
+        // A narrow pane keeps the room for the title: the buttons show only their icons.
+        ActionButton { text: root.narrow ? "" : "Copy"; glyph: Model.Glyph.copy; tooltip: "Copy the full report"; enabled: root.path !== ""; onClicked: root.copy() }
+        ActionButton { text: root.narrow ? "" : "Save"; glyph: Model.Glyph.save; tooltip: "Save the report to Downloads"; enabled: root.path !== ""; onClicked: root.save() }
       }
 
       LoadingState {
@@ -159,21 +165,56 @@ Item {
           text: root.explain(root.summary, root.item)
           wrapMode: Text.Wrap
         }
-        KeyValueList {
+        ColumnLayout {   // Reason + the other rows as one list
           Layout.fillWidth: true
-          labelWidth: Style.space(140)
-          rows: {
-            var s = root.summary || {}, r = []
-            if (s.terminationReason) r.push({ label: "Reason", value: s.terminationReason })
-            if (s.bundleId) r.push({ label: "App", value: s.bundleId, copy: true })
-            if (s.appVersion) r.push({ label: "Version", value: s.appVersion })
-            if (s.osVersion) r.push({ label: "iOS", value: s.osVersion })
-            if (s.date) r.push({ label: "When", value: s.date })
-            if (s.crashedThread !== null && s.crashedThread !== undefined) r.push({ label: "Crashed thread", value: String(s.crashedThread) })
-            if (s.incident) r.push({ label: "Incident", value: s.incident, copy: true })
-            return r
+          spacing: 0
+          // Reason: free text that runs long (a Swift fatalError message), so it wraps instead of
+          // eliding; laid out like the InfoRows below it (same label column, padding and height).
+          ColumnLayout {
+            Layout.fillWidth: true
+            visible: !!root.summary && !!root.summary.terminationReason
+            spacing: 0
+            Item {
+              Layout.fillWidth: true
+              implicitHeight: Math.max(reasonRow.implicitHeight + Style.spacing.sm * 2, rowProbe.implicitHeight)
+              InfoRow { id: rowProbe; visible: false; value: "x" }   // a one-line row's height
+              RowLayout {
+                id: reasonRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.spacing.lg
+                AppText {
+                  Layout.preferredWidth: kv.labelWidth
+                  Layout.alignment: Qt.AlignTop
+                  text: "Reason"; tone: "dim"; elide: Text.ElideRight
+                }
+                AppText {
+                  Layout.fillWidth: true
+                  Layout.alignment: Qt.AlignTop
+                  text: root.summary && root.summary.terminationReason ? root.summary.terminationReason : ""
+                  wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+              }
+            }
+            Rectangle { Layout.fillWidth: true; implicitHeight: Style.spacing.hairline; color: Theme.hairline }
           }
-          onCopied: function(v) { root.app.toast("Copied") }
+          KeyValueList {
+            id: kv
+            Layout.fillWidth: true
+            labelWidth: root.narrow ? Style.space(110) : Style.space(140)
+            rows: {
+              var s = root.summary || {}, r = []
+              if (s.bundleId) r.push({ label: "App", value: s.bundleId, copy: true })
+              if (s.appVersion) r.push({ label: "Version", value: s.appVersion })
+              if (s.osVersion) r.push({ label: "iOS", value: s.osVersion })
+              if (s.date) r.push({ label: "When", value: s.date })
+              if (s.crashedThread !== null && s.crashedThread !== undefined) r.push({ label: "Crashed thread", value: String(s.crashedThread) })
+              if (s.incident) r.push({ label: "Incident", value: s.incident, copy: true })
+              return r
+            }
+            onCopied: function(v) { root.app.toast("Copied") }
+          }
         }
       }
 

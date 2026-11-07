@@ -119,7 +119,8 @@ Item {
 
     ColumnLayout {
       Layout.fillWidth: false
-      Layout.preferredWidth: Math.max(Style.space(280), Math.min(Style.space(380), root.width * 0.36))
+      // ~a third of the tab, so the report keeps most of the room
+      Layout.preferredWidth: Math.max(Style.space(260), Math.min(Style.space(400), root.width * 0.34))
       Layout.fillHeight: true
       spacing: Style.spacing.lg
 
@@ -157,7 +158,9 @@ Item {
           glyph: root.glyphOf(modelData)
           glyphColor: svc.isOwn(modelData) ? Theme.error : Theme.dim
           title: root.titleOf(modelData)
-          subtitle: svc.exceptionText(modelData) + " · " + root.when(modelData)
+          // exception on one line, time on the next (the list is narrow; one joined line elided)
+          subtitle: svc.exceptionText(modelData)
+          meta: root.when(modelData)
           hasCursor: root.cursor === index
           current: root.selectedName === modelData.name
           onHovered: function(h) { if (h) root.cursor = index }

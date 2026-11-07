@@ -71,6 +71,13 @@ Item {
     if (b.warnings) parts.push(Model.plural(b.warnings, "warning"))
     return parts.join(", ")
   }
+  // Each part keeps its words together (no-break spaces), so a wrapped line breaks only at the dots.
+  function metaText(b) {
+    if (!b) return ""
+    return [svc.buildKindLabel(b.kind, b), b.config === "release" ? "Release" : "Debug", "took " + Model.formatDuration(b.duration),
+            new Date(b.time * 1000).toLocaleString(Qt.locale(), "d MMM, HH:mm")]
+      .map(function(p) { return String(p).replace(/ /g, "\u00a0") }).join(" · ")
+  }
   function logLines(text) {
     var ls = String(text || "").replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").split("\n")
     if (ls.length && ls[ls.length - 1] === "") ls.pop()
@@ -98,7 +105,7 @@ Item {
     ListView {
       id: list
       Layout.fillWidth: false
-      Layout.preferredWidth: Math.max(Style.space(240), Math.min(Style.space(360), root.width * 0.34))
+      Layout.preferredWidth: Math.max(Style.space(240), Math.min(Style.space(400), root.width * 0.34))
       Layout.fillHeight: true
       clip: true
       spacing: Style.spacing.xxs
@@ -112,8 +119,9 @@ Item {
         glyph: Model.levelGlyph(root.resultLevel(modelData))
         glyphColor: Theme.levelColor(root.resultLevel(modelData))
         title: modelData.name || modelData.project || "Build"
-        subtitle: [root.svc.buildKindLabel(modelData.kind, modelData), root.resultText(modelData), Model.formatDuration(modelData.duration), root.countsText(modelData)].filter(function(s) { return s !== "" }).join(" · ")
-        meta: Model.relativeTime(modelData.time)
+        // The glyph already says succeeded/failed; kind + duration fit one line, when + problems the next.
+        subtitle: [root.svc.buildKindLabel(modelData.kind, modelData), Model.formatDuration(modelData.duration)].filter(function(s) { return s !== "" }).join(" · ")
+        meta: [Model.relativeTime(modelData.time), root.countsText(modelData)].filter(function(s) { return s !== "" }).join(" · ")
         hasCursor: root.cursor === index
         current: root.keyOf(root.selected) === root.keyOf(modelData)
         onHovered: function(h) { if (h) root.cursor = index }
@@ -153,14 +161,13 @@ Item {
               size: "title"; strong: true; elide: Text.ElideRight
               TextMetrics { id: titleMetrics; font: detailTitle.font; text: detailTitle.text }
             }
-            StatusPill { visible: !!root.selected; level: root.selected ? root.resultLevel(root.selected) : "info"; text: root.selected ? root.resultText(root.selected) : "" }
+            StatusPill { visible: !!root.selected && !detail.narrow; level: root.selected ? root.resultLevel(root.selected) : "info"; text: root.selected ? root.resultText(root.selected) : "" }
             Item { Layout.fillWidth: true }
           }
           AppText {
             Layout.fillWidth: true
-            text: root.selected ? [root.svc.buildKindLabel(root.selected.kind, root.selected), root.selected.config === "release" ? "Release" : "Debug",
-                                    "took " + Model.formatDuration(root.selected.duration),
-                                    new Date(root.selected.time * 1000).toLocaleString(Qt.locale(), "d MMM, HH:mm")].join(" · ") : ""
+            visible: !detail.narrow
+            text: root.metaText(root.selected)
             size: "small"; tone: "dim"; elide: Text.ElideRight
           }
         }
@@ -173,6 +180,30 @@ Item {
           enabled: !!root.selected && !(root.app.projects && root.app.projects.building)
           tooltip: detail.narrow ? "Rebuild: run this build again in Projects" : "Run this build again in Projects"
           onClicked: root.svc.rebuild(root.selected)
+        }
+      }
+
+      // A narrow pane gives the title the header row to itself (with the buttons); the result pill
+      // and the details move to a full-width row below it, the details wrapping instead of eliding.
+      RowLayout {
+        Layout.fillWidth: true
+        Layout.topMargin: -Style.spacing.xl + Style.spacing.xs   // as close to the title as in the wide header
+        visible: detail.narrow && !!root.selected
+        spacing: Style.spacing.lg
+        StatusPill {
+          id: narrowPill
+          Layout.alignment: Qt.AlignTop
+          level: root.selected ? root.resultLevel(root.selected) : "info"
+          text: root.selected ? root.resultText(root.selected) : ""
+        }
+        AppText {
+          id: narrowMeta
+          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignTop
+          topPadding: Math.max(0, (narrowPill.implicitHeight - narrowMetaLine.height) / 2)   // first line centred on the pill
+          text: root.metaText(root.selected)
+          size: "small"; tone: "dim"; wrapMode: Text.Wrap
+          FontMetrics { id: narrowMetaLine; font: narrowMeta.font }
         }
       }
 
