@@ -23,8 +23,11 @@ import time
 
 from pymobiledevice3.services.accessibilityaudit import AccessibilityAudit, Direction, deserialize_object
 
+import deviced_core as core
 import ui_inspect as U
-from deviced_core import classify, dlog, err, installed_apps
+from deviced_core import classify, dlog, err
+from deviced_features._app_lookup import exe_path, find_app
+from deviced_features.app_index import INDEX, bundle_dir, device_fetcher
 
 KEY = "ui"
 FOCUS_EVENT = "hostInspectorCurrentElementChanged:"
@@ -152,22 +155,21 @@ async def target(ax, pid: int, wait: float = FRONT_WAIT_S) -> dict | None:
     return raw
 
 
-async def _running_apps(d, rsd) -> list[tuple[int, str]]:
-    """(pid, bundle id) of running app processes, newest pid first."""
-    apps = await installed_apps(d.pmd3, rsd, application_type="Any")
-    by_path = {(i.get("Path") or "").rstrip("/"): bid for bid, i in apps.items() if i.get("Path")}
-    out = []
+async def _running_apps(d, s, rsd) -> list[tuple[int, str]]:
+    """(pid, bundle id) of running app processes, newest pid first. Bundle ids come from the cached
+    app list; a running user app it doesn't know (installed elsewhere since) refreshes it once."""
     async with d.pmd3.AppServiceService(rsd) as svc:
         procs = await asyncio.wait_for(svc.list_processes(), 10)
-    for p in procs:
-        url = p.get("executableURL")
-        path = (url.get("relative", "") if isinstance(url, dict) else str(url or "")).removeprefix("file://")
-        if ".app/" not in path or "processIdentifier" not in p:
-            continue
-        app_path = path.split(".app/")[0] + ".app"
-        bid = by_path.get(app_path) or next((b for ap, b in by_path.items() if ap and app_path.endswith(ap)), None)
-        if bid:
-            out.append((int(p["processIdentifier"]), bid))
+    running = [(int(p["processIdentifier"]), bundle_dir(path)) for p in procs
+               if ".app/" in (path := exe_path(p)) and "processIdentifier" in p]
+    fetch = device_fetcher(d.pmd3, rsd)
+    for sync in (core.ONCE, True):
+        apps, _, _ = await INDEX.list(s.udid, "Any", fetch, sync=sync)
+        by_dir = {bundle_dir(e["path"]): e["bundleId"] for e in apps if e.get("path")}
+        out = [(pid, by_dir[app_dir]) for pid, app_dir in running if app_dir in by_dir]
+        unknown = any(app_dir not in by_dir and "/Bundle/Application/" in app_dir for _, app_dir in running)
+        if sync or not unknown:
+            break
     return sorted(out, reverse=True)
 
 
@@ -177,13 +179,13 @@ async def front_app(d, s, rsd, ax, bundle_id: str | None) -> dict:
     if bundle_id:
         from deviced_features.apps import app_pids  # noqa: PLC0415  (loaded by the same registry)
         try:
-            apps = await installed_apps(d.pmd3, rsd, application_type="Any")
+            app = await find_app(s.udid, bundle_id, device_fetcher(d.pmd3, rsd))
         except Exception as exc:  # noqa: BLE001
             raise classify(exc)
-        real = U.match_bundle(apps.keys(), bundle_id)
-        if real is None:
+        if app is None:
             raise err("wrong-app", f"{bundle_id} isn't installed on this iPhone.")
-        pids = await app_pids(d, rsd, real)
+        real = app["bundleId"]
+        pids = await app_pids(d, s, rsd, real)
         if not pids:
             raise err("wrong-app", f"{real} isn't running. Launch it first and keep it in front.")
         for pid in sorted(pids, reverse=True):
@@ -193,7 +195,7 @@ async def front_app(d, s, rsd, ax, bundle_id: str | None) -> dict:
         raise err("wrong-app", f"{real} isn't the app in front. Bring it to the front (and unlock the iPhone), "
                   "then try again.", None, f"pids {pids}")
     tried = []
-    for pid, bid in (await _running_apps(d, rsd))[:AUTO_CANDIDATES]:
+    for pid, bid in (await _running_apps(d, s, rsd))[:AUTO_CANDIDATES]:
         tried.append(bid)
         first = await target(ax, pid, wait=1.0)
         if first is not None:

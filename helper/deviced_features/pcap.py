@@ -20,7 +20,9 @@ from pymobiledevice3.services.pcapd import PcapdService
 
 import common
 import device_network as net
-from deviced_core import classify, dlog, emit, err, installed_apps
+from deviced_core import classify, dlog, emit, err
+from deviced_features._app_lookup import find_app
+from deviced_features.app_index import device_fetcher
 
 KEY = "pcap"
 CAPTURE_DIR = common.CACHE_DIR / "captures"
@@ -158,12 +160,9 @@ class Capture:
 
 async def resolve_process(s, bundle_id: str) -> tuple[str, str]:
     """bundle id (plain or XTL-<TEAM>. form) -> (executable, installed bundle id)."""
-    apps = await installed_apps(s.pmd3, s.rsd, application_type="Any")
-    for k, v in apps.items():
-        if k == bundle_id or k.endswith("." + bundle_id):
-            exe = v.get("CFBundleExecutable")
-            if exe:
-                return exe, k
+    app = await find_app(s.udid, bundle_id, device_fetcher(s.pmd3, await s.get_rsd()))
+    if app and app.get("executable"):
+        return app["executable"], app["bundleId"]
     raise err("not-found", f"The app {bundle_id} isn't installed on your iPhone.")
 
 
