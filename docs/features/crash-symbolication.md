@@ -21,7 +21,7 @@ where the crash happened. iOS Studio resolves those frames to the function, file
 
 Every build overwrites `.build`, so a crash from yesterday's build can't be resolved against today's.
 After each successful build that can end up on the phone (Run, Renew and signed builds; not
-compile-only checks), `helper/projects.py` calls `crash_symbols.remember_build()`, which:
+compile-only checks), `helper/iosstudio/features/projects/build.py` calls `crash_symbols.remember_build()`, which:
 
 1. finds the executable the build produced (`.build/<config>/<Product>-App`, the file xtool signs),
 2. reads its Mach-O `LC_UUID` (iOS writes the same UUID into every crash report's `usedImages`),

@@ -1,4 +1,4 @@
-"""Build output parser (helper/iosstudio/features/diagnostics.py) and its use in BuildRunner (helper/iosstudio/features/projects.py).
+"""Build output parser (helper/iosstudio/features/diagnostics.py) and its use in BuildRunner (helper/iosstudio/features/projects/runner.py).
 
 Stdlib only, like the helper:
     python -m pytest tests/helper/test_diagnostics.py
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from iosstudio.core import output
 from iosstudio.features import diagnostics as D
-from iosstudio.features import projects
+from iosstudio.features.projects import runner as build_runner
 from support import ROOT
 
 FIXTURES = ROOT / "tests" / "fixtures" / "build-output"
@@ -214,11 +214,11 @@ class Runner(unittest.TestCase):
         old = output._write
         output._write = events.append
         try:
-            runner = projects.BuildRunner(plan, False, Path(_TMP) / f"{name}.log", None)
+            runner = build_runner.BuildRunner(plan, False, Path(_TMP) / f"{name}.log", None)
             for ln in (FIXTURES / name).read_text().splitlines()[:only]:
                 runner.on_line(ln)
             runner.flush_diags(failed=True)
-            err = projects.classify_failure(runner, 1)
+            err = build_runner.classify_failure(runner, 1)
             runner.finish_all(False)
             runner.close()
         finally:

@@ -1,4 +1,4 @@
-"""Per-project build settings (helper/iosstudio/features/build_settings.py and the build path in helper/iosstudio/features/projects.py):
+"""Per-project build settings (helper/iosstudio/features/build_settings.py and the build path in helper/iosstudio/features/projects/build.py):
 validation, patches and diffs, open-file limits and suggestions from a project's own scripts. Builds through a fake
 xtool are in tests/cli/test_build_settings_cli.py. Stdlib only:
     python -m pytest tests/helper/test_build_settings.py

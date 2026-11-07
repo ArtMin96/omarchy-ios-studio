@@ -1,4 +1,4 @@
-"""Run presets (helper/iosstudio/features/run_presets.py and `projects presets` / `build run --preset` in helper/iosstudio/features/projects.py):
+"""Run presets (helper/iosstudio/features/run_presets.py and `projects presets` / `build run --preset` in helper/iosstudio/features/projects/):
 argument building, validation and the list logic. Storage, the fail-fast check before a build and demo mode
 through the helper are in tests/cli/test_run_presets_cli.py. Stdlib only:
     python -m pytest tests/helper/test_run_presets.py

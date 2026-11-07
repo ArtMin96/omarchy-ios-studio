@@ -19,7 +19,11 @@ from unittest import mock
 
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError
-from iosstudio.features import packages, projects, setup, watch
+from iosstudio.features import packages, setup, watch
+from iosstudio.features.projects import build as projects_build
+from iosstudio.features.projects import renew as projects_renew
+from iosstudio.features.projects import runner as projects_runner
+from iosstudio.features.projects import store as projects_store
 from support import write_exe
 
 # A fake tool that starts a long-lived grandchild (its pid goes to $1), prints one line, then hangs.
@@ -150,11 +154,11 @@ class Timeouts(Tmp):
         bindir.mkdir()
         write_exe(bindir / "systemctl", "#!/bin/sh\nsleep 30\n")
         env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(projects, "SYSTEMCTL_TIMEOUT", 0.3):
+        with mock.patch.dict(os.environ, env), mock.patch.object(projects_renew, "SYSTEMCTL_TIMEOUT", 0.3):
             with self.assertRaises(HelperError) as cm:
-                projects._systemctl("daemon-reload")
+                projects_renew.systemctl("daemon-reload")
             self.assertEqual(cm.exception.code, "systemd-timeout")
-            st = projects._timer_status()      # status stays best-effort
+            st = projects_renew.timer_status()      # status stays best-effort
         self.assertNotIn("enabled", st)
 
     def test_ls_remote_timeout(self):
@@ -180,7 +184,7 @@ class Buffers(Tmp):
         exe = self.exe("flood", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n")
         got: list[int] = []
         with Captured(), open(os.devnull) as null, mock.patch.object(sys, "stdin", null):
-            runner = projects.BuildRunner(["compile"], False, self.tmp / "b.log", None)
+            runner = projects_runner.BuildRunner(["compile"], False, self.tmp / "b.log", None)
             runner.on_line = lambda text: got.append(len(text))
             runner.on_partial = lambda text: False
             try:
@@ -189,12 +193,12 @@ class Buffers(Tmp):
                 runner.close()
         self.assertEqual(rc, 0)
         self.assertEqual(sum(got), 300000)
-        self.assertLessEqual(max(got), projects.MAX_LINE)
+        self.assertLessEqual(max(got), subproc.MAX_LINE)
 
     def test_build_runner_lingering_child(self):
         with Captured(), open(os.devnull) as null, mock.patch.object(sys, "stdin", null), \
-                mock.patch.object(projects, "EXIT_GRACE", 0.3):
-            runner = projects.BuildRunner(["compile"], False, self.tmp / "b.log", None)
+                mock.patch.object(projects_runner, "EXIT_GRACE", 0.3):
+            runner = projects_runner.BuildRunner(["compile"], False, self.tmp / "b.log", None)
             try:
                 with self.assertRaises(HelperError) as cm:
                     runner.run([self.exe("linger", LINGERS)], self.tmp)
@@ -243,19 +247,19 @@ class Tails(Tmp):
 
 class Locks(Tmp):
     def test_build_lock_is_a_context_manager(self):
-        with mock.patch.object(projects, "LOCK_DIR", self.tmp / "locks"):
-            with projects._lock(self.tmp):
-                with self.assertRaises(HelperError) as cm, projects._lock(self.tmp):
+        with mock.patch.object(projects_store, "LOCK_DIR", self.tmp / "locks"):
+            with projects_build.project_lock(self.tmp):
+                with self.assertRaises(HelperError) as cm, projects_build.project_lock(self.tmp):
                     pass
                 self.assertEqual(cm.exception.code, "busy")
-                with projects._lock(self.tmp / "other"):     # another project isn't blocked
+                with projects_build.project_lock(self.tmp / "other"):     # another project isn't blocked
                     pass
-            with projects._lock(self.tmp):     # released on exit
+            with projects_build.project_lock(self.tmp):     # released on exit
                 pass
             with self.assertRaises(RuntimeError):
-                with projects._lock(self.tmp):
+                with projects_build.project_lock(self.tmp):
                     raise RuntimeError
-            with projects._lock(self.tmp):     # and on an exception
+            with projects_build.project_lock(self.tmp):     # and on an exception
                 pass
 
 

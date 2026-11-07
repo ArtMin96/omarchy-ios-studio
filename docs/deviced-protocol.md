@@ -1329,7 +1329,7 @@ be the active device) and the reply is printed in the same format. Otherwise it 
 USB, first Wi-Fi pair record), runs one command, prints **one** JSON object
 `{"ok": true, "data": …}` / `{"ok": false, "error": {…}}` on stdout and exits (0 ok, 1 error).
 Events and diagnostics go to stderr only. Any command works, e.g.
-`--once app.install '{"path": "/…/App.ipa"}'` (background renewals: helper/iosstudio/features/projects.py
+`--once app.install '{"path": "/…/App.ipa"}'` (background renewals: helper/iosstudio/features/projects/renew.py
 `renew-due`), `--once device.info '{}'`. The tunnel wait is 25 s, so an unreachable phone answers
 `unreachable` in ~25–35 s. Standalone, the real daemon needs an iPhone for every command (no paired
 one around: `no-device`); the demo daemon answers any command. Bad JSON arguments answer `bad-args`.
