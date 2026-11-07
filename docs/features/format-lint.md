@@ -51,7 +51,7 @@ newest 10 diffs are kept. A run stops after 20 seconds with `timed_out` and the 
 ## Linting
 
 `swift-format lint` (with the same configuration) and, when it runs, `swiftlint lint --quiet --reporter json`.
-Each finding has the shape of a build diagnostic (see `helper/diagnostics.py`):
+Each finding has the shape of a build diagnostic (see `helper/iosstudio/features/diagnostics.py`):
 
 | Field | |
 |---|---|

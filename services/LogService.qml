@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Logs slice: live device log (syslog over the device daemon), crash reports
 // and build logs (from the projects slice's build history).
@@ -12,7 +11,7 @@ import "../Model.js" as Model
 //   app.logs.status / summary / refresh()
 //   Syslog:  streamWanted, viewVisible (set by LogsPage), keepStreaming, streaming,
 //            processFilter, levelFilter, start(), stop(), signal entries(batch), signal cleared()
-//   Crashes: crashes, crashStatus, crashError, newCrashCount, summaryFor(item), pullCrash(item, cb),
+//   Crashes: crashes, crashStatus, crashError (views of crashResource), newCrashCount, summaryFor(item), pullCrash(item, cb),
 //            refreshCrashes(), beginCrashVisit(), isNew(item), isOwn(item)
 //   Builds:  builds, refreshBuilds(), loadBuildLog(entry, cb), parseDiagnostics(text), rebuild(entry),
 //            buildKindLabel(kind, entry?) ("Compile on save" / "Run on save" for watch-mode entries)
@@ -150,10 +149,24 @@ Item {
   }
 
   // ============================================================ crashes
-  property var crashes: []                 // CrashItem[] newest first
-  property string crashStatus: "unknown"   // unknown | loading | ready | error
-  property var crashError: null
-  property double crashesLoadedAt: 0
+  // crash.list (a cheap read-only listing), newest first. Kept while the phone is away.
+  Resource {
+    id: crashRes
+    active: root.deviceApi && root.deviceConnected
+    initial: []
+    fetch: function(done, fail) {
+      root.dev.fetch("crash.list", { flush: true }, function(d) {
+        done((d || []).slice().sort(function(a, b) { return b.ts - a.ts }))
+      }, fail)
+    }
+    onSucceeded: function(list) { root._announce(list); root._pullQueue() }
+    onFailed: function(err) { if (!root._quietCrashLoad && root.crashes.length) root.app.toast(Model.errorMessage(err), "warn") }
+  }
+  readonly property alias crashResource: crashRes
+  readonly property var crashes: crashRes.data || []          // CrashItem[] newest first
+  readonly property string crashStatus: crashRes.status === "idle" ? "unknown" : crashRes.status   // unknown | loading | ready | error
+  readonly property var crashError: crashRes.error
+  property bool _quietCrashLoad: false
   property var summaries: ({})             // name -> CrashSummary
   property var localPaths: ({})            // name -> pulled file
   property var pulling: ({})               // name -> true
@@ -207,25 +220,11 @@ Item {
 
   property var _knownNames: null            // names seen this session (null until the first list)
 
+  // quiet: a background check (no toast when it fails).
   function refreshCrashes(quiet) {
-    if (!deviceApi || !deviceConnected) return
-    if (root.crashStatus === "loading") return
-    if (!quiet || root.crashes.length === 0) root.crashStatus = "loading"
-    dev.request("crash.list", { flush: true }, function(ok, d) {
-      root.crashesLoadedAt = Date.now()
-      if (!ok) {
-        root.crashError = d
-        root.crashStatus = root.crashes.length ? "ready" : "error"
-        if (!quiet && root.crashes.length) root.app.toast(Model.errorMessage(d), "warn")
-        return
-      }
-      var list = (d || []).slice().sort(function(a, b) { return b.ts - a.ts })
-      root.crashError = null
-      root.crashes = list
-      root.crashStatus = "ready"
-      root._announce(list)
-      root._pullQueue()
-    })
+    if (crashRes.busy) return
+    root._quietCrashLoad = !!quiet
+    crashRes.load(true)
   }
 
   function _announce(list) {
@@ -302,7 +301,7 @@ Item {
   function beginCrashVisit() {
     root.visitBaseline = root.seenTs
     markCrashesSeen()
-    if (Date.now() - root.crashesLoadedAt > 60000) refreshCrashes(true)
+    if (Date.now() - crashRes.loadedAt > 60000) refreshCrashes(true)
   }
   function endCrashVisit() { root.visitBaseline = -1; markCrashesSeen() }
 

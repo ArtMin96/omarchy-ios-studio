@@ -8,14 +8,26 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
-from ..models import (AccountStatus, ActionResult, BuildStatus, Certificate, Profile, ProjectSigning, RenewalDue,
-                      SigningBrief, SigningStatus, iso)
-from ..state import get_state, resolve_project
-from . import READ, READ_REMOTE, ann, dry_run, start_and_wait, tool
-from .build import Udid, WaitSeconds, make_installer
-from .projects import ProjectPath
+from ..backends.builds import make_installer
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.job_status import start_and_wait
+from ..core.params import ProjectPath, Udid, WaitSeconds
+from ..core.registry import dry_run, tool
+from ..models import (
+    AccountStatus,
+    ActionResult,
+    Certificate,
+    JobStatus,
+    Profile,
+    ProjectSigning,
+    RenewalDue,
+    SigningBrief,
+    SigningStatus,
+    iso,
+)
+from ..state import get_state
 
 SIGN_IN = ("Signing in needs the human: ask them to sign in with their Apple ID in iOS Studio "
            "(ios_open_app(page='account')). Never ask for their password or 2FA code yourself.")
@@ -33,18 +45,13 @@ def _profiles(details: dict) -> list[Profile]:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("Apple ID status"))
+    @tool(mcp, "Apple ID status", kind="read_remote")
     async def ios_account_status(
-        refresh: Annotated[bool, Field(description="Fetch fresh team, certificate and profile lists from Apple "
-                                                   "(5-15 s). Default: the cached copy")] = False,
+        refresh: Annotated[bool, Field(description="Fetch fresh lists from Apple (5-15 s)")] = False,
     ) -> AccountStatus:
-        """Apple ID sign-in state and developer account facts used for signing: Apple ID, team id and type
-        (free or paid), free-team limits (7-day profiles, 3 apps per iPhone, 10 app ids per week), the
-        local signing key, certificates and provisioning profiles with expiry.
-
-        Free teams register bundle ids as XTL-<TEAM>.<bundle id>; profiles show both forms. If not signed
-        in, next_steps explains the human-only sign-in.
-        """
+        """Apple ID sign-in state for signing: team id and type (free/paid), free-team limits, the signing
+        key, certificates and profiles with expiry. Free teams register bundle ids as XTL-<TEAM>.<id>. Sign-in
+        is human-only (see next_steps)."""
         st = await helper.call("account", "status")
         out = AccountStatus(signed_in=bool(st.get("signedIn")), apple_id=st.get("appleId"), team_id=st.get("teamId"),
                             token_days_left=st.get("tokenDaysLeft"),
@@ -88,14 +95,10 @@ def register(mcp: MCPServer) -> None:
             out.next_steps.append("Cached details may be outdated; refresh=true fetches them from Apple.")
         return out
 
-    @tool(mcp, annotations=READ("Signing status"))
+    @tool(mcp, "Signing status", kind="read")
     async def ios_signing_status(ctx: Context) -> SigningStatus:
-        """When each app's signing expires on the iPhone, and how renewal is set up.
-
-        With a free Apple ID, apps stop opening 7 days after they were signed; ios_project_renew re-signs
-        and reinstalls one. Lists per-project expiry (days_left, level ok/warn/error), the account's
-        provisioning profiles (cached), the daily auto-renew timer and which projects it would renew.
-        """
+        """When each app's signing expires (free Apple IDs: 7 days; ios_project_renew re-signs): per-project
+        days_left, cached profiles, the daily auto-renew timer and what it would renew."""
         state = get_state(ctx)
         data = await state.projects()
         projects = [ProjectSigning(name=str(p.get("name")), path=str(p.get("path")), bundle_id=p.get("bundleId"),
@@ -135,22 +138,20 @@ def register(mcp: MCPServer) -> None:
                              for k in ("installed", "enabled", "next", "last", "lastResult") if k in timer},
             renewal_due=due[:B.LIST_CAP], renewal_due_total=len(due), next_steps=nxt[:B.LIST_CAP])
 
-    @tool(mcp, annotations=ann("Renew app signing", read_only=False, destructive=False, idempotent=False,
-                              open_world=True))
+    @tool(mcp, "Renew app signing", kind="write", open_world=True)
     async def ios_project_renew(
         ctx: Context,
         project_path: ProjectPath,
         udid: Udid = None,
         wait_seconds: WaitSeconds = 0,
-    ) -> BuildStatus:
-        """Re-sign and reinstall an app so it keeps opening for another 7 days (free Apple IDs). Runs as a
-        job: returns a build_id ('r-N'); poll ios_build_status. Needs the signed-in Apple ID and the
-        iPhone reachable. The app's data on the phone is kept."""
+    ) -> JobStatus:
+        """Re-sign and reinstall an app so it opens for another 7 days (free Apple IDs); its data stays. A job
+        ('r-N', poll ios_job_status); needs the Apple ID and the iPhone."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         busy = state.jobs.running_for(p["path"])
         if busy:
-            raise ToolError(f"{p.get('name')} already has a running job {busy.id}; poll ios_build_status.")
+            raise ToolError(f"{p.get('name')} already has a running job {busy.id}; poll ios_job_status.")
         udid = udid or (p.get("signing") or {}).get("udid") or await state.active_udid()
         if not udid:
             raise ToolError("No iPhone is known. Ask the user to connect it (ios_open_app(page='device')) or pass udid.")
@@ -159,21 +160,17 @@ def register(mcp: MCPServer) -> None:
                                     prefix="r", wait_seconds=wait_seconds, project_path=p["path"],
                                     project=p.get("name"), finisher=make_installer(state, launch=False))
 
-    @tool(mcp, annotations=ann("Automatic renewal", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Automatic renewal", kind="destructive", idempotent=True)
     async def ios_project_autorenew(
         ctx: Context,
         action: Annotated[Literal["status", "enable", "disable"],
-                          Field(description="status: read only. enable/disable: the daily background timer "
-                                            "(a systemd user timer)")] = "status",
-        project_path: Annotated[str | None, Field(description="With enable/disable: also include/exclude this "
-                                                              "project in the renewal")] = None,
-        confirm: Annotated[bool, Field(description="With enable/disable: false (default) = dry run that lists the "
-                                                   "changes; true only after the user agreed")] = False,
+                          Field(description="enable/disable the daily systemd user timer")] = "status",
+        project_path: Annotated[str | None, Field(description="Also include/exclude this project")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
     ) -> ActionResult:
-        """Read or change automatic re-signing. When enabled, a daily systemd user timer renews every
-        project marked for auto-renew whose signing has under 2 days left (the iPhone must be reachable).
-        enable installs that user service and disable removes it, so both are dry runs unless
-        confirm=true: show the user what would change, ask them, then repeat with confirm=true."""
+        """Read or change automatic re-signing: a daily systemd user timer renews auto-renew projects with
+        under 2 days left. enable/disable install/remove it: dry runs until confirm=true after the user
+        agrees."""
         state = get_state(ctx)
         if action == "status":
             data = await helper.call("projects", "autorenew")
@@ -194,15 +191,13 @@ def register(mcp: MCPServer) -> None:
         return ActionResult(done=True, message=f"Automatic renewal {'enabled' if action == 'enable' else 'disabled'}.",
                             data=data)
 
-    @tool(mcp, annotations=ann("Sign out of Apple ID", read_only=False, destructive=True, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Sign out of Apple ID", kind="destructive", idempotent=True, open_world=True)
     async def ios_account_logout(
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         reset_2fa: Annotated[bool, Field(description="Also forget the trusted 2FA session")] = False,
     ) -> ActionResult:
-        """Sign out of the Apple ID used for signing. Afterwards nothing can be signed or renewed until the
-        human signs in again in the app. Apps already on the iPhone keep working until their profiles
-        expire. Call with confirm=false first; repeat with confirm=true only if the user asked for it."""
+        """Sign out of the Apple ID: nothing can be signed or renewed until the human signs in again; installed
+        apps work until their profiles expire. Dry run first; confirm=true only if the user asked."""
         st = await helper.call("account", "status")
         if not st.get("signedIn"):
             return ActionResult(done=False, message="Not signed in; nothing to do.")

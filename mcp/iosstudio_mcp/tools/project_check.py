@@ -1,6 +1,6 @@
 """Project check: ios_project_check lists config mistakes in a project before a build (misspelled xtool.yml
 keys, missing NS*UsageDescription keys, a bad icon, entitlements a free account can't use, bundle id and
-version fields). Read-only and fast; see helper/project_check.py for the checks themselves."""
+version fields). Read-only and fast; see helper/iosstudio/features/project_check.py for the checks themselves."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,13 +9,13 @@ from typing import Annotated, Literal
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out
-from ..state import get_state, resolve_project
-from . import READ, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 CHECKS = ("xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version")
 HELPER_MAX = 500        # issues asked of the helper; max_issues and the check filter apply on this side
@@ -76,28 +76,18 @@ def _more_note(k: int, total: int, check: str | None, by_check: dict[str, int]) 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("Check project config"))
+    @tool(mcp, "Check project config", kind="read")
     async def ios_project_check(
         ctx: Context,
         project_path: ProjectPath,
-        check: Annotated[CheckId | None, Field(description="Only this check: xtool-keys (unknown or misspelled "
-                                                           "xtool.yml keys), usage-descriptions (missing "
-                                                           "NS*UsageDescription for camera, location, photos, …), "
-                                                           "icon (PNG, 1024×1024, no alpha), entitlements (ones a "
-                                                           "free account can't use), bundle-id, version")] = None,
-        max_issues: Annotated[int, Field(ge=1, le=200, description="Max issues to return")] = 50,
+        check: Annotated[CheckId | None, Field(description="Only this check")] = None,
+        max_issues: Annotated[int, Field(ge=1, le=200)] = 50,
         max_bytes: MaxBytes = None,
     ) -> ProjectCheckResult:
-        """Check a project for config mistakes before building: unknown or misspelled xtool.yml keys (with the
-        closest valid key), missing NS*UsageDescription keys for APIs the sources use (the app would crash
-        the first time it uses the camera, location, photos, …), an icon that isn't a 1024×1024 PNG without
-        alpha, entitlements a free Apple ID can't get, and malformed bundle id or version fields. Each issue
-        has severity (warning or note), check, message, file:line when known and a fix hint.
-
-        Fast (under a second), needs no iPhone or Apple ID, and never changes files. Results are warnings
-        only; a build is never blocked by them. The same issues show up automatically as category='config'
-        in ios_build_diagnostics for every build, so call this before a build to fix them early, or after
-        editing xtool.yml or Info.plist."""
+        """Find config mistakes before a build: misspelled xtool.yml keys, missing NS*UsageDescription keys
+        (the app would crash), a bad icon (needs 1024×1024 PNG, no alpha), entitlements a free Apple ID can't
+        get, bad bundle id/version. Each issue has file:line and a fix hint. Under a second, warnings only,
+        never changes files."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         root = str(p.get("path") or "")

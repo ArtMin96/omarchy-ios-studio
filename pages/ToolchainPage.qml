@@ -3,8 +3,8 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Toolchain: what's installed (versions, SDKs), how much disk each piece
 // takes, safe cleanup, and removing everything.
@@ -16,7 +16,7 @@ PageFrame {
   title: "Toolchain"
   subtitle: "Versions, the iOS SDK, disk usage and cleanup."
   actions: [
-    IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; busy: page.svc.status === "loading" || page.svc.diskStatus === "loading"; onClicked: page.svc.refresh() },
+    IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; busy: page.svc.infoResource.busy || page.svc.diskResource.busy; onClicked: page.svc.refresh() },
     ActionButton { text: "Open Setup"; glyph: Model.Glyph.rocket; kind: "ghost"; onClicked: page.app.nav("setup") }
   ]
 
@@ -24,6 +24,7 @@ PageFrame {
   property bool removeAuth: false
 
   function refresh() { page.svc.refresh() }
+  Component.onCompleted: page.svc.diskWanted = true      // disk usage (du over the toolchain) only once this page is open
   // ios-studio toolchain / nav("toolchain", { action: "remove-all" }) from Settings › Uninstall
   function activated(params) {
     if (params && params.action === "remove-all") Qt.callLater(function() { page.scrollToItem(dangerZone) })
@@ -69,15 +70,18 @@ PageFrame {
     })
   }
 
-  // ------------------------------------------------------------ loading / error
-  Skeleton { Layout.fillWidth: true; visible: page.svc.status === "loading" && page.svc.items.length === 0; lines: 6; rowHeight: Style.space(40) }
-  ErrorState { Layout.fillWidth: true; visible: page.svc.status === "error" && page.svc.items.length === 0; app: page.app; error: page.svc.error; onRetry: page.svc.refresh() }
-
   // ------------------------------------------------------------ versions
-  ColumnLayout {
+  StateView {
     Layout.fillWidth: true
-    visible: page.svc.items.length > 0
-    spacing: Style.spacing.md
+    app: page.app
+    resource: page.svc.infoResource
+    isEmpty: function(d) { return !d || !d.items || d.items.length === 0 }
+    skeletonLines: 6
+    skeletonRowHeight: Style.space(40)
+    skeletonGap: Style.spacing.lg
+    emptyGlyph: Model.Glyph.toolbox
+    emptyTitle: "Nothing to show yet"
+    contentSpacing: Style.spacing.md
 
     SectionHeader {
       Layout.fillWidth: true
@@ -105,14 +109,20 @@ PageFrame {
         }
         hasCursor: page.cursor === index
         onHovered: function(h) { if (h) page.cursor = index }
+        // pill and button share one centre line, a normal control gap apart
         trailing: [
-          StatusPill { level: page.levelOf(modelData.status); text: page.statusText(modelData); quiet: modelData.status === "ok" },
-          ActionButton {
-            visible: modelData.status !== "ok"
-            compact: true
-            text: modelData.status === "error" ? "Repair" : "Install"
-            glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download
-            onClicked: page.app.openSetupStep(modelData.step)
+          Row {
+            anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+            spacing: Style.spacing.md
+            StatusPill { anchors.verticalCenter: parent.verticalCenter; level: page.levelOf(modelData.status); text: page.statusText(modelData); quiet: modelData.status === "ok" }
+            ActionButton {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: modelData.status !== "ok"
+              compact: true
+              text: modelData.status === "error" ? "Repair" : "Install"
+              glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download
+              onClicked: page.app.openSetupStep(modelData.step)
+            }
           }
         ]
       }
@@ -123,7 +133,7 @@ PageFrame {
       Layout.fillWidth: true
       Layout.topMargin: Style.spacing.md
       visible: !!page.svc.sdks.caches && page.svc.sdks.caches.length > 0
-      size: "small"; tone: "dim"; wrapMode: Text.WordWrap
+      size: "small"; tone: "dim"; wrapMode: Text.Wrap
       text: {
         var c = page.svc.sdks.caches || []
         var spare = c.filter(function(x) { return x.current && x.complete }).map(function(x) { return "iOS " + x.ios })
@@ -145,8 +155,8 @@ PageFrame {
       detail: page.svc.disk ? Model.formatBytes(page.svc.disk.total) + (page.svc.diskStale ? " · updating…" : "") : ""
     }
 
-    Skeleton { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskStatus === "loading"; lines: 4; rowHeight: Style.space(28) }
-    ErrorState { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskStatus === "error"; banner: true; app: page.app; error: page.svc.diskError; onRetry: page.svc.refreshDisk() }
+    Skeleton { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskResource.status !== "error"; lines: 4; rowHeight: Style.space(28) }
+    ErrorState { Layout.fillWidth: true; visible: !page.svc.disk && page.svc.diskResource.status === "error"; banner: true; app: page.app; error: page.svc.diskResource.error; onRetry: page.svc.refreshDisk() }
 
     // headline + one stacked bar for the whole toolchain
     ColumnLayout {
@@ -275,7 +285,7 @@ PageFrame {
               Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
             }
           }
-          AppText { Layout.fillWidth: true; text: drow.modelData.note; size: "small"; tone: "dim"; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: drow.modelData.note; size: "small"; tone: "dim"; wrapMode: Text.Wrap }
           AppText {
             Layout.fillWidth: true
             visible: drow.hot && drow.modelData.paths.length > 0
@@ -320,7 +330,7 @@ PageFrame {
           AppText {
             Layout.fillWidth: true
             text: "Uninstalls Swift, xtool, the iOS SDK and all caches (about " + (page.svc.disk ? Model.formatBytes(page.svc.disk.total - (page.diskRows.filter(function(i) { return i.id === "project-builds" || i.id === "xip" }).reduce(function(a, i) { return a + i.size }, 0))) : "20 GB") + "). Your projects, your Xcode download and your iPhone pairing stay. You can set everything up again from Setup."
-            tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2
+            tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2
           }
         }
         ActionButton {

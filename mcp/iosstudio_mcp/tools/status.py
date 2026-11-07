@@ -6,9 +6,10 @@ import asyncio
 from mcp.server.mcpserver import Context, MCPServer
 
 from .. import helper
+from ..core.registry import tool
 from ..models import DeviceBrief, HistoryEntry, Problem, StatusReport, iso
 from ..state import get_state, last_device_state
-from . import READ, tool
+
 
 async def _safe(coro):
     try:
@@ -33,7 +34,7 @@ async def device_brief(state) -> DeviceBrief | None:
         return DeviceBrief(udid="00008150-000000000000001C", name="Alex's iPhone", model="iPhone 17 Pro",
                            ios_version="27.2", connection="connected", transport="wifi", developer_mode=True,
                            source="last-known")
-    d = last_device_state()
+    d = await asyncio.to_thread(last_device_state)
     if not d:
         return None
     return DeviceBrief(udid=d["udid"], name=d.get("name"), model=d.get("model"), ios_version=d.get("iosVersion"),
@@ -43,16 +44,11 @@ async def device_brief(state) -> DeviceBrief | None:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("iOS Studio status"))
+    @tool(mcp, "iOS Studio status", kind="read")
     async def ios_status(ctx: Context) -> StatusReport:
-        """START HERE. One-call readiness check for iPhone development on this computer.
-
-        Reports whether the toolchain (Swift, xtool, iOS SDK) is installed, whether an Apple ID is signed in
-        (free or paid team), the active iPhone and its connection, the known projects, the last build,
-        running jobs and apps whose 7-day signing is about to expire. Every problem comes with the tool to
-        call (or the human-only step) that fixes it, in `problems` and `next_steps`.
-        Fast (about 1 s) and read-only.
-        """
+        """START HERE. Readiness check: toolchain, Apple ID, active iPhone, projects, last build, running jobs
+        and apps whose 7-day signing expires soon. Each problem names the tool (or human step) that fixes it.
+        Fast (~1 s), read-only."""
         state = get_state(ctx)
         setup, account, projects, history = await asyncio.gather(
             _safe(helper.call("setup", "check")), _safe(helper.call("account", "status")),

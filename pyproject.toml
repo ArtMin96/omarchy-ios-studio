@@ -1,0 +1,46 @@
+# Development config only: iOS Studio isn't installed as a Python package. The helper (helper/) is stdlib-only;
+# the MCP server has its own pyproject (mcp/pyproject.toml). This file holds the dev tools: `uv sync --group dev`
+# makes .venv with pytest, ruff and the MCP server's dependencies. See docs/development.md#tests.
+[project]
+name = "ios-studio-dev"
+version = "0"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff==0.17.4",          # pinned so a new ruff release can't turn CI red on its own
+    # the MCP server's dependencies, as in mcp/pyproject.toml
+    "mcp>=2.3,<3",
+    "pydantic>=2.7,<3",
+    "pillow>=10",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["helper", "mcp", "tests"]
+testpaths = ["tests"]
+addopts = ["-m", "not network", "-ra"]
+markers = [
+    "slow: runs the helper as a subprocess or a real toolchain (tests/cli, tests/e2e)",
+    "network: needs the internet (deselected by default; run with -m network)",
+    "device: needs a real iPhone (none yet; never run in CI)",
+    "mcp: needs the MCP server's dependencies (tests/mcp)",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["helper", "mcp", "tests"]
+extend-exclude = ["docs/research"]
+
+[tool.ruff.lint]
+# pyflakes (F), pycodestyle's real errors (E4, E7, E9) and import sorting (I); no style rules.
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = [
+    "E731",  # a lambda assigned to a name: used on purpose for small callbacks
+    "E741",  # ambiguous names such as `l`: short loop variables, not bugs
+]

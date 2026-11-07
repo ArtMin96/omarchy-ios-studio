@@ -158,7 +158,7 @@ The MCP server's `ios_camera_test` tool does the same run (see [mcp.md](mcp.md))
 ios_camera_test(project_path="MyApp", inputs=["~/Pictures/tests/cat.jpg", "~/Pictures/tests/street.mov"])
 ```
 
-`bundle_id` is the app's bundle id; pass `project_path` (a project name or path) instead to use its bundle id. The result has a summary of `done.json` (the number of results, the most common values of each text field and min/mean/max of each number field, and the first few results), the path of the full `done.json`, the output files, the key log lines and any new crash with its top frames. A run longer than about 20 seconds comes back with `state: "running"` and a `test_id`; the agent calls `ios_camera_test(test_id=...)` again to wait for it.
+`bundle_id` is the app's bundle id; pass `project_path` (a project name or path) instead to use its bundle id. The result has a summary of `done.json` (the number of results, the most common values of each text field and min/mean/max of each number field, and the first few results), the path of the full `done.json`, the output files, the key log lines and any new crash with its top frames. A run longer than about 20 seconds comes back with `state: "running"` and a `job_id`; the agent calls `ios_camera_test(job_id=...)` again to wait for it.
 
 An agent can use this loop to change the processing code, rebuild with `ios_run`, and rerun the same inputs to compare results.
 

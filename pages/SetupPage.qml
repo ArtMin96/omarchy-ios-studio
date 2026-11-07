@@ -4,8 +4,8 @@ import QtQuick.Dialogs
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Setup: the guided onboarding wizard. Every piece iOS Studio needs, grouped,
 // in install order, with one "Install everything" and per-step Install/Repair.
@@ -218,7 +218,7 @@ PageFrame {
           AppText {
             Layout.fillWidth: true
             size: "display"; strong: true
-            wrapMode: Text.WordWrap
+            wrapMode: Text.Wrap
             text: page.svc.runningAll ? "Setting things up…"
                 : page.ready ? "Ready to build for iPhone"
                 : page.doneCount * 2 < page.counted.length ? "Let's get your computer ready"
@@ -226,7 +226,7 @@ PageFrame {
           }
           AppText {
             Layout.fillWidth: true
-            tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.25
+            tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.25
             text: {
               if (page.svc.runningAll) return "You can keep using your computer. iOS Studio will tell you if it needs anything."
               if (page.ready) return "Swift, xtool and the iOS SDK are installed and you're signed in. Build an app and run it on your iPhone from Projects."
@@ -439,7 +439,7 @@ PageFrame {
               text: page.blockedText(row.s, row.blocked)
               size: "small"
               tone: row.s.state === "unknown" || row.s.state === "optional" ? "faint" : "warn"
-              wrapMode: Text.WordWrap
+              wrapMode: Text.Wrap
             },
             Loader {
               Layout.fillWidth: true
@@ -470,7 +470,7 @@ PageFrame {
     Layout.fillWidth: true
     visible: page.svc.loaded
     text: "iOS Studio installs only into your home folder, except system packages and Swift, which go through your package manager after you enter your password."
-    size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+    size: "small"; tone: "faint"; wrapMode: Text.Wrap
   }
 
   // ------------------------------------------------------------ guides
@@ -519,7 +519,7 @@ PageFrame {
             }
             AppText {
               Layout.fillWidth: true
-              wrapMode: Text.WordWrap
+              wrapMode: Text.Wrap
               strong: true
               text: {
                 var w = watchCol.w
@@ -588,7 +588,7 @@ PageFrame {
         Layout.fillWidth: true
         visible: !!pg.s.detail
         text: pg.s.detail || ""
-        size: "small"; tone: "warn"; wrapMode: Text.WordWrap
+        size: "small"; tone: "warn"; wrapMode: Text.Wrap
       }
       GuideLine { n: 1; glyph: Model.Glyph.usb; title: "Connect"; text: "Plug your iPhone in with a USB cable. On iOS 27 you can also pair over Wi-Fi: iOS Studio shows a 6-digit code and you type it on the phone." }
       GuideLine { n: 2; glyph: Model.Glyph.shieldCheck; title: "Tap Trust"; text: "Unlock the phone. When it asks “Trust This Computer?”, tap Trust and enter your passcode." }
@@ -601,7 +601,7 @@ PageFrame {
     id: devModeGuide
     AppText {
       text: "Developer Mode only appears after a developer app was installed once, or after iOS Studio asks the phone to reveal it. The iPhone page can do that for you."
-      size: "small"; tone: "faint"; wrapMode: Text.WordWrap
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
   }
 
@@ -630,8 +630,8 @@ PageFrame {
     ColumnLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.xxs
-      AppText { Layout.fillWidth: true; text: gl.title; strong: true; wrapMode: Text.WordWrap }
-      AppText { Layout.fillWidth: true; text: gl.text; size: "small"; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
+      AppText { Layout.fillWidth: true; text: gl.title; strong: true; wrapMode: Text.Wrap }
+      AppText { Layout.fillWidth: true; text: gl.text; size: "small"; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2 }
     }
   }
 
@@ -639,7 +639,7 @@ PageFrame {
     id: xipDialog
     title: "Choose the Xcode .xip file"
     nameFilters: ["Xcode archive (*.xip)"]
-    currentFolder: "file://" + page.app.home + "/Downloads"
+    currentFolder: Util.fileUrl(page.app.home + "/Downloads")
     onAccepted: page.svc.useXip(String(selectedFile))
   }
 
@@ -659,7 +659,7 @@ PageFrame {
       AppText {
         Layout.fillWidth: true
         text: promptSheet.p ? promptSheet.p.message : ""
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
         lineHeight: 1.25
       }
       footer: [

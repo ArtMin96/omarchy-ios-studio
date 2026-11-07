@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Setup slice service. Owns `setup check` (step states), the install stream
 // (`setup install --step/--all`), its prompts, and the Xcode .xip watcher.
@@ -26,15 +25,29 @@ Item {
   // "unknown" | "loading" | "ready" | "needs-setup" | "error"
   property string status: "unknown"
   property var summary: ({ title: "Setup", detail: "Checking…", level: "info", badge: "" })
-  property var error: null
+  readonly property var error: check.error
+
+  // `setup check` (~17 commands, ~0.8 s CPU): steps are re-derived from it (and live device info).
+  Resource {
+    id: check
+    fetch: root.app.cli.fetcher(["setup", "check"], "", { timeout: 30000 })
+    onSucceeded: function(data) {
+      root.steps = root._merge(data.steps || [])
+      root._recompute()
+    }
+    onFailed: function(err) {
+      root.status = "error"
+      root.summary = { title: "Setup", detail: Model.errorMessage(err), level: "error", badge: "!" }
+    }
+  }
 
   property var steps: []
-  property var raw: null                // last check data
-  property var xcode: ({})              // {needed, major, swift, expectedSize, downloadUrl, pageUrl, file}
+  readonly property var raw: check.data                  // last check data
+  readonly property var xcode: raw && raw.xcode ? raw.xcode : ({})   // {needed, major, swift, expectedSize, downloadUrl, pageUrl, file}
   property var essentialMissing: []
-  property bool checking: false
-  property double checkedAt: 0
-  readonly property bool loaded: checkedAt > 0
+  readonly property bool checking: check.busy
+  readonly property double checkedAt: check.loadedAt
+  readonly property bool loaded: check.loaded
 
   // installs
   property var runs: ({})
@@ -58,23 +71,9 @@ Item {
   readonly property var groups: ["System", "Toolchain", "Apple", "iPhone"]
 
   function refresh() {
-    if (root.checking) return
-    root.checking = true
+    if (check.busy) return
     if (!root.loaded) root.status = "loading"
-    root.app.cli.call(["setup", "check"], "", function(data) {
-      root.checking = false
-      root.raw = data
-      root.xcode = data.xcode || {}
-      root.steps = root._merge(data.steps || [])
-      root.checkedAt = Date.now()
-      root.error = null
-      root._recompute()
-    }, function(err) {
-      root.checking = false
-      root.error = err
-      root.status = "error"
-      root.summary = { title: "Setup", detail: Model.errorMessage(err), level: "error", badge: "!" }
-    }, { timeout: 30000 })
+    check.load(true)
   }
 
   function step(id) {
@@ -265,7 +264,7 @@ Item {
   function openXcodeDownload(pageOnly) {
     root.app.cli.call(["setup", "xip", "--open"].concat(pageOnly ? ["--page"] : []), "", function(data) {
       root.app.toast("Opened Apple's download page in your browser", "info")
-    }, function(err) { root.app.toast(Model.errorMessage(err), "error") })
+    }, root.app.toastError)
     root.watchXip()
   }
 
@@ -326,7 +325,8 @@ Item {
   readonly property int recheckInterval: 60000
   Timer {
     interval: root.recheckInterval; repeat: true
-    running: !root.installing && root.app.windowFocused
+    // Once everything is ready, only while Setup is on screen: focusing the window still re-checks.
+    running: !root.installing && root.app.windowFocused && (!root.summary.ready || root.app.page === "setup")
     onTriggered: root.refresh()
   }
   Connections {

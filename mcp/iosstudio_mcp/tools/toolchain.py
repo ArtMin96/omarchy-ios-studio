@@ -9,12 +9,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
-from ..models import ActionResult, BuildStatus, DiskItem, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
+from ..core.job_status import follow_job, job_result, start_and_wait, still_running
+from ..core.jobs import Job
+from ..core.params import OptJobId, WaitSeconds
+from ..core.registry import MAX_WAIT, dry_run, tool
+from ..models import ActionResult, DiskItem, JobStatus, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
 from ..state import get_state
-from . import READ, ann, dry_run, start_and_wait, tool
-from .build import WaitSeconds
 
 MB = 1024 * 1024
+INFO_TIMEOUT = 60     # `toolchain info` runs every tool's --version (Swift's alone can take seconds)
+DISK_TIMEOUT = 120    # `toolchain disk` walks the SDK, toolchain and caches
 
 
 def _human(step: dict) -> str | None:
@@ -24,17 +28,29 @@ def _human(step: dict) -> str | None:
     return None
 
 
+async def _info(job: Job, refresh_disk: bool) -> tuple[dict, dict]:
+    """The job behind ios_toolchain_info: versions, then disk usage (cached unless refresh_disk)."""
+    job.report(None, "asking each tool for its version")
+    info = await helper.call("toolchain", "info", timeout=INFO_TIMEOUT) or {}
+    job.report(0.5, "measuring disk usage" if refresh_disk else "reading the last disk measurement")
+    try:
+        disk = await helper.call("toolchain", "disk", {} if refresh_disk else {"cached": True},
+                                 timeout=DISK_TIMEOUT if refresh_disk else 20) or {}
+    except helper.HelperFailure:
+        disk = {}
+    return info, disk
+
+
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("Toolchain check"))
+    @tool(mcp, "Toolchain check", kind="read")
     async def ios_toolchain_check(
         include_done: Annotated[bool, Field(description="Also list steps that are already done")] = False,
     ) -> ToolchainCheck:
-        """Per-step setup status of everything needed to build iPhone apps on Linux: system packages, Swift,
-        xtool, the iOS SDK (built from Xcode's .xip), pymobiledevice3, Apple ID, iPhone pairing and
-        Developer Mode. Each step says whether ios_toolchain_install can do it (can_auto_install) or
-        whether it's a human step in the app."""
-        data = await helper.call("setup", "check", timeout=40)
+        """Setup status per step (system packages, Swift, xtool, iOS SDK from Xcode's .xip, pymobiledevice3,
+        Apple ID, pairing, Developer Mode), each saying whether ios_toolchain_install can do it
+        (can_auto_install) or it's a human step in the app."""
+        data = await helper.call("setup", "check", timeout=MAX_WAIT)
         summ = data.get("summary") or {}
         steps = []
         for s in data.get("steps") or []:
@@ -59,19 +75,23 @@ def register(mcp: MCPServer) -> None:
                               essential_missing=list(summ.get("essentialMissing") or []), auto_installable=auto,
                               steps=steps, next_steps=nxt)
 
-    @tool(mcp, annotations=READ("Toolchain versions and disk"))
+    @tool(mcp, "Toolchain versions and disk", kind="read")
     async def ios_toolchain_info(
-        refresh_disk: Annotated[bool, Field(description="Re-measure disk usage (can take 10-30 s); default uses "
-                                                        "the last measurement")] = False,
+        ctx: Context,
+        refresh_disk: Annotated[bool, Field(description="Re-measure disk usage (10-30 s)")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
     ) -> ToolchainInfo:
-        """Installed versions (xtool, Swift, iOS SDKs, pymobiledevice3, rcodesign, ipsw…) and disk usage per
-        item, with which items ios_toolchain_clean may remove (cleanable + safe)."""
-        info = await helper.call("toolchain", "info", timeout=40)
-        try:
-            disk = await helper.call("toolchain", "disk", {} if refresh_disk else {"cached": True},
-                                     timeout=60 if refresh_disk else 20)
-        except helper.HelperFailure:
-            disk = {}
+        """Installed versions (xtool, Swift, iOS SDKs, pymobiledevice3…) and disk usage per item, with what
+        ios_toolchain_clean may remove. A job: state='running' + job_id, call again with job_id."""
+        state = get_state(ctx)
+        if not job_id:
+            job_id = state.jobs.run(lambda job: _info(job, refresh_disk), "toolchain-info",
+                                    title="Toolchain versions and disk", tool="ios_toolchain_info").id
+        job = await follow_job(state, ctx, job_id, "toolchain-info", wait_seconds)
+        if not job.finished:
+            return ToolchainInfo(state="running", job_id=job.id, next_steps=[still_running(job)])
+        info, disk = job_result(job)
         tools = [ToolInfo(id=i.get("id", ""), name=i.get("name", ""), version=i.get("version"), status=i.get("status"),
                           detail=helper.tilde(i.get("detail"))) for i in info.get("items") or []]
         items = [DiskItem(id=d["id"], name=d.get("name", d["id"]), size_mb=round((d.get("size") or 0) / MB, 1),
@@ -81,52 +101,45 @@ def register(mcp: MCPServer) -> None:
         reclaim = (disk.get("reclaimable") or 0) / MB
         if reclaim > 100:
             nxt.append(f"About {reclaim:.0f} MB can be reclaimed safely with ios_toolchain_clean(item=...).")
-        return ToolchainInfo(tools=tools, sdks=info.get("sdks") or {}, disk=items,
+        return ToolchainInfo(job_id=job.id, tools=tools, sdks=info.get("sdks") or {}, disk=items,
                              disk_total_mb=round((disk.get("total") or 0) / MB, 1) if disk else None,
                              reclaimable_mb=round(reclaim, 1) if disk else None,
                              free_mb=round((disk.get("free") or 0) / MB, 1) if disk else None,
                              disk_cached_at=iso(disk.get("cachedAt")), next_steps=nxt)
 
-    @tool(mcp, annotations=ann("Install toolchain", read_only=False, destructive=False, idempotent=True,
-                              open_world=True))
+    @tool(mcp, "Install toolchain", kind="write", idempotent=True, open_world=True)
     async def ios_toolchain_install(
         ctx: Context,
-        step: Annotated[str | None, Field(description="One step id from ios_toolchain_check, e.g. 'xtool'")] = None,
-        all: Annotated[bool, Field(description="Install every missing step that can be automated")] = False,
+        step: Annotated[str | None, Field(description="Step id from ios_toolchain_check, e.g. 'xtool'")] = None,
+        all: Annotated[bool, Field(description="Every missing step that can be automated")] = False,
         include_optional: Annotated[bool, Field(description="With all: also optional extras")] = False,
         force: Annotated[bool, Field(description="Reinstall even if the step looks done")] = False,
         wait_seconds: WaitSeconds = 5,
-    ) -> BuildStatus:
-        """Install missing toolchain pieces as a background job (build_id 't-N'; poll ios_build_status).
-
-        Big steps (Swift, xtool, the SDK) download up to ~2 GB and take 15-45 min. The job first asks
-        for confirmation (state needs_input): show the user the prompt and answer with
-        ios_build_respond. System packages need root, so a polkit password dialog appears on the user's
-        screen; tell them to expect it. Steps that need the human (Xcode download, sign-in, pairing)
-        are not done here: see ios_toolchain_check.
-        """
+    ) -> JobStatus:
+        """Install missing toolchain pieces as a job ('t-N', poll ios_job_status). Big steps download up to
+        ~2 GB, 15-45 min. It first asks (needs_input): show the user, answer with ios_job_respond. System
+        packages show a polkit password dialog; warn the user. Human steps (Xcode download, sign-in, pairing)
+        aren't done here."""
         if bool(step) == bool(all):
             raise ToolError("Pass either step='<id>' (from ios_toolchain_check) or all=true.")
         state = get_state(ctx)
         busy = [j for j in state.jobs.jobs.values() if j.kind == "toolchain-install" and not j.finished]
         if busy:
-            raise ToolError(f"Toolchain install {busy[0].id} is already running; poll ios_build_status.")
+            raise ToolError(f"Toolchain install {busy[0].id} is already running; poll ios_job_status.")
         flags = {"all": all, "step": step, "include_optional": include_optional and all, "force": force}
         return await start_and_wait(state, ctx, kind="toolchain-install", group="setup", action="install",
                                     flags=flags, title=f"Install {'toolchain' if all else step}", prefix="t",
                                     wait_seconds=wait_seconds)
 
-    @tool(mcp, annotations=ann("Clean toolchain files", read_only=False, destructive=True, idempotent=True))
+    @tool(mcp, "Clean toolchain files", kind="destructive", idempotent=True)
     async def ios_toolchain_clean(
         ctx: Context,
-        item: Annotated[str, Field(description="Disk item id from ios_toolchain_info with cleanable=true, e.g. "
-                                               "'project-builds', 'aur', 'xip', 'build-trees', 'xtool-old'")],
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+        item: Annotated[str, Field(description="Cleanable item id from ios_toolchain_info, e.g. 'xip'")],
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         wait_seconds: WaitSeconds = 20,
     ) -> ActionResult:
         """Delete one cleanable toolchain item (download caches, old xtool builds, project .build folders…)
-        to free disk space. Never touches what's in use. Call with confirm=false first to see exactly what
-        would be deleted; repeat with confirm=true once the user agrees."""
+        to free disk; never what's in use. Dry run first; confirm=true once the user agrees."""
         disk = await helper.call("toolchain", "disk", {"cached": True}, timeout=20)
         items = {d["id"]: d for d in disk.get("items") or []}
         it = items.get(item)
@@ -144,9 +157,9 @@ def register(mcp: MCPServer) -> None:
                                   flags={"item": item}, title=f"Clean {it.get('name')}", prefix="t",
                                   wait_seconds=wait_seconds)
         if st.state == "succeeded":
-            freed = (state.jobs.get(st.build_id).result or {}).get("freed") or 0
+            freed = (state.jobs.get(st.job_id).result or {}).get("freed") or 0
             return ActionResult(done=True, message=f"Deleted {it.get('name')}, freed {freed / MB:.0f} MB.")
         if st.state in ("failed", "cancelled"):
             raise ToolError(f"Cleaning failed: {st.error.message if st.error else st.state}.")
-        return ActionResult(done=True, message=f"Still deleting; poll ios_build_status('{st.build_id}').",
-                            data={"build_id": st.build_id})
+        return ActionResult(done=True, message=f"Still deleting; poll ios_job_status('{st.job_id}').",
+                            data={"job_id": st.job_id})

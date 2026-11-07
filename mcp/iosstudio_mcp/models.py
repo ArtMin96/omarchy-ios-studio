@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .budget import ERROR_CUT, LIST_CAP, Budgeted, clip, clip_data
+from .core.budget import ERROR_CUT, LIST_CAP, Budgeted, clip, clip_data
 from .helper import tilde
 
 
@@ -191,6 +191,7 @@ class ProjectDetail(ProjectBrief):
 class ProjectChange(Out):
     done: bool
     message: str
+    job_id: str | None = Field(None, description="Still creating: call ios_project_create(job_id=...) to wait")
     project: ProjectDetail | None = None
     next_steps: list[str] = Field(default_factory=list)
 
@@ -278,9 +279,14 @@ class BuildResult(Out):
     launch_env: dict[str, str] = Field(default_factory=dict, description="Launch environment (from the preset)")
 
 
-class BuildStatus(Out):
-    build_id: str
-    kind: str = Field(description="build | toolchain-install | renew")
+class JobStatus(Out):
+    """Any background job: a build, toolchain install, renewal, package change, or a feature's job (install,
+    file copy, camera test, app data change, profile, screenshot matrix, screen recording, packet capture,
+    new project)."""
+    job_id: str
+    kind: str = Field(description="build | toolchain-install | renew | packages | debug | install | transfer | "
+                                  "cameratest | app-defaults | app-reset | launch-profile | memory-leaks | matrix | "
+                                  "recording | pcap | project-create")
     action: str
     title: str | None = None
     project: str | None = None
@@ -306,12 +312,16 @@ class BuildStatus(Out):
     error: ErrorInfo | None = None
     log_lines: int = 0
     log_file: str | None = None
+    detail: dict | None = Field(None, description="A feature job's own result summary (`tool` gives the full one)")
+    tool: str | None = Field(None, description="The feature tool that shows this job's full result: call it with "
+                                               "job_id")
     next_steps: list[str] = Field(default_factory=list)
 
 
 class DiagnosticsPage(Budgeted, Out):
-    source: str = Field(description="A live build_id or the build history")
-    build_id: str | None = Field(None, description="The build these come from: a job id, or w-N for watch mode")
+    source: str = Field(description="A live build job, or the build history")
+    job_id: str | None = Field(None, description="The build these come from: its job id (w-N for watch mode); "
+                                                 "ios_build_diagnostics and ios_build_log take it as job_id")
     project: str | None = None
     build_result: str | None = None
     total: int = Field(description="Groups after the severity filter")
@@ -348,14 +358,14 @@ class HistoryEntry(BuildBrief):
     udid: str | None = None
     via: str | None = None
     preset: str | None = Field(None, description="Run preset the run launched with")
-    build_id: str | None = Field(None, description="w-N for a watch-mode build (ios_build_diagnostics(build_id=...))")
+    job_id: str | None = Field(None, description="w-N for a watch-mode build (ios_build_diagnostics(job_id=...))")
     trigger: str | None = Field(None, description="'watch' for a compile on save")
 
     @classmethod
     def from_entry(cls, b: dict) -> "HistoryEntry":
         return cls(**BuildBrief.from_helper(b).model_dump(), project=b.get("project"), path=b.get("path"),
                    udid=b.get("udid"), via=b.get("via"), preset=b.get("preset") or None,
-                   build_id=b.get("buildId") or None, trigger=b.get("trigger") or None)
+                   job_id=b.get("buildId") or None, trigger=b.get("trigger") or None)
 
 
 class BuildHistory(Budgeted, Out):
@@ -444,7 +454,10 @@ class DiskItem(Out):
 
 
 class ToolchainInfo(Out):
-    tools: list[ToolInfo]
+    state: Literal["running", "done"] = Field("done", description="running: still asking the tools; call "
+                                              "ios_toolchain_info(job_id=...) again")
+    job_id: str | None = Field(None, description="The job behind this result: pass back as job_id to wait for it")
+    tools: list[ToolInfo] = Field(default_factory=list)
     sdks: dict[str, Any] = Field(default_factory=dict)
     disk: list[DiskItem] = Field(default_factory=list)
     disk_total_mb: float | None = None
@@ -568,6 +581,7 @@ class DevicePrepare(Out):
     ready: bool = Field(description="True when Developer Mode is on and the developer disk image is mounted")
     developer_mode: bool | None = None
     ddi_mounted: bool | None = None
+    mount_job_id: str | None = Field(None, description="The disk image is still mounting (ios_job_status shows it)")
     actions: list[str] = Field(default_factory=list, description="What this call did")
     human_steps: list[str] = Field(default_factory=list, description="Steps only the user can do on the iPhone")
     next_steps: list[str] = Field(default_factory=list)

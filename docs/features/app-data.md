@@ -22,15 +22,15 @@ time) and Reset (Wipe data or Clean reinstall, each shown as a dry run first). T
 
 | Tool | What it does |
 |---|---|
-| `ios_app_defaults(bundle_id, action='read', key?, max_bytes?)` | The defaults as JSON with each key's type. Keys that don't fit the output budget (about 12 KB) are named in `left_out`, and the whole JSON is written to `full_output_path`. `key=` returns one value in full. |
-| `ios_app_defaults(bundle_id, action='set', key, value, type?, confirm=false, stop_app=false, refresh=true)` | Sets one key. Without `confirm=true` it's a dry run that returns the old and the new value. With it, it's a job of about 20 s (`state: "running"` and a `job_id`, then call again with `job_id`). The result says how the change was applied (`method`), whether the file holds it (`verified`), and with `method: "file"` gives `launch_args`. |
-| `ios_app_defaults(bundle_id, action='delete', key, confirm=false, stop_app=false, refresh=true)` | Deletes one key, the same way. |
-| `ios_app_defaults(bundle_id, action='refresh')` | After several changes made with `refresh=false`: installs the last build over the app once, so it sees them all. |
+| `ios_app_defaults(bundle_id, key?, max_bytes?)` (read-only) | The defaults as JSON with each key's type. Keys that don't fit the output budget (about 12 KB) are named in `left_out`, and the whole JSON is written to `full_output_path`. `key=` returns one value in full. |
+| `ios_app_defaults_set(bundle_id, action='set', key, value, type?, confirm=false, stop_app=false, refresh=true)` | Sets one key. Without `confirm=true` it's a dry run that returns the old and the new value. With it, it's a job of about 20 s (`state: "running"` and a `job_id`, then call again with `job_id`). The result says how the change was applied (`method`), whether the file holds it (`verified`), and with `method: "file"` gives `launch_args`. |
+| `ios_app_defaults_set(bundle_id, action='delete', key, confirm=false, stop_app=false, refresh=true)` | Deletes one key, the same way. |
+| `ios_app_defaults_set(bundle_id, action='refresh')` | After several changes made with `refresh=false`: installs the last build over the app once, so it sees them all. |
 | `ios_app_store(bundle_id)` | Each store with its kind, size, tables, entity names, row counts and columns. |
-| `ios_app_store(bundle_id, table, store?, offset=0, limit=20)` | One page of a table's rows (a table or entity name works), `next_offset` for the next page. |
+| `ios_app_store(bundle_id, table, store?, offset=0, limit=20)` | One page of a table's rows (a table or entity name works), `next_offset` for the next page. Copying a big store from the phone can outlast one call: then it returns `state: "running"` and a `job_id`; call it again with `job_id`. |
 | `ios_app_reset(bundle_id, mode='wipe'\|'reinstall', confirm=false, stop_app=false, project_path?)` | A dry run listing the 20 biggest items, the counts and the bytes. With `confirm=true` it runs as a job: `state: "running"` and a `job_id`, then call it again with `job_id`. |
 
-Typical loop: `ios_app_defaults` → `ios_app_defaults(action='set', …)` (dry run) → ask the user →
+Typical loop: `ios_app_defaults` → `ios_app_defaults_set(action='set', …)` (dry run) → ask the user →
 `confirm=true, stop_app=true` → `ios_app_run_and_capture(bundle_id)` to see the app pick it up.
 
 The daemon commands behind them (`appdata.defaults`, `appdata.defaults.set`, `appdata.defaults.delete`,
@@ -185,7 +185,7 @@ warning and `launchArgs`. The demo has no cfprefsd, so nothing is ever waited fo
 
 ## Tests
 
-- `tests/test_app_data.py` covers:
+- `tests/helper/test_app_data.py` covers:
   - plist ↔ JSON round trips: binary and XML, Data, dates, UIDs, nested values, infinities, a `$type` key
   - shortened values and the reply limit
   - type inference and explicit types with their errors
@@ -198,7 +198,7 @@ warning and `launchArgs`. The demo has no cfprefsd, so nothing is ever waited fo
     there: its late save over the first write, a copy that always wins, and a value put back
     (`reverted`). These runs also cover the refresh install, the 10 s wait after a kill (also after another
     client's kill), and no build or a failed install keeping the file change with `launchArgs`.
-- `tests/test_mcp_app_data.py` runs the three tools against the demo modules: the budget and
+- `tests/mcp/test_mcp_app_data.py` runs the three tools against the demo modules: the budget and
   `full_output_path`, dry runs, `stop_app`, a change as a job (`job_id`), `refresh=false` with `launch_args`
   then `action='refresh'`, paging by entity name, and the reset job.
 
@@ -209,7 +209,7 @@ Checked with CrashLab, a development build installed as `XTL-<TEAM>.dev.iosstudi
 - reading defaults (a binary plist named after the `XTL-` id)
 - the stores (`ZSAMPLE` 300 rows, `ZTAG`, metadata tables marked) and paging their rows
 - both reset dry runs; the reinstall one finds `xtool/CrashLab.ipa`
-- a change seen on the next launch, through the daemon and through `ios_app_defaults` over MCP, with the app
+- a change seen on the next launch, through the daemon and through `ios_app_defaults_set` over MCP, with the app
   running beforehand (`stop_app`)
 - a delete falling back to the app's own default
 - the app's own launch counter surviving a change
