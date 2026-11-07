@@ -72,16 +72,14 @@ PageFrame {
   function copyRow(r) {
     if (!r) return
     var v = "", what = ""
-    if (r.kind === "profile") { v = r.item.displayBundleId || r.item.name; what = "Bundle ID" }
-    else if (r.kind === "certificate") { v = r.item.serial; what = "Serial number" }
-    else if (r.kind === "identifier") { v = r.item.displayBundleId || r.item.bundleId; what = "Bundle ID" }
-    else if (r.kind === "device") { v = r.item.udid; what = "UDID" }
+    if (r.kind === "profile") { v = r.item.displayBundleId || r.item.name; what = "the bundle ID" }
+    else if (r.kind === "certificate") { v = r.item.serial; what = "the serial number" }
+    else if (r.kind === "identifier") { v = r.item.displayBundleId || r.item.bundleId; what = "the bundle ID" }
+    else if (r.kind === "device") { v = r.item.udid; what = "the UDID" }
     copy(v, what)
   }
   function copy(v, what) {
-    if (!v) return
-    Util.execArgv(["wl-copy", "--", String(v)])
-    page.app.toast((what || "Value") + " copied", "ok")
+    if (v) page.app.copyText(v, what)
   }
 
   function handleKey(event) {

@@ -14,12 +14,28 @@ Item {
   id: root
   required property var app
 
-  property string status: "unknown"
-  property var error: null
-  property var auth: null
-  property var details: null
-  property bool detailsLoading: false
-  property var detailsError: null
+  // `account status`: the cheap check (who is signed in).
+  Resource {
+    id: authRes
+    fetch: root.app.cli.fetcher(["account", "status"], "", { timeout: 30000 })
+    onSucceeded: function(data) { root._afterStatus(data) }
+  }
+  // `account details`: what Apple has on file (slow; seeded from the helper's cache first).
+  Resource {
+    id: detailsRes
+    fetch: root.app.cli.fetcher(["account", "details"], "", { timeout: 180000 })
+    onSucceeded: root.now = Date.now()
+    onFailed: function(err) { if (err && err.code === "not-signed-in") root.refresh() }
+  }
+
+  // "unknown" (not checked yet) | "loading" | "ready" | "needs-setup" (xtool missing) | "error" (no answer yet)
+  readonly property string status: authRes.error && authRes.error.code === "missing-tool" ? "needs-setup"
+                                   : authRes.status === "idle" ? "unknown" : authRes.status
+  readonly property var error: authRes.error
+  readonly property var auth: authRes.data
+  readonly property var details: detailsRes.data
+  readonly property bool detailsLoading: detailsRes.busy
+  readonly property var detailsError: detailsRes.error
   property bool signingOut: false
   property real now: Date.now()
 
@@ -70,59 +86,45 @@ Item {
   }
 
   // ------------------------------------------------------------ refresh
-  function refresh() {
-    if (root.status !== "ready") root.status = "loading"
-    app.cli.call(["account", "status"], "", function(data) {
-      var wasSignedIn = root.signedIn
-      root.auth = data
-      root.error = null
-      root.status = "ready"
-      if (data.signedIn && data.mode !== "key") {
-        if (!root.details || !wasSignedIn) loadCached(true)
-        else refreshDetails()
-      } else {
-        root.details = null
-      }
-    }, function(err) {
-      root.error = err
-      root.status = err && err.code === "missing-tool" ? "needs-setup" : "error"
-    }, { timeout: 30000 })
+  function refresh() { authRes.load(true) }
+
+  property bool _wasSignedIn: false
+  function _afterStatus(data) {
+    var wasSignedIn = root._wasSignedIn
+    root._wasSignedIn = !!data.signedIn
+    if (data.signedIn && data.mode !== "key") {
+      if (!root.details || !wasSignedIn) loadCached(true)
+      else refreshDetails()
+    } else {
+      detailsRes.reset()
+    }
   }
 
   // Instant cached read, then a background refresh when it's stale or empty.
   function loadCached(thenRefresh) {
     app.cli.call(["account", "details", "--cached"], "", function(data) {
-      if (!data.empty && data.status && root.auth && data.status.teamId === root.auth.teamId) root.details = data
+      if (!data.empty && data.status && root.auth && data.status.teamId === root.auth.teamId && !detailsRes.loaded) detailsRes.set(data)
       if (thenRefresh && (data.empty || data.stale)) refreshDetails()
     }, function(err) { if (thenRefresh) refreshDetails() })
   }
 
   function refreshDetails() {
-    if (root.detailsLoading || !root.signedIn || root.keyMode) return
-    root.detailsLoading = true
-    app.cli.call(["account", "details"], "", function(data) {
-      root.detailsLoading = false
-      root.details = data
-      root.detailsError = null
-      root.now = Date.now()
-    }, function(err) {
-      root.detailsLoading = false
-      root.detailsError = err
-      if (err && err.code === "not-signed-in") root.refresh()
-    }, { timeout: 180000 })
+    if (!root.signedIn || root.keyMode) return
+    detailsRes.load(true)
   }
 
   function signOut() {
     root.signingOut = true
     app.cli.call(["account", "logout"], "", function() {
       root.signingOut = false
-      root.details = null
-      root.auth = { signedIn: false, mode: null }
+      detailsRes.reset()
+      root._wasSignedIn = false
+      authRes.set({ signedIn: false, mode: null })
       app.toast("Signed out of your Apple ID", "ok")
       root.refresh()
     }, function(err) {
       root.signingOut = false
-      app.toast(Model.errorMessage(err), "error")
+      app.toastError(err)
     })
   }
 
@@ -190,9 +192,8 @@ Item {
       if (root.flow.phase === "idle") return
       if (ok) {
         root._patch({ phase: "done", prompt: null, error: null, result: data.status || null })
-        if (data.status) root.auth = data.status
-        root.details = null
-        root.status = "ready"
+        detailsRes.reset()
+        if (data.status) { root._wasSignedIn = !!data.status.signedIn; authRes.set(data.status) }
         root.signInSucceeded(data.status || {})
         root.refreshDetails()
         Qt.callLater(root.refresh)
@@ -203,7 +204,8 @@ Item {
   }
 
   // ------------------------------------------------------------ timers
-  Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() }
+  // `now` drives expiry countdowns and "updated 5 min ago" texts, which only exist while signed in.
+  Timer { interval: 60000; running: root.signedIn; repeat: true; triggeredOnStart: true; onTriggered: root.now = Date.now() }
   // Re-check Apple every 30 minutes while the app is open (cheap status, cached details).
   Timer { interval: 30 * 60000; running: root.signedIn; repeat: true; onTriggered: root.refreshDetails() }
 

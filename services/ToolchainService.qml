@@ -11,17 +11,46 @@ Item {
   id: root
   required property var app
 
-  // "unknown" | "loading" | "ready" | "needs-setup" | "error"
-  property string status: "unknown"
-  property var summary: ({ title: "Toolchain", detail: "Not checked yet", level: "info", badge: "" })
-  property var error: null
+  // `toolchain info`: versions and SDKs (cheap; the sidebar shows its summary).
+  Resource {
+    id: infoRes
+    fetch: root.app.cli.fetcher(["toolchain", "info"], "", { timeout: 30000 })
+  }
+  // `toolchain disk`: du over ~20 GB, a second or two. Only fetched once the Toolchain page has been
+  // opened (diskWanted); until the real numbers arrive the helper's cached copy shows (diskStale).
+  Resource {
+    id: diskRes
+    fetch: root.app.cli.fetcher(["toolchain", "disk"], "", { timeout: 90000 })
+  }
+  readonly property alias infoResource: infoRes
+  readonly property alias diskResource: diskRes
 
-  property var items: []          // versions
-  property var sdks: ({})
-  property var disk: null         // {items, total, reclaimable, free}
-  property string diskStatus: "unknown"
-  property var diskError: null
-  property bool diskStale: false
+  readonly property var items: infoRes.data && infoRes.data.items ? infoRes.data.items : []   // versions
+  readonly property var sdks: infoRes.data && infoRes.data.sdks ? infoRes.data.sdks : ({})
+  readonly property var _bad: items.filter(function(i) { return !i.optional && i.status !== "ok" })
+
+  // "unknown" | "loading" | "ready" | "needs-setup" | "error" (the last check failed)
+  readonly property string status: infoRes.error ? "error"
+                                   : infoRes.status === "idle" ? "unknown"
+                                   : infoRes.status === "loading" ? "loading"
+                                   : _bad.length ? "needs-setup" : "ready"
+  readonly property var error: infoRes.error
+  readonly property var summary: {
+    if (infoRes.error) return { title: "Toolchain", detail: Model.errorMessage(infoRes.error), level: "error", badge: "" }
+    if (!infoRes.loaded) return { title: "Toolchain", detail: "Not checked yet", level: "info", badge: "" }
+    var bad = root._bad
+    return {
+      title: "Toolchain",
+      detail: bad.length ? bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention" : "All pieces installed",
+      level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length ? "warn" : "ok"),
+      badge: ""
+    }
+  }
+
+  property bool diskWanted: false                               // the Toolchain page sets it when it opens
+  property var _cachedDisk: null
+  readonly property var disk: diskRes.data || _cachedDisk        // {items, total, reclaimable, free}
+  readonly property bool diskStale: !diskRes.data && !!_cachedDisk
 
   // running clean / remove
   property string busyItem: ""    // disk item id, or "remove-all"
@@ -31,43 +60,18 @@ Item {
   readonly property bool busy: job.running
 
   function refresh() {
-    if (root.status !== "ready") root.status = "loading"
-    root.app.cli.call(["toolchain", "info"], "", function(data) {
-      root.items = data.items || []
-      root.sdks = data.sdks || {}
-      root.error = null
-      var bad = root.items.filter(function(i) { return !i.optional && i.status !== "ok" })
-      root.status = bad.length ? "needs-setup" : "ready"
-      root.summary = {
-        title: "Toolchain",
-        detail: bad.length ? bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention" : "All pieces installed",
-        level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length ? "warn" : "ok"),
-        badge: ""
-      }
-    }, function(err) {
-      root.error = err
-      root.status = "error"
-      root.summary = { title: "Toolchain", detail: Model.errorMessage(err), level: "error", badge: "" }
-    }, { timeout: 30000 })
-    root.refreshDisk()
+    infoRes.load(true)
+    if (root.diskWanted) root.refreshDisk()
   }
 
   function refreshDisk() {
-    if (root.diskStatus !== "ready") root.diskStatus = "loading"
-    // Instant stale read first, then the real numbers (du over ~20 GB takes a second or two).
+    // Instant stale read first, then the real numbers.
     if (!root.disk) root.app.cli.call(["toolchain", "disk", "--cached"], "", function(data) {
-      if (data && data.items && root.diskStatus !== "ready") { root.disk = data; root.diskStale = true }
+      if (data && data.items && !diskRes.data) root._cachedDisk = data
     }, function() {})
-    root.app.cli.call(["toolchain", "disk"], "", function(data) {
-      root.disk = data
-      root.diskStale = false
-      root.diskStatus = "ready"
-      root.diskError = null
-    }, function(err) {
-      root.diskError = err
-      root.diskStatus = root.disk ? "ready" : "error"
-    }, { timeout: 90000 })
+    diskRes.load(true)
   }
+  onDiskWantedChanged: if (diskWanted && !diskRes.loaded && !diskRes.busy) root.refreshDisk()
 
   function clean(id) {
     if (job.running) return
@@ -116,7 +120,7 @@ Item {
       if (what === "remove-all") root.app.toast("The iOS toolchain was removed", "ok")
       else root.app.toast("Freed " + Model.formatBytes(data.freed || 0), "ok")
     } else if (error && error.code !== "cancelled") {
-      root.app.toast(Model.errorMessage(error), "error")
+      root.app.toastError(error)
     }
     root.refresh()
     if (root.app.setup) root.app.setup.refresh()

@@ -20,13 +20,14 @@ Card {
   glyph: Model.Glyph.robot
   contentSpacing: Style.spacing.md
   actions: [
-    IconButton { glyph: Model.Glyph.help; tooltip: "How it works"; onClicked: Util.execArgv(["xdg-open", root.app.repoPath + "/docs/mcp.md"]) },
+    IconButton { glyph: Model.Glyph.help; tooltip: "How it works"; onClicked: root.app.openPath(root.app.repoPath + "/docs/mcp.md") },
     IconButton { glyph: Model.Glyph.refresh; tooltip: "Check again"; busy: root.loading; onClicked: root.refresh() }
   ]
 
-  property var info: null              // helper `agents list`
-  property var error: null
-  property bool loading: false
+  Resource { id: listRes; fetch: root.app.cli.fetcher(["agents", "list"]) }   // helper `agents list`
+  readonly property var info: listRes.data
+  readonly property var error: listRes.error
+  readonly property bool loading: listRes.busy
   property var busy: ({})              // client id -> "connect" | "disconnect" | "test"
   property bool preparing: false
   property string prepareDetail: ""
@@ -44,12 +45,7 @@ Card {
     cursor: Model.Glyph.cursorArrow, gemini: Model.Glyph.starFour, crush: Model.Glyph.heart, zed: Model.Glyph.lightning
   })
 
-  function refresh() {
-    root.loading = true
-    root.app.cli.call(["agents", "list"], "",
-      function(d) { root.info = d; root.error = null; root.loading = false },
-      function(e) { root.error = e; root.loading = false })
-  }
+  function refresh() { listRes.load(true) }
   Component.onCompleted: refresh()
 
   function _busy(id, what) {
@@ -69,7 +65,7 @@ Card {
         refresh()
         if (root.server && !root.server.ready && !root.preparing) prepare(false)
       },
-      function(e) { _busy(c.id, ""); root.app.toast(Model.errorMessage(e), "error"); refresh() })
+      function(e) { _busy(c.id, ""); root.app.toastError(e); refresh() })
   }
 
   function askDisconnect(c) {
@@ -85,7 +81,7 @@ Card {
         _busy(c.id, "disconnect")
         root.app.cli.call(["agents", "disconnect", "--client", c.id], "",
           function(d) { _busy(c.id, ""); root.app.toast(c.name + " is disconnected", "ok"); refresh() },
-          function(e) { _busy(c.id, ""); root.app.toast(Model.errorMessage(e), "error"); refresh() })
+          function(e) { _busy(c.id, ""); root.app.toastError(e); refresh() })
       }
     })
   }
@@ -97,15 +93,14 @@ Card {
         _busy(c.id, "")
         root.app.toast(c.name + " can use " + d.tools + " iOS Studio tools" + (d.demo ? " (demo data)" : ""), "ok")
       },
-      function(e) { _busy(c.id, ""); root.app.toast(Model.errorMessage(e), "error") },
+      function(e) { _busy(c.id, ""); root.app.toastError(e) },
       { timeout: 200000 })
   }
 
   function copySnippet(c) {
     if (!c.snippet) return
-    Util.execArgv(["wl-copy", "--", c.snippet.text])
-    root.app.toast(c.snippet.where ? "Copied. Paste it into " + c.snippet.where
-                                   : "Copied. Run it in a terminal to connect " + c.name)
+    root.app.copyText(c.snippet.text, c.snippet.where ? "the config. Paste it into " + c.snippet.where
+                                                      : "the command. Run it in a terminal to connect " + c.name)
   }
 
   function prepare(repair) {

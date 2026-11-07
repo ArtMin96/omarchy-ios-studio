@@ -639,7 +639,7 @@ PageFrame {
     id: xipDialog
     title: "Choose the Xcode .xip file"
     nameFilters: ["Xcode archive (*.xip)"]
-    currentFolder: "file://" + page.app.home + "/Downloads"
+    currentFolder: Util.fileUrl(page.app.home + "/Downloads")
     onAccepted: page.svc.useXip(String(selectedFile))
   }
 

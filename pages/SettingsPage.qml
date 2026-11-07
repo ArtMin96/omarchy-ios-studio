@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../components/common"
+import "../core"
 import "../components/settings"
 import "../lib/Model.js" as Model
 
@@ -18,17 +19,18 @@ PageFrame {
   title: "Settings"
   subtitle: "Preferences are saved as you change them."
 
-  property var integration: null       // helper `app status`
-  property var about: null             // helper `app about`
+  Resource { id: integrationRes; fetch: page.app.cli.fetcher(["app", "status"]) }   // helper `app status`
+  Resource { id: aboutRes; fetch: page.app.cli.fetcher(["app", "about"]) }          // helper `app about`
+  readonly property var integration: integrationRes.data
+  readonly property var integrationError: integrationRes.error
+  readonly property var about: aboutRes.data
   property bool keyBusy: false
   property bool windowBusy: false
   property bool opaqueBusy: false
-  property var integrationError: null
 
   function refresh() {
-    page.app.cli.call(["app", "status"], "", function(d) { page.integration = d; page.integrationError = null },
-                      function(e) { page.integrationError = e })
-    page.app.cli.call(["app", "about"], "", function(d) { page.about = d }, function(e) {})
+    integrationRes.load(true)
+    aboutRes.load(true)
   }
   function activated(params) {
     if (!page.integration) refresh()
@@ -87,20 +89,20 @@ PageFrame {
     page.keyBusy = true
     page.app.cli.call(["app", "keybinding", "--enabled", on ? "true" : "false"], "",
       function(d) { page.keyBusy = false; page.app.toast(on ? "Super + Shift + I now opens iOS Studio" : "Shortcut removed", "ok"); page.refresh() },
-      function(e) { page.keyBusy = false; page.app.toast(Model.errorMessage(e), "error"); page.refresh() })
+      function(e) { page.keyBusy = false; page.app.toastError(e); page.refresh() })
   }
   function setWindowMode(mode) {
     page.windowBusy = true
     page.app.cli.call(["app", "window-rule", "--mode", mode], "",
       function(d) { page.windowBusy = false; page.app.toast(mode === "float" ? "iOS Studio will open as a floating window" : "iOS Studio will tile like other apps", "ok"); page.refresh() },
-      function(e) { page.windowBusy = false; page.app.toast(Model.errorMessage(e), "error"); page.refresh() })
+      function(e) { page.windowBusy = false; page.app.toastError(e); page.refresh() })
   }
 
   function setOpaque(on) {
     page.opaqueBusy = true
     page.app.cli.call(["app", "opacity", "--opaque", on ? "on" : "off"], "",
       function(d) { page.opaqueBusy = false; page.app.setSetting("opaqueWindow", on); page.app.toast(on ? "The window is now solid" : "The window now follows Omarchy's see-through look", "ok"); page.refresh() },
-      function(e) { page.opaqueBusy = false; page.app.toast(Model.errorMessage(e), "error"); page.refresh() })
+      function(e) { page.opaqueBusy = false; page.app.toastError(e); page.refresh() })
   }
 
   // Uninstall: install.sh --uninstall removes the launcher entry, icon, hooks and Hyprland rules,
@@ -156,9 +158,9 @@ PageFrame {
         subtitle: String(modelData).indexOf(page.app.home + "/") === 0 ? "In your home folder" : String(modelData)
         hasCursor: rowHover.hovered
         HoverHandler { id: rowHover }
-        onClicked: Util.execArgv(["xdg-open", String(modelData)])
+        onClicked: page.app.openPath(modelData)
         trailing: [
-          IconButton { glyph: Model.Glyph.openExternal; tooltip: "Open folder"; onClicked: Util.execArgv(["xdg-open", String(modelData)]) },
+          IconButton { glyph: Model.Glyph.openExternal; tooltip: "Open folder"; onClicked: page.app.openPath(modelData) },
           IconButton { glyph: Model.Glyph.trash; tooltip: "Remove from list"; danger: true; onClicked: page.removeRoot(String(modelData)) }
         ]
       }
@@ -306,7 +308,7 @@ PageFrame {
       Layout.fillWidth: true
       spacing: Style.spacing.md
       ActionButton { text: "Run setup again"; glyph: Model.Glyph.rocket; onClicked: page.app.nav("setup") }
-      ActionButton { text: "Open settings folder"; glyph: Model.Glyph.folderOpen; kind: "ghost"; onClicked: Util.execArgv(["xdg-open", page.app.configDir]) }
+      ActionButton { text: "Open settings folder"; glyph: Model.Glyph.folderOpen; kind: "ghost"; onClicked: page.app.openPath(page.app.configDir) }
       ActionButton { text: "Keyboard shortcuts"; glyph: Model.Glyph.keyboard; kind: "ghost"; onClicked: page.app.shortcutsOpen = true }
     }
   }
