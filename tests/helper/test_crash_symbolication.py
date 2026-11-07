@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio.device import device_crash
+from iosstudio.device.features.crashes import core as device_crash
 from iosstudio.features import crash_symbols as S
 from support.crash import APP, DWARF, FIX, OFF_FIRST, UUID, ips
 
@@ -218,7 +218,7 @@ class Demo(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": tmp}):
             try:
                 import importlib
-                mod = importlib.import_module("iosstudio.device.demo_features.crashes")
+                mod = importlib.import_module("iosstudio.device.features.crashes.demo")
             except Exception as exc:  # noqa: BLE001
                 self.skipTest(f"demo daemon modules not importable here ({exc})")
             with mock.patch.object(mod, "DIR", Path(tmp)):
@@ -237,7 +237,7 @@ class DaemonPull(TempCache):
         import asyncio
         import importlib
         try:
-            mod = importlib.import_module("iosstudio.device.features.crashes")
+            mod = importlib.import_module("iosstudio.device.features.crashes.real")
         except Exception as exc:  # noqa: BLE001
             self.skipTest(f"daemon modules not importable here ({exc})")
         commands = {}

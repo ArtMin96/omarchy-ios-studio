@@ -297,9 +297,9 @@ class DemoCommands(unittest.TestCase):
     """The demo feature module, called directly through a registry (no daemon process)."""
 
     def setUp(self):
-        from iosstudio.device import deviced_demo_core as core
-        from iosstudio.device.demo_features import ui as demo_ui
-        from iosstudio.device.deviced_kit import FeatureRegistry
+        from iosstudio.device.demo import core
+        from iosstudio.device.features.ui import demo as demo_ui
+        from iosstudio.device.kit import FeatureRegistry
         self.core, self.mod = core, demo_ui
         self.saved_running = set(core.running)
         self.saved_state = {k: (set(v) if isinstance(v, set) else list(v) if isinstance(v, list) else v)

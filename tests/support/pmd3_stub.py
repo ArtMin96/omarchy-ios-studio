@@ -1,8 +1,8 @@
 """Stub pymobiledevice3 for importing the real device feature modules where pymobiledevice3 isn't installed.
 
     with stub_pmd3():
-        from iosstudio.device import deviced_kit as kit
-        kit.load_features(registry, "features")
+        from iosstudio.device import kit
+        kit.load_features(registry, "real")
 
 Every `pymobiledevice3.*` module exists and every name in it is a fresh class (an Exception subclass, so
 `except X` clauses work). With the real pymobiledevice3 installed (the daemon's venv) nothing is stubbed.

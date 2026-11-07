@@ -598,7 +598,7 @@ class RuntimeDirTests(unittest.TestCase):
     """XDG_RUNTIME_DIR unset (the MCP SDK's stdio_client drops it): /run/user/<uid> when it's ours, else /tmp."""
 
     def setUp(self):
-        from iosstudio.device import device_client
+        from iosstudio.device import client as device_client
         self.dc = device_client
         self.env = {k: v for k, v in os.environ.items() if k not in ("XDG_RUNTIME_DIR", "IOSSTUDIO_RUNTIME_DIR")}
 

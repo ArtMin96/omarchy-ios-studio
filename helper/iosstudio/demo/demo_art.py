@@ -11,9 +11,7 @@ from pathlib import Path
 
 
 def demo_dir() -> Path:
-    from iosstudio.device import (
-        device_client,  # same fallback as the daemon (/run/user/<uid> when XDG_RUNTIME_DIR is unset)
-    )
+    from iosstudio.device import client as device_client  # same fallback as the daemon (/run/user/<uid> without XDG)
     base = device_client.xdg_runtime_dir() or "/tmp"
     d = Path(base) / "ios-studio-demo"
     d.mkdir(parents=True, exist_ok=True)

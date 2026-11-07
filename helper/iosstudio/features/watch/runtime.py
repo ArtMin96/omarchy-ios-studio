@@ -25,7 +25,7 @@ CANCEL_GRACE = 5.0       # a cancelled build gets this long to clean up before i
 def runtime_dir() -> Path:
     """device_client.runtime_dir(): ios-studio (ios-studio-demo in demo mode) under the runtime base shared with
     the device daemon ($IOSSTUDIO_RUNTIME_DIR, $XDG_RUNTIME_DIR, /run/user/<uid>, /tmp/...). Created on use."""
-    from iosstudio.device import device_client
+    from iosstudio.device import client as device_client
     d = device_client.runtime_dir()
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d

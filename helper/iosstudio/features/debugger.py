@@ -362,7 +362,7 @@ async def _stdin_reader() -> asyncio.StreamReader | None:
 
 
 async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds: list) -> int:
-    from iosstudio.device.device_client import DeviceClient, DeviceError
+    from iosstudio.device.client import DeviceClient, DeviceError
 
     output.step("project", "Finding the app's build on this computer", "running")
     path, info = await asyncio.to_thread(find_project, bid)

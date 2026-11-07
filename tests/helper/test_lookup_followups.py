@@ -1,5 +1,5 @@
 """syslog's bundle id filter goes through the cached AppIndex (never a full `get_apps`), and apps.py
-reads process paths with _app_lookup.exe_path.
+reads process paths with apps/lookup.exe_path.
 
     python -m pytest tests/helper/test_lookup_followups.py
 """
@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio.device.features import app_index as AI
-from iosstudio.device.features import apps as A
-from iosstudio.device.features import syslog as S
+from iosstudio.device.features.apps import index as AI
+from iosstudio.device.features.apps import real as A
+from iosstudio.device.features.syslog import real as S
 
 UDID = "00008150-SYSLOG"
 APP_DIR = "/private/var/containers/Bundle/Application/AAAA/Habits.app"
