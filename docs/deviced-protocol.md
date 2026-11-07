@@ -81,8 +81,12 @@ its own filters, whatever its subscription.
 the same batching and limits per client (100 ms, ≤200 entries per batch, 1000-entry buffer,
 `dropped` counted per client). The phone-side filter is a single `pid` when every subscriber
 filters on exactly that one pid; otherwise the phone sends everything and entries below every
-subscriber's `minLevel` are skipped before they're built. The phone stream starts with the first
-subscriber and stops when the last one stops or disconnects.
+subscriber's `minLevel` are skipped before they're decoded. The event loop only reads the raw
+records off the tunnel and hands them on in batches (256 records or 50 ms); decoding and every
+client's filter run on one worker thread, so a chatty log never delays other requests. When that
+worker falls behind (64 batches queued), whole batches are dropped and counted in each client's
+`dropped`. The phone stream starts with the first subscriber and stops when the last one stops or
+disconnects.
 
 **Held resources.** Features that keep something running on the phone for a client hold it as a
 reference-counted resource: the mirror (`mirror`), a recording (`record`), the network condition
@@ -262,7 +266,7 @@ plugging in a cable switches transport on the next reconnect.
 | `devices.list` | – | `[Device…]` |
 | `device.select` | `{udid}` | `Device`; makes it active, (re)opens its tunnel |
 | `device.reconnect` | `{udid?}` | `{}`; drops the tunnel and reconnects now (resets backoff) |
-| `device.info` | `{udid?, fresh?: bool}` | DeviceInfo (below). `fresh` re-reads battery/storage/DDI |
+| `device.info` | `{udid?, fresh?: bool}` | DeviceInfo (below), at once from the cached info (refreshed on connect and every 60 s). `fresh` re-reads battery/storage/DDI, joining a refresh in flight or one started in the last 10 s instead of opening the four services again |
 
 DeviceInfo:
 
@@ -378,7 +382,8 @@ the last 2 s and `dropped` counts frames held back by backpressure. `mirror.stat
 `{stream: {available, reason, message}, screenshot: {available, reason}, jpeg, ffmpeg}`.
 
 **Frames and backpressure.** Frames rotate through four files,
-`~/.cache/ios-studio/screens/mirror-<udid>-{0..3}.jpg` (`.png` without Pillow), so the client must
+`$XDG_RUNTIME_DIR/ios-studio/screens/mirror-<udid>-{0..3}.jpg` (`.png` without Pillow; tmpfs, so up
+to 30 frames a second never touch the disk; take the path from each `frame` event), so the client must
 bust its image cache, e.g. `source = "file://" + path + "?" + seq`. A client that sends
 `mirror.ack {seq}` after showing each frame is never more than three frames behind: the daemon
 holds new frames back while three are unacknowledged, and sends one anyway after a second without

@@ -36,6 +36,7 @@ import errno
 import fcntl
 import json
 import os
+import queue
 import socket
 import stat
 import subprocess
@@ -58,7 +59,9 @@ LOG_CHECK_S = 30.0
 
 SYSLOG_FLUSH_S = 0.1
 SYSLOG_BATCH = 200
-SYSLOG_BUFFER = 1000
+SYSLOG_BUFFER = 1000                    # entries waiting per client; older ones are dropped (counted)
+SYSLOG_YIELD_EVERY = 16                 # records the worker filters between handing the GIL to the loop
+SYSLOG_QUEUE = 64                       # raw batches waiting for the worker; a full queue drops the batch
 LEVELS = {"debug": 0, "info": 1, "default": 2, "error": 3, "fault": 4}
 
 # Events every client gets by default; `subscribe` narrows it. Per-client events are sent directly.
@@ -123,38 +126,136 @@ def norm_filters(f) -> dict:
 
 
 class SyslogSub:
+    """One client's syslog subscription. match() runs on the syslog worker thread: it reads only
+    `_m`, a tuple rebuilt (and swapped in one assignment) whenever the filters or the resolved
+    bundle id change on the loop."""
+
     def __init__(self, client: "Client", filters: dict):
         self.client = client
-        self.filters = filters
-        self.min = LEVELS.get(filters.get("minLevel", "debug"), 0)
         self.exe: str | None = None
         self.bid: str | None = None
-        self.buf: deque = deque()
+        self.buf: deque = deque(maxlen=SYSLOG_BUFFER)
         self.dropped = 0
         self.last_drop_emit = 0.0
+        self.filters = filters
+
+    @property
+    def filters(self) -> dict:
+        return self._filters
+
+    @filters.setter
+    def filters(self, f: dict) -> None:
+        self._filters = f
+        self.compile()
+
+    @property
+    def min(self) -> int:
+        return self._m[0]
+
+    def compile(self) -> None:
+        """Precompute what match() needs (sets, lowercased text) once instead of per entry."""
+        f = self._filters
+        self._m = (LEVELS.get(f.get("minLevel", "debug"), 0),
+                   frozenset(f["pids"]) if "pids" in f else None,
+                   frozenset(f["processes"]) if "processes" in f else None,
+                   (self.exe, self.bid or f["bundleId"]) if "bundleId" in f else None,
+                   f.get("subsystem"),
+                   f["text"].lower() if "text" in f else None)
+
+    def set_resolved(self, exe: str | None, bid: str | None) -> None:
+        self.exe, self.bid = exe, bid
+        self.compile()
 
     def match(self, e: dict) -> bool:
-        f = self.filters
-        if LEVELS.get(e["level"], 2) < self.min:
+        lvl, pids, procs, bundle, subsys, text = self._m
+        if LEVELS.get(e["level"], 2) < lvl:
             return False
-        if "pids" in f and e["pid"] not in f["pids"]:
+        if pids is not None and e["pid"] not in pids:
             return False
         proc = e["process"]
-        if "processes" in f and proc not in f["processes"]:
+        if procs is not None and proc not in procs:
             return False
         msg = e["message"]
-        if "bundleId" in f:
-            exe, bid = self.exe, self.bid or f["bundleId"]
+        if bundle is not None:
+            exe, bid = bundle
             if not ((exe and proc == exe) or (exe and exe in msg) or bid in msg):
                 return False
         sub = e["subsystem"]
-        if "subsystem" in f and not sub.startswith(f["subsystem"]):
+        if subsys is not None and not sub.startswith(subsys):
             return False
-        if "text" in f:
-            t = f["text"].lower()
-            if t not in msg.lower() and t not in proc.lower() and t not in sub.lower():
-                return False
+        if text is not None and text not in msg.lower() and text not in proc.lower() and text not in sub.lower():
+            return False
         return True
+
+
+def route(batch, subs, parse=None, min_level: int = 0, pause=None) -> list[tuple["SyslogSub", list[dict]]]:
+    """Pure: parse each raw record (parse(raw, min_level) -> entry | None; None = already entries)
+    and sort the entries into the subscriptions that match them. Runs on the syslog worker, which
+    passes pause=time.sleep(0) every SYSLOG_YIELD_EVERY records: hands the GIL to the event loop
+    so it never waits a whole switch interval (5 ms) per wakeup while a big batch is filtered."""
+    out: dict[SyslogSub, list[dict]] = {sub: [] for sub in subs}
+    for i, raw in enumerate(batch):
+        if pause is not None and i and i % SYSLOG_YIELD_EVERY == 0:
+            pause()
+        e = parse(raw, min_level) if parse is not None else raw
+        if e is None:
+            continue
+        for sub, lst in out.items():
+            if sub.match(e):
+                lst.append(e)
+    return [(sub, lst) for sub, lst in out.items() if lst]
+
+
+def _yield_gil() -> None:
+    time.sleep(0)
+
+
+class SyslogWorker:
+    """A thread that parses and filters syslog batches off the event loop (it also hosts the tunnel,
+    so a busy log must never delay other requests) and hands the per-client results back to the loop.
+    The queue is bounded: when the worker falls behind, whole batches are dropped and counted."""
+
+    def __init__(self, hub: "SyslogHub", loop: asyncio.AbstractEventLoop):
+        self.hub = hub
+        self.loop = loop
+        self.q: queue.Queue = queue.Queue(maxsize=SYSLOG_QUEUE)
+        self.lost = 0
+        self.thread = threading.Thread(target=self._run, name="syslog-worker", daemon=True)
+        self.thread.start()
+
+    def submit(self, batch: list, parse=None) -> bool:
+        try:
+            self.q.put_nowait((batch, parse))
+            return True
+        except queue.Full:
+            self.lost += len(batch)
+            return False
+
+    def _run(self) -> None:
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            batch, parse = item
+            try:
+                results = route(batch, self.hub.snapshot, parse, self.hub.min_level(), _yield_gil)
+            except Exception as exc:  # noqa: BLE001 - one bad batch mustn't end the log
+                log(f"syslog: worker failed on a batch: {exc!r}")
+                continue
+            if results:
+                try:
+                    self.loop.call_soon_threadsafe(self.hub.deliver, results)
+                except RuntimeError:   # the loop is closed: the daemon is going away
+                    return
+
+    def close(self, timeout: float = 2.0) -> None:
+        """Drop what's queued, stop the thread and wait for it (blocking: call via to_thread)."""
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self.q.get_nowait()
+        with contextlib.suppress(queue.Full):
+            self.q.put_nowait(None)
+        self.thread.join(timeout)
 
 
 class SyslogHub:
@@ -175,6 +276,8 @@ class SyslogHub:
         self.reconnecting = False
         self.error = None
         self._min = 0
+        self.snapshot: tuple[SyslogSub, ...] = ()      # what the worker routes to (replaced, never mutated)
+        self.worker: SyslogWorker | None = None
         self.flusher: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
@@ -194,6 +297,7 @@ class SyslogHub:
         return self._min
 
     def _recompute(self) -> int:
+        self.snapshot = tuple(self.subs.values())
         self._min = min((s.min for s in self.subs.values()), default=0)
         pids = [tuple(s.filters.get("pids") or ()) for s in self.subs.values()]
         if pids and all(len(p) == 1 for p in pids) and len(set(pids)) == 1:
@@ -202,13 +306,13 @@ class SyslogHub:
 
     async def _resolve(self, sub: SyslogSub):
         bid = sub.filters.get("bundleId")
-        sub.exe, sub.bid = (None, None)
+        sub.set_resolved(None, None)
         if bid:
             try:
-                sub.exe, sub.bid = await asyncio.wait_for(self.b.backend.syslog_resolve(bid), 15)
+                sub.set_resolved(*await asyncio.wait_for(self.b.backend.syslog_resolve(bid), 15))
             except Exception as exc:  # noqa: BLE001
                 log(f"syslog: can't resolve {bid}: {exc!r}")
-                sub.exe, sub.bid = None, bid
+                sub.set_resolved(None, bid)
 
     async def resolve_missing(self):
         """After (re)connecting: resolve bundleId filters that couldn't be resolved without a tunnel."""
@@ -227,6 +331,7 @@ class SyslogHub:
                 self.open = False
                 await self.b.backend.syslog_close()
                 log("syslog: phone stream stopped (no subscribers)")
+            await self._stop_worker()
             return
         if self.open and want_pid == self.phone_pid:
             return
@@ -238,7 +343,7 @@ class SyslogHub:
             f"{len(self.subs)} subscriber(s))")
         self.b.backend.syslog_open(want_pid)
         if self.flusher is None or self.flusher.done():
-            self.flusher = asyncio.create_task(self._flush_loop())
+            self.flusher = self.b.spawn(self._flush_loop(), name="syslog-flush")
 
     # -- commands
     async def start(self, client: "Client", args: dict) -> dict:
@@ -261,7 +366,7 @@ class SyslogHub:
         if sub is None:
             self.pending_filters[client] = f
             return {"filters": f}
-        sub.filters, sub.min = f, LEVELS.get(f.get("minLevel", "debug"), 0)
+        sub.filters = f
         await self._resolve(sub)
         await self._sync_stream()
         self._send_state(sub)
@@ -288,16 +393,52 @@ class SyslogHub:
 
     # -- from the backend
     def feed(self, entry: dict):
+        """One entry, filtered right here on the loop (the demo's few lines a second)."""
         for sub in self.subs.values():
             if sub.match(entry):
-                if len(sub.buf) >= SYSLOG_BUFFER:
-                    sub.buf.popleft()
-                    sub.dropped += 1
-                    now = time.monotonic()
-                    if now - sub.last_drop_emit > 1:
-                        sub.last_drop_emit = now
-                        self._send_state(sub)
-                sub.buf.append(entry)
+                self._append(sub, [entry])
+
+    def feed_batch(self, batch: list, parse=None) -> bool:
+        """Raw records (or entries, parse=None) to parse and filter on the worker thread; the matches
+        come back through deliver(). False when the worker is behind and the batch was dropped."""
+        if not self.subs:
+            return True
+        if self.worker is None:
+            self.worker = SyslogWorker(self, asyncio.get_running_loop())
+        if self.worker.submit(batch, parse):
+            return True
+        for sub in self.subs.values():      # every subscriber may have lost lines: say so
+            sub.dropped += len(batch)
+            self._drop_notice(sub)
+        return False
+
+    def deliver(self, results: list[tuple[SyslogSub, list[dict]]]) -> None:
+        """On the loop: the worker's matches into each (still subscribed) client's buffer."""
+        for sub, entries in results:
+            if self.subs.get(sub.client) is sub:
+                self._append(sub, entries)
+
+    def _append(self, sub: SyslogSub, entries: list[dict]) -> None:
+        over = len(sub.buf) + len(entries) - SYSLOG_BUFFER
+        sub.buf.extend(entries)              # bounded deque: the oldest fall out
+        if over > 0:
+            sub.dropped += over
+            self._drop_notice(sub)
+
+    def _drop_notice(self, sub: SyslogSub) -> None:
+        now = time.monotonic()
+        if now - sub.last_drop_emit > 1:
+            sub.last_drop_emit = now
+            self._send_state(sub)
+
+    async def _stop_worker(self) -> None:
+        w, self.worker = self.worker, None
+        if w is not None:
+            await asyncio.to_thread(w.close)
+
+    async def close(self) -> None:
+        """Broker shutdown: end the worker thread."""
+        await self._stop_worker()
 
     def stream_state(self, reconnecting: bool, error: dict | None = None):
         self.reconnecting, self.error = reconnecting, error
@@ -333,7 +474,8 @@ class SyslogHub:
     def client_gone(self, client: "Client"):
         self.pending_filters.pop(client, None)
         if self.subs.pop(client, None) is not None:
-            asyncio.create_task(self._sync_stream())
+            self._recompute()
+            self.b.spawn(self._sync_stream(), name="syslog-sync")
 
 
 # ====================================================================== clients
@@ -404,6 +546,14 @@ class Broker:
         self._server: asyncio.AbstractServer | None = None
         self._lock_fd: int | None = None
         self._log_redirected = False
+        self._bg: set[asyncio.Task] = set()   # fire-and-forget work, cancelled at shutdown
+
+    def spawn(self, coro, name: str | None = None) -> asyncio.Task:
+        """A background task the broker keeps a reference to until it ends (or shutdown cancels it)."""
+        t = asyncio.get_running_loop().create_task(coro, name=name)
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+        return t
 
     # -- single instance
     def acquire(self, wait: float = 10.0) -> bool:
@@ -529,6 +679,13 @@ class Broker:
             if self.backend is not None:
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(self.backend.shutdown(), 8)
+            bg = [t for t in self._bg if not t.done()]
+            for t in bg:
+                t.cancel()
+            if bg:
+                await asyncio.gather(*bg, return_exceptions=True)
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(self.syslog.close(), 3)
             log("bye")
         return 0
 
@@ -575,7 +732,7 @@ class Broker:
             self.clients.discard(c)
             log(f"{c.name} disconnected ({len(self.clients)} client(s) left)")
             self.syslog.client_gone(c)
-            asyncio.create_task(self._client_gone(c))
+            self.spawn(self._client_gone(c), name=f"{c.name}-gone")
             self._check_idle()
 
     async def _client_gone(self, c: Client):

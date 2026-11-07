@@ -4,9 +4,10 @@ the live screen view on the iPhone › Screen tab and short screen recordings fo
 Two engines feed one FrameSink (rotating JPEG files + `frame` events, with backpressure):
 
 * StreamEngine, mode "stream" (iOS 27+): DisplayService pushes RTP/HEVC to a UDP socket on the
-  daemon's own userspace tunnel stack (s.userspace_udp()). This module depacketizes it, keeps the
-  encoder alive with RTCP receiver reports, asks for keyframes (PLI) after loss, decodes with PyAV in
-  a worker thread and writes downscaled JPEGs. While a stream runs the phone shows its
+  daemon's own userspace tunnel stack (s.userspace_udp()). The event loop only receives the packets;
+  one worker thread (Decoder) depacketizes them, decodes with PyAV and writes downscaled JPEGs to the
+  tmpfs frames_dir(). The loop keeps the encoder alive with RTCP receiver reports and asks for
+  keyframes (PLI) after loss. While a stream runs the phone shows its
   screen-sharing indicator and blocks the camera and microphone, so every way out of a stream
   (stop, release, tunnel drop, device switch, shutdown, a crash of the loop) ends with
   DisplayService.stop_all_streams(); when the tunnel is down at that moment, the stop is sent as
@@ -41,7 +42,7 @@ from pathlib import Path
 
 import common
 from common import fix
-from deviced_core import SCREENS_DIR, classify, dlog, emit, err, png_size, safe_name, write_bytes
+from deviced_core import SCREENS_DIR, classify, dlog, emit, err, frames_dir, png_size, safe_name, write_bytes
 
 # Pillow, PyAV and the stream classes are imported by load_media() when the screen view or a recording
 # first needs them: together they take about a third of a second, which the daemon shouldn't pay at
@@ -91,9 +92,10 @@ SHOT_FPS = (0.2, 8.0)           # screenshot mode: as fast as the capture RPC al
 STREAM_FPS = (0.2, 30.0)        # stream mode: frame events to the UI, at most 30/s
 REC_SHOT_FPS = 8.0              # screenshot mode captures at least this fast while recording
 REC_MAX_S = 300
+REC_MAX_FRAMES = int(REC_MAX_S * 60) + 600   # hard cap on a recording's pictures (times/files lists)
 STALL_S = 5.0                   # stream: no picture for this long -> restart the stream
 MAX_RESTARTS = 3
-DECODE_QUEUE = 45               # access units waiting for the decoder before we drop to the next key
+PACKET_QUEUE = 4096             # RTP packets waiting for the decoder thread before the backlog is dropped
 REC_HOLDER = "recording"        # the mirror holder a recording uses (not a client)
 
 NOTICE = {
@@ -224,9 +226,10 @@ class FrameSink:
     """Rotating frame files and `frame` events, throttled to the requested rate and to what the UI has
     acknowledged (mirror.ack). Thread-safe: the stream decoder publishes from its worker thread."""
 
-    def __init__(self):
+    def __init__(self, folder: Path | None = None):
         self.lock = threading.Lock()
         self.udid = ""
+        self.folder = folder or frames_dir()
         self.reset("")
 
     def reset(self, udid: str):
@@ -269,7 +272,7 @@ class FrameSink:
             self.last = (data, ext, w, h)
             if self.acking and now - self.ack_t >= ACK_STALE_S:
                 self.ack_t = now   # one frame per stale period, then wait for the UI again
-        path = SCREENS_DIR / f"mirror-{self.udid}-{seq % FRAME_FILES}.{ext}"
+        path = self.folder / f"mirror-{self.udid}-{seq % FRAME_FILES}.{ext}"
         write_bytes(path, data)
         emit("frame", {"path": str(path), "seq": seq, "ts": time.time(), "width": w, "height": h,
                        "bytes": len(data), "mode": mode})
@@ -446,19 +449,132 @@ def build_rr(local_ssrc: int, remote_ssrc: int, highest_seq: int) -> bytes:
     return rr + sdes
 
 
+class RateWindow:
+    """Bytes seen in the last `span` seconds, as a running total (O(1) per add, no re-summing).
+    Thread-safe: the decoder thread adds, the loop reads."""
+
+    def __init__(self, span: float = 1.0):
+        self.span = span
+        self.items: deque = deque()
+        self.total = 0
+        self.lock = threading.Lock()
+
+    def _expire(self, now: float) -> None:
+        cut = now - self.span
+        while self.items and self.items[0][0] < cut:
+            self.total -= self.items.popleft()[1]
+
+    def add(self, now: float, n: int) -> None:
+        with self.lock:
+            self.items.append((now, n))
+            self.total += n
+            self._expire(now)
+
+    def value(self, now: float) -> int:
+        with self.lock:
+            self._expire(now)
+            return self.total
+
+
+class Depacketizer:
+    """RTP (RFC 7798) packets -> HEVC access units. Pure state machine, run on the decoder thread.
+    push() returns ("au", nals, is_key) when a picture is complete, ("loss",) when it was broken by
+    a missing or reordered packet, else None. Parameter sets (VPS/SPS/PPS) are remembered across
+    reset() so a keyframe without them can still be decoded."""
+
+    def __init__(self, depacketize):
+        self.depacketize = depacketize
+        self.vps = self.sps = self.pps = None
+        self.highest = 0                    # extended highest sequence number (RTCP receiver reports)
+        self.reset()
+
+    def reset(self) -> None:
+        self.fu = bytearray()
+        self.au: list[bytes] = []
+        self.key = False
+        self.corrupt = False
+        self.last_seq: int | None = None
+        self.nals: list[bytes] = []
+
+    def _track_seq(self, seq: int) -> None:
+        cur = self.highest
+        cycles = (cur >> 16) & 0xFFFF
+        last16 = cur & 0xFFFF
+        if seq < last16 and (last16 - seq) > 0x8000:
+            cycles = (cycles + 1) & 0xFFFF
+        new = (cycles << 16) | seq
+        if cur == 0 or ((new - cur) & 0xFFFFFFFF) < 0x80000000:
+            self.highest = new
+
+    def push(self, data: bytes):
+        if len(data) < 12:
+            return None
+        pt = data[1] & 0x7F
+        if 64 <= pt <= 95:                      # RTCP from the phone
+            return None
+        marker = data[1] >> 7
+        hl = 12 + (data[0] & 0x0F) * 4
+        if data[0] & 0x10:                      # header extension
+            if len(data) < hl + 4:
+                return None
+            hl += 4 + int.from_bytes(data[hl + 2:hl + 4], "big") * 4
+        seq = int.from_bytes(data[2:4], "big")
+        self._track_seq(seq)
+        last = self.last_seq
+        if last is not None and seq != ((last + 1) & 0xFFFF):
+            self.fu.clear()                     # loss or reorder: this access unit is broken
+            self.corrupt = True
+        if last is None or ((seq - last) & 0xFFFF) < 0x8000:
+            self.last_seq = seq
+        self.nals.clear()
+        self.depacketize(data[hl:], self.fu, self.nals)
+        for nal in self.nals:
+            if not nal:
+                continue
+            nt = (nal[0] >> 1) & 0x3F
+            if nt == _VPS:
+                self.vps = nal
+            elif nt == _SPS:
+                self.sps = nal
+            elif nt == _PPS:
+                self.pps = nal
+            if nt in _RTP_KEY_NALS:
+                self.key = True
+            self.au.append(nal)
+        if not marker:
+            return None
+        au, key, corrupt = self.au, self.key, self.corrupt
+        self.au, self.key, self.corrupt = [], False, False
+        if corrupt:
+            return ("loss",)
+        if not au:
+            return None
+        if key:
+            types = {(n[0] >> 1) & 0x3F for n in au}
+            if _SPS not in types and self.vps and self.sps and self.pps:
+                au = [self.vps, self.sps, self.pps] + au
+        return ("au", au, key)
+
+
+_RESET = object()        # decoder queue marker: a new stream starts (forget a half-assembled picture)
+
+
 class Decoder:
-    """PyAV HEVC decoder on a worker thread. Every access unit is decoded (deltas need their
-    references); only the frames the sink wants are scaled and encoded to JPEG."""
+    """The stream's worker thread: RTP packets in (from the loop's receive task, which does nothing
+    else), depacketized into access units, decoded with PyAV; only the frames the sink wants are
+    scaled and encoded to JPEG. Every access unit is decoded (deltas need their references)."""
 
     def __init__(self, engine: "StreamEngine", loop: asyncio.AbstractEventLoop):
         import queue
         self.engine = engine
         self.loop = loop
-        self.q: "queue.Queue[bytes | None]" = queue.Queue(maxsize=DECODE_QUEUE)
+        self.q: "queue.Queue" = queue.Queue(maxsize=PACKET_QUEUE)
+        self.depack = Depacketizer(depacketize_hevc)
         self.latest = None               # newest decoded av.VideoFrame (thumbnails)
         self.decoded = 0
         self.errors = 0
         self.encode_errors = 0
+        self.overflows = 0
         self._stop = threading.Event()
         self.codec = av.CodecContext.create("hevc", "r")
         with contextlib.suppress(Exception):
@@ -467,65 +583,104 @@ class Decoder:
         self.thread = threading.Thread(target=self._run, name="mirror-hevc", daemon=True)
         self.thread.start()
 
-    def feed(self, annexb: bytes) -> bool:
-        """False when the decoder is too far behind (the caller then waits for the next keyframe)."""
+    @property
+    def highest(self) -> int:
+        return self.depack.highest
+
+    def feed_packet(self, data) -> None:
+        """From the loop: queue one RTP packet. When the thread is too far behind, the backlog is
+        dropped; the sequence gap marks the picture broken and a keyframe is requested."""
         import queue
         try:
-            self.q.put_nowait(annexb)
-            return True
+            self.q.put_nowait(data)
         except queue.Full:
-            with contextlib.suppress(Exception):
+            self.overflows += 1
+            if self.overflows <= 3 or self.overflows % 50 == 0:
+                dlog(f"mirror (stream): decoder behind, dropped {PACKET_QUEUE} packets ({self.overflows} times)")
+            with contextlib.suppress(queue.Empty):
                 while True:
                     self.q.get_nowait()
-            return False
+
+    def new_stream(self) -> None:
+        with contextlib.suppress(Exception):
+            self.q.put_nowait(_RESET)
 
     def close(self):
+        """Blocking (call via to_thread): stop the thread and wait for it."""
+        import queue
         self._stop.set()
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self.q.get_nowait()
+        with contextlib.suppress(queue.Full):
             self.q.put_nowait(None)
-        self.thread.join(timeout=2)
+        self.thread.join(timeout=3)
+        if self.thread.is_alive():
+            dlog("mirror (stream): decoder thread didn't stop within 3 s")
+        else:
+            self.codec = None
 
-    def _key_please(self):
-        with contextlib.suppress(RuntimeError):
-            self.loop.call_soon_threadsafe(self.engine.request_key, "decode")
+    def _call(self, fn, *args):
+        with contextlib.suppress(RuntimeError):     # the loop is closed: shutting down
+            self.loop.call_soon_threadsafe(fn, *args)
 
     def _run(self):
         import queue
-        m = self.engine.m
         while not self._stop.is_set():
             try:
-                item = self.q.get(timeout=0.1)
+                item = self.q.get(timeout=0.5)
             except queue.Empty:
                 continue
             if item is None:
                 break
-            try:
-                frames = self.codec.decode(av.Packet(item))
-            except Exception as exc:  # noqa: BLE001 - concealed / rejected AU: ask for a key
-                self.errors += 1
-                if self.errors <= 3 or self.errors % 50 == 0:
-                    dlog(f"mirror (stream): decode error {exc!r}")
-                self._key_please()
-                continue
-            if not frames:
-                continue
-            fr = frames[-1]
-            self.latest = fr
-            self.decoded += 1
-            if not m.viewers or not m.sink.ready(m.stream_interval()):
+            if item is _RESET:
+                self.depack.reset()
                 continue
             try:
-                tw = max(2, round(fr.width * m.scale) // 2 * 2)
-                th = max(2, round(fr.height * m.scale) // 2 * 2)
-                img = fr.reformat(width=tw, height=th, format="rgb24", interpolation="AREA").to_image()
-                img = uncollapse(img)
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=int(m.quality))
-                m.sink.publish(buf.getvalue(), "jpg", tw, th, "stream")
-            except Exception as exc:  # noqa: BLE001
-                self.encode_errors += 1
-                if self.encode_errors <= 3 or self.encode_errors % 100 == 0:
-                    dlog(f"mirror (stream): frame encode failed {exc!r} ({self.encode_errors} so far)")
+                out = self.depack.push(item)
+            except Exception as exc:  # noqa: BLE001 - a malformed packet: drop the picture
+                self.depack.reset()
+                out = ("loss",)
+                dlog(f"mirror (stream): bad packet {exc!r}")
+            if out is None:
+                continue
+            if out[0] == "loss":
+                self.engine.need_key = True
+                self._call(self.engine.request_key, "loss")
+                continue
+            annexb = self.engine.on_au(out[1], out[2])
+            if annexb is not None:
+                self._decode(annexb)
+
+    def _decode(self, annexb: bytes) -> None:
+        m = self.engine.m
+        try:
+            frames = self.codec.decode(av.Packet(annexb))
+        except Exception as exc:  # noqa: BLE001 - concealed / rejected AU: ask for a key
+            self.errors += 1
+            if self.errors <= 3 or self.errors % 50 == 0:
+                dlog(f"mirror (stream): decode error {exc!r}")
+            self._call(self.engine.request_key, "decode")
+            return
+        if not frames:
+            return
+        fr = frames[-1]
+        self.latest = fr
+        self.decoded += 1
+        if not m.viewers or not m.sink.ready(m.stream_interval()):
+            return
+        try:
+            tw = max(2, round(fr.width * m.scale) // 2 * 2)
+            th = max(2, round(fr.height * m.scale) // 2 * 2)
+            img = fr.reformat(width=tw, height=th, format="rgb24", interpolation="AREA").to_image()
+            img = uncollapse(img)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=int(m.quality))
+            m.sink.publish(buf.getvalue(), "jpg", tw, th, "stream")
+        except Exception as exc:  # noqa: BLE001
+            self.encode_errors += 1
+            if self.encode_errors <= 3 or self.encode_errors % 100 == 0:
+                dlog(f"mirror (stream): frame encode failed {exc!r} ({self.encode_errors} so far)")
 
     def thumbnail(self, max_dim: int = 320):
         fr = self.latest
@@ -545,15 +700,17 @@ class StreamEngine:
         self.transport = None
         self.decoder: Decoder | None = None
         self.tasks: list[asyncio.Task] = []
-        self.vps = self.sps = self.pps = None
         self.local_ssrc = self.remote_ssrc = 0
         self.rtcp_dest = None
-        self.highest = 0
         self.packets = 0
         self.last_au_t = 0.0
         self.last_key_req = 0.0
         self.need_key = True
-        self.au_bytes: deque = deque()
+        self.au_bytes = RateWindow(1.0)    # non-key picture bytes in the last second (motion detector)
+
+    @property
+    def highest(self) -> int:
+        return self.decoder.highest if self.decoder is not None else 0
 
     # -- checks
     @staticmethod
@@ -615,12 +772,13 @@ class StreamEngine:
         self.remote_ssrc = int(cfg.get("LocalSSRC", 0) or 0)
         self.rtcp_dest = (rsd.service.address[0], port) if port else None
         self.svc, self.transport = svc, transport
-        self.highest = self.packets = 0
+        self.packets = 0
         self.need_key = True
         self.last_au_t = time.monotonic()
         loop = asyncio.get_running_loop()
         if self.decoder is None:
             self.decoder = Decoder(self, loop)
+        self.decoder.new_stream()
         self.tasks = [asyncio.create_task(self._recv(transport), name="mirror-rtp"),
                       asyncio.create_task(self._rtcp(transport), name="mirror-rtcp"),
                       asyncio.create_task(self._refresh(), name="mirror-refresh")]
@@ -684,6 +842,7 @@ class StreamEngine:
 
     # -- keyframes
     def request_key(self, reason: str = "") -> None:
+        """On the loop (the decoder thread calls it through call_soon_threadsafe)."""
         now = time.monotonic()
         if now - self.last_key_req < 0.7 or self.transport is None or self.rtcp_dest is None:
             return
@@ -695,26 +854,11 @@ class StreamEngine:
         async def send():
             with contextlib.suppress(OSError, Exception):
                 await tr.sendto(build_pli(self.local_ssrc, self.remote_ssrc), *dest)
-        asyncio.ensure_future(send())
+        self.m.spawn(send(), "mirror-pli")
 
-    # -- RTP in
-    def _track_seq(self, seq: int) -> None:
-        cur = self.highest
-        cycles = (cur >> 16) & 0xFFFF
-        last16 = cur & 0xFFFF
-        if seq < last16 and (last16 - seq) > 0x8000:
-            cycles = (cycles + 1) & 0xFFFF
-        new = (cycles << 16) | seq
-        if cur == 0 or ((new - cur) & 0xFFFFFFFF) < 0x80000000:
-            self.highest = new
-
+    # -- RTP in: the loop only receives; everything else is on the decoder thread
     async def _recv(self, transport) -> None:
-        fu = bytearray()
-        au: list[bytes] = []
-        key = False
-        corrupt = False
-        last_seq = None
-        nals: list[bytes] = []
+        dec = self.decoder
         while True:
             try:
                 data = await transport.recv(65535)
@@ -723,74 +867,27 @@ class StreamEngine:
             except Exception as exc:  # noqa: BLE001
                 dlog(f"mirror (stream): receive failed {exc!r}")
                 return
-            if len(data) < 12:
-                continue
-            pt = data[1] & 0x7F
-            if 64 <= pt <= 95:                      # RTCP from the phone
-                continue
-            marker = data[1] >> 7
-            hl = 12 + (data[0] & 0x0F) * 4
-            if data[0] & 0x10:                      # header extension
-                if len(data) < hl + 4:
-                    continue
-                hl += 4 + int.from_bytes(data[hl + 2:hl + 4], "big") * 4
-            seq = int.from_bytes(data[2:4], "big")
             self.packets += 1
-            self._track_seq(seq)
-            if last_seq is not None and seq != ((last_seq + 1) & 0xFFFF):
-                fu.clear()                          # loss or reorder: this access unit is broken
-                corrupt = True
-            if last_seq is None or ((seq - last_seq) & 0xFFFF) < 0x8000:
-                last_seq = seq
-            nals.clear()
-            depacketize_hevc(data[hl:], fu, nals)
-            for nal in nals:
-                if not nal:
-                    continue
-                nt = (nal[0] >> 1) & 0x3F
-                if nt == _VPS:
-                    self.vps = nal
-                elif nt == _SPS:
-                    self.sps = nal
-                elif nt == _PPS:
-                    self.pps = nal
-                if nt in _RTP_KEY_NALS:
-                    key = True
-                au.append(nal)
-            if marker:
-                if corrupt:
-                    self.need_key = True
-                    self.request_key("loss")
-                elif au:
-                    self._on_au(au, key)
-                au = []
-                key = False
-                corrupt = False
+            dec.feed_packet(data)
 
-    def _on_au(self, nals: list[bytes], key: bool) -> None:
+    def on_au(self, nals: list[bytes], key: bool) -> bytes | None:
+        """Decoder thread: one complete picture. Returns its Annex-B bytes to decode, or None while
+        waiting for a keyframe."""
         now = time.monotonic()
-        size = sum(len(n) for n in nals)
         if not key:
-            self.au_bytes.append((now, size))
-        while self.au_bytes and self.au_bytes[0][0] < now - 1.0:
-            self.au_bytes.popleft()
+            self.au_bytes.add(now, sum(len(n) for n in nals))
         if self.need_key and not key:
-            self.request_key("waiting for key")
-            return
+            self.decoder._call(self.request_key, "waiting for key")
+            return None
         if key:
             self.need_key = False
-            types = {(n[0] >> 1) & 0x3F for n in nals}
-            if _SPS not in types and self.vps and self.sps and self.pps:
-                nals = [self.vps, self.sps, self.pps] + nals
         self.last_au_t = now
         self.m.au_count_since_open += 1
         annexb = b"".join(b"\x00\x00\x00\x01" + n for n in nals)
         rec = self.m.recorder
         if rec is not None and rec.mode == self.mode:
             rec.add_au(annexb, key, now)
-        if self.decoder is not None and not self.decoder.feed(annexb):
-            self.need_key = True
-            self.request_key("decoder behind")
+        return annexb
 
     # -- RTCP out
     async def _rtcp(self, transport) -> None:
@@ -812,7 +909,7 @@ class StreamEngine:
         while True:
             await asyncio.sleep(0.2)
             now = time.monotonic()
-            moving = sum(n for _, n in self.au_bytes) >= 200_000
+            moving = self.au_bytes.value(now) >= 200_000
             if moving:
                 quiet_since = None
                 continue
@@ -829,23 +926,25 @@ class StreamEngine:
 class Recorder:
     """One recording. Thread-safe adds; finish() writes the MP4 and returns the result dict."""
 
-    def __init__(self, mode: str, max_seconds: float, client):
+    def __init__(self, mode: str, max_seconds: float, client, folder: Path | None = None):
         load_media()
         self.mode = mode
-        self.max_seconds = max_seconds
+        self.max_seconds = max(1.0, min(float(max_seconds), REC_MAX_S))
+        self.max_frames = min(REC_MAX_FRAMES, int(self.max_seconds * 60) + 600)
+        rec_dir = folder or REC_DIR
         self.client = client
         self.state = "recording"
         self.t0 = time.monotonic()
         self.started = time.time()
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        REC_DIR.mkdir(parents=True, exist_ok=True)
-        self.path = REC_DIR / f"rec-{stamp}.mp4"
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        self.path = rec_dir / f"rec-{stamp}.mp4"
         n = 1
         while self.path.exists():
             n += 1
-            self.path = REC_DIR / f"rec-{stamp}-{n}.mp4"
+            self.path = rec_dir / f"rec-{stamp}-{n}.mp4"
         self.thumb = self.path.with_suffix(".jpg")
-        self.tmp = REC_DIR / f".{self.path.stem}.parts"
+        self.tmp = rec_dir / f".{self.path.stem}.parts"
         self.tmp.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         self.frames = 0
@@ -863,9 +962,14 @@ class Recorder:
     def seconds(self) -> float:
         return round(time.monotonic() - self.t0, 1)
 
+    def _full(self) -> bool:
+        """Past its picture cap or its time (plus slack): a backstop for the resource timeout that
+        normally ends the recording, so times/files never grow without bound."""
+        return self.frames >= self.max_frames or time.monotonic() - self.t0 > self.max_seconds + 10
+
     def add_au(self, annexb: bytes, key: bool, t: float) -> None:
         with self.lock:
-            if self.state != "recording" or self.raw is None:
+            if self.state != "recording" or self.raw is None or self._full():
                 return
             if not self.got_key and not key:
                 return
@@ -877,7 +981,7 @@ class Recorder:
 
     def add_frame(self, data: bytes, ext: str, t: float) -> None:
         with self.lock:
-            if self.state != "recording":
+            if self.state != "recording" or self._full():
                 return
             name = f"{len(self.files):05d}.{ext}"
             (self.tmp / name).write_bytes(data)
@@ -990,6 +1094,14 @@ def sweep_stale_parts() -> None:
             pass
 
 
+def sweep_old_frames() -> None:
+    """Mirror frames used to be written to ~/.cache/ios-studio/screens/ (now the tmpfs frames_dir()):
+    remove the rotating files left there (screenshots shot-*.png stay)."""
+    for p in SCREENS_DIR.glob("mirror-*"):
+        with contextlib.suppress(OSError):
+            p.unlink()
+
+
 def write_concat(listfile: Path, files: list[str], times: list[float]) -> None:
     """ffconcat list with each frame shown until the next one was captured (real, variable timing)."""
     lines = ["ffconcat version 1.0"]
@@ -1070,7 +1182,15 @@ class Mirror:
         self.au_count_since_open = 0
         self._d = None
         self._owed: set = set()          # sessions that may still have a stream open on the phone
-        self._bg: set = set()
+        self._bg: set = set()            # background tasks (PLIs, deferred stops, ...), cancelled at shutdown
+
+    def spawn(self, coro, name: str = "mirror-bg") -> asyncio.Task:
+        t = asyncio.ensure_future(coro)
+        with contextlib.suppress(Exception):
+            t.set_name(name)
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+        return t
 
     # -- rates
     def shot_interval(self) -> float:
@@ -1122,9 +1242,7 @@ class Mirror:
             except BaseException as exc:  # noqa: BLE001
                 dlog(f"mirror (stream): stop_all_streams failed {exc!r}")
                 self._defer_stop(s)
-        t = asyncio.ensure_future(go())
-        self._bg.add(t)
-        t.add_done_callback(self._bg.discard)
+        t = self.spawn(go(), "mirror-stop-streams")
         with contextlib.suppress(BaseException):
             await asyncio.shield(t)
 
@@ -1161,9 +1279,7 @@ class Mirror:
                 self._owed.discard(s)          # gave up: don't pin the session forever
             finally:
                 s._mirror_stop_pending = False
-        t = asyncio.ensure_future(later())
-        self._bg.add(t)
-        t.add_done_callback(self._bg.discard)
+        self.spawn(later(), "mirror-stop-later")
 
     # -- lifecycle
     def start_task(self, d, s):
@@ -1222,7 +1338,7 @@ class Mirror:
         rec = self.recorder
         if rec is not None and rec.state == "recording" and rec.mode != new_mode:
             rec.stop_reason = "mode"
-            asyncio.ensure_future(self._end_recording("mode"))
+            self.spawn(self._end_recording("mode"), "record-end")
 
     async def stop(self, *_):
         await self._end_recording("stopped")
@@ -1318,6 +1434,7 @@ class Mirror:
 def register(reg):
     m = Mirror()
     threading.Thread(target=sweep_stale_parts, name="record-sweep", daemon=True).start()
+    threading.Thread(target=sweep_old_frames, name="frames-sweep", daemon=True).start()
 
     def apply_args(a) -> bool:
         """Settings from mirror.start; True when the engine has to restart (mode changed)."""
@@ -1462,6 +1579,11 @@ def register(reg):
             await m.stop()
         for s in list(m._owed):
             await m.stop_streams(s)
+        bg = [t for t in m._bg if not t.done()]
+        for t in bg:
+            t.cancel()
+        if bg:
+            await asyncio.gather(*bg, return_exceptions=True)
 
     @reg.welcome
     def snapshot(d):
