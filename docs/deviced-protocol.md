@@ -54,6 +54,23 @@ daemon).
 `daemon.shutdown` means "this client is done": the daemon replies `{}` and closes that
 connection; other clients are unaffected. `{"all": true}` stops the daemon for everyone.
 
+**Shutting down.** Every shutdown (`daemon.shutdown {"all": true}`, the idle exit, a signal) starts
+by closing the listening socket and removing the socket file (only its own: never a successor's),
+before the reply to `daemon.shutdown` goes out. So a client that connects afterwards never attaches
+to the dying daemon: it finds no socket and starts a new daemon, which waits (up to 25 s) for the
+old one to release `deviced.lock` when its process exits. Until the old daemon closes its
+connections (about 0.1 s later), any request on them, `hello` included, answers `daemon-stopping`
+without running. A connection accepted in that window is closed at once.
+
+`client.py` handles both: on `daemon-stopping` it waits for the old connection to close, reconnects
+(spawning the new daemon) and sends the request once more; it does the same when the connection
+drops before the reply, but only for a request that never left the client or that only reads
+(`SAFE_TO_RESEND`: `device.info`, `apps.list`, `daemon.ping`, the `*.list` / `*.status` reads, …).
+An install, uninstall, launch, delete or anything else that changes the phone is not sent twice
+once it may have reached the daemon: the caller gets `disconnected`. One retry at most. `--once`
+through the bridge retries a `daemon-stopping` reply the same way, against the new daemon. The
+GUI's stdio bridge connects only to a listening socket, so it reaches the new daemon too.
+
 ### Broker commands
 
 | cmd | args | reply data |
@@ -123,7 +140,9 @@ async with DeviceClient(name="mcp") as dev:          # spawns the daemon if need
 `iosstudio` package it is a `core.output.HelperError`) for error replies, plus `timeout`,
 `disconnected` and `daemon-unavailable`. Demo mode follows `IOSSTUDIO_DEMO` (or `demo=True`).
 After a daemon restart the client reconnects by itself and emits a local `reconnected` event;
-syslog subscriptions and mirror references must be re-requested then.
+syslog subscriptions and mirror references must be re-requested then. A request that meets a
+daemon in the middle of shutting down is sent once more to the next daemon when that is safe (see
+[Shutting down](#broker)).
 
 `python3 helper/iosstudio/device/client.py device.info '{}'` sends one request from a shell (debugging).
 
@@ -186,6 +205,7 @@ Rules:
 | `needs-usb` | The feature only works over a USB cable (packet capture). |
 | `unsafe-over-wifi` | That network condition would cut the Wi-Fi link to this computer; USB only. |
 | `wifi-risk` | That network condition also slows the Wi-Fi link; repeat with `acceptWifiRisk: true` after the user agreed. |
+| `daemon-stopping` | The daemon is shutting down and didn't run the request; send it again (a new daemon starts). `client.py` and `--once` do this themselves. |
 | `failed` | Anything else (see `detail`). |
 
 ## Device object
