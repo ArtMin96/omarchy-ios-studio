@@ -1,6 +1,10 @@
 """Resources (optional extras; everything here is also reachable through tools)."""
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError
 
@@ -20,10 +24,12 @@ def _tail(text: str, hint: str, cap: int = MAX_TEXT) -> str:
     return f"…[first {(len(raw) - cap) // 1000} KB cut; read earlier lines with {hint}]\n" + tail
 
 
-def _head(text: str, hint: str, cap: int = MAX_TEXT) -> str:
-    raw = text.encode()
+def _read_head(p: Path, hint: str, cap: int = MAX_TEXT) -> str:
+    """The first `cap` bytes of a file as text, reading no more than that (blocking: run it in a thread)."""
+    with open(p, "rb") as f:
+        raw = f.read(cap + 1)
     if len(raw) <= cap:
-        return text
+        return raw.decode(errors="replace")
     return raw[:cap].decode(errors="ignore") + f"\n…[cut at {cap // 1000} KB; {hint}]\n"
 
 
@@ -40,33 +46,35 @@ def register(mcp: MCPServer) -> None:
         return _tail("\n".join(job.lines), f"ios_build_log(job_id='{job_id}', before=...)")
 
     @mcp.resource("iosstudio://cache/{kind}/{name}", name="saved-output", mime_type="text/plain")
-    def saved_output(kind: str, name: str) -> str:
+    async def saved_output(kind: str, name: str) -> str:
         """A large output a tool saved to ~/.cache/ios-studio/mcp (its full_output_path): first 100 KB."""
-        p = B.cache_file(kind, name)
+        p = await asyncio.to_thread(B.cache_file, kind, name)
         if p is None:
             raise ResourceError(f"No saved output {kind}/{name}; it may have been replaced by newer ones.")
-        return _head(p.read_text(errors="replace"), f"the whole file is {helper.tilde(str(p))}")
+        try:
+            return await asyncio.to_thread(_read_head, p, f"the whole file is {helper.tilde(str(p))}")
+        except OSError:
+            raise ResourceError(f"Couldn't read saved output {kind}/{name}.")
 
     @mcp.resource("iosstudio://device/state", name="device-state", mime_type="application/json")
-    def device_state() -> str:
+    async def device_state() -> str:
         """The last known iPhone state written by the device daemon (udid, model, iOS, connection)."""
-        import json
-        return json.dumps(last_device_state() or {}, indent=2)
+        return json.dumps(await asyncio.to_thread(last_device_state) or {}, indent=2)
 
     @mcp.resource("iosstudio://docs/troubleshooting", name="troubleshooting", mime_type="text/markdown")
-    def troubleshooting() -> str:
+    async def troubleshooting() -> str:
         """iOS Studio's troubleshooting guide (signing, pairing, builds, toolchain)."""
         p = helper.REPO / "docs" / "troubleshooting.md"
         try:
-            return _head(p.read_text(), f"the whole guide is {p}")
+            return await asyncio.to_thread(_read_head, p, f"the whole guide is {p}")
         except OSError:
             raise ResourceError("The troubleshooting guide isn't in this install.")
 
     @mcp.resource("iosstudio://docs/mcp", name="mcp-guide", mime_type="text/markdown")
-    def mcp_guide() -> str:
+    async def mcp_guide() -> str:
         """How this MCP server works: tools, jobs, the safety model and demo mode."""
         p = helper.REPO / "docs" / "mcp.md"
         try:
-            return _head(p.read_text(), f"the whole page is {p}")
+            return await asyncio.to_thread(_read_head, p, f"the whole page is {p}")
         except OSError:
             raise ResourceError("docs/mcp.md isn't in this install.")

@@ -32,6 +32,7 @@ from pydantic import Field
 from .. import helper
 from ..backends.device import dcall, resolve_app
 from ..core import budget as B
+from ..core import deadline
 from ..core.job_status import wait_with_progress
 from ..core.jobs import Job
 from ..core.params import BundleId, Udid
@@ -373,9 +374,9 @@ class Session:
             self.results.pop(rid, None)
 
     async def wait(self, pred, seconds: float) -> bool:
-        deadline = time.monotonic() + max(0.0, seconds)
+        end = time.monotonic() + deadline.wait_time(seconds)      # within a tool call's budget
         while not pred():
-            left = deadline - time.monotonic()
+            left = end - time.monotonic()
             if left <= 0:
                 return False
             self.changed.clear()

@@ -64,9 +64,9 @@ NEXT_BY_CODE: dict[str, str] = {
                         "open-file limit (it needs a new login session).",
     "invalid-setting": "Fix the value and call ios_project_build_settings again.",
     "unknown-preset": "Use one of the preset names listed in the message (ios_project_presets(project_path) shows "
-                      "them with their args), or save it first with ios_project_presets(action='save').",
+                      "them with their args), or save it first with ios_project_preset_set(action='save').",
     "invalid-preset": "Fix the preset (a name, args as a list of strings, env with string values, language like 'de', "
-                      "region like 'de_DE') and call ios_project_presets(action='save') again.",
+                      "region like 'de_DE') and call ios_project_preset_set(action='save') again.",
     "no-build": "Call ios_run (or ios_build_start action='ipa') to produce a signed build first.",
     "build-failed": "Call ios_build_diagnostics and ios_build_log(grep='error') for the failing lines.",
     "compile-errors": "Call ios_build_diagnostics for file:line errors, fix them, then rebuild.",
@@ -193,9 +193,17 @@ def kill_group(pid: int, sig: int = signal.SIGKILL) -> None:
 
 # ------------------------------------------------------------------ one-shot
 
+def _clamp(timeout: float, what: str) -> float:
+    """The call's time budget (core/deadline.py; imported here to keep this module's imports to the stdlib/mcp)."""
+    from .core import deadline
+    return deadline.clamp(timeout, what)
+
+
 async def call(group: str, action: str, flags: dict[str, Any] | None = None, *,
                timeout: float = 25, stdin: str | None = None) -> Any:
-    """Run one helper command and return its `data`. Raises HelperFailure / ToolError."""
+    """Run one helper command and return its `data`. Raises HelperFailure / ToolError. Inside a tool call the
+    timeout is cut to what is left of the call's budget (core/deadline.py)."""
+    timeout = _clamp(timeout, f"'{group} {action}'")
     argv = build_argv(group, action, flags)
     log.debug("helper: %s", argv[1:])
     proc = await asyncio.create_subprocess_exec(
@@ -207,8 +215,8 @@ async def call(group: str, action: str, flags: dict[str, Any] | None = None, *,
     except asyncio.TimeoutError:
         kill_group(proc.pid)
         await proc.wait()
-        raise ToolError(f"iOS Studio's helper took longer than {int(timeout)} s for '{group} {action}'. "
-                        "Retry, or check ios_status.")
+        raise ToolError(f"iOS Studio's helper took longer than {timeout:.0f} s for '{group} {action}' [timeout]. "
+                        "Next: retry, or check ios_status.")
     except BaseException:  # cancelled by the client: never leave the child behind
         kill_group(proc.pid)
         raise
@@ -240,6 +248,7 @@ def parse_result(text: str) -> dict | None:
 async def call_stream_collect(group: str, action: str, flags: dict[str, Any] | None = None, *,
                               timeout: float = 25) -> tuple[Any, list[dict]]:
     """Run a short *streaming* command to completion (e.g. a --dry-run). Returns (done data, events)."""
+    timeout = _clamp(timeout, f"'{group} {action}'")
     argv = build_argv(group, action, flags)
     proc = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,

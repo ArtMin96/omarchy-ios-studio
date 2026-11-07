@@ -10,7 +10,8 @@ this server (core/jobs.py, kind 'matrix'): the first call starts it and waits up
 job_id to wait more or page the shots; ios_job_cancel stops it. Partial results stay on disk; at the end the app is put back the way it was
 (relaunched plainly if it was running before, else stopped).
 
-ios_screenshot_baselines lists a project's baselines, or deletes one (dry run unless confirm=true).
+ios_screenshot_baselines lists a project's baselines; ios_screenshot_baseline_delete deletes one (dry run unless
+confirm=true).
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from .. import helper
 from ..backends.device import apps, dcall, launch, match_app
 from ..backends.projects import resolve_project
 from ..core import budget as B
+from ..core import deadline
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
 from ..core.params import MaxBytes, ProjectPath, Udid
@@ -193,7 +195,7 @@ def _thumb(path: str | None) -> tuple[bytes | None, str | None]:
 
 
 async def _capture(state: AppState, udid: str | None) -> dict:
-    shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
+    shot = await dcall(state, "screenshot", udid=udid, timeout=MAX_WAIT) or {}
     if not shot.get("path") or not Path(str(shot["path"])).is_file():
         raise ToolError("The iPhone returned no screenshot file. Retry with the phone unlocked and the screen on.")
     return shot
@@ -347,6 +349,7 @@ async def _run(state: AppState, job: Job) -> dict:
 
 async def _finish(job: Job, end_state: str, error: str | None) -> None:
     """Write how the matrix ended into its manifest (state, error, app_restored, finished)."""
+    deadline.clear()       # may run from a done-callback: never under a tool call's budget
     m = _m(job)
     m.manifest_done = True
     flags = {"project": m.plan.get("project"), "set": m.plan.get("set_id"), "state": end_state,
@@ -425,8 +428,8 @@ def register(mcp: MCPServer) -> None:
         current_path (the screenshot), baseline_path and diff_path (the screenshot dimmed with changed pixels
         pink and regions boxed). The status bar (clock, battery) is ignored, and so is slight compression noise.
         No image bytes unless include_image=true. Typical loop: save_baseline=true before a change, then the
-        same call without it after rebuilding. Baselines are per project; list or delete them with
-        ios_screenshot_baselines."""
+        same call without it after rebuilding. Baselines are per project; list them with ios_screenshot_baselines
+        and delete one with ios_screenshot_baseline_delete."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         if shot_path:
@@ -472,40 +475,17 @@ def register(mcp: MCPServer) -> None:
                                                mime_type=f"image/{fmt}"))
         return res
 
-    @tool(mcp, "Screenshot baselines", kind="destructive", idempotent=True)
+    @tool(mcp, "Screenshot baselines", kind="read")
     async def ios_screenshot_baselines(
         ctx: Context,
         project_path: ProjectPath,
-        action: Annotated[Literal["list", "delete"], Field(description="list (default), or delete `name` (dry run "
-                                                                       "unless confirm=true)")] = "list",
-        name: Annotated[str | None, Field(description="delete: the baseline's name")] = None,
-        confirm: Annotated[bool, Field(description="delete: false = dry run. true only after the user agreed")] = False,
         max_bytes: MaxBytes = None,
     ) -> BaselinesResult:
-        """The saved screenshot baselines of a project (name, size, when, which iPhone), or delete one. Delete
-        is a dry run that changes nothing unless confirm=true; ask the user first. Baselines live in iOS
-        Studio's data folder, not in the project."""
+        """The saved screenshot baselines of a project: name, size, when, which iPhone. Baselines live in iOS
+        Studio's data folder, not in the project; ios_screenshot_baseline_delete removes one. Read-only."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         pname = str(p.get("name") or p["path"])
-        if action == "delete":
-            if not name:
-                raise ToolError("action='delete' needs name (ios_screenshot_baselines(project_path) lists them).")
-            flags: dict = {"project": p["path"], "name": name, "confirm": True if confirm else None}
-            d = await helper.call("screenshots", "delete", flags) or {}
-            if not confirm:
-                return BaselinesResult(action=action, done=False, project=pname,
-                                       message=f"Dry run: this would delete the baseline '{d.get('name')}' of {pname}. "
-                                               "Nothing was changed. Ask the user, then call again with confirm=true.",
-                                       would=[f"Delete {_t(d.get('baseline_path'))} and its details"] +
-                                       ([f"Delete its {d['compare_runs']} kept compare run(s) (screenshot + diff, "
-                                         f"{int(d.get('compare_bytes') or 0) // 1000} KB)"] if d.get("compare_runs") else []),
-                                       next_steps=["Ask the user whether to proceed; only then repeat with "
-                                                   "confirm=true."]).with_budget(max_bytes)
-            return BaselinesResult(action=action, done=True, project=pname,
-                                   message=f"Deleted the baseline '{d.get('name')}' of {pname}"
-                                           + (f" and {d['compare_runs']} compare run(s)" if d.get("compare_runs") else "")
-                                           + ".").with_budget(max_bytes)
         d = await helper.call("screenshots", "list", {"project": p["path"]}) or {}
         items = [BaselineInfo(name=str(b.get("name")), path=_t(b.get("path")) or "", created=_iso(b.get("created")),
                               width=b.get("width"), height=b.get("height"), device=b.get("device"),
@@ -516,6 +496,35 @@ def register(mcp: MCPServer) -> None:
                                 ["Save one with ios_screenshot_compare(project_path, name='Home', save_baseline=true)."]
                                 ).with_budget(max_bytes)
         return fit_page(model, "baselines", 0, lambda k, e: f"Showing {k} of {len(items)}; raise max_bytes.")
+
+    @tool(mcp, "Delete a screenshot baseline", kind="destructive", idempotent=True)
+    async def ios_screenshot_baseline_delete(
+        ctx: Context,
+        project_path: ProjectPath,
+        name: Annotated[str, Field(min_length=1, description="The baseline's name (ios_screenshot_baselines lists "
+                                                             "them)")],
+        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+    ) -> BaselinesResult:
+        """Delete one screenshot baseline of a project and its kept compare runs. A dry run that changes nothing
+        unless confirm=true; ask the user first."""
+        state = get_state(ctx)
+        p = await resolve_project(state, project_path)
+        pname = str(p.get("name") or p["path"])
+        flags: dict = {"project": p["path"], "name": name, "confirm": True if confirm else None}
+        d = await helper.call("screenshots", "delete", flags) or {}
+        if not confirm:
+            return BaselinesResult(action="delete", done=False, project=pname,
+                                   message=f"Dry run: this would delete the baseline '{d.get('name')}' of {pname}. "
+                                           "Nothing was changed. Ask the user, then call again with confirm=true.",
+                                   would=[f"Delete {_t(d.get('baseline_path'))} and its details"] +
+                                   ([f"Delete its {d['compare_runs']} kept compare run(s) (screenshot + diff, "
+                                     f"{int(d.get('compare_bytes') or 0) // 1000} KB)"] if d.get("compare_runs") else []),
+                                   next_steps=["Ask the user whether to proceed; only then repeat with "
+                                               "confirm=true."]).with_budget(None)
+        return BaselinesResult(action="delete", done=True, project=pname,
+                               message=f"Deleted the baseline '{d.get('name')}' of {pname}"
+                                       + (f" and {d['compare_runs']} compare run(s)" if d.get("compare_runs") else "")
+                                       + ".").with_budget(None)
 
     @tool(mcp, "Screenshot matrix", kind="write", open_world=True)
     async def ios_screenshot_matrix(

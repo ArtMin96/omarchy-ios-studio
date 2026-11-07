@@ -34,7 +34,7 @@ async def device_brief(state) -> DeviceBrief | None:
         return DeviceBrief(udid="00008150-000000000000001C", name="Alex's iPhone", model="iPhone 17 Pro",
                            ios_version="27.2", connection="connected", transport="wifi", developer_mode=True,
                            source="last-known")
-    d = last_device_state()
+    d = await asyncio.to_thread(last_device_state)
     if not d:
         return None
     return DeviceBrief(udid=d["udid"], name=d.get("name"), model=d.get("model"), ios_version=d.get("iosVersion"),

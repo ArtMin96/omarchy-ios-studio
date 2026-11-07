@@ -24,21 +24,14 @@ from pydantic import Field
 from .. import helper
 from ..backends.console import ConsoleSummary, capture_summary, fmt_line
 from ..backends.crashes import crash_detail
-from ..backends.device import (
-    AppInstallStatus,
-    dcall,
-    get_install,
-    install_status,
-    new_client,
-    package_for,
-    resolve_app,
-    start_install,
-    wait_install,
-)
+from ..backends.device import AppInstallStatus, dcall, install_ipa, new_client, package_for, resolve_app
 from ..backends.projects import merge_launch, resolve_preset, resolve_project
 from ..core import budget as B
+from ..core import deadline
 from ..core.errors import device_error
-from ..core.params import PresetName, Udid
+from ..core.job_status import follow_job, job_result, still_running
+from ..core.jobs import Job
+from ..core.params import PresetName, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, tool
 from ..models import ActionResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state
@@ -56,10 +49,11 @@ Level = Literal["debug", "info", "default", "error", "fault"]
 
 
 class RunCaptureResult(RunCapture):
-    """RunCapture, or (state='installing') an install that is still running; nothing was launched yet."""
+    """RunCapture, or (state='running') a run that is still going: call again with job_id."""
     BULK: ClassVar[tuple[str, ...]] = ("key_lines", "console_lines")
-    state: Literal["done", "installing"] = Field("done", description="installing: the install is still running and "
-                                                 "nothing was launched; call again with job_id")
+    state: Literal["done", "running"] = Field("done", description="running: still installing, launching or "
+                                              "capturing; call ios_app_run_and_capture(job_id=...) again")
+    job_id: str | None = Field(None, description="The run's job: pass back as job_id to wait for it")
     installed: AppInstallStatus | None = None
     console: ConsoleSummary | None = Field(None, description="What the app printed (stdout/stderr): counts, and "
                                                              "the session for ios_app_console_read")
@@ -167,13 +161,15 @@ async def open_session(state: AppState, filters: dict, udid: str | None, interna
     s.client = new_client(f"mcp-logs-{sid}", [])
     s.client.on_event(s.on_event, ["syslog", "syslogState", "reconnected"])
     try:
-        await s.client.connect()
-        await s.client.request("syslog.start", s._args(), timeout=40)
+        await asyncio.wait_for(s.client.connect(), deadline.clamp(40, "connecting to the iPhone service"))
+        await s.client.request("syslog.start", s._args(), timeout=deadline.clamp(40, "the log stream started"))
     except Exception as exc:  # noqa: BLE001
         with contextlib.suppress(Exception):
             await s.client.close()
         if exc.__class__.__name__ == "DeviceError":
             raise device_error(exc) from None
+        if isinstance(exc, asyncio.TimeoutError):
+            raise ToolError("The iPhone service is still starting [timeout]. Next: retry in a few seconds.") from None
         raise
     s.running = True
     sessions[sid] = s
@@ -201,6 +197,7 @@ def _ensure_reaper(state: AppState) -> None:
 
 
 async def _reaper(state: AppState) -> None:
+    deadline.clear()       # a background task: the tool call that started it has its own budget
     while _sessions(state):
         await asyncio.sleep(30)
         now = time.time()
@@ -312,7 +309,7 @@ def register(mcp: MCPServer) -> None:
         if wait_seconds and cur >= s.seq and s.running:
             s.changed.clear()
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(s.changed.wait(), wait_seconds)
+                await asyncio.wait_for(s.changed.wait(), deadline.wait_time(wait_seconds))
         missed = max(0, s.buffer_start - cur)
         cur = max(cur, s.buffer_start)
         lo = RANK.get(min_level or "debug", 0)
@@ -394,8 +391,9 @@ def register(mcp: MCPServer) -> None:
         install: Annotated[bool, Field(description="First install the project's last signed build (or ipa_path). "
                                                    "Does not build: use ios_run to rebuild")] = False,
         ipa_path: Annotated[str | None, Field(description="A signed .ipa/.app to install first")] = None,
-        job_id: Annotated[str | None, Field(description="Continue a call that returned state='installing': wait "
-                                                        "for that install job, then launch and capture")] = None,
+        job_id: Annotated[str | None, Field(description="Keep waiting for a run started earlier (state='running'): "
+                                                        "its job_id; the other arguments are ignored")] = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
         seconds: Annotated[int, Field(ge=1, le=MAX_WAIT, description="How long to capture after launch")] = 8,
         min_level: Annotated[Level, Field(description="Lowest log level to capture")] = "default",
         relaunch: Annotated[bool, Field(description="Stop the app first if it's running, so you see a fresh "
@@ -416,203 +414,228 @@ def register(mcp: MCPServer) -> None:
         log counts per level, key lines (faults and errors first, then the latest), the new crash's
         exception, reason and top frames, what the app printed (console: stderr lines and the latest
         print() output, after the log lines), and next steps. The key lines come as plain text after the JSON
-        (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s.
-        An install that outlasts the call returns state='installing' with installed.job_id and nothing
-        launched: call again with job_id (and the other arguments) to wait for it and then capture.
+        (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s
+        (plus the install). It runs as a job: when it isn't done within wait_seconds the result is
+        state='running' with job_id; call again with job_id to wait for the rest.
         Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read.
         preset='<name>' launches with a run preset of the app's project (ios_project_presets; the project is
         project_path, else the one that builds bundle_id): its args come first, then `args`, and `env`
         overrides its environment."""
         state = get_state(ctx)
-        installed = None
-        proj = None
-        how = None
-        if project_path and not bundle_id:
-            proj = await resolve_project(state, project_path)
-            bundle_id = proj.get("bundleId")
-            if not bundle_id:
-                raise ToolError(f"{proj.get('name')} has no bundle id yet. Check ios_project_info.")
-        if not bundle_id and not job_id and not ipa_path:
-            raise ToolError("Pass bundle_id or project_path (or ipa_path to install and run).")
-        if preset and (project_path or bundle_id):   # before any install: an unknown name fails at once
-            how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id)
-        total = seconds + 6.0
-        step = [0.0]
-
-        async def progress(done: float, msg: str) -> None:
-            if done > step[0]:
-                step[0] = done
-                await ctx.report_progress(round(done, 1), total, message=msg)
-
-        if job_id or install or ipa_path:
-            if job_id:
-                job = get_install(state, job_id)
-            else:
+        if not job_id:
+            proj = None
+            if project_path and not bundle_id:
+                proj = await resolve_project(state, project_path)
+                bundle_id = proj.get("bundleId")
+                if not bundle_id:
+                    raise ToolError(f"{proj.get('name')} has no bundle id yet. Check ios_project_info.")
+            if not bundle_id and not ipa_path:
+                raise ToolError("Pass bundle_id or project_path (or ipa_path to install and run).")
+            how = None
+            if preset and (project_path or bundle_id):   # before any install: an unknown name fails at once
+                how = await resolve_preset(state, preset, project_path=project_path, bundle_id=bundle_id)
+            pkg = None
+            if install or ipa_path:
                 pkg, _ = await package_for(state, ipa_path, None if ipa_path else (project_path or None))
-                job = start_install(state, udid, pkg, tool="ios_app_run_and_capture")
-            await progress(0.1, "Installing")
-            # Whatever the install leaves of MAX_WAIT goes to the capture; a long install returns early instead
-            await wait_install(state, job, max(3.0, MAX_WAIT - seconds - 7),
-                               lambda pct, st: progress(0.1 + 0.3 * pct / 100, f"Installing {pct:.0f}%"))
-            if not job.finished:
-                again = (f"ios_app_run_and_capture(job_id='{job.id}'"
-                         + (f", bundle_id='{bundle_id}'" if bundle_id else "")
-                         + (f", preset='{preset}'" if preset else "")
-                         + f", seconds={seconds})")
-                installed = install_status(job, f"Still installing; nothing was launched yet. Call {again} to wait "
-                                                "for it, then launch and capture (pass your other arguments too).")
-                return RunCaptureResult(state="installing", bundle_id=bundle_id or "", launched=False,
-                                        installed=installed, seconds=0,
-                                        summary=f"Installing ({installed.progress_detail}); not launched yet.",
-                                        next_steps=installed.next_steps)
-            installed = install_status(job)
-            installed.next_steps = []
-            if installed.bundle_id:
-                bundle_id = installed.bundle_id
-        app = await resolve_app(state, bundle_id, udid)
-        bid, exe = app["bundleId"], app.get("executable") or app.get("name")
-        if preset and how is None:   # the bundle id came from the install
-            how = await resolve_preset(state, preset, bundle_id=bid)
-        args, env = merge_launch(how, args, env)
-        await progress(0.5, "Checking crash reports")
-        try:
-            before = {c.get("name") for c in await dcall(state, "crash.list", {"process": exe, "flush": True},
-                                                         udid=udid, timeout=30) or []}
-        except ToolError:
-            before = None
-        sess = await open_session(state, {"bundleId": bid, "minLevel": min_level}, udid, internal=True)
-        launch_error, pid, running_end = None, None, None
-        launch_res: dict = {}
-        started_wall = time.time()
-        t0 = time.monotonic()
-        try:
-            if relaunch and app.get("running"):
-                with contextlib.suppress(ToolError):
-                    await dcall(state, "app.kill", {"bundleId": bid}, udid=udid, timeout=20)
-                await asyncio.sleep(0.5)
-            await progress(1.5, "Launching")
-            try:
-                a: dict = {"bundleId": bid}
-                if args:
-                    a["args"] = args
-                if env:
-                    a["env"] = env
-                if console:
-                    a["console"] = True
-                res = await dcall(state, "app.launch", a, udid=udid, timeout=60) or {}
-                launch_res = res
-                pid = res.get("pid")
-            except ToolError as exc:
-                launch_error = str(exc)
-            t0 = time.monotonic()
-            if launch_error is None:
-                end = t0 + seconds
-                while (now := time.monotonic()) < end:
-                    await asyncio.sleep(min(1.0, end - now))
-                    await progress(1.5 + (time.monotonic() - t0), f"Capturing ({len(sess.ring)} lines)")
-                with contextlib.suppress(ToolError):
-                    procs = await dcall(state, "processes.list", {"appsOnly": True}, udid=udid, timeout=20) or []
-                    running_end = any(p.get("bundleId") == bid or (pid and p.get("pid") == pid) for p in procs)
-            else:
-                await asyncio.sleep(1.0)
-        finally:
-            await asyncio.sleep(0.3)   # let the last batch arrive
-            await close_session(state, sess)
-        elapsed = round(time.monotonic() - t0, 1)
-        await progress(total - 2, "Checking for new crash reports")
+            req = RunRequest(bundle_id=bundle_id, project_path=project_path, pkg=pkg, preset=preset, how=how,
+                             seconds=seconds, min_level=min_level, relaunch=relaunch, args=args, env=env,
+                             max_lines=max_lines, console=console, max_bytes=max_bytes, udid=udid)
+            job_id = state.jobs.run(lambda job: _run_and_capture(state, job, req), "run-capture",
+                                    title=f"Run and capture {bundle_id or helper.tilde(pkg)}",
+                                    tool="ios_app_run_and_capture", data={"bundle_id": bundle_id}).id
+        job = await follow_job(state, ctx, job_id, "run-capture", wait_seconds)
+        if not job.finished:
+            return RunCaptureResult(state="running", job_id=job.id, bundle_id=job.data.get("bundle_id") or "",
+                                    launched=bool(job.data.get("launched")), seconds=0,
+                                    summary=f"Still running ({job.progress_detail or 'starting'}).",
+                                    next_steps=[still_running(job)])
+        out = job_result(job)
+        out.job_id = job.id
+        return out
 
-        new_crash, others = None, []
-        if before is not None and (launch_error is None):
-            if running_end is False:
-                await asyncio.sleep(1.5)   # the phone writes the report shortly after the process dies
+
+@dataclass
+class RunRequest:
+    """The arguments of one ios_app_run_and_capture, for its job."""
+    bundle_id: str | None
+    project_path: str | None
+    pkg: str | None              # install this first
+    preset: str | None
+    how: dict | None             # the resolved preset (None: resolve it from the installed bundle id)
+    seconds: int
+    min_level: str
+    relaunch: bool
+    args: list[str] | None
+    env: dict[str, str] | None
+    max_lines: int
+    console: bool
+    max_bytes: int | None
+    udid: str | None
+
+
+async def _run_and_capture(state: AppState, job: Job, r: RunRequest) -> RunCaptureResult:
+    """The job behind ios_app_run_and_capture: (install,) launch, capture, look for a new crash, summarize."""
+    bundle_id, udid, how, seconds, max_lines, max_bytes = r.bundle_id, r.udid, r.how, r.seconds, r.max_lines, r.max_bytes
+    min_level, console, preset, relaunch = r.min_level, r.console, r.preset, r.relaunch
+    installed = None
+    total = seconds + 6.0
+    if r.pkg:
+        job.report(0.02, "Installing")
+
+        def prog(pct: float, status: str) -> None:
+            job.report((0.1 + 0.3 * pct / 100) / total, f"Installing {pct:.0f}%")
+        res = await install_ipa(state, udid, r.pkg, prog)
+        installed = AppInstallStatus(installed=True, state="succeeded", bundle_id=res.get("bundleId"),
+                                     package_bundle_id=res.get("packageBundleId"), path=helper.tilde(r.pkg),
+                                     seconds=res.get("seconds"))
+        if installed.bundle_id:
+            bundle_id = installed.bundle_id
+            job.data["bundle_id"] = bundle_id
+    app = await resolve_app(state, bundle_id, udid)
+    bid, exe = app["bundleId"], app.get("executable") or app.get("name")
+    if preset and how is None:   # the bundle id came from the install
+        how = await resolve_preset(state, preset, bundle_id=bid)
+    args, env = merge_launch(how, r.args, r.env)
+    job.report(0.5 / total, "Checking crash reports")
+    try:
+        before = {c.get("name") for c in await dcall(state, "crash.list", {"process": exe, "flush": True},
+                                                     udid=udid, timeout=30) or []}
+    except ToolError:
+        before = None
+    sess = await open_session(state, {"bundleId": bid, "minLevel": min_level}, udid, internal=True)
+    launch_error, pid, running_end = None, None, None
+    launch_res: dict = {}
+    started_wall = time.time()
+    t0 = time.monotonic()
+    try:
+        if relaunch and app.get("running"):
             with contextlib.suppress(ToolError):
-                after = await dcall(state, "crash.list", {"process": exe, "flush": True}, udid=udid, timeout=30) or []
-                # new names only, of this process, written since just before the launch
-                fresh = [c for c in after if c.get("name") not in before and c.get("process") in (None, exe)
-                         and float(c.get("ts") or 0) >= started_wall - 5]
-                if fresh:
-                    with contextlib.suppress(ToolError):
-                        new_crash = await crash_detail(state, fresh[0]["name"], udid)
-                    others = [c["name"] for c in fresh[1:]]
-
-        entries = [e for _, e in sess.ring]
-        counts = Counter(str(e.get("level")) for e in entries)
-        bad = [e for e in entries if RANK.get(e.get("level"), 2) >= RANK["error"]]
-        bad.sort(key=lambda e: -RANK.get(e.get("level"), 2))   # faults, then errors (stable: time order)
-        fkey = (lambda e: (e.get("process"), e.get("level"), e.get("message")))
-        bad_rows = B.fold_repeats(bad, key=fkey)
-        key = bad_rows[:max(5, max_lines * 2 // 3)]
-        rest = B.fold_repeats([e for e in entries if RANK.get(e.get("level"), 2) < RANK["error"]], key=fkey)
-        key += rest[-(max_lines - len(key)):] if max_lines > len(key) else []
-        rendered = [fmt(None, e) + (f" ×{n}" if n > 1 else "") for e, n in key]
-        room = B.room(max_bytes, B.RESERVE * 2)
-        con_sum, con_lines, con_entries = None, [], []
-        if console and launch_error is None:
-            # the console shares the bulk room with the log lines (about 45 %, more if the log is short)
-            log_need = sum(B.nbytes(r) + 1 for r in rendered)
-            con_room = max(room * 45 // 100, room - log_need)
-            con_sum, con_lines, con_entries = await capture_summary(state, launch_res, udid, max_lines, con_room)
-            room = max(1_000, room - sum(B.nbytes(x) + 1 for x in con_lines))
-        page = B.take(rendered, len(rendered), room, from_end=False)
-        lines = page.items
-        omitted = len(entries) - sum(n for _, n in key[:len(lines)])
-        full_path, links = None, []
-        if entries or con_entries:
-            text = "\n".join(fmt(None, e, 4000) for e in entries)
-            if con_entries:
-                text += "\n\n--- console (what the app printed) ---\n" + "\n".join(
-                    fmt_line(None, e, 4000) for e in con_entries)
-            path, _, link = B.spill(text, "captures", f"{bid}-{time.strftime('%Y%m%d-%H%M%S')}.log")
-            full_path, links = helper.tilde(path), [link]
-
-        name = app.get("name") or bid
-        if launch_error:
-            summary = f"{name} did not launch: {launch_error}"
-        elif new_crash:
-            summary = (f"{name} launched (pid {pid}) and CRASHED: {new_crash.exception_type or ''} "
-                       f"{new_crash.signal or ''} {new_crash.termination_reason or ''}".strip())
-        elif running_end is False:
-            summary = f"{name} launched (pid {pid}) but was no longer running after {elapsed} s (no crash report yet)."
+                await dcall(state, "app.kill", {"bundleId": bid}, udid=udid, timeout=20)
+            await asyncio.sleep(0.5)
+        job.report(1.5 / total, "Launching")
+        try:
+            a: dict = {"bundleId": bid}
+            if args:
+                a["args"] = args
+            if env:
+                a["env"] = env
+            if console:
+                a["console"] = True
+            res = await dcall(state, "app.launch", a, udid=udid, timeout=60) or {}
+            launch_res = res
+            pid = res.get("pid")
+            job.data["launched"] = True
+        except ToolError as exc:
+            launch_error = str(exc)
+        t0 = time.monotonic()
+        if launch_error is None:
+            end = t0 + seconds
+            while (now := time.monotonic()) < end:
+                await asyncio.sleep(min(1.0, end - now))
+                job.report((1.5 + time.monotonic() - t0) / total, f"Capturing ({len(sess.ring)} lines)")
+            with contextlib.suppress(ToolError):
+                procs = await dcall(state, "processes.list", {"appsOnly": True}, udid=udid, timeout=20) or []
+                running_end = any(p.get("bundleId") == bid or (pid and p.get("pid") == pid) for p in procs)
         else:
-            summary = f"{name} launched (pid {pid}) and was still running after {elapsed} s."
-        summary += f" Captured {len(entries)} log lines ({counts.get('fault', 0)} faults, {counts.get('error', 0)} errors)."
-        if con_sum is not None and con_sum.session_id:
-            summary += (f" It printed {con_sum.captured} lines" +
-                        (f" ({con_sum.stderr} to stderr)." if con_sum.stderr else "."))
+            await asyncio.sleep(1.0)
+    finally:
+        await asyncio.sleep(0.3)   # let the last batch arrive
+        await close_session(state, sess)
+    elapsed = round(time.monotonic() - t0, 1)
+    job.report((total - 2) / total, "Checking for new crash reports")
 
-        nxt = []
-        if launch_error:
-            nxt.append("Fix the launch problem above (ios_device_prepare if Developer Mode/DDI, unlock the phone if "
-                       "locked), then retry.")
-        if new_crash:
-            nxt.append(f"Map the app frames to source files; more of the report: ios_crash_get(name='{new_crash.name}', "
-                       "section='threads').")
-        if not entries and launch_error is None:
-            nxt.append("No log lines matched. Retry with min_level='info' or 'debug', or a longer seconds.")
-        if launch_error is None and not new_crash:
-            nxt.append("ios_screenshot shows the screen now; ios_logs_start(bundle_id) follows the log longer.")
-        if con_sum is not None and con_sum.session_id:
-            nxt.append(f"ios_app_console_read(session_id='{con_sum.session_id}', wait_seconds=10) follows what it "
-                       "prints.")
-        if proj or project_path:
-            nxt.append("After fixing code, rebuild and reinstall with ios_run(project_path), then run this again.")
-        note = (f"Showing {len(lines)} key lines of {len(entries)} captured; the full capture is {full_path}."
-                if omitted > 0 and full_path else None)
-        con_cut = con_sum.lines_omitted if con_sum is not None else 0
-        if con_cut and full_path:
-            note = (note + " " if note else "") + (f"{con_cut} printed lines aren't shown; they're in {full_path} "
-                                                   "and ios_app_console_read.")
-        if new_crash is not None:
-            new_crash.next_steps = []
-        return RunCaptureResult(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
-                                launch_error=B.clip(launch_error, B.ERROR_CUT) if launch_error else None,
-                                installed=installed, seconds=elapsed,
-                                log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
-                                lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
-                                other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
-                                truncated=omitted > 0 or con_cut > 0, omitted=max(0, omitted) + con_cut,
-                                note=note, full_output_path=full_path, console=con_sum,
-                                console_lines=con_lines, preset=how["name"] if how else None,
-                                launch_args=[B.clip(x, 300) for x in args or []][:64] if how else [],
-                                launch_env={k: B.clip(v, 300) for k, v in (env or {}).items()} if how else {}
-                                ).with_budget(max_bytes, links)
+    new_crash, others = None, []
+    if before is not None and (launch_error is None):
+        if running_end is False:
+            await asyncio.sleep(1.5)   # the phone writes the report shortly after the process dies
+        with contextlib.suppress(ToolError):
+            after = await dcall(state, "crash.list", {"process": exe, "flush": True}, udid=udid, timeout=30) or []
+            # new names only, of this process, written since just before the launch
+            fresh = [c for c in after if c.get("name") not in before and c.get("process") in (None, exe)
+                     and float(c.get("ts") or 0) >= started_wall - 5]
+            if fresh:
+                with contextlib.suppress(ToolError):
+                    new_crash = await crash_detail(state, fresh[0]["name"], udid)
+                others = [c["name"] for c in fresh[1:]]
+
+    entries = [e for _, e in sess.ring]
+    counts = Counter(str(e.get("level")) for e in entries)
+    bad = [e for e in entries if RANK.get(e.get("level"), 2) >= RANK["error"]]
+    bad.sort(key=lambda e: -RANK.get(e.get("level"), 2))   # faults, then errors (stable: time order)
+    fkey = (lambda e: (e.get("process"), e.get("level"), e.get("message")))
+    bad_rows = B.fold_repeats(bad, key=fkey)
+    key = bad_rows[:max(5, max_lines * 2 // 3)]
+    rest = B.fold_repeats([e for e in entries if RANK.get(e.get("level"), 2) < RANK["error"]], key=fkey)
+    key += rest[-(max_lines - len(key)):] if max_lines > len(key) else []
+    rendered = [fmt(None, e) + (f" ×{n}" if n > 1 else "") for e, n in key]
+    room = B.room(max_bytes, B.RESERVE * 2)
+    con_sum, con_lines, con_entries = None, [], []
+    if console and launch_error is None:
+        # the console shares the bulk room with the log lines (about 45 %, more if the log is short)
+        log_need = sum(B.nbytes(r) + 1 for r in rendered)
+        con_room = max(room * 45 // 100, room - log_need)
+        con_sum, con_lines, con_entries = await capture_summary(state, launch_res, udid, max_lines, con_room)
+        room = max(1_000, room - sum(B.nbytes(x) + 1 for x in con_lines))
+    page = B.take(rendered, len(rendered), room, from_end=False)
+    lines = page.items
+    omitted = len(entries) - sum(n for _, n in key[:len(lines)])
+    full_path, links = None, []
+    if entries or con_entries:
+        text = "\n".join(fmt(None, e, 4000) for e in entries)
+        if con_entries:
+            text += "\n\n--- console (what the app printed) ---\n" + "\n".join(
+                fmt_line(None, e, 4000) for e in con_entries)
+        path, _, link = B.spill(text, "captures", f"{bid}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+        full_path, links = helper.tilde(path), [link]
+
+    name = app.get("name") or bid
+    if launch_error:
+        summary = f"{name} did not launch: {launch_error}"
+    elif new_crash:
+        summary = (f"{name} launched (pid {pid}) and CRASHED: {new_crash.exception_type or ''} "
+                   f"{new_crash.signal or ''} {new_crash.termination_reason or ''}".strip())
+    elif running_end is False:
+        summary = f"{name} launched (pid {pid}) but was no longer running after {elapsed} s (no crash report yet)."
+    else:
+        summary = f"{name} launched (pid {pid}) and was still running after {elapsed} s."
+    summary += f" Captured {len(entries)} log lines ({counts.get('fault', 0)} faults, {counts.get('error', 0)} errors)."
+    if con_sum is not None and con_sum.session_id:
+        summary += (f" It printed {con_sum.captured} lines" +
+                    (f" ({con_sum.stderr} to stderr)." if con_sum.stderr else "."))
+
+    nxt = []
+    if launch_error:
+        nxt.append("Fix the launch problem above (ios_device_prepare if Developer Mode/DDI, unlock the phone if "
+                   "locked), then retry.")
+    if new_crash:
+        nxt.append(f"Map the app frames to source files; more of the report: ios_crash_get(name='{new_crash.name}', "
+                   "section='threads').")
+    if not entries and launch_error is None:
+        nxt.append("No log lines matched. Retry with min_level='info' or 'debug', or a longer seconds.")
+    if launch_error is None and not new_crash:
+        nxt.append("ios_screenshot shows the screen now; ios_logs_start(bundle_id) follows the log longer.")
+    if con_sum is not None and con_sum.session_id:
+        nxt.append(f"ios_app_console_read(session_id='{con_sum.session_id}', wait_seconds=10) follows what it "
+                   "prints.")
+    if r.project_path:
+        nxt.append("After fixing code, rebuild and reinstall with ios_run(project_path), then run this again.")
+    note = (f"Showing {len(lines)} key lines of {len(entries)} captured; the full capture is {full_path}."
+            if omitted > 0 and full_path else None)
+    con_cut = con_sum.lines_omitted if con_sum is not None else 0
+    if con_cut and full_path:
+        note = (note + " " if note else "") + (f"{con_cut} printed lines aren't shown; they're in {full_path} "
+                                               "and ios_app_console_read.")
+    if new_crash is not None:
+        new_crash.next_steps = []
+    return RunCaptureResult(bundle_id=bid, launched=launch_error is None, pid=pid, running_at_end=running_end,
+                            launch_error=B.clip(launch_error, B.ERROR_CUT) if launch_error else None,
+                            installed=installed, seconds=elapsed,
+                            log_counts={lv: counts[lv] for lv in LEVELS if counts.get(lv)}, key_lines=lines,
+                            lines_omitted=max(0, omitted), dropped=sess.dropped, new_crash=new_crash,
+                            other_new_crashes=others[:10], summary=B.clip(summary, 600), next_steps=nxt,
+                            truncated=omitted > 0 or con_cut > 0, omitted=max(0, omitted) + con_cut,
+                            note=note, full_output_path=full_path, console=con_sum,
+                            console_lines=con_lines, preset=how["name"] if how else None,
+                            launch_args=[B.clip(x, 300) for x in args or []][:64] if how else [],
+                            launch_env={k: B.clip(v, 300) for k, v in (env or {}).items()} if how else {}
+                            ).with_budget(max_bytes, links)

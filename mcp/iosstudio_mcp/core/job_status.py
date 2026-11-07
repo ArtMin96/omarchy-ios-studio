@@ -3,6 +3,8 @@
     job_status(job)     JobStatus model for any job, with next_steps
     start_and_wait(...) start a helper stream as a job and long-poll it briefly
     wait_with_progress  job long-poll (≤ MAX_WAIT) that forwards progress notifications to the client
+    follow_job(...)     a feature job by id (of one kind), long-polled with progress
+    job_result(job)     a finished job's result, or its error raised as a ToolError
     still_running(job)  the next step of a feature job that is still running
 """
 from __future__ import annotations
@@ -11,6 +13,7 @@ import json
 from typing import Any
 
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .. import helper
 from ..models import (
@@ -199,6 +202,25 @@ async def wait_with_progress(state: AppState, job: Job, seconds: float, ctx: Con
                                       message=j.progress_detail or j.current_step or j.state)
 
     return await state.jobs.wait(job, min(max(seconds, 0), MAX_WAIT), report)
+
+
+async def follow_job(state: AppState, ctx: Context | None, job_id: str, kind: str, wait_seconds: float) -> Job:
+    """The job `job_id` (it must be of `kind`), after waiting up to wait_seconds for it to finish. The pattern
+    of a tool whose work can outlast a call: start it with state.jobs.run(...) (or take the caller's job_id),
+    follow it here, then answer with job_result(job) or state='running' + still_running(job)."""
+    job = state.jobs.get(job_id, kind)
+    await wait_with_progress(state, job, wait_seconds, ctx)
+    return job
+
+
+def job_result(job: Job) -> Any:
+    """A finished job's result; a failed or cancelled job raises its error (one line + next step)."""
+    if job.state == "succeeded":
+        return job.result
+    msg = str((job.error or {}).get("message") or "").strip()
+    if job.state == "cancelled":
+        raise ToolError(f"Job {job.id} was cancelled." + (f" {msg}" if msg and msg != "Cancelled." else ""))
+    raise ToolError(msg or f"Job {job.id} failed.")
 
 
 async def start_and_wait(state: AppState, ctx: Context | None, *, kind: str, group: str, action: str,

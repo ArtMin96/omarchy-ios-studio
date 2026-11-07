@@ -56,6 +56,10 @@ from ..models import (
 )
 from ..state import AppState, get_state
 
+# ddi.mount downloads the image from Apple; the iPhone service keeps going when a call gives up waiting
+MOUNT_HINTS = {"timeout": "The disk image is still downloading and mounting. Call ios_device_prepare again in a "
+                          "minute; it reports ddi_mounted=true once it's done."}
+
 log = logging.getLogger("iosstudio.device")
 
 
@@ -210,7 +214,7 @@ def register(mcp: MCPServer) -> None:
             ddi = (await dcall(state, "ddi.status", udid=udid, timeout=30) or {}).get("mounted")
             if ddi is False and mount:
                 await ctx.report_progress(10, 100, message="Mounting the developer disk image")
-                ddi = bool((await dcall(state, "ddi.mount", udid=udid, timeout=300) or {}).get("mounted"))
+                ddi = bool((await dcall(state, "ddi.mount", udid=udid, timeout=MAX_WAIT, hints=MOUNT_HINTS) or {}).get("mounted"))
                 actions.append("Mounted the developer disk image." if ddi else "Tried to mount the disk image.")
             elif ddi is False:
                 nxt.append("Call again with mount=true to mount the developer disk image (needs internet).")
@@ -403,7 +407,7 @@ def register(mcp: MCPServer) -> None:
         down from 80 until it fits); width, height and bytes are reported. inline=false returns only the
         path. The phone must be unlocked with the screen on. If your client can't show images, open the path."""
         state = get_state(ctx)
-        shot = await dcall(state, "screenshot", udid=udid, timeout=45) or {}
+        shot = await dcall(state, "screenshot", udid=udid, timeout=MAX_WAIT) or {}
         src = Path(str(shot.get("path") or ""))
         if not src.is_file():
             raise ToolError("The iPhone returned no screenshot file. Retry with the phone unlocked.")

@@ -71,9 +71,9 @@ class WatchTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((group, action), ("watch", "run"))
         self.assertEqual(flags, {"project": PROJ, "auto_run": "true", "debounce_ms": 900, "detach": True,
                                  "owner": os.getpid()})
-        self.assertGreaterEqual(opts["timeout"], 30)
+        self.assertEqual(opts["timeout"], 25)      # stop the old watcher (12 s) + start (8 s), within MAX_WAIT
         self.assertEqual(data["state"], "compiling")
-        self.assertEqual(data["current_build_id"], "w-3")
+        self.assertEqual(data["current_job_id"], "w-3")
         self.assertIn("wait_seconds=20", " ".join(data["next_steps"]))
 
     async def test_start_passes_only_given_settings(self):
@@ -147,13 +147,13 @@ class WatchDiagnostics(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(BT.helper, "call", fake_call):
             res = await mcp.tools["ios_build_diagnostics"](ctx, job_id="w-3")
             data = res.structured_content
-            self.assertEqual((data["errors"], data["build_result"], data["build_id"]), (1, "failed", "w-3"))
+            self.assertEqual((data["errors"], data["build_result"], data["job_id"]), (1, "failed", "w-3"))
             steps = " ".join(data["next_steps"])
             self.assertIn("ios_watch_status(wait_seconds=", steps)
             self.assertNotIn("ios_build_start", steps)
             res = await mcp.tools["ios_build_history"](ctx)
             first = res.structured_content["builds"][0]
-            self.assertEqual(first.get("build_id"), "w-3")
+            self.assertEqual(first.get("job_id"), "w-3")
             self.assertEqual(data["diagnostics"][0]["locations"], ["Sources/Glance/A.swift:3:1"])
             with self.assertRaises(ToolError):
                 await mcp.tools["ios_build_diagnostics"](ctx, job_id="w-99")
@@ -188,7 +188,7 @@ class DiagnosticsPicksTheNewerBuild(unittest.IsolatedAsyncioTestCase):
             res = await mcp.tools["ios_build_diagnostics"](ctx, project_path="Glance")
         d = res.structured_content
         if d["source"] == "build b-1":   # a session job keeps its id and the rebuild advice
-            self.assertEqual(d["build_id"], "b-1")
+            self.assertEqual(d["job_id"], "b-1")
             self.assertIn("ios_build_start", " ".join(d["next_steps"]))
         return d["source"], d["diagnostics"][0]["message"]
 

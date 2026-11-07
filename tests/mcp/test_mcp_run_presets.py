@@ -89,10 +89,13 @@ class PresetsTool(Base):
         mcp = FakeMCP()
         T.register(mcp)
         self.tool = mcp.tools["ios_project_presets"]
+        self.set_tool = mcp.tools["ios_project_preset_set"]
 
     async def run_tool(self, **kw):
+        """ios_project_presets, or ios_project_preset_set when an action is given."""
+        tool = self.set_tool if "action" in kw else self.tool
         with self.patches():
-            res = await self.tool(self.ctx, **{"project_path": "Glance", **kw})
+            res = await tool(self.ctx, **{"project_path": "Glance", **kw})
         text = "".join(c.text for c in res.content if getattr(c, "text", None))
         return res.structured_content, text
 
@@ -122,7 +125,7 @@ class PresetsTool(Base):
         self.replies = [listing(presets=())]
         sc, _ = await self.run_tool()
         self.assertEqual(sc["total"], 0)
-        self.assertIn("action='save'", sc["next_steps"][0])
+        self.assertIn("ios_project_preset_set(project_path=", sc["next_steps"][0])
 
     async def test_save_new_maps_to_camel_case(self):
         self.replies = [listing(presets=(DEBUG,)), listing(presets=(DEBUG, GERMAN))]
@@ -543,7 +546,11 @@ class Registration(unittest.TestCase):
         mcp = server.create_server()
         tools = {t.name: t for t in mcp._tool_manager.list_tools()}
         t = tools["ios_project_presets"]
-        self.assertEqual(t.parameters["properties"]["action"]["enum"], ["list", "save", "delete", "select"])
+        self.assertNotIn("action", t.parameters["properties"])
+        self.assertTrue(t.annotations.read_only_hint)
+        t = tools["ios_project_preset_set"]
+        self.assertEqual(t.parameters["properties"]["action"]["enum"], ["save", "delete", "select"])
+        self.assertIn("action", t.parameters.get("required", []))
         self.assertTrue(t.annotations.destructive_hint)
         for name in ("ios_run", "ios_app_launch", "ios_app_run_and_capture"):
             self.assertIn("preset", tools[name].parameters["properties"], name)

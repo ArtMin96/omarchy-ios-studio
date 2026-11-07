@@ -130,51 +130,51 @@ class Defaults(Base):
             await self.call("ios_app_defaults", bundle_id=HABITS, key="nope")
 
     async def test_set_is_a_dry_run_until_confirmed(self):
-        dry = await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="dailyGoal", value="5", type="int")
+        dry = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="dailyGoal", value="5", type="int")
         self.assertFalse(dry.done)
         self.assertEqual((dry.previous, dry.value, dry.type), (3, 5, "int"))
         self.assertIn("Nothing was changed", dry.message)
         self.assertEqual((await self.call("ios_app_defaults", bundle_id=HABITS, key="dailyGoal")).values["dailyGoal"], 3)
         self.assertIn("installed over it", dry.message)
-        done = await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="dailyGoal", value="5",
+        done = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="dailyGoal", value="5",
                                type="int", confirm=True)
         self.assertEqual((done.state, done.done, done.method, done.verified), ("succeeded", True, "reinstall", True))
         self.assertTrue(done.artifact.endswith("HabitTracker.ipa"))
         self.assertTrue(done.backup)
         self.assertEqual((await self.call("ios_app_defaults", bundle_id=HABITS, key="dailyGoal")).values["dailyGoal"], 5)
-        gone = await self.call("ios_app_defaults", bundle_id=HABITS, action="delete", key="dailyGoal", confirm=True)
+        gone = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="delete", key="dailyGoal", confirm=True)
         self.assertTrue(gone.existed)
-        again = await self.call("ios_app_defaults", bundle_id=HABITS, action="delete", key="dailyGoal")
+        again = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="delete", key="dailyGoal")
         self.assertIn("nothing to delete", again.message)
 
     async def test_change_runs_as_a_job(self):
         self.delay = 0.3
-        r = await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="userName", value="Sam",
+        r = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="userName", value="Sam",
                             confirm=True, wait_seconds=0)
         self.assertEqual((r.state, r.done), ("running", False))
-        done = await self.call("ios_app_defaults", job_id=r.job_id, wait_seconds=5)
+        done = await self.call("ios_app_defaults_set", job_id=r.job_id, wait_seconds=5)
         self.assertEqual((done.state, done.key, done.value), ("succeeded", "userName", "Sam"))
         with self.assertRaises(ToolError):
-            await self.call("ios_app_defaults", job_id="d0-0")
+            await self.call("ios_app_defaults_set", job_id="d0-0")
 
     async def test_batch_without_refresh(self):
-        r = await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="userName", value="Kim",
+        r = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="userName", value="Kim",
                             confirm=True, refresh=False)
         self.assertEqual((r.method, r.launch_args), ("file", ["-userName", "Kim"]))
         self.assertIn("cached copy", r.warning)
         self.assertTrue(any("ios_app_launch" in n for n in r.next_steps))
-        f = await self.call("ios_app_defaults", bundle_id=HABITS, action="refresh")
+        f = await self.call("ios_app_defaults_set", bundle_id=HABITS, action="refresh")
         self.assertEqual((f.state, f.method), ("succeeded", "reinstall"))
 
     async def test_running_app(self):
-        dry = await self.call("ios_app_defaults", bundle_id=WEATHER, action="set", key="unit", value="fahrenheit")
+        dry = await self.call("ios_app_defaults_set", bundle_id=WEATHER, action="set", key="unit", value="fahrenheit")
         self.assertTrue(dry.running)
         self.assertTrue(any("stop_app=true" in s for s in dry.next_steps))
         with self.assertRaises(ToolError) as c:
-            await self.call("ios_app_defaults", bundle_id=WEATHER, action="set", key="unit", value="f", confirm=True)
+            await self.call("ios_app_defaults_set", bundle_id=WEATHER, action="set", key="unit", value="f", confirm=True)
         self.assertIn("[app-running]", str(c.exception))
         self.assertIn("stop_app=true", str(c.exception))
-        ok = await self.call("ios_app_defaults", bundle_id=WEATHER, action="set", key="unit", value="f",
+        ok = await self.call("ios_app_defaults_set", bundle_id=WEATHER, action="set", key="unit", value="f",
                              confirm=True, stop_app=True)
         self.assertTrue(ok.stopped_app)
 
@@ -183,11 +183,11 @@ class Defaults(Base):
             await self.call("ios_app_defaults", bundle_id="com.example.podcasts")
         self.assertIn("not-developer", str(c.exception))
         with self.assertRaises(ToolError) as c:
-            await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="x", value="abc", type="int",
+            await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="x", value="abc", type="int",
                             confirm=True)
         self.assertIn("Next:", str(c.exception))
         with self.assertRaises(ToolError):
-            await self.call("ios_app_defaults", bundle_id=HABITS, action="set", key="x")
+            await self.call("ios_app_defaults_set", bundle_id=HABITS, action="set", key="x")
         with self.assertRaises(ToolError):
             await self.call("ios_app_defaults", bundle_id="com.example.nothere")
 

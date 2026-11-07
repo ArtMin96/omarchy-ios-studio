@@ -308,6 +308,22 @@ class OneIdName(unittest.TestCase):
         for t in tools:
             self.assertFalse(old & set(t.parameters.get("properties", {})), t.name)
 
+    def test_no_result_names_an_id_build_id(self):
+        """Results name the ids the tools take: job_id, never build_id."""
+        from iosstudio_mcp.server import mcp
+
+        def keys(schema):
+            if isinstance(schema, dict):
+                for k, v in schema.items():
+                    if k == "properties" and isinstance(v, dict):
+                        yield from v
+                    yield from keys(v)
+            elif isinstance(schema, list):
+                for x in schema:
+                    yield from keys(x)
+        for t in mcp._tool_manager.list_tools():
+            self.assertNotIn("build_id", set(keys(t.output_schema or {})), t.name)
+
 
 if __name__ == "__main__":
     unittest.main()

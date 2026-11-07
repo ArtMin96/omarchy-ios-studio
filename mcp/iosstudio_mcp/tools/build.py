@@ -413,7 +413,7 @@ def register(mcp: MCPServer) -> None:
             nxt.append("History keeps the first 200 diagnostics of a build; fix those and save to see the rest.")
         if notes and not include_notes:
             nxt.append(f"{notes} compiler notes hidden; include_notes=true shows them.")
-        return DiagnosticsPage(source=source, build_id=bid, project=project, build_result=result, total=len(entries),
+        return DiagnosticsPage(source=source, job_id=bid, project=project, build_result=result, total=len(entries),
                                count=len(page), offset=offset, has_more=nxt_off is not None, next_offset=nxt_off,
                                errors=errors, warnings=warnings, notes=notes, categories=cats, diagnostics=page,
                                next_steps=nxt,

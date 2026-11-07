@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -14,11 +16,15 @@ from mcp.types import ResourceLink
 
 from .. import helper
 from ..core import budget as B
+from ..core.registry import MAX_WAIT
 from ..models import CrashDetail, CrashFrame
 from ..state import AppState
 from .device import dcall
 
 FRAMES = 15
+REPORT_CAP = 8 * 1024 * 1024    # bytes of a .ips (or its .symbols.json) read into memory
+PULL_TIMEOUT_NEXT = ("Copying and symbolicating the report took longer than one call; the iPhone service keeps "
+                     "going and keeps the copy. Call ios_crash_get again in a few seconds.")
 
 
 def _not_found(name: str) -> str:
@@ -29,7 +35,7 @@ async def _lookup_name(state: AppState, name: str, udid: str | None) -> str:
     """Accept the device path from ios_crash_list, or just the file name."""
     if name.startswith("/"):
         return name
-    items = await dcall(state, "crash.list", {"flush": False}, udid=udid, timeout=30) or []
+    items = await dcall(state, "crash.list", {"flush": False}, udid=udid, timeout=MAX_WAIT) or []
     hit = next((c for c in items if c.get("file") == name or str(c.get("name", "")).endswith("/" + name)), None)
     if hit is None:
         known = ", ".join(str(c.get("file") or c.get("name")) for c in items[:5])
@@ -62,11 +68,26 @@ def _resolved(n: int, f: dict, images: list, info: dict | None) -> str:
     return f"{n} {info.get('image') or ''} {info.get('function') or ''}".rstrip() + where
 
 
+def read_report(path: str, cap: int = REPORT_CAP) -> tuple[str, int | None]:
+    """(text, size in bytes) of a pulled .ips, at most `cap` bytes of it (a report is rarely over 1 MB).
+    Blocking: call it with asyncio.to_thread."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(cap)
+            size = os.fstat(f.fileno()).st_size
+    except OSError:
+        return "", None
+    return data.decode(errors="replace"), size
+
+
 def load_symbols(path: str) -> dict:
     """Crash symbolication's saved result for a pulled report (<report>.symbols.json, written by the device
-    daemon's crash.pull): {"<thread>:<frame>": {function, file, line, ...}}."""
+    daemon's crash.pull): {"<thread>:<frame>": {function, file, line, ...}}. Blocking: use asyncio.to_thread."""
     try:
-        data = json.loads(Path(path + ".symbols.json").read_text())
+        p = Path(path + ".symbols.json")
+        if p.stat().st_size > REPORT_CAP:
+            return {}
+        data = json.loads(p.read_text())
     except (OSError, ValueError):
         return {}
     frames = data.get("frames") if isinstance(data, dict) else None
@@ -110,19 +131,15 @@ def render_section(raw: str, section: str, frames_per_thread: int = 25, symbols:
 async def crash_detail(state: AppState, name: str, udid: str | None = None, section: str = "summary",
                        start_line: int = 0, max_lines: int = 400, max_bytes: int | None = None) -> CrashDetail:
     name = await _lookup_name(state, name, udid)
-    res = await dcall(state, "crash.pull", {"name": name}, udid=udid, timeout=60,
-                    hints={"not-found": _not_found(name)}) or {}
+    res = await dcall(state, "crash.pull", {"name": name}, udid=udid, timeout=MAX_WAIT,
+                      hints={"not-found": _not_found(name), "timeout": PULL_TIMEOUT_NEXT}) or {}
     s = res.get("summary") or {}
     path = str(res.get("path") or "")
     file = Path(path).name if path else None
     size = None
     raw = ""
     if path:
-        try:
-            raw = Path(path).read_text(errors="replace")
-            size = len(raw.encode())
-        except OSError:
-            raw = ""
+        raw, size = await asyncio.to_thread(read_report, path)
     nxt = []
     frames = [B.clip(f, 300) for f in (s.get("frames") or [])][:FRAMES]
     proc = s.get("process")
@@ -160,7 +177,8 @@ async def crash_detail(state: AppState, name: str, udid: str | None = None, sect
                       project_path=helper.tilde(sym["project"]) if sym.get("project") else None,
                       app_frames=app_frames, next_steps=nxt, full_output_path=helper.tilde(path) or None).with_budget(max_bytes, links)
     if section != "summary" and raw:
-        lines = raw.splitlines() if section == "raw" else render_section(raw, section, symbols=load_symbols(path))
+        symbols = {} if section == "raw" else await asyncio.to_thread(load_symbols, path)
+        lines = raw.splitlines() if section == "raw" else render_section(raw, section, symbols=symbols)
         window = [B.clip(ln, 1000) for ln in lines[start_line:start_line + max_lines]]
 
         def page_note(end: int) -> str | None:

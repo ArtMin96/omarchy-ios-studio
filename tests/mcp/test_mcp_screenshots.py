@@ -188,18 +188,18 @@ class Baselines(Base):
         self.helper_replies["delete"] = lambda f: {"name": "Home", "baseline_path": "/x/Home.png",
                                                    "deleted": bool(f.get("confirm")), "dryRun": not f.get("confirm"),
                                                    "compare_runs": 3, "compare_bytes": 120_000}
-        res = await self.tools["ios_screenshot_baselines"](self.ctx, project_path="MyApp", action="delete", name="Home")
+        res = await self.tools["ios_screenshot_baseline_delete"](self.ctx, project_path="MyApp", name="Home")
         self.assertFalse(res.done)
         self.assertEqual(len(res.would), 2)
         self.assertIn("3 kept compare run(s)", res.would[1])
         self.assertIsNone(self.hcalls[-1][1]["confirm"])
-        res = await self.tools["ios_screenshot_baselines"](self.ctx, project_path="MyApp", action="delete", name="Home",
-                                                           confirm=True)
+        res = await self.tools["ios_screenshot_baseline_delete"](self.ctx, project_path="MyApp", name="Home",
+                                                                 confirm=True)
         self.assertTrue(res.done)
         self.assertIn("3 compare run(s)", res.message)
         self.assertTrue(self.hcalls[-1][1]["confirm"])
-        with self.assertRaises(ToolError):
-            await self.tools["ios_screenshot_baselines"](self.ctx, project_path="MyApp", action="delete")
+        with self.assertRaises(TypeError):        # name is required (MCP validation rejects the call)
+            await self.tools["ios_screenshot_baseline_delete"](self.ctx, project_path="MyApp")
 
 
 class Matrix(Base):
