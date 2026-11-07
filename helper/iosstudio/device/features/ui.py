@@ -79,27 +79,18 @@ def _clamp_timeout(a) -> float:
     return max(2.0, min(t, U.MAX_TIMEOUT))
 
 
+AX_UNAVAILABLE = err("ax-unavailable", "Couldn't reach the iPhone's accessibility service. Make sure the iPhone "
+                     "is unlocked and Developer Mode is on.")
+
+
 @contextlib.asynccontextmanager
 async def ax_session(s):
-    rsd = await s.get_rsd()
-    try:
-        ax = AccessibilityAudit(rsd)
-        await ax.__aenter__()
-    except BaseException as exc:  # noqa: BLE001
-        if isinstance(exc, asyncio.CancelledError):
-            raise
-        e = classify(exc)
-        if e.code == "failed":
-            raise err("ax-unavailable", "Couldn't reach the iPhone's accessibility service. Make sure the iPhone "
-                      "is unlocked and Developer Mode is on.", None, e.detail)
-        raise e
-    try:
-        yield ax
-    finally:
-        with contextlib.suppress(BaseException):
-            await asyncio.wait_for(ax.set_app_monitoring_enabled(False), 2)
-        with contextlib.suppress(BaseException):
-            await asyncio.wait_for(ax.close(), 3)
+    async with s.open_service(AccessibilityAudit, fail=AX_UNAVAILABLE) as ax:
+        try:
+            yield ax
+        finally:
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(ax.set_app_monitoring_enabled(False), 2)
 
 
 def _drain(q: asyncio.Queue) -> None:

@@ -58,7 +58,7 @@ connection; other clients are unaffected. `{"all": true}` stops the daemon for e
 
 | cmd | args | reply data |
 |---|---|---|
-| `hello` | `{name?, events?, version?}` | `{version, pid, clientId, name, clients, demo, socket, idle, events}`; names the client (logs, `daemon.clients`) and optionally sets the subscription |
+| `hello` | `{name?, events?, version?}` | `{version, pid, clientId, name, clients, demo, socket, runtimeDir, log, idle, events}`; names the client (logs, `daemon.clients`) and optionally sets the subscription |
 | `subscribe` | `{events: [name…] \| null}` | same as `hello`; `null`, `"*"` or omitting `events` = all events |
 | `daemon.clients` | – | `[{id, name, since, events, syslog: Filters \| null, mirror: bool}]` |
 | `daemon.shutdown` | `{all?: bool}` | `{}`; detaches this client (or stops the daemon with `all`) |
@@ -103,8 +103,9 @@ subscribed client. A recording holds the mirror too, so it keeps running until t
 
 ### Python client (`helper/iosstudio/device/device_client.py`)
 
-Stdlib asyncio; import it from the repo or vendor the single file. Its module docstring is the
-full API.
+Stdlib asyncio; import it from the repo, or load it by file path as the MCP server does
+(`protocol.py` next to it is then loaded by path too, so the pair can be copied together). Its module
+docstring is the full API.
 
 ```python
 import sys; sys.path.insert(0, "<repo>/helper")
@@ -118,7 +119,8 @@ async with DeviceClient(name="mcp") as dev:          # spawns the daemon if need
             ...
 ```
 
-`request()` raises `DeviceError(code, message, fix, detail)` for error replies, plus `timeout`,
+`request()` raises `DeviceError(code, message, fix, detail)` (`protocol.DeviceError`; inside the
+`iosstudio` package it is a `core.output.HelperError`) for error replies, plus `timeout`,
 `disconnected` and `daemon-unavailable`. Demo mode follows `IOSSTUDIO_DEMO` (or `demo=True`).
 After a daemon restart the client reconnects by itself and emits a local `reconnected` event;
 syslog subscriptions and mirror references must be re-requested then.
@@ -126,6 +128,13 @@ syslog subscriptions and mirror references must be re-requested then.
 `python3 helper/iosstudio/device/device_client.py device.info '{}'` sends one request from a shell (debugging).
 
 ## Framing
+
+`helper/iosstudio/device/protocol.py` is the one implementation of what follows (stdlib only): `encode`/`decode`,
+`read_lines`/`write_line` (blocking) and `read_lines_async`/`write_line_async` (asyncio), the message
+builders (`request`, `reply_ok`, `reply_error`, `event`), the one error type `DeviceError` and
+`error_json(exc)`. The daemons, the broker, `--once` and `device_client.py` all use it. Lines are at
+most 16 MiB (`MAX_LINE`); a longer request line ends that client's connection, a malformed one is
+skipped with a `log` warning event.
 
 Request (UI → daemon), one per line:
 
@@ -204,7 +213,7 @@ the tunnel is up.
 
 | event | data | when |
 |---|---|---|
-| `ready` | `{version, pymobiledevice3, python, pid}` | once, at start |
+| `ready` | `{version, pymobiledevice3, python, pid, socket, runtimeDir, log, error?}` | first, to every new client. `log` is the daemon's log file: clients show it from here instead of working out the runtime-dir rules (`device_client.runtime_base()` is the only place they live). `error` = the iPhone tools can't be used (`needs-setup`, `pmd3-api`, `busy`); every request but `daemon.ping` then answers with it |
 | `devices` | `[Device…]` | at start and whenever the list or any field changes |
 | `connection` | Connection (below) | on every connection state change of the active device |
 | `deviceInfo` | `{udid, …partial DeviceInfo}` | after connect and every 60 s (battery etc.) |
@@ -1322,7 +1331,25 @@ USB, first Wi-Fi pair record), runs one command, prints **one** JSON object
 Events and diagnostics go to stderr only. Any command works, e.g.
 `--once app.install '{"path": "/…/App.ipa"}'` (background renewals: helper/iosstudio/features/projects.py
 `renew-due`), `--once device.info '{}'`. The tunnel wait is 25 s, so an unreachable phone answers
-`unreachable` in ~25–35 s.
+`unreachable` in ~25–35 s. Standalone, the real daemon needs an iPhone for every command (no paired
+one around: `no-device`); the demo daemon answers any command. Bad JSON arguments answer `bad-args`.
+
+## Inside the daemon (`helper/iosstudio/device/`)
+
+| file | role |
+|---|---|
+| `protocol.py` | wire format: framing, message builders, `DeviceError`, `error_json` |
+| `backend.py` | `Backend`: the contract the broker calls (`welcome`, `dispatch`, `error_json`, `syslog_*`, `client_gone`, `shutdown`) with the shared parts: dispatch (`async def` handlers awaited, plain ones run in a worker thread), feature registry, hooks, `TaskSet` of background tasks cancelled at shutdown, `handle()` for `--once` |
+| `deviced.py` | the real iPhone: `Daemon(Backend)` (discovery, `Session`, core commands, classify errors and drop a dead tunnel), `BrokenBackend(Backend)` (pymobiledevice3 unusable or another daemon owns the phone: `daemon.ping` answers, everything else returns the one error) |
+| `deviced_demo.py` | `DemoBackend(Backend)`: the made-up iPhone, same commands (a test checks real and demo register the same set; demo adds `demo.transport`) |
+| `device_broker.py` | the socket server: clients, subscriptions, the shared syslog stream, per-client resources, idle exit, the stdio bridge |
+| `deviced_core.py` | what real feature modules share: `emit`, `err`, `classify`, `reclassify`, cache paths, `PortForward` |
+| `features/`, `demo_features/` | one module per feature, `register(reg)` each |
+
+Real features reach the phone only through the `Session`: `async with s.open_service(Cls, fail=err(...))`
+opens a service on the current tunnel with a bounded open (30 s; a hang reads as a dropped link) and
+close (5 s). `fail` replaces an unexplained open failure with the feature's own error; connection,
+lock and trust problems keep their codes so the daemon can react (drop the tunnel, show Trust).
 
 ## State file for other parts of the app
 
