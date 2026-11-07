@@ -9,6 +9,7 @@
 
 - FakeDaemon speaks the device daemon's protocol (JSON lines on a Unix socket, docs/deviced-protocol.md) to the
   real DeviceClient; replies[cmd] = (delay, data) | (delay, {"error": {code, message}}) | callable(args).
+  `delay` can be an asyncio.Event instead of seconds: the reply waits until the test sets it (no timing races).
   `emit(event, data)` pushes an event to every connected client, like the broker does.
 - FakeHelper is an executable run by the real helper.call()/spawn_stream(): per "group action" it prints one
   {"ok": ...} line, or a list of JSON event lines (streams), after an optional delay; it records every argv.
@@ -37,6 +38,7 @@ from iosstudio_mcp.core import deadline
 from iosstudio_mcp.core.registry import tool as real_tool
 from iosstudio_mcp.state import AppState
 from support.mcp_fakes import FakeMCP, size_of
+from support.waiting import until
 
 __all__ = ["FAKE_HELPER", "FakeDaemon", "FakeHelper", "ToolCase", "Recorder", "err", "size_of", "registered"]
 
@@ -106,7 +108,9 @@ class FakeDaemon:
             if callable(rep):
                 rep = rep(args)
         delay, data = rep
-        if delay:
+        if isinstance(delay, asyncio.Event):
+            await delay.wait()
+        elif delay:
             await asyncio.sleep(delay)
         failed = isinstance(data, dict) and isinstance(data.get("error"), dict)   # real replies carry "error": null
         out = {"id": msg["id"], "ok": False, "error": data["error"]} if failed \
@@ -268,6 +272,10 @@ class ToolCase(unittest.IsolatedAsyncioTestCase):
         text = str(cm.exception)
         self.assertNotIn("\n", text, name)
         return text
+
+    async def until(self, cond, /, timeout: float = 5.0, what: str = ""):
+        """support.waiting.until: wait for something that happens on the loop instead of a fixed sleep."""
+        return await until(cond, timeout=timeout, what=what)
 
     async def poll(self, module, name: str, job_id: str, /, tries: int = 20, **kw) -> dict:
         """Call the tool again with job_id until its state isn't 'running'."""

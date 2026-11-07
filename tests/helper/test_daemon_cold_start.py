@@ -94,7 +94,10 @@ class ColdStart(unittest.IsolatedAsyncioTestCase):
         from iosstudio.device.real import daemon as deviced
         self.deviced = deviced
         self.events = Events()
-        for p in (mock.patch.object(core, "BROKER", self.events), mock.patch.object(link, "rsd_for", slow_tunnel)):
+        state = {"DEVICE_STATE": self.tmp / "device.json", "DEVICE_CACHE": self.tmp / "devices.json",
+                 "LAST_DEVICE": self.tmp / "last-device"}       # the daemon's machine-wide files stay in tmp
+        for p in (mock.patch.object(core, "BROKER", self.events), mock.patch.object(link, "rsd_for", slow_tunnel),
+                  mock.patch.multiple(deviced, **state)):
             p.start()
             self.addCleanup(p.stop)
         self.d = deviced.Daemon(fake_pmd3(self.tmp))

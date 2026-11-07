@@ -28,6 +28,7 @@ from iosstudio_mcp.tools import network as TN
 from iosstudio_mcp.tools import projects as TP
 from iosstudio_mcp.tools import screen as TS
 from support.mcp_fakes import FakeMCP
+from support.waiting import until
 
 HOME = str(Path.home())
 
@@ -173,7 +174,7 @@ class Files(Base):
     async def test_pull_progress_and_result(self):
         r = await self.call("ios_files_pull", bundle_id="com.example.app", paths=["/Documents/a.txt"], wait_seconds=0)
         self.assertEqual((r.state, r.kind), ("running", "container.pull"))
-        await asyncio.sleep(0.01)
+        await until(lambda: self.calls, what="the pull request")
         self.assertEqual(self.calls[0][1]["transferId"], r.job_id)          # the daemon's id is the job id
         self.emit("transfer", {"id": r.job_id, "bytes": 5, "total": 10, "file": "a.txt", "files": 0})
         st = await self.call("ios_job_status", job_id=r.job_id, wait_seconds=0)

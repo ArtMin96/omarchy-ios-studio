@@ -18,6 +18,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from iosstudio_mcp.core import jobs as J
 from iosstudio_mcp.core.job_status import job_status
 from iosstudio_mcp.core.jobs import Job, JobManager
+from support.waiting import until
 
 
 class Fail(Exception):
@@ -169,9 +170,11 @@ class Coroutines(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_cancels_coroutines_and_streams(self):
         mgr = JobManager()
         cleaned = []
+        started = asyncio.Event()
 
         async def work(job: Job) -> None:
             try:
+                started.set()
                 await asyncio.sleep(30)
             finally:
                 cleaned.append(job.id)
@@ -183,14 +186,13 @@ class Coroutines(unittest.IsolatedAsyncioTestCase):
         b = Job(id="b-99", kind="build", action="compile", title="b", proc=proc)
         mgr.jobs[b.id] = b
         b._task = asyncio.create_task(mgr._pump(b))
-        await asyncio.sleep(0.05)
+        await started.wait()
         t0 = time.monotonic()
         await mgr.shutdown()
         self.assertLess(time.monotonic() - t0, 8)
         self.assertEqual((a.state, cleaned), ("cancelled", [a.id]))
         self.assertIsNotNone(proc.returncode)
-        await asyncio.sleep(0.05)
-        self.assertTrue(b.finished)
+        await until(lambda: b.finished, what="the stream job to finish")
 
 
 class Lookup(unittest.IsolatedAsyncioTestCase):
