@@ -14,6 +14,7 @@ import uuid
 import device_link as link
 import deviced_core as core
 from deviced_core import dlog, emit, err, icon_path, is_connection_error, write_bytes
+from deviced_features._app_lookup import exe_path
 from deviced_features.app_index import INDEX, bundle_dir, compose, device_fetcher, fetch_icons, size_fetcher
 
 
@@ -29,8 +30,7 @@ async def running_pids(d, rsd) -> dict[str, int]:
         dlog(f"apps: process list: {exc!r}")
         return out
     for p in procs:
-        url = p.get("executableURL")
-        path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
+        path = exe_path(p)
         if ".app/" in path and "processIdentifier" in p:
             out[bundle_dir(path)] = int(p["processIdentifier"])
     return out
@@ -75,9 +75,7 @@ async def app_pids(d, s, rsd, bundle_id: str) -> list[int]:
     pids = []
     async with d.pmd3.AppServiceService(rsd) as svc:
         for p in await svc.list_processes():
-            url = p.get("executableURL")
-            path = url.get("relative", "") if isinstance(url, dict) else str(url or "")
-            path = path.removeprefix("file://")
+            path = exe_path(p)
             if (app_dir and bundle_dir(path) == app_dir) or (exe and path.endswith(f".app/{exe}")):
                 if "processIdentifier" in p:
                     pids.append(int(p["processIdentifier"]))
@@ -173,8 +171,7 @@ def register(reg):
             procs = await svc.list_processes()
         out = []
         for p in procs:
-            url = p.get("executableURL")
-            path = (url.get("relative", "") if isinstance(url, dict) else str(url or "")).removeprefix("file://")
+            path = exe_path(p)
             is_app = ".app/" in path
             if a.get("appsOnly") and not is_app:
                 continue

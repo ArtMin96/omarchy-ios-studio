@@ -18,6 +18,8 @@ import time
 
 import deviced_core as core
 from deviced_core import TUNNEL_WAIT_S, classify, dlog
+from deviced_features._app_lookup import find_app
+from deviced_features.app_index import device_fetcher
 
 SYSLOG_MSG_MAX = 8192
 BATCH_MAX = 256          # raw records per batch handed to the worker
@@ -48,12 +50,10 @@ class PhoneSyslog:
         """bundleId filter -> (executable, installed bundle id). Never waits for the tunnel."""
         if session is None or session.rsd is None:
             return None, None
-        async with session.pmd3.InstallationProxyService(lockdown=session.rsd) as ip:
-            apps = await ip.get_apps(application_type="Any")
-        for k, v in apps.items():
-            if k == bid or k.endswith("." + bid):
-                return v.get("CFBundleExecutable") or None, k
-        return None, bid
+        app = await find_app(session.udid, bid, device_fetcher(session.pmd3, session.rsd))
+        if app is None:
+            return None, bid
+        return app.get("executable") or None, app["bundleId"]
 
     @staticmethod
     def _entry(e, min_level: int) -> dict | None:
