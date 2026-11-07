@@ -53,6 +53,8 @@ DISCOVERY_EVERY_S = 3
 SERVICE_OPEN_S = 30    # Session.open_service: an open that takes longer reads as a dropped link
 SERVICE_CLOSE_S = 5    # ... and a close that takes longer is left behind
 INFO_FRESH_S = 10      # a `fresh` device.info joins a refresh started this recently instead of a new one
+DISCOVERY_WAIT_S = 10  # a request right after start waits this long at most for the first discovery pass
+NO_DEVICE_CMDS = frozenset({"daemon.ping", "daemon.shutdown", "daemon.features"})   # never wait for discovery
 
 
 # ---------------------------------------------------------------- device session
@@ -598,6 +600,7 @@ class Daemon(Backend):
         self.cache: dict = fileio.load_json(DEVICE_CACHE, {}) or {}
         self.session: Session | None = None
         self.disc_task: asyncio.Task | None = None
+        self.discovered = asyncio.Event()   # the first discovery pass ran (and picked a device, if any)
         self._last_devices = None
         self.stopping = asyncio.Event()
         self.records = link.PairRecords(pmd3)
@@ -691,27 +694,45 @@ class Daemon(Backend):
     async def discovery(self):
         while not self.stopping.is_set():
             try:
-                usb = set(await link.usb_udids(self.pmd3))
-            except BaseException:  # noqa: BLE001
-                usb = set()
-            new_usb = usb - self.usb
-            self.usb = usb
-            # Off the loop: stats the record folders and re-reads records only when they changed.
-            with contextlib.suppress(Exception):
-                self.wifi, self.lockdown = await asyncio.to_thread(self.records.read)
-            s = self.session
-            if s is None:
-                cand = self.default_udid()
-                if cand:
-                    await self.select(cand)
-            elif new_usb:
-                if s.udid in new_usb:
-                    if s.rsd is None or s.where.get("transport") != "usb":
-                        s.reconnect_now()  # prefer the cable
-                elif s.rsd is None:
-                    await self.select(sorted(new_usb)[0])
-            self.publish_devices()
+                await self._discover_once()
+            finally:
+                self.discovered.set()
             await asyncio.sleep(DISCOVERY_EVERY_S)
+
+    async def _discover_once(self):
+        try:
+            usb = set(await link.usb_udids(self.pmd3))
+        except Exception:  # noqa: BLE001
+            usb = set()
+        new_usb = usb - self.usb
+        self.usb = usb
+        # Off the loop: stats the record folders and re-reads records only when they changed.
+        with contextlib.suppress(Exception):
+            self.wifi, self.lockdown = await asyncio.to_thread(self.records.read)
+        s = self.session
+        if s is None:
+            cand = self.default_udid()
+            if cand:
+                await self.select(cand)
+        elif new_usb:
+            if s.udid in new_usb:
+                if s.rsd is None or s.where.get("transport") != "usb":
+                    s.reconnect_now()  # prefer the cable
+            elif s.rsd is None:
+                await self.select(sorted(new_usb)[0])
+        self.publish_devices()
+
+    async def settle(self, cmd: str) -> None:
+        """Before a request that needs the iPhone: wait (bounded) for the first discovery pass, so a
+        request sent right after the daemon started doesn't answer no-device before discovery has even
+        looked. The session then waits for its tunnel itself (Session.get_rsd)."""
+        if cmd in NO_DEVICE_CMDS or self.discovered.is_set():
+            return
+        t = self.disc_task
+        if t is None or t.done():
+            return
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(self.discovered.wait()), DISCOVERY_WAIT_S)
 
     def default_udid(self) -> str | None:
         last = self._last_device.get() or ""

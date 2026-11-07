@@ -205,6 +205,17 @@ class AppIndex:
             self._refresh_task(udid, kind, fetch, on_change)
         return snap.apps, stale, snap.fetched_at
 
+    def peek(self, udid: str, kind: str) -> list[dict] | None:
+        """The cached entries (memory, else the disk copy) without fetching or refreshing; None if none."""
+        snap = self._dev(udid).lists.get(kind)
+        return snap.apps if snap is not None else None
+
+    async def settled(self, udid: str, kind: str) -> None:
+        """Wait for a list refresh in flight (if any) to end; its errors are only logged."""
+        t = self._tasks.get((udid, f"list:{kind}"))
+        if t is not None:
+            await asyncio.gather(asyncio.shield(t), return_exceptions=True)
+
     def _refresh_task(self, udid: str, kind: str, fetch: Fetch, on_change: OnChange | None) -> asyncio.Task:
         key = (udid, f"list:{kind}")
         t = self._tasks.get(key)

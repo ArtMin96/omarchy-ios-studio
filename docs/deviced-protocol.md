@@ -164,6 +164,9 @@ Rules:
 - Paths returned are absolute local paths under `~/.cache/ios-studio/`.
 - Slow commands: a request never blocks events or other requests. A command that needs the
   tunnel waits up to 25 s for it to come up, then fails with `unreachable`.
+- Right after the daemon starts, a request (anything but `daemon.ping`, `daemon.features`,
+  `daemon.shutdown`) first waits for the first device discovery pass (up to 10 s, usually well under
+  a second), so it never answers `no-device` before the daemon has looked for a phone.
 
 ### Common error codes
 
@@ -223,7 +226,7 @@ the tunnel is up.
 | `syslog` | `[SyslogEntry…]` (array!) | batched, see Syslog |
 | `syslogState` | `{running, udid, filters, dropped, reconnecting, error?}` | stream state change |
 | `pair` | Pair (below) | pairing flow progress |
-| `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list changed |
+| `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list (or, after a reply sent while the tunnel was coming up, the running apps) changed |
 | `appIcons` | `{udid, icons: {bundleId: path}}` | icons fetched in the background after `apps.list`, batched (at most every 250 ms or 10 icons) |
 | `installProgress` | `{path, percent, status}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing`, `done` (100) |
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list {sizes: true}` (sizes are slow to compute) |
@@ -326,8 +329,11 @@ can be opened).
 
 **The app list cache** (helper/iosstudio/device/features/apps/index.py). The list is kept per device and kind
 (user apps / with `system`) in memory and in `~/.cache/ios-studio/apps-<udid>.json`, so the Phone page
-opens instantly, also right after a daemon restart. `running`/`pid` are always live (one process list
-per request). With no cache the daemon fetches now (one installation_proxy Lookup limited to the
+opens instantly, also right after a daemon restart. `running`/`pid` are live (one process list
+per request) while the phone is connected. While the tunnel is still coming up (daemon start,
+reconnect) a cached list never waits for it: the reply is the cached copy with `stale: true` and
+`running`/`pid` as last seen (none yet after a daemon start), and once the phone answers the daemon
+sends `apps` if the list or the running apps differ from that reply. With no cache the daemon fetches now (one installation_proxy Lookup limited to the
 attributes above, `stale: false`). When the copy is older than 60 s, `force: true` was passed, or the
 phone reconnected / the active device changed, the reply is the cached copy with `stale: true` and the
 daemon refreshes it in the background; it sends `apps` only if the list changed. `app.install` and
@@ -430,7 +436,7 @@ Recording: `{state, mode, seconds, bytes, frames, maxSeconds, path, started}`, w
 `recording`, `finishing`, `done` or `failed`. A finished one adds `{fps, thumbnail, reason}`
 (`reason` is `timeout` for `maxSeconds`, `stopped`, `client`, `tunnel`, `mode`, `shutdown`, …).
 A failed one adds `error`. Errors: `no-ffmpeg` (screenshot recordings need ffmpeg, fix: Setup ›
-System packages), `record-empty` (no picture arrived), `record-failed`, `not-recording`.
+System packages), `record-empty` (no picture arrived; a recording stopped before its first picture waits up to 3 s for one), `record-failed`, `not-recording`.
 
 Demo mode paints the frames. `IOSSTUDIO_DEMO_MEDIA_BUSY=1` makes the demo iPhone behave as if an app
 held the camera, so `auto` falls back with the notice. A demo recording is a real MP4 made with
@@ -1339,7 +1345,7 @@ one around: `no-device`); the demo daemon answers any command. Bad JSON argument
 | file | role |
 |---|---|
 | `protocol.py` | wire format: framing, message builders, `DeviceError`, `error_json` |
-| `backend.py` | `Backend`: the contract the broker calls (`welcome`, `dispatch`, `error_json`, `syslog_*`, `client_gone`, `shutdown`) with the shared parts: dispatch (`async def` handlers awaited, plain ones run in a worker thread), feature registry, hooks, `TaskSet` of background tasks cancelled at shutdown, `handle()` for `--once` |
+| `backend.py` | `Backend`: the contract the broker calls (`welcome`, `dispatch`, `error_json`, `syslog_*`, `client_gone`, `shutdown`) with the shared parts: dispatch (`async def` handlers awaited, plain ones run in a worker thread), feature registry, hooks, `TaskSet` of background tasks cancelled at shutdown, `settle(cmd)` (the real daemon waits for its first discovery pass there), `handle()` for `--once` |
 | `kit.py` | `FeatureRegistry` + `load_features()`, `Resources` (per-client holds), `CursorRing` |
 | `broker.py` | the socket server: clients, subscriptions, the shared syslog stream, per-client resources, idle exit, the stdio bridge |
 | `client.py` | the stdlib client (`DeviceClient`), runtime-dir rules; also loaded by file path by the MCP server |

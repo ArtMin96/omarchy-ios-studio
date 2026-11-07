@@ -536,7 +536,7 @@ class RealHandler(unittest.IsolatedAsyncioTestCase):
                                         "Path": f"/private/var/containers/Bundle/Application/{i}/App{i}.app",
                                         "Junk": "x" * 100} for i in range(20)}
         self.pmd3 = FakePmd3(apps, {"/var/containers/Bundle/Application/3/App3.app": 333})
-        session = type("S", (), {"udid": UDID})()
+        session = type("S", (), {"udid": UDID, "rsd": "rsd", "data": {}})()   # connected
 
         async def get_rsd():
             return "rsd"
@@ -544,7 +544,8 @@ class RealHandler(unittest.IsolatedAsyncioTestCase):
 
         async def rsd(a):
             return session, "rsd"
-        self.d = type("D", (), {"pmd3": self.pmd3, "rsd": staticmethod(rsd)})()
+        self.d = type("D", (), {"pmd3": self.pmd3, "rsd": staticmethod(rsd),
+                                "need_session": staticmethod(lambda a: session)})()
 
     async def asyncTearDown(self):
         self.index.cancel()

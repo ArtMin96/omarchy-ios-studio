@@ -178,6 +178,9 @@ class Backend:
     def __init__(self):
         self.opened: list[int] = []
 
+    async def settle(self, cmd):
+        pass
+
     def syslog_target(self, a):
         return "UDID"
 
