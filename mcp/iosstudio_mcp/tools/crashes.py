@@ -1,6 +1,8 @@
 """Crash reports from the iPhone (.ips): list, parsed summary, full text, and a resource template."""
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -13,20 +15,23 @@ from ..backends.crashes import Section, crash_detail
 from ..backends.device import apps, dcall, match_app
 from ..core import budget as B
 from ..core.params import Udid
-from ..core.registry import page_of, tool
+from ..core.registry import MAX_WAIT, page_of, tool
 from ..models import CrashBrief, CrashDetail, CrashList
 from ..state import get_state
 
 RESOURCE_CAP = 100_000
 
 
-def cap_text(text: str, tool_hint: str, cap: int = RESOURCE_CAP) -> str:
-    """Resources are capped at 100 KB, with a pointer to the tool that pages through the rest."""
-    if len(text.encode()) <= cap:
-        return text
-    head = text.encode()[:cap].decode(errors="ignore")
-    head = head[:head.rfind("\n") + 1] or head
-    return head + f"\n…[cut at {cap // 1000} KB of {len(text.encode()) // 1000} KB; read the rest with {tool_hint}]\n"
+def capped(p: Path, tool_hint: str) -> str:
+    """The first RESOURCE_CAP bytes of a file as text (blocking: call it in a thread)."""
+    with open(p, "rb") as f:
+        head = f.read(RESOURCE_CAP + 1)
+        size = os.fstat(f.fileno()).st_size
+    if size <= RESOURCE_CAP:
+        return head.decode(errors="replace")
+    text = head[:RESOURCE_CAP].decode(errors="ignore")
+    text = text[:text.rfind("\n") + 1] or text
+    return text + f"\n…[cut at {RESOURCE_CAP // 1000} KB of {size // 1000} KB; read the rest with {tool_hint}]\n"
 
 
 def _crash_dirs() -> list[Path]:
@@ -71,7 +76,7 @@ def register(mcp: MCPServer) -> None:
         args: dict = {"flush": True}
         if process:
             args["process"] = process
-        items = await dcall(state, "crash.list", args, udid=udid, timeout=45) or []
+        items = await dcall(state, "crash.list", args, udid=udid, timeout=MAX_WAIT) or []
         if process:
             items = [c for c in items if c.get("process") == process]
         if kind != "any":
@@ -127,20 +132,24 @@ def register(mcp: MCPServer) -> None:
         if "/" in file or not file.endswith(".ips"):
             raise ResourceError("Expected a .ips file name from ios_crash_list.")
 
-        def capped(p: Path) -> str:
-            return cap_text(p.read_text(errors="replace"), f"ios_crash_get(name='{file}', section='raw', "
-                                                          "start_line=...)")
-        for d in _crash_dirs():
-            for p in d.glob(f"*/{file}") if d.is_dir() else []:
-                return capped(p)
-            if (d / file).is_file():
-                return capped(d / file)
+        hint = f"ios_crash_get(name='{file}', section='raw', start_line=...)"
+
+        def local_copy() -> str | None:      # blocking file access: runs in a thread
+            for d in _crash_dirs():
+                for p in d.glob(f"*/{file}") if d.is_dir() else []:
+                    return capped(p, hint)
+                if (d / file).is_file():
+                    return capped(d / file, hint)
+            return None
+        text = await asyncio.to_thread(local_copy)
+        if text is not None:
+            return text
         state = get_state(ctx)
         try:
             det = await crash_detail(state, file)
         except ToolError as exc:
             raise ResourceError(B.clip_error(str(exc)))
         try:
-            return capped(Path(helper.expand(det.path)))
+            return await asyncio.to_thread(capped, Path(helper.expand(det.path)), hint)
         except OSError:
             raise ResourceError(f"Couldn't read {det.path}.")

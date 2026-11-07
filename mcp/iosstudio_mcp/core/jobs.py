@@ -40,6 +40,7 @@ from typing import Any, Awaitable, Callable
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .. import helper
+from . import deadline
 
 log = logging.getLogger("iosstudio.jobs")
 
@@ -248,6 +249,7 @@ class JobManager:
             self._finish(job, "cancelled" if task.cancelled() or job.cancel_requested else "failed")
 
     async def _run_task(self, job: Job, fn: JobFn) -> None:
+        deadline.clear()       # the job outlives the tool call that started it: no call budget here
         try:
             res = await fn(job)
         except (asyncio.CancelledError, JobCancelled):
@@ -286,6 +288,7 @@ class JobManager:
 
     # ---------------------------------------------------------------- event pump
     async def _pump(self, job: Job) -> None:
+        deadline.clear()       # the job outlives the tool call that started it: no call budget here
         proc = job.proc
         assert proc and proc.stdout and proc.stderr
         done_seen = False
@@ -488,10 +491,10 @@ class JobManager:
     # ---------------------------------------------------------------- wait / respond / cancel
     async def wait(self, job: Job, seconds: float,
                    on_progress: Callable[[Job], Awaitable[None]] | None = None) -> Job:
-        """Return when the job finishes, needs input, or `seconds` pass."""
-        deadline = time.monotonic() + max(0.0, seconds)
+        """Return when the job finishes, needs input, or `seconds` pass (cut to the tool call's budget)."""
+        end = time.monotonic() + deadline.wait_time(seconds)
         while not job.finished and job.state != "needs_input":
-            left = deadline - time.monotonic()
+            left = end - time.monotonic()
             if left <= 0:
                 break
             job._changed.clear()

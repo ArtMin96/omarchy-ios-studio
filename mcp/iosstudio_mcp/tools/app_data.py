@@ -38,8 +38,8 @@ NEXT = {
     "not-developer": "Only your own development builds share their data (ios_app_list(scope='own') lists them).",
     "no-build": "No signed build of this app was found. Pass project_path, or build one with "
                 "ios_build_start(project_path, action='ipa') first.",
-    "truncated-value": "That value was shortened for display. Read it whole with ios_app_defaults(action='read', "
-                       "key=...), then send the full value.",
+    "truncated-value": "That value was shortened for display. Read it whole with ios_app_defaults(key=...), then "
+                       "send the full value.",
     "bad-value": "Check value and type: type is string, int, float, bool, date (ISO 8601), data (base64) or json.",
     "bad-type": "type is one of string, int, float, bool, date, data, json.",
     "no-store": "Call ios_app_store(bundle_id) to list the stores the app has now.",
@@ -59,7 +59,7 @@ class AppDefaults(B.Budgeted, Out):
     bundle_id: str
     state: Literal["dry_run", "running", "succeeded", "failed", "cancelled"] | None = Field(
         None, description="set/delete/refresh: running means call again with job_id")
-    job_id: str | None = Field(None, description="state=running: call ios_app_defaults(job_id=...) again")
+    job_id: str | None = Field(None, description="state=running: call ios_app_defaults_set(job_id=...) again")
     done: bool | None = Field(None, description="set/delete: False for a dry run or while running")
     message: str | None = None
     path: str | None = Field(None, description="The preferences file in the app's container")
@@ -263,7 +263,7 @@ def _start_job(state: AppState, bid: str, mode: str, kind: str, cmd: str, args: 
     async def run(job: Job) -> dict:
         return await call(state, cmd, args, udid, timeout=900) or {}
 
-    tool_name = "ios_app_reset" if kind == "app-reset" else "ios_app_defaults"
+    tool_name = "ios_app_reset" if kind == "app-reset" else "ios_app_defaults_set"
     title = f"{'Reset' if kind == 'app-reset' else 'Change UserDefaults of'} {bid} ({mode})"
     return state.jobs.run(run, kind, action=mode, title=title, tool=tool_name,
                           data={"bundle_id": bid, **(meta or {})})
@@ -273,14 +273,73 @@ def _start_job(state: AppState, bid: str, mode: str, kind: str, cmd: str, args: 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, "Read or change an app's UserDefaults", kind="destructive", idempotent=True, open_world=True)
+    @tool(mcp, "Read an app's UserDefaults", kind="read_remote")
     async def ios_app_defaults(
         ctx: Context,
+        bundle_id: BundleId,
+        key: Annotated[str | None, Field(description="Only this key, whole")] = None,
+        max_bytes: Annotated[int | None, Field(ge=3000, le=B.MAX_BYTES, description="Output budget")] = None,
+        udid: Udid = None,
+    ) -> AppDefaults:
+        """An app's UserDefaults (Library/Preferences/<bundle id>.plist) as JSON with each key's type, for your
+        own development builds. Bounded: the full JSON goes to full_output_path when it doesn't fit. Change a
+        key with ios_app_defaults_set. Read-only."""
+        state = get_state(ctx)
+        app = await resolve_app(state, bundle_id, udid)
+        bid = app["bundleId"]
+        d = await call(state, "appdata.defaults", {"bundleId": bid, "full": True}, udid) or {}
+        values, types = d.get("values") or {}, d.get("types") or {}
+        if key is not None:
+            if key not in values:
+                raise ToolError(f"No key '{key}' in {bid}'s defaults ({len(values)} keys). Next: read without "
+                                "key to see them.")
+            values, types = {key: values[key]}, {key: types.get(key, "")}
+        room = B.room(max_bytes) - 600
+        shown: dict = {}
+        used = 0
+        left: list[str] = []
+        for k in values:
+            b = _jsize(values[k]) + len(k) * 2 + 20
+            if used + b > room:
+                left.append(k)
+                continue
+            shown[k] = values[k]
+            used += b
+        out = AppDefaults(action="read", bundle_id=bid, path=str(d.get("path") or ""), exists=bool(d.get("exists")),
+                          running=bool(d.get("running")), keys=int(d.get("keys") or 0), shown=len(shown),
+                          values=shown, types={k: types.get(k, "") for k in shown},
+                          left_out=left[:KEYS_LISTED], size=int(d.get("size") or 0),
+                          reverted=[B.clip_data(x, 5) for x in (d.get("reverted") or [])][:20])
+        links = []
+        if left:
+            name = re.sub(r"[^A-Za-z0-9._-]", "_", bid) + (f"-{key}" if key else "") + "-defaults.json"
+            path, _, link = B.spill(json.dumps({"bundleId": bid, "values": values, "types": types}, indent=1,
+                                               ensure_ascii=False), "appdata", name, "application/json")
+            links.append(link)
+            out.full_output_path = path
+            out.truncated = True
+            out.omitted = len(left)
+            out.note = (f"{len(left)} key(s) didn't fit; the full JSON is in full_output_path. Read one with "
+                        "key=..., or raise max_bytes.")
+        if out.reverted:
+            out.warning = (f"{len(out.reverted)} earlier change(s) were undone by iOS's cached copy of the "
+                           "settings (see reverted). Set them again with refresh=true (the default).")
+        if not d.get("exists"):
+            out.next_steps = ["The app hasn't saved any defaults yet (no preferences file). ios_app_defaults_set("
+                              "action='set') creates it."]
+        else:
+            out.next_steps = ["Change a key with ios_app_defaults_set(action='set') (dry run first); the app reads it "
+                              "on its next launch."]
+        return out.with_budget(max_bytes, links)
+
+    @tool(mcp, "Change an app's UserDefaults", kind="destructive", idempotent=True, open_world=True)
+    async def ios_app_defaults_set(
+        ctx: Context,
         bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
-        action: Annotated[Literal["read", "set", "delete", "refresh"],
-                          Field(description="read (default), set or delete one key, or refresh: install the "
-                                            "last build over the app after changes made with refresh=false")] = "read",
-        key: Annotated[str | None, Field(description="read: only this key, whole; set/delete: the key")] = None,
+        action: Annotated[Literal["set", "delete", "refresh"],
+                          Field(description="set or delete one key, or refresh: install the last build over the "
+                                            "app after changes made with refresh=false")] = "set",
+        key: Annotated[str | None, Field(description="set/delete: the key")] = None,
         value: Annotated[Any, Field(description="set: the new value as JSON (string, number, bool, array, object, "
                                                 "or a tagged {'$type': 'date'|'data', ...})")] = None,
         type: Annotated[Literal["string", "int", "float", "bool", "date", "data", "json"] | None,
@@ -288,8 +347,8 @@ def register(mcp: MCPServer) -> None:
                                           "json: text holding JSON). Default: from the JSON type")] = None,
         confirm: Annotated[bool, Field(description="set/delete: false = dry run showing old -> new. true only after "
                                                    "the user agreed")] = False,
-        stop_app: Annotated[bool, Field(description="set/delete with confirm: stop the app first if it's running "
-                                                    "(otherwise a running app is an error)")] = False,
+        stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running (otherwise a "
+                                                    "running app is an error)")] = False,
         refresh: Annotated[bool, Field(description="set/delete: install the app's last signed build over it "
                                                    "afterwards (keeps its data) so iOS drops its cached settings and "
                                                    "the app sees the change. false for several changes in a row; "
@@ -297,15 +356,13 @@ def register(mcp: MCPServer) -> None:
         job_id: Annotated[str | None, Field(description="Keep waiting for a change started earlier")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
                                                                            "state='running'")] = 20,
-        max_bytes: Annotated[int | None, Field(ge=3000, le=B.MAX_BYTES, description="read: output budget")] = None,
         udid: Udid = None,
     ) -> AppDefaults:
-        """An app's UserDefaults (Library/Preferences/<bundle id>.plist) as JSON, for your own development
-        builds. read returns the keys with their types (bounded; the full JSON goes to full_output_path when it
-        doesn't fit). set/delete change one key: a dry run (previous -> new) unless confirm=true, and never
-        while the app runs (stop_app=true stops it). iOS keeps a cached copy of an app's settings, so a change
-        also installs the app's last signed build over it (its data stays); then the app sees it on its next
-        launch. That takes about 20 s and runs as a job: state='running' + job_id, call again with job_id."""
+        """Set or delete one UserDefaults key of your own development build (read them with ios_app_defaults).
+        A dry run (previous -> new) unless confirm=true, and never while the app runs (stop_app=true stops it).
+        iOS keeps a cached copy of an app's settings, so a change also installs the app's last signed build over
+        it (its data stays); then the app sees it on its next launch. That takes about 20 s and runs as a job:
+        state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-defaults")
@@ -315,51 +372,6 @@ def register(mcp: MCPServer) -> None:
             raise ToolError("Pass bundle_id (or job_id to wait for a change started earlier).")
         app = await resolve_app(state, bundle_id, udid)
         bid = app["bundleId"]
-        if action == "read":
-            d = await call(state, "appdata.defaults", {"bundleId": bid, "full": True}, udid) or {}
-            values, types = d.get("values") or {}, d.get("types") or {}
-            if key is not None:
-                if key not in values:
-                    raise ToolError(f"No key '{key}' in {bid}'s defaults ({len(values)} keys). Next: read without "
-                                    "key to see them.")
-                values, types = {key: values[key]}, {key: types.get(key, "")}
-            room = B.room(max_bytes) - 600
-            shown: dict = {}
-            used = 0
-            left: list[str] = []
-            for k in values:
-                b = _jsize(values[k]) + len(k) * 2 + 20
-                if used + b > room:
-                    left.append(k)
-                    continue
-                shown[k] = values[k]
-                used += b
-            out = AppDefaults(action="read", bundle_id=bid, path=str(d.get("path") or ""), exists=bool(d.get("exists")),
-                              running=bool(d.get("running")), keys=int(d.get("keys") or 0), shown=len(shown),
-                              values=shown, types={k: types.get(k, "") for k in shown},
-                              left_out=left[:KEYS_LISTED], size=int(d.get("size") or 0),
-                              reverted=[B.clip_data(x, 5) for x in (d.get("reverted") or [])][:20])
-            links = []
-            if left:
-                name = re.sub(r"[^A-Za-z0-9._-]", "_", bid) + (f"-{key}" if key else "") + "-defaults.json"
-                path, _, link = B.spill(json.dumps({"bundleId": bid, "values": values, "types": types}, indent=1,
-                                                   ensure_ascii=False), "appdata", name, "application/json")
-                links.append(link)
-                out.full_output_path = path
-                out.truncated = True
-                out.omitted = len(left)
-                out.note = (f"{len(left)} key(s) didn't fit; the full JSON is in full_output_path. Read one with "
-                            "key=..., or raise max_bytes.")
-            if out.reverted:
-                out.warning = (f"{len(out.reverted)} earlier change(s) were undone by iOS's cached copy of the "
-                               "settings (see reverted). Set them again with refresh=true (the default).")
-            if not d.get("exists"):
-                out.next_steps = ["The app hasn't saved any defaults yet (no preferences file). ios_app_defaults("
-                                  "action='set') creates it."]
-            else:
-                out.next_steps = ["Change a key with action='set' (dry run first); the app reads it on its next launch."]
-            return out.with_budget(max_bytes, links)
-
         if action == "refresh":
             a = {"bundleId": bid, **({"stopApp": True} if stop_app else {})}
             job = _start_job(state, bid, "refresh", "app-defaults", "appdata.defaults.refresh", a, udid)

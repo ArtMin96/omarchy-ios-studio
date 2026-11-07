@@ -15,6 +15,7 @@ phone; ios_status only attaches when a daemon is already running.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -25,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
+from ..core import deadline
 from ..core.errors import device_error
 from ..core.jobs import Job
 from ..core.registry import MAX_WAIT
@@ -34,6 +36,8 @@ from .builds import history
 from .projects import resolve_project
 
 log = logging.getLogger("iosstudio.device")
+
+CONNECT_TIMEOUT = 40.0   # starting the daemon; inside a tool call it is cut to the call's budget
 
 # Device-wide events the MCP client wants. Not 'frame' (mirror images) or icons: nobody here reads them.
 EVENTS = ["ready", "devices", "connection", "deviceInfo", "installProgress", "transfer", "cameratest"]
@@ -65,7 +69,7 @@ def _ensure_runtime_dir() -> None:
 def new_client(name: str, events: list[str] | None):
     _ensure_runtime_dir()
     mod = helper.device_client_module()
-    return mod.DeviceClient(name=name, events=events, connect_timeout=40.0)
+    return mod.DeviceClient(name=name, events=events, connect_timeout=CONNECT_TIMEOUT)
 
 
 async def client(state: AppState):
@@ -87,7 +91,14 @@ async def client(state: AppState):
             state.device = dev
         if not state.device.connected:
             try:
-                await state.device.connect()
+                await asyncio.wait_for(state.device.connect(), deadline.clamp(CONNECT_TIMEOUT, "connecting to the "
+                                                                              "iPhone service"))
+            except asyncio.TimeoutError:
+                dev, state.device = state.device, None     # half-open (maybe mid-hello): start over next time
+                with contextlib.suppress(Exception):
+                    await dev.close()
+                raise ToolError("The iPhone service is still starting [timeout]. Next: retry in a few seconds; if it "
+                                "keeps happening, run ios_toolchain_check (pymobiledevice3 step).") from None
             except Exception as exc:  # noqa: BLE001
                 raise device_error(exc) from None
             log.info("connected to the device daemon (pid %s)", (state.device.hello or {}).get("pid"))
@@ -97,13 +108,14 @@ async def client(state: AppState):
 async def dcall(state: AppState, cmd: str, args: dict | None = None, *, timeout: float = 60.0,
                 udid: str | None = None, hints: dict[str, str] | None = None) -> Any:
     """One device request. DeviceError -> ToolError with the next step (hints: the caller's own next step
-    per error code, see core/errors.py)."""
+    per error code, see core/errors.py). Inside a tool call `timeout` is cut to what is left of the call's
+    budget (core/deadline.py); in a background job it applies as given."""
     dev = await client(state)
     a = dict(args or {})
     if udid:
         a["udid"] = udid
     try:
-        return await dev.request(cmd, a, timeout=timeout)
+        return await dev.request(cmd, a, timeout=deadline.clamp(timeout, f"the iPhone answered {cmd}"))
     except Exception as exc:  # noqa: BLE001
         if exc.__class__.__name__ == "DeviceError":
             raise device_error(exc, hints) from None

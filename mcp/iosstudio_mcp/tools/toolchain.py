@@ -9,13 +9,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
-from ..core.job_status import start_and_wait
-from ..core.params import WaitSeconds
-from ..core.registry import dry_run, tool
+from ..core.job_status import follow_job, job_result, start_and_wait, still_running
+from ..core.jobs import Job
+from ..core.params import OptJobId, WaitSeconds
+from ..core.registry import MAX_WAIT, dry_run, tool
 from ..models import ActionResult, DiskItem, JobStatus, SetupStep, ToolchainCheck, ToolchainInfo, ToolInfo, iso
 from ..state import get_state
 
 MB = 1024 * 1024
+INFO_TIMEOUT = 60     # `toolchain info` runs every tool's --version (Swift's alone can take seconds)
+DISK_TIMEOUT = 120    # `toolchain disk` walks the SDK, toolchain and caches
 
 
 def _human(step: dict) -> str | None:
@@ -23,6 +26,19 @@ def _human(step: dict) -> str | None:
     if act.get("kind") == "page" or step.get("interactive"):
         return f"{act.get('label') or 'Open'} in the app: ios_open_app(page='{act.get('page') or 'setup'}')"
     return None
+
+
+async def _info(job: Job, refresh_disk: bool) -> tuple[dict, dict]:
+    """The job behind ios_toolchain_info: versions, then disk usage (cached unless refresh_disk)."""
+    job.report(None, "asking each tool for its version")
+    info = await helper.call("toolchain", "info", timeout=INFO_TIMEOUT) or {}
+    job.report(0.5, "measuring disk usage" if refresh_disk else "reading the last disk measurement")
+    try:
+        disk = await helper.call("toolchain", "disk", {} if refresh_disk else {"cached": True},
+                                 timeout=DISK_TIMEOUT if refresh_disk else 20) or {}
+    except helper.HelperFailure:
+        disk = {}
+    return info, disk
 
 
 def register(mcp: MCPServer) -> None:
@@ -35,7 +51,7 @@ def register(mcp: MCPServer) -> None:
         xtool, the iOS SDK (built from Xcode's .xip), pymobiledevice3, Apple ID, iPhone pairing and
         Developer Mode. Each step says whether ios_toolchain_install can do it (can_auto_install) or
         whether it's a human step in the app."""
-        data = await helper.call("setup", "check", timeout=40)
+        data = await helper.call("setup", "check", timeout=MAX_WAIT)
         summ = data.get("summary") or {}
         steps = []
         for s in data.get("steps") or []:
@@ -62,17 +78,24 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Toolchain versions and disk", kind="read")
     async def ios_toolchain_info(
+        ctx: Context,
         refresh_disk: Annotated[bool, Field(description="Re-measure disk usage (can take 10-30 s); default uses "
                                                         "the last measurement")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
     ) -> ToolchainInfo:
         """Installed versions (xtool, Swift, iOS SDKs, pymobiledevice3, rcodesign, ipsw…) and disk usage per
-        item, with which items ios_toolchain_clean may remove (cleanable + safe)."""
-        info = await helper.call("toolchain", "info", timeout=40)
-        try:
-            disk = await helper.call("toolchain", "disk", {} if refresh_disk else {"cached": True},
-                                     timeout=60 if refresh_disk else 20)
-        except helper.HelperFailure:
-            disk = {}
+        item, with which items ios_toolchain_clean may remove (cleanable + safe). Asking each tool for its
+        version (and re-measuring the disk) can take longer than one call, so it runs as a job: state='running'
+        with job_id means call again with job_id."""
+        state = get_state(ctx)
+        if not job_id:
+            job_id = state.jobs.run(lambda job: _info(job, refresh_disk), "toolchain-info",
+                                    title="Toolchain versions and disk", tool="ios_toolchain_info").id
+        job = await follow_job(state, ctx, job_id, "toolchain-info", wait_seconds)
+        if not job.finished:
+            return ToolchainInfo(state="running", job_id=job.id, next_steps=[still_running(job)])
+        info, disk = job_result(job)
         tools = [ToolInfo(id=i.get("id", ""), name=i.get("name", ""), version=i.get("version"), status=i.get("status"),
                           detail=helper.tilde(i.get("detail"))) for i in info.get("items") or []]
         items = [DiskItem(id=d["id"], name=d.get("name", d["id"]), size_mb=round((d.get("size") or 0) / MB, 1),
@@ -82,7 +105,7 @@ def register(mcp: MCPServer) -> None:
         reclaim = (disk.get("reclaimable") or 0) / MB
         if reclaim > 100:
             nxt.append(f"About {reclaim:.0f} MB can be reclaimed safely with ios_toolchain_clean(item=...).")
-        return ToolchainInfo(tools=tools, sdks=info.get("sdks") or {}, disk=items,
+        return ToolchainInfo(job_id=job.id, tools=tools, sdks=info.get("sdks") or {}, disk=items,
                              disk_total_mb=round((disk.get("total") or 0) / MB, 1) if disk else None,
                              reclaimable_mb=round(reclaim, 1) if disk else None,
                              free_mb=round((disk.get("free") or 0) / MB, 1) if disk else None,

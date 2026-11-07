@@ -19,6 +19,7 @@ calls them from the lifespan, in module order.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -68,12 +69,13 @@ class AppState:
                 pass
         if helper.demo_mode():
             return "00008150-000000000000001C"
-        st = last_device_state()
+        st = await asyncio.to_thread(last_device_state)
         return st.get("udid") if st else None
 
 
 def last_device_state() -> dict | None:
-    """The daemon's last-known device (~/.local/state/ios-studio/device.json), if any."""
+    """The daemon's last-known device (~/.local/state/ios-studio/device.json), if any. Blocking (a small
+    file): async code calls it with asyncio.to_thread."""
     try:
         data = json.loads(DEVICE_STATE.read_text())
     except (OSError, json.JSONDecodeError):

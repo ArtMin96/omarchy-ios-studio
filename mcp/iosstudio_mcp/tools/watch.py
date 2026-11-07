@@ -18,6 +18,7 @@ from pydantic import Field
 from .. import helper
 from ..backends.projects import resolve_project
 from ..core import budget as B
+from ..core import deadline
 from ..core.params import ProjectPath
 from ..core.registry import MAX_WAIT, tool
 from ..models import Out, iso
@@ -34,7 +35,7 @@ class WatchError(Out):
 
 
 class WatchBuild(Out):
-    build_id: str = Field(description="w-N: pass to ios_build_diagnostics(job_id=...) for the full list")
+    job_id: str = Field(description="w-N: pass to ios_build_diagnostics(job_id=...) for the full list")
     result: str = Field(description="ok or failed")
     duration_seconds: float | None = None
     finished_at: str | None = None
@@ -48,7 +49,7 @@ class WatchBuild(Out):
 class WatchRun(Out):
     state: str = Field(description="checking, building, installing, launching, launched, failed or skipped")
     message: str
-    build_id: str | None = None
+    job_id: str | None = Field(None, description="The run's own build (w-N)")
     bundle_id: str | None = None
 
 
@@ -65,7 +66,7 @@ class WatchStatus(B.Budgeted, Out):
     debounce_ms: int | None = None
     changed_files: list[str] = Field(default_factory=list, description="Files of the pending or running build")
     changed_count: int = 0
-    current_build_id: str | None = Field(None, description="The build compiling right now")
+    current_job_id: str | None = Field(None, description="The build compiling right now (w-N)")
     progress: float | None = Field(None, description="0..1 of the running build")
     last_build: WatchBuild | None = Field(None, description="The latest finished build (ok or failed)")
     first_errors: list[WatchError] = Field(default_factory=list, description="≤ 5 errors of last_build")
@@ -105,7 +106,7 @@ def to_status(d: dict, project_path: str | None = None) -> WatchStatus:
     last = d.get("lastBuild") if isinstance(d.get("lastBuild"), dict) else None
     lb = None
     if last:
-        lb = WatchBuild(build_id=str(last.get("id")), result=str(last.get("result")),
+        lb = WatchBuild(job_id=str(last.get("id")), result=str(last.get("result")),
                         duration_seconds=last.get("duration"), finished_at=iso(last.get("time")),
                         errors=int(last.get("errors") or 0), warnings=int(last.get("warnings") or 0),
                         error_code=last.get("errorCode"),
@@ -120,11 +121,11 @@ def to_status(d: dict, project_path: str | None = None) -> WatchStatus:
         project=d.get("project"), project_path=helper.tilde(root), mode=d.get("mode"), mode_reason=d.get("modeReason"),
         auto_run=bool(d.get("autoRun")), debounce_ms=d.get("debounceMs"),
         changed_files=[B.clip(f, 200) for f in (d.get("changed") or [])[:5]], changed_count=int(d.get("changedCount") or 0),
-        current_build_id=d.get("buildId") if state == "compiling" else None,
+        current_job_id=d.get("buildId") if state == "compiling" else None,
         progress=round(float(prog["fraction"]), 3) if prog and isinstance(prog.get("fraction"), (int, float)) else None,
         last_build=lb, first_errors=_errors(last, root) if last else [],
         run=WatchRun(state=str(run.get("state")), message=B.clip(run.get("message") or "", 300),
-                     build_id=run.get("buildId"), bundle_id=run.get("bundleId")) if run else None,
+                     job_id=run.get("buildId"), bundle_id=run.get("bundleId")) if run else None,
         builds=int(d.get("builds") or 0), superseded=int(d.get("superseded") or 0),
         stop_reason=d.get("stopReason") if state == "stopped" else None, attached=bool(d.get("attached")),
         replaced=helper.tilde((d.get("replaced") or {}).get("path")) if isinstance(d.get("replaced"), dict) else None,
@@ -145,7 +146,7 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
         else:
             out.append(f"Not watching. ios_watch_start(project_path='{p}') compiles on every save.")
         if st.last_build and st.last_build.errors:
-            out.append(f"The last watch build had errors: ios_build_diagnostics(job_id='{st.last_build.build_id}').")
+            out.append(f"The last watch build had errors: ios_build_diagnostics(job_id='{st.last_build.job_id}').")
         return out
     if st.state in ("changed", "compiling"):
         out.append("A build is pending or running: ios_watch_status(wait_seconds=20) returns when it finishes.")
@@ -154,15 +155,15 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
         if lb.errors:
             more = f" (first {len(st.first_errors)} shown)" if lb.errors > len(st.first_errors) else ""
             out.append(f"{lb.errors} error(s){more}. Full list with hints: ios_build_diagnostics(job_id="
-                       f"'{lb.build_id}'). Fix and save the files: the watcher compiles again by itself; then "
+                       f"'{lb.job_id}'). Fix and save the files: the watcher compiles again by itself; then "
                        "ios_watch_status(wait_seconds=20).")
         else:
             nxt = helper.next_step_for({"code": lb.error_code}) if lb.error_code else None
-            out.append(f"The build failed without a compiler error: ios_build_diagnostics(job_id='{lb.build_id}')"
+            out.append(f"The build failed without a compiler error: ios_build_diagnostics(job_id='{lb.job_id}')"
                        + (f". {nxt}" if nxt else "."))
     elif lb and st.state == "ok":
         out.append("Compiled cleanly" + (f" with {lb.warnings} warning(s) (ios_build_diagnostics(job_id='"
-                                         f"{lb.build_id}', severity='warning'))" if lb.warnings else "") + ".")
+                                         f"{lb.job_id}', severity='warning'))" if lb.warnings else "") + ".")
         if not st.auto_run:
             out.append(f"To try it on the iPhone: ios_run(project_path='{p}').")
     if st.run and st.run.state in ("skipped", "failed"):
@@ -206,7 +207,7 @@ def register(mcp: MCPServer) -> None:
             flags["auto_run"] = "true" if auto_run else "false"
         if debounce_ms is not None:
             flags["debounce_ms"] = debounce_ms
-        data = await helper.call("watch", "run", flags, timeout=40)
+        data = await helper.call("watch", "run", flags, timeout=MAX_WAIT)
         state.extras["watch.path"] = p["path"]
         return to_status(data or {}, p["path"]).with_budget(None)
 
@@ -246,14 +247,15 @@ def register(mcp: MCPServer) -> None:
         build (w-N id, result, duration, error and warning counts) and its first ≤ 5 errors as
         'file:line:col' + message. wait_seconds blocks until a build that finishes after this call (use it right
         after saving a file); timed_out says it was still busy. The full list: ios_build_diagnostics(job_id=
-        last_build.build_id)."""
+        last_build.job_id)."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}
         path = None
         if project_path:
             path = (await resolve_project(state, project_path))["path"]
             flags["project"] = path
-        if wait_seconds:
-            flags["wait_seconds"] = wait_seconds
-        data = await helper.call("watch", "status", flags, timeout=wait_seconds + 20)
+        wait = int(max(0.0, deadline.wait_time(wait_seconds + 3) - 3))   # 3 s for the helper to start and answer
+        if wait:
+            flags["wait_seconds"] = wait
+        data = await helper.call("watch", "status", flags, timeout=wait + 20)
         return to_status(data or {}, path).with_budget(None)

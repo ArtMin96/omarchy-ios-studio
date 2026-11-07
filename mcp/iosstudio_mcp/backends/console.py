@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ..core import budget as B
+from ..core import deadline
 from ..models import Out
 from ..state import AppState
 from .device import dcall
@@ -73,6 +74,7 @@ def cursors(state: AppState) -> dict[str, int]:
 async def daemon_read(state: AppState, target: dict, cursor: int | None, limit: int = FETCH, wait: float = 0,
                       udid: str | None = None) -> dict:
     a = dict(target)
+    wait = max(0.0, deadline.wait_time(wait + 2) - 2)   # 2 s for the reply, within the call's budget
     a.update(limit=limit, wait=wait)
     if cursor is not None:
         a["cursor"] = cursor

@@ -32,7 +32,7 @@ def register(mcp: MCPServer) -> None:
 
 1. ios_status to confirm the iPhone is connected.
 2. ios_crash_list(bundle_id="{bundle_id}") for this app's newest crash reports, then ios_crash_get(name) for the exception type, termination reason and the crashed thread's top frames (section='threads' for every thread, section='raw' for the report text, paged with start_line).
-3. Reproduce it while capturing logs: ios_app_run_and_capture(bundle_id="{bundle_id}", seconds=15) launches the app fresh, records its log and reports any new crash. For a crash that needs user interaction, ios_logs_start(bundle_id="{bundle_id}"), ask the user to trigger it, then ios_logs_read(session_id, wait_seconds=20) and ios_logs_stop.
+3. Reproduce it while capturing logs: ios_app_run_and_capture(bundle_id="{bundle_id}", seconds=15) launches the app fresh, records its log and reports any new crash (state='running' means call it again with the job_id it returned). For a crash that needs user interaction, ios_logs_start(bundle_id="{bundle_id}"), ask the user to trigger it, then ios_logs_read(session_id, wait_seconds=20) and ios_logs_stop.
    If the iPhone isn't reachable, ask the user to open iOS Studio's crash view: ios_open_app(page="crashes").
 4. Map the top frames in the app's own module to source files in the project (ios_project_list finds the folder by bundle id).
 5. Explain the cause, fix it, rebuild with ios_run, and verify with ios_app_run_and_capture that the crash is gone."""

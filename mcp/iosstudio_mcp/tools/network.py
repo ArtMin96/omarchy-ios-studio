@@ -179,7 +179,7 @@ def register(mcp: MCPServer) -> None:
         the network profiles also slow this computer's link to the phone; the worst two are refused (allowed=false).
         Apply one with ios_network_condition_set(profile, minutes)."""
         state = get_state(ctx)
-        r = await _call(state, "condition.list", {}, udid=udid, timeout=60) or {}
+        r = await _call(state, "condition.list", {}, udid=udid, timeout=MAX_WAIT) or {}
         groups = []
         wifi = r.get("transport") == "wifi"
         for g in r.get("groups") or []:
@@ -209,7 +209,7 @@ def register(mcp: MCPServer) -> None:
         Wi-Fi caveat). Ask the user, then call with confirm=true. It replaces any active condition, and switches
         off after `minutes`, on ios_network_condition_clear, or when this MCP server stops."""
         state = get_state(ctx)
-        r = await _call(state, "condition.list", {}, udid=udid, timeout=60) or {}
+        r = await _call(state, "condition.list", {}, udid=udid, timeout=MAX_WAIT) or {}
         hit = None
         for g in r.get("groups") or []:
             for p in g.get("profiles") or []:
@@ -234,7 +234,7 @@ def register(mcp: MCPServer) -> None:
             return dry_run(f"This would simulate {what} for {minutes} minute(s).", would,
                            {"profile": profile, "minutes": minutes, "transport": r.get("transport")})
         v = await _call(state, "condition.set", {"profile": profile, "timeoutS": minutes * 60, "acceptWifiRisk": True},
-                        udid=udid, timeout=60) or {}
+                        udid=udid, timeout=MAX_WAIT) or {}
         return ActionResult(done=True, message=f"The iPhone now simulates {what} until {iso(v.get('expiresAt'))} "
                             "(or ios_network_condition_clear, or this MCP server stopping).",
                             data={"profile": profile, "expires_at": iso(v.get("expiresAt")), "transport": v.get("transport")},
@@ -245,7 +245,7 @@ def register(mcp: MCPServer) -> None:
     async def ios_network_condition_clear(ctx: Context, udid: Udid = None) -> ActionResult:
         """Switch off the simulated condition (network, thermal or GPU); the iPhone behaves normally again."""
         state = get_state(ctx)
-        r = await _call(state, "condition.clear", {}, udid=udid, timeout=60) or {}
+        r = await _call(state, "condition.clear", {}, udid=udid, timeout=MAX_WAIT) or {}
         return ActionResult(done=True, message="Condition switched off; the iPhone is back to normal." if r.get("cleared")
                             else "No condition was active.")
 
@@ -273,7 +273,7 @@ def register(mcp: MCPServer) -> None:
             args: dict = {"maxSeconds": seconds}
             if bundle_id:
                 args["bundleId"] = bundle_id
-            started = await _call(state, "pcap.start", args, udid=udid, timeout=60,
+            started = await _call(state, "pcap.start", args, udid=udid, timeout=MAX_WAIT,
                                   hints={"not-found": "Check the bundle id with ios_app_list(scope='own')."}) or {}
 
             async def stop(j: Job) -> None:

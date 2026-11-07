@@ -21,8 +21,9 @@ from pydantic import BaseModel
 
 from ..models import ActionResult
 from . import budget as B
+from .deadline import MAX_WAIT, call_budget
 
-MAX_WAIT = 25  # seconds; stays under opencode's 30 s and Codex's 60 s default tool timeouts
+__all__ = ["MAX_WAIT", "tool", "to_result", "page_of", "fit_page", "dry_run", "slim_schemas", "annotations"]
 
 Kind = Literal["read", "read_remote", "write", "destructive"]
 
@@ -55,7 +56,7 @@ def to_result(value: Any) -> Any:
     tool's max_bytes), bulk lines and then lists are cut and the result is marked truncated, with a note.
     Resource links the tool attached (spilled files) are appended as resource_link blocks.
     Anything else (a CallToolResult the tool built itself) passes through."""
-    if not isinstance(value, BaseModel):
+    if not isinstance(value, BaseModel) or isinstance(value, CallToolResult):   # (CallToolResult is a model too)
         return value
     data, text = B.enforce(B.dump(value), getattr(type(value), "BULK", ()), B.ceiling(value))
     content: list = [TextContent(type="text", text=text)] + B.links(value)
@@ -72,7 +73,7 @@ def tool(mcp: MCPServer, title: str, kind: Kind, *, idempotent: bool | None = No
     """`@tool(mcp, "Title", kind="read")`: register an async tool whose return annotation is a Pydantic model
     (or `Annotated[CallToolResult, Model]` for a tool that builds its own result). The outputSchema still
     comes from that model; results go through to_result(); a ToolError or ResourceError leaves as one
-    clipped line. kind: read (local, read-only), read_remote (read-only, talks to the iPhone/Apple/internet),
+    clipped line. The call runs inside a MAX_WAIT time budget (core/deadline.py). kind: read (local, read-only), read_remote (read-only, talks to the iPhone/Apple/internet),
     write, destructive (deletes or overwrites something the user may want back)."""
     ann = annotations(title, kind, idempotent=idempotent, open_world=open_world)
 
@@ -83,7 +84,8 @@ def tool(mcp: MCPServer, title: str, kind: Kind, *, idempotent: bool | None = No
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kw: Any) -> Any:
             try:
-                return to_result(await fn(*args, **kw))
+                with call_budget():          # every step of the call fits in MAX_WAIT (core/deadline.py)
+                    return to_result(await fn(*args, **kw))
             except (ToolError, ResourceError) as exc:   # one line + next step, never a raw dump
                 raise ToolError(B.clip_error(str(exc))) from None
 

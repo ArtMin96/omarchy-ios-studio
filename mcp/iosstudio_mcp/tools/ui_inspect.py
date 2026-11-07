@@ -22,8 +22,10 @@ from pydantic import Field
 
 from ..backends.device import dcall
 from ..core import budget as B
-from ..core.params import Udid
-from ..core.registry import fit_page, page_of, tool
+from ..core.job_status import follow_job, job_result, still_running
+from ..core.jobs import Job
+from ..core.params import OptJobId, Udid, WaitSeconds
+from ..core.registry import MAX_WAIT, fit_page, page_of, tool
 from ..models import Out
 from ..state import AppState, get_state
 
@@ -31,6 +33,7 @@ TREE_MAX = 400           # the daemon's cap on elements per walk
 TEXT_CUT = 120           # characters kept of a label, value, hint or identifier
 CHANGES_CAP = 25         # labels per list in a press's change summary
 CACHE_SECONDS = 120      # a cursor pages through a walk at most this old
+AUDIT_TIMEOUT = 60       # ui.audit in its job: session + front app + types (8 s) + the audit itself (18 s)
 
 # Roles and traits that make an element something to press or edit (matched case-insensitively, by substring).
 INTERACTIVE = ("button", "link", "field", "textview", "switch", "toggle", "slider", "adjustable", "stepper",
@@ -108,10 +111,13 @@ class A11yIssue(Out):
 
 
 class A11yAudit(B.Budgeted, Out):
-    counts: dict[str, int] = Field(description="Issues per type, most frequent first")
-    total: int = Field(description="All issues found")
-    count: int = Field(description="Issues listed below")
-    issues: list[A11yIssue] = Field(description="Grouped by type, in the order of `counts`")
+    state: Literal["running", "done"] = Field("done", description="running: the audit is still going; call "
+                                              "ios_a11y_audit(job_id=...) again")
+    job_id: str | None = Field(None, description="The audit's job: pass back as job_id to wait for it")
+    counts: dict[str, int] = Field(default_factory=dict, description="Issues per type, most frequent first")
+    total: int = Field(0, description="All issues found")
+    count: int = Field(0, description="Issues listed below")
+    issues: list[A11yIssue] = Field(default_factory=list, description="Grouped by type, in the order of `counts`")
     supported: list[str] = Field(default_factory=list, description="Audit types this iPhone ran")
     unsupported: list[str] = Field(default_factory=list, description="Types this iOS version can't run "
                                                                      "(informational, not a failure)")
@@ -221,7 +227,7 @@ async def _walk(state: AppState, udid: str | None, bundle_id: str | None, max_el
     args: dict = {"max": max_elements}
     if bundle_id:
         args["bundleId"] = bundle_id
-    data = await dcall(state, "ui.tree", args, udid=udid, timeout=45) or {}
+    data = await dcall(state, "ui.tree", args, udid=udid, timeout=MAX_WAIT) or {}   # the daemon stops a walk at 20 s
     if not isinstance(data, dict):
         data = {}
     c["tree"] = {"key": key, "at": time.monotonic(), "data": data}
@@ -349,7 +355,7 @@ def register(mcp: MCPServer) -> None:
         if bundle_id:
             args["bundleId"] = bundle_id
         try:
-            data = await dcall(state, "ui.press", args, udid=udid, timeout=40) or {}
+            data = await dcall(state, "ui.press", args, udid=udid, timeout=MAX_WAIT) or {}   # the daemon caps it at ~19 s
         finally:
             _forget(state)              # pressed or not, the screen may have moved: no paging an old walk
         ch = data.get("changes") or {}
@@ -389,20 +395,33 @@ def register(mcp: MCPServer) -> None:
                                                              "'dynamic-type', 'clipped-text', 'hit-region', "
                                                              "'missing-label']; default: all")] = None,
         max_issues: Annotated[int, Field(ge=1, le=200, description="Issues listed (counts cover all)")] = 50,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
     ) -> A11yAudit:
         """Run Apple's accessibility audit on the screen showing now: low contrast, Dynamic Type problems,
         clipped text, hit areas that are too small, missing labels and more. Returns counts per type, a capped
         list of issues with the element's label and frame, and the types this iOS version can't check
         (reported as unsupported, not as an error). The app must be in front: launch it with
         ios_app_launch(bundle_id) and pass bundle_id here. Only audits the current screen; navigate with
-        ios_ui_press to audit others. Read-only."""
+        ios_ui_press to audit others. Read-only. The audit takes 5-25 s and runs as a job: if it isn't done
+        within wait_seconds the result is state='running' with job_id; call again with job_id."""
         state = get_state(ctx)
-        args: dict = {}
-        if bundle_id:
-            args["bundleId"] = bundle_id
-        if types:
-            args["types"] = [t.strip() for t in types if t and t.strip()]
-        data = await dcall(state, "ui.audit", args, udid=udid, timeout=60) or {}
+        if not job_id:
+            args: dict = {}
+            if bundle_id:
+                args["bundleId"] = bundle_id
+            if types:
+                args["types"] = [t.strip() for t in types if t and t.strip()]
+
+            async def run(job: Job) -> dict:
+                job.report(None, "auditing the screen")
+                return await dcall(state, "ui.audit", args, udid=udid, timeout=AUDIT_TIMEOUT) or {}
+            job_id = state.jobs.run(run, "a11y-audit", title=f"Accessibility audit of {bundle_id or 'the app in front'}",
+                                    tool="ios_a11y_audit").id
+        job = await follow_job(state, ctx, job_id, "a11y-audit", wait_seconds)
+        if not job.finished:
+            return A11yAudit(state="running", job_id=job.id, next_steps=[still_running(job)])
+        data = job_result(job)
         raw = [i for i in data.get("issues") or [] if isinstance(i, dict)]
         counts, ordered = group_issues(raw)
         shown = [issue(i) for i in ordered[:max_issues]]
@@ -420,7 +439,7 @@ def register(mcp: MCPServer) -> None:
                    "check fewer kinds at a time.") if timed_out else None
         cut = (f"Showing {len(shown)} of {len(raw)} issues; counts cover all of them. Pass types=[...] to list one "
                "kind, or raise max_issues.") if len(shown) < len(raw) else None
-        model = A11yAudit(counts=counts, total=len(raw), count=len(shown), issues=shown,
+        model = A11yAudit(job_id=job.id, counts=counts, total=len(raw), count=len(shown), issues=shown,
                           supported=[str(t) for t in data.get("supported") or []], unsupported=unsupported,
                           elapsed_ms=data.get("elapsedMs"), timed_out=timed_out or None,
                           bundle_id=data.get("bundleId") or bundle_id, pid=data.get("pid"), omitted=len(raw) - len(shown),

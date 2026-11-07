@@ -4,6 +4,7 @@
     params.py     the parameter types tools share (Udid, BundleId, ProjectPath, MaxBytes, WaitSeconds, …)
     errors.py     error code -> one-line message + next step (device errors and feature hints)
     job_status.py JobStatus views of helper jobs and the long-poll helpers
+    deadline.py   the time budget of one call: MAX_WAIT, clamp(), wait_time()
     budget.py     output size rules (see docs/mcp.md "Output size")
 
 Tool modules import from core/ and backends/ only, never from each other.
