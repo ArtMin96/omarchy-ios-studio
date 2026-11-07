@@ -222,18 +222,12 @@ def _png_encode(img: Img) -> bytes:
 
 
 def save_png(path: Path, img: Img) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
     Image = _pil()
-    try:
+    with fileio.replacing(path) as tmp:
         if Image:
             Image.frombytes("RGB", (img.w, img.h), bytes(img.rgb)).save(tmp, "PNG", compress_level=6)
         else:
             tmp.write_bytes(_png_encode(img))
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 def _copy_png(src: Path, dst: Path) -> tuple[int, int]:
@@ -246,13 +240,8 @@ def _copy_png(src: Path, dst: Path) -> tuple[int, int]:
     dst.parent.mkdir(parents=True, exist_ok=True)
     size = png_size(head)
     if size:
-        tmp = dst.with_name(f".{dst.name}.tmp")
-        try:
+        with fileio.replacing(dst) as tmp:
             shutil.copyfile(src, tmp)
-            os.replace(tmp, dst)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
         return size
     img = load(src)          # JPEG and friends: needs Pillow
     save_png(dst, img)

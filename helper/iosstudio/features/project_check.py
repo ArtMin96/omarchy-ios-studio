@@ -27,6 +27,9 @@ import struct
 import time
 from pathlib import Path
 
+from iosstudio.core import xtool_yml
+from iosstudio.core.xtool_yml import XtoolYml
+
 CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
 DEFAULT_CACHE = Path.home() / ".cache/omarchy-apple-dev"
 
@@ -192,44 +195,6 @@ def _plist_line(text: str, key: str) -> int | None:
 
 # ================================================================ xtool.yml
 
-def _scalar(v: str) -> str:
-    v = v.strip()
-    if v and v[0] in "'\"":
-        q = v[0]
-        end = v.find(q, 1)
-        return v[1:end] if end > 0 else v[1:]
-    return re.sub(r"\s+#.*$", "", v).strip()
-
-
-def parse_yml(text: str) -> dict:
-    """The parts of xtool.yml the checks need: top-level keys (with line and scalar value) and the keys of each
-    `extensions:` item. xtool.yml is small flat YAML; anything fancier than that is left alone."""
-    top: list[tuple[str, int, str]] = []
-    ext_items: list[list[tuple[str, int]]] = []
-    in_ext = False
-    for i, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#") or line.startswith("---"):
-            continue
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:(.*)$", line)
-        if m:
-            top.append((m.group(1), i, _scalar(m.group(2))))
-            in_ext = m.group(1) == "extensions"
-            continue
-        if line[:1] not in (" ", "\t", "-"):
-            in_ext = False
-            continue
-        if in_ext:
-            e = re.match(r"^\s*(-\s+)?([A-Za-z_][\w-]*)\s*:(\s|$)", line)
-            if e:
-                if e.group(1) or not ext_items:
-                    ext_items.append([])
-                ext_items[-1].append((e.group(2), i))
-            elif re.match(r"^\s*-\s*$", line):
-                ext_items.append([])
-    return {"top": top, "values": {k: v for k, _ln, v in top}, "lines": {k: ln for k, ln, _v in top},
-            "extensions": ext_items}
-
-
 def _swift_struct_keys(text: str, name: str) -> list[str] | None:
     """Stored-property names (or CodingKeys raw values) declared directly in `struct <name>`."""
     m = re.search(r"\bstruct\s+" + re.escape(name) + r"\b[^{]*\{", text)
@@ -298,22 +263,22 @@ def suggest(key: str, valid: list[str]) -> str | None:
     return low[m[0]] if m else None
 
 
-def _check_keys(root: Path, yml: dict, top_keys: list[str], ext_keys: list[str]) -> list[dict]:
+def _check_keys(root: Path, yml: XtoolYml, top_keys: list[str], ext_keys: list[str]) -> list[dict]:
     out: list[dict] = []
-    for key, line, _v in yml["top"]:
+    for key, line in ((k.name, k.line) for k in yml.keys):
         if key not in top_keys:
             s = suggest(key, top_keys)
             out.append(_issue("xtool-keys", f"xtool.yml has an unknown key '{key}'" +
                               (f": did you mean '{s}'?" if s else "."),
                               (f"Rename it to '{s}'. " if s else "") + HINTS["unknown-key"], "xtool.yml", line))
-    for item in yml["extensions"]:
+    for item in yml.extensions:
         for key, line in item:
             if key not in ext_keys:
                 s = suggest(key, ext_keys)
                 out.append(_issue("xtool-keys", f"xtool.yml has an unknown key '{key}' in extensions" +
                                   (f": did you mean '{s}'?" if s else "."),
                                   (f"Rename it to '{s}'. " if s else "") + HINTS["unknown-key"], "xtool.yml", line))
-    vals, lines = yml["values"], yml["lines"]
+    vals, lines = yml.values, yml.lines
     if "version" not in vals:
         out.append(_issue("xtool-keys", "xtool.yml has no 'version' key, so xtool refuses it.", HINTS["schema"],
                           "xtool.yml", 1))
@@ -486,9 +451,9 @@ def png_info(path: Path) -> dict:
         return info
 
 
-def _check_icon(root: Path, yml: dict) -> list[dict]:
-    rel = yml["values"].get("iconPath")
-    line = yml["lines"].get("iconPath")
+def _check_icon(root: Path, yml: XtoolYml) -> list[dict]:
+    rel = yml.values.get("iconPath")
+    line = yml.lines.get("iconPath")
     if not rel:
         return [_issue("icon", "The app has no icon (xtool.yml has no iconPath).", HINTS["icon-none"],
                        "xtool.yml", None, severity="note")]
@@ -514,8 +479,8 @@ def _check_icon(root: Path, yml: dict) -> list[dict]:
 
 # ================================================================ entitlements
 
-def _check_entitlements(root: Path, yml: dict) -> list[dict]:
-    rels = [yml["values"].get("entitlementsPath")]
+def _check_entitlements(root: Path, yml: XtoolYml) -> list[dict]:
+    rels = [yml.values.get("entitlementsPath")]
     out = []
     for rel in [r for r in rels if r]:
         ents, text, err = _load_plist(root, rel)
@@ -533,9 +498,9 @@ def _check_entitlements(root: Path, yml: dict) -> list[dict]:
 
 # ================================================================ bundle id / versions
 
-def _product(root: Path, yml: dict) -> str:
-    if yml["values"].get("product"):
-        return yml["values"]["product"]
+def _product(root: Path, yml: XtoolYml) -> str:
+    if yml.values.get("product"):
+        return yml.values["product"]
     try:
         libs = re.findall(r'\.library\s*\(\s*name:\s*"([^"]+)"', (root / "Package.swift").read_text(errors="replace"))
     except OSError:
@@ -543,8 +508,8 @@ def _product(root: Path, yml: dict) -> str:
     return libs[0] if len(libs) == 1 else root.name
 
 
-def _check_bundle(root: Path, yml: dict) -> list[dict]:
-    vals, lines = yml["values"], yml["lines"]
+def _check_bundle(root: Path, yml: XtoolYml) -> list[dict]:
+    vals, lines = yml.values, yml.lines
     if vals.get("bundleID"):
         bid, key = vals["bundleID"], "bundleID"
     elif vals.get("orgID"):
@@ -587,14 +552,10 @@ def check(path: Path | str, deadline: float | None = None, cache_dir: Path | Non
     root = Path(path)
     budget = _Budget(deadline)
     issues: list[dict] = []
-    try:
-        text = (root / "xtool.yml").read_text(errors="replace")
-    except OSError:
-        text = ""
-    yml = parse_yml(text)
+    yml = xtool_yml.read(root / "xtool.yml")
     top, ext, source = valid_keys(cache_dir)
     issues += _check_keys(root, yml, top, ext)
-    info_rel = yml["values"].get("infoPath") or None
+    info_rel = yml.values.get("infoPath") or None
     info, info_text, info_err = _load_plist(root, info_rel)
     shown_info = _rel(root, _resolve(root, info_rel)) if info_rel else None
     if info_err:

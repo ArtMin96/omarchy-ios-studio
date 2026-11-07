@@ -20,8 +20,6 @@ State (all under ~/.local/state/ios-studio/):
 from __future__ import annotations
 
 import ctypes
-import fcntl
-import hashlib
 import json
 import os
 import plistlib
@@ -34,12 +32,12 @@ import subprocess
 import sys
 import time
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from iosstudio.core import appdirs, fileio, output, subproc
+from iosstudio.core import appdirs, fileio, output, subproc, xtool_yml
 from iosstudio.core.output import HelperError, fix
 from iosstudio.features import build_settings, diagnostics, run_presets
 
@@ -103,9 +101,7 @@ def _save_state(data: dict) -> None:
 def _file_lock(name: str):
     """Exclusive flock on STATE_DIR/.<name>.lock for a read-modify-write of one state file (the app,
     the MCP server and the renew timer each run their own helper processes)."""
-    appdirs.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(appdirs.STATE_DIR / f".{name}.lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+    with fileio.lock(appdirs.STATE_DIR / f".{name}.lock"):
         yield
 
 
@@ -189,21 +185,6 @@ def _notify(title: str, body: str = "", urgency: str = "normal") -> None:
 
 # ================================================================ project metadata
 
-def _read_yml(path: Path) -> dict:
-    """xtool.yml is flat YAML; we only need top-level scalar keys."""
-    out: dict[str, Any] = {}
-    try:
-        text = path.read_text(errors="replace")
-    except OSError:
-        return out
-    out["_generated"] = "GENERATED" in text[:400]
-    for line in text.splitlines():
-        m = re.match(r"^([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$", line)
-        if m and m.group(2) and not m.group(2).startswith("#"):
-            out[m.group(1)] = m.group(2).strip("'\"")
-    return out
-
-
 def _package_info(pkg: Path) -> dict:
     try:
         text = pkg.read_text(errors="replace")
@@ -247,10 +228,10 @@ def _last_build(path: str, history: list | None = None) -> dict | None:
 
 def _project_info(path: Path, history: list | None = None, renewals: dict | None = None,
                   state: dict | None = None) -> dict:
-    yml = _read_yml(path / "xtool.yml")
+    yml = xtool_yml.read(path / "xtool.yml")
     pkg = _package_info(path / "Package.swift")
     product = yml.get("product") or (pkg.get("libraries") or [None])[0] or pkg.get("package") or path.name
-    bundle = yml.get("bundleID") or (f"{yml['orgID']}.{product}" if yml.get("orgID") else None)
+    bundle = yml.get("bundleID") or (f"{yml.get('orgID')}.{product}" if yml.get("orgID") else None)
     icon = yml.get("iconPath")
     icon_abs = str((path / icon).resolve()) if icon and (path / icon).is_file() else None
     sp = str(path)
@@ -272,7 +253,7 @@ def _project_info(path: Path, history: list | None = None, renewals: dict | None
         "icon": icon_abs,
         "iosMin": pkg.get("iosMin"),
         "branch": _git_branch(path),
-        "generated": bool(yml.get("_generated")),
+        "generated": yml.generated,
         "added": sp in state["added"],
         "autoRenew": bool(state["meta"].get(sp, {}).get("autoRenew")),
         "buildSettings": build_settings.current(state["meta"].get(sp)),
@@ -674,12 +655,7 @@ def cmd_new(flags: dict) -> int:
         target = f"{name}App.swift" if f.name == "App.swift" else f.name
         (src_dir / target).write_text(f.read_text().replace("{{NAME}}", name))
     yml = dest / "xtool.yml"
-    text = yml.read_text() if yml.exists() else "version: 1\n"
-    if re.search(r"^bundleID:.*$", text, re.M):
-        text = re.sub(r"^bundleID:.*$", f"bundleID: {bundle}", text, flags=re.M)
-    else:
-        text = text.rstrip("\n") + f"\nbundleID: {bundle}\n"
-    yml.write_text(text)
+    yml.write_text(xtool_yml.set_key(yml.read_text() if yml.exists() else "version: 1\n", "bundleID", bundle))
 
     git = shutil.which("git")
     if git and not (dest / ".git").exists() and flags.get("git", True) not in ("0", "false", "no"):
@@ -1531,11 +1507,9 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
 @contextmanager
 def _lock(path: Path):
     """Hold the project's build lock for the with-block; HelperError('busy') if another build holds it."""
-    LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha1(str(path).encode()).hexdigest()[:16]
-    with open(LOCK_DIR / f"{key}.lock", "w") as fh:
+    with ExitStack() as stack:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stack.enter_context(fileio.lock(LOCK_DIR / f"{fileio.path_key(path)}.lock", blocking=False))
         except BlockingIOError:
             raise HelperError("busy", "This project is already being built. Wait for it to finish, or cancel it.")
         yield

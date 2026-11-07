@@ -54,7 +54,6 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -129,26 +128,12 @@ def control_path() -> Path:
     return _p("watch-control.json")
 
 
-@contextmanager
-def _flock(name: str):
-    with open(_p(name), "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        yield
-
-
-def _load(path: Path, default: Any = None) -> Any:
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return default
-
-
 def _save(path: Path, data: Any) -> None:
     fileio.atomic_write(path, json.dumps(data, separators=(",", ":"), default=str), mode=0o600)
 
 
 def read_status() -> dict | None:
-    st = _load(status_path())
+    st = fileio.load_json(status_path())
     return st if isinstance(st, dict) else None
 
 
@@ -197,7 +182,7 @@ def watcher_pid() -> int | None:
 
 
 def read_owners() -> dict[str, str]:
-    o = _load(owners_path(), {})
+    o = fileio.load_json(owners_path(), {})
     return {str(k): str(v) for k, v in o.items()} if isinstance(o, dict) else {}
 
 
@@ -205,14 +190,14 @@ def add_owner(pid: int) -> None:
     start = proc_start(pid)
     if start is None:
         return
-    with _flock(".watch-owners.lock"):
+    with fileio.lock(_p(".watch-owners.lock")):
         o = read_owners()
         o[str(pid)] = start
         _save(owners_path(), o)
 
 
 def remove_owner(pid: int) -> None:
-    with _flock(".watch-owners.lock"):
+    with fileio.lock(_p(".watch-owners.lock")):
         o = read_owners()
         if o.pop(str(pid), None) is not None:
             _save(owners_path(), o)
@@ -967,7 +952,7 @@ class Watcher:
             self.stop_message = "Stopped: the project folder or its Package.swift is gone"
 
     def apply_control(self) -> None:
-        c = _load(control_path(), {}) or {}
+        c = fileio.load_json(control_path(), {}) or {}
         if c.get("path") not in (None, str(self.root)):
             return
         if "autoRun" in c:
@@ -1278,7 +1263,7 @@ def current_status() -> dict:
     st = read_status()
     pid = watcher_pid()
     if st and st.get("state") != "stopped" and pid is None:
-        with _flock(".watch-start.lock"):
+        with fileio.lock(_p(".watch-start.lock")):
             st = read_status() or st
             if st.get("state") != "stopped" and watcher_pid() is None:
                 st = _mark_dead(st)
@@ -1384,7 +1369,7 @@ def ensure(root: Path, auto_run: bool | None, debounce_ms: int | None, owner: in
     keep a running watcher's value (a new one gets False / DEFAULT_DEBOUNCE_MS); a given one changes it live.
     Another project's watcher is stopped first (reported as `replaced`). Returns the snapshot plus
     `attached` (an existing watcher was reused) and `replaced`."""
-    with _flock(".watch-start.lock"):
+    with fileio.lock(_p(".watch-start.lock")):
         pid = watcher_pid()
         st = read_status() or {}
         replaced = None
@@ -1446,7 +1431,7 @@ def ensure(root: Path, auto_run: bool | None, debounce_ms: int | None, owner: in
 
 
 def stop(project: str | None = None) -> dict:
-    with _flock(".watch-start.lock"):
+    with fileio.lock(_p(".watch-start.lock")):
         st = read_status() or {}
         if watcher_pid() is None and st.get("state") in (None, "stopped"):
             return {"stopped": False, "watching": False, "message": "Not watching", **({"last": st} if st else {})}

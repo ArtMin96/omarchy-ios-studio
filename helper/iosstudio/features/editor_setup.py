@@ -51,7 +51,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from iosstudio.core import appdirs, fileio, output
+from iosstudio.core import appdirs, fileio, jsonc, output, xtool_yml
+from iosstudio.core.jsonc import JsoncError, Node
 from iosstudio.core.output import HelperError
 
 EDITORS = {"vscode": "VS Code", "zed": "Zed", "neovim": "Neovim"}
@@ -163,175 +164,7 @@ def _flatpak(env: Env, app_id: str) -> bool:
     return any((d / app_id).is_dir() for d in (env.data / "flatpak/app", Path("/var/lib/flatpak/app")))
 
 
-# ================================================================ JSONC: parse and edit as text
-
-class JsoncError(ValueError):
-    pass
-
-
-def _line_of(text: str, i: int) -> int:
-    return text.count("\n", 0, max(0, i)) + 1
-
-
-def strip_jsonc(text: str) -> tuple[str, bool, set[int]]:
-    """(clean, had_comments, trailing_comma_offsets). `clean` has the same length as `text`: comments,
-    trailing commas and a BOM become spaces (newlines are kept), so offsets in it are offsets in `text`."""
-    out = list(text)
-    n = len(text)
-    comments = False
-    if text.startswith("﻿"):
-        out[0] = " "
-    i = 0
-    in_str = False
-    while i < n:
-        c = text[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-        elif c == '"':
-            in_str = True
-        elif c == "/" and i + 1 < n and text[i + 1] == "/":
-            comments = True
-            while i < n and text[i] != "\n":
-                out[i] = " "
-                i += 1
-            continue
-        elif c == "/" and i + 1 < n and text[i + 1] == "*":
-            end = text.find("*/", i + 2)
-            if end < 0:
-                raise JsoncError(f"a /* comment */ that never ends (line {_line_of(text, i)})")
-            comments = True
-            for j in range(i, end + 2):
-                if text[j] != "\n":
-                    out[j] = " "
-            i = end + 2
-            continue
-        i += 1
-    clean = "".join(out)
-    # trailing commas: a comma (outside strings) whose next non-space character closes the object or list
-    trailing: set[int] = set()
-    in_str = False
-    i = 0
-    while i < n:
-        c = clean[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-        elif c == '"':
-            in_str = True
-        elif c == ",":
-            j = i + 1
-            while j < n and clean[j] in " \t\r\n":
-                j += 1
-            if j < n and clean[j] in "}]":
-                trailing.add(i)
-        i += 1
-    if trailing:
-        out = list(clean)
-        for i in trailing:
-            out[i] = " "
-        clean = "".join(out)
-    return clean, comments, trailing
-
-
-@dataclass
-class Node:
-    kind: str                 # obj | arr | val
-    start: int
-    end: int                  # one past the closing brace / bracket / value
-    value: Any = None
-    members: list[tuple[str, "Node"]] = field(default_factory=list)   # obj
-    items: list["Node"] = field(default_factory=list)                  # arr
-
-
-_DECODER = json.JSONDecoder()
-_WS = " \t\r\n"
-
-
-def _skip(s: str, i: int) -> int:
-    while i < len(s) and s[i] in _WS:
-        i += 1
-    return i
-
-
-def _parse(s: str, i: int, depth: int = 0) -> Node:
-    if depth > 64:
-        raise JsoncError("nested too deeply")
-    i = _skip(s, i)
-    if i >= len(s):
-        raise JsoncError("ends too early")
-    c = s[i]
-    if c == "{":
-        node = Node("obj", i, i, {})
-        j = _skip(s, i + 1)
-        if j < len(s) and s[j] == "}":
-            node.end = j + 1
-            return node
-        while True:
-            j = _skip(s, j)
-            if j >= len(s) or s[j] != '"':
-                raise JsoncError(f"expected a \"key\" (line {_line_of(s, j)})")
-            try:
-                key, j = _DECODER.raw_decode(s, j)
-            except json.JSONDecodeError as exc:
-                raise JsoncError(f"{exc.msg} (line {exc.lineno})") from None
-            j = _skip(s, j)
-            if j >= len(s) or s[j] != ":":
-                raise JsoncError(f"expected ':' (line {_line_of(s, j)})")
-            child = _parse(s, j + 1, depth + 1)
-            node.members.append((key, child))
-            node.value[key] = child.value
-            j = _skip(s, child.end)
-            if j < len(s) and s[j] == ",":
-                j += 1
-                continue
-            if j < len(s) and s[j] == "}":
-                node.end = j + 1
-                return node
-            raise JsoncError(f"expected ',' or '}}' (line {_line_of(s, j)})")
-    if c == "[":
-        node = Node("arr", i, i, [])
-        j = _skip(s, i + 1)
-        if j < len(s) and s[j] == "]":
-            node.end = j + 1
-            return node
-        while True:
-            child = _parse(s, j, depth + 1)
-            node.items.append(child)
-            node.value.append(child.value)
-            j = _skip(s, child.end)
-            if j < len(s) and s[j] == ",":
-                j += 1
-                continue
-            if j < len(s) and s[j] == "]":
-                node.end = j + 1
-                return node
-            raise JsoncError(f"expected ',' or ']' (line {_line_of(s, j)})")
-    try:
-        value, end = _DECODER.raw_decode(s, i)
-    except json.JSONDecodeError as exc:
-        raise JsoncError(f"{exc.msg} (line {exc.lineno})") from None
-    if isinstance(value, (dict, list)):   # raw_decode only sees containers through the branches above
-        raise JsoncError(f"unexpected value (line {_line_of(s, i)})")
-    return Node("val", i, end, value)
-
-
-def parse_jsonc(text: str) -> tuple[Node, str, bool, set[int]]:
-    """Parse JSON with comments and trailing commas. Returns (root node, clean text, had_comments,
-    trailing comma offsets). Raises JsoncError."""
-    clean, comments, trailing = strip_jsonc(text)
-    root = _parse(clean, 0)
-    rest = _skip(clean, root.end)
-    if rest < len(clean):
-        raise JsoncError(f"extra text after the end (line {_line_of(clean, rest)})")
-    return root, clean, comments, trailing
-
+# ================================================================ JSONC: edit as text
 
 def _indent_unit(text: str) -> str:
     """The file's indent step: a tab, or the smallest run of leading spaces (default 2)."""
@@ -367,28 +200,25 @@ class _Merge:
     kept: list[dict] = field(default_factory=list)
 
 
-def _append(text: str, clean: str, trailing: set[int], node: Node, new: list[tuple[str | None, Any]],
+def _append(text: str, node: Node, new: list[tuple[str | None, Any]],
             unit: str) -> list[tuple]:
     """Text edits that add `new` members (key, value) to an object node, or items (None, value) to a list node,
     in the file's own layout."""
     close = node.end - 1
-    children = [c for _, c in node.members] if node.kind == "obj" else node.items
+    children = [m.node for m in node.members] if node.kind == "obj" else node.items
     multiline = "\n" in text[node.start:node.end]
 
     def entry(k: str | None, v: Any, ind: str) -> str:
         return (json.dumps(k, ensure_ascii=False) + ": " if k is not None else "") + _render(v, ind, unit)
 
     if children:
-        first = node.members[0][1].start if node.kind == "obj" else children[0].start
-        if node.kind == "obj":   # the key starts the member's line, not its value
-            first = clean.rfind('"', node.start, first)
-            first = clean.rfind('"', node.start, first)
+        first = node.members[0].kstart if node.kind == "obj" else children[0].start   # a member's line starts with its key
         ind = _line_indent(text, first) if text[text.rfind("\n", 0, first) + 1:first].strip() == "" \
             else _line_indent(text, node.start) + unit
     else:
         ind = _line_indent(text, node.start) + unit
     if not multiline:
-        if not children and node.start == _skip(clean, 0):   # an empty root {}: lay it out
+        if not children and node.start == jsonc.skip(text, 0):   # an empty root {}: lay it out
             outer = _line_indent(text, node.start)
             return [(close, "\n" + ",\n".join(ind + entry(k, v, ind) for k, v in new) + "\n" + outer)]
 
@@ -398,7 +228,7 @@ def _append(text: str, clean: str, trailing: set[int], node: Node, new: list[tup
         if not children:
             return [(close, ", ".join(compact(k, v) for k, v in new))]
         return [(children[-1].end, "".join(", " + compact(k, v) for k, v in new))]
-    had_trailing = bool(children) and any(p in trailing for p in range(children[-1].end, close))
+    had_trailing = bool(children) and children[-1].comma >= 0
     lines = [ind + entry(k, v, ind) for k, v in new]
     ls = text.rfind("\n", 0, close) + 1
     edits: list[tuple] = []
@@ -416,25 +246,25 @@ def _append(text: str, clean: str, trailing: set[int], node: Node, new: list[tup
     return edits
 
 
-def _merge_node(text: str, clean: str, trailing: set[int], node: Node, want: Any, path: list[str],
+def _merge_node(text: str, node: Node, want: Any, path: list[str],
                 unit: str, m: _Merge) -> None:
     if node.kind == "obj" and isinstance(want, dict):
-        have = dict(node.members)
+        have = {m.key: m.node for m in node.members}
         new: list[tuple[str | None, Any]] = []
         for k, v in want.items():
             if k not in have:
                 new.append((k, v))
                 m.added.append(_key_label(path + [k]))
             else:
-                _merge_node(text, clean, trailing, have[k], v, path + [k], unit, m)
+                _merge_node(text, have[k], v, path + [k], unit, m)
         if new:
-            m.edits.extend(_append(text, clean, trailing, node, new, unit))
+            m.edits.extend(_append(text, node, new, unit))
         return
     if node.kind == "arr" and isinstance(want, list):
         new = [(None, v) for v in want if v not in node.value]
         if new:
             m.added.extend(_key_label(path) + " + " + json.dumps(v, ensure_ascii=False) for _, v in new)
-            m.edits.extend(_append(text, clean, trailing, node, new, unit))
+            m.edits.extend(_append(text, node, new, unit))
         return
     if node.value != want:
         m.kept.append({"key": _key_label(path), "yours": node.value, "ours": want})
@@ -465,18 +295,18 @@ def merge_text(text: str, want: dict) -> dict:
         return {"status": "merged", "text": json.dumps(want, indent=2, ensure_ascii=False) + "\n",
                 "added": [_key_label([k]) for k in want], "kept": []}
     try:
-        root, clean, _comments, trailing = parse_jsonc(text)
+        root = jsonc.parse(text)
     except JsoncError as exc:
         return {"status": "skip", "reason": f"isn't valid JSON: {exc}", "added": [], "kept": []}
     if root.kind != "obj":
         return {"status": "skip", "reason": "isn't a JSON object ({ … })", "added": [], "kept": []}
     m = _Merge()
-    _merge_node(text, clean, trailing, root, want, [], _indent_unit(text), m)
+    _merge_node(text, root, want, [], _indent_unit(text), m)
     if not m.edits:
         return {"status": "unchanged", "added": [], "kept": m.kept}
     new_text = _apply_edits(text, m.edits)
     try:   # belt and braces: the result must parse and contain everything we meant to add
-        check, _, _, _ = parse_jsonc(new_text)
+        check = jsonc.parse(new_text)
     except JsoncError as exc:
         return {"status": "skip", "reason": f"couldn't be merged safely ({exc}); add the keys by hand",
                 "added": [], "kept": m.kept}
@@ -551,14 +381,6 @@ def _kept_note(kept: list) -> str:
 
 # ================================================================ the build server file (.bsp)
 
-def _xtool_yml_skip_lsp(project: Path) -> bool:
-    try:
-        text = (project / "xtool.yml").read_text(errors="replace")
-    except OSError:
-        return False
-    return bool(re.search(r"(?m)^skipLSP:\s*(true|yes|on)\s*(#.*)?$", text))
-
-
 SDK_REASON = "xtool's iOS SDK isn't set up: finish it on the Toolchain page"
 
 
@@ -582,7 +404,7 @@ def bsp_status(project: Path, env: Env) -> dict:
     xtool = env.which("xtool")
     out: dict[str, Any] = {"present": path.is_file(), "path": str(path), "kind": kind, "stale": False,
                            "reason": None, "built": (project / ".build").is_dir(), "xtoolOnPath": bool(xtool),
-                           "skipLSP": _xtool_yml_skip_lsp(project), "note": None}
+                           "skipLSP": xtool_yml.read(project / "xtool.yml").flag("skipLSP"), "note": None}
     if out["present"]:
         text, problem = _read_json_file(path)
         try:
@@ -708,7 +530,7 @@ def vscode_project_actions(project: Path) -> list[dict]:
     unwanted: Any = []
     if text:
         try:
-            v = parse_jsonc(text)[0].value
+            v = jsonc.parse(text).value
             unwanted = (v.get("unwantedRecommendations") or []) if isinstance(v, dict) else []
         except JsoncError:
             pass

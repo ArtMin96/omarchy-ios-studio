@@ -41,8 +41,6 @@ Errors are {code, message, hint?, diagnostics?, …}; diagnostics have the build
 from __future__ import annotations
 
 import ctypes
-import fcntl
-import hashlib
 import json
 import os
 import re
@@ -53,11 +51,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from iosstudio.core import appdirs, fileio, output, subproc
+from iosstudio.core import appdirs, fileio, output, subproc, xtool_yml
 from iosstudio.core.output import HelperError
 from iosstudio.features import package_manifest as M
 
@@ -309,24 +307,16 @@ def project_root(flags: dict) -> Path:
     return p
 
 
-def _key(p: Path | str) -> str:
-    return hashlib.sha1(str(p).encode()).hexdigest()[:16]
-
-
 @contextmanager
 def project_lock(root: Path):
     """One mutating package command per project (the app and the MCP server share it)."""
-    LOCKS.mkdir(parents=True, exist_ok=True)
-    fh = open(LOCKS / f"{_key(root)}.lock", "w")
-    try:
+    with ExitStack() as stack:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stack.enter_context(fileio.lock(LOCKS / f"{fileio.path_key(root)}.lock", blocking=False))
         except OSError:
             raise HelperError("package-busy", "Another package change for this project is still running. Wait for "
                                               "it to finish, then try again.")
         yield
-    finally:
-        fh.close()
 
 
 class Backup:
@@ -349,14 +339,14 @@ class Backup:
         did = False
         mp = self.root / "Package.swift"
         if not resolved_only and _read_bytes(mp) != self.manifest:
-            _write_bytes(mp, self.manifest, self.mode)
+            fileio.atomic_write(mp, self.manifest, self.mode)
             did = True
         rp = self.root / "Package.resolved"
         if _read_bytes(rp) != self.resolved:
             if self.resolved is None:
                 rp.unlink(missing_ok=True)
             else:
-                _write_bytes(rp, self.resolved, 0o644)
+                fileio.atomic_write(rp, self.resolved, 0o644)
             did = True
         if did:
             _forget_dump(self.root)
@@ -370,21 +360,6 @@ def _read_bytes(p: Path) -> bytes | None:
         return None
 
 
-def _write_bytes(p: Path, data: bytes, mode: int) -> None:
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.chmod(tmp, mode)
-        os.replace(tmp, p)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
 # ================================================================ dump-package
 
 def _stamp(p: Path) -> list | None:
@@ -396,7 +371,7 @@ def _stamp(p: Path) -> list | None:
 
 
 def _dump_cache(root: Path) -> Path:
-    return CACHE / "dump" / f"{_key(root)}.json"
+    return CACHE / "dump" / f"{fileio.path_key(root)}.json"
 
 
 def _forget_dump(root: Path) -> None:
@@ -423,7 +398,7 @@ def dump_package(root: Path, use_cache: bool = True) -> dict:
         entry = fileio.load_json(cache)
         if isinstance(entry, dict) and entry.get("stamp") == stamp and isinstance(entry.get("data"), dict):
             return entry["data"]
-    data = _dump_dir(root, CACHE / "scratch" / _key(root))
+    data = _dump_dir(root, CACHE / "scratch" / fileio.path_key(root))
     try:
         fileio.save_json(cache, {"stamp": stamp, "data": data})
     except OSError:
@@ -499,7 +474,7 @@ def products_of(pkg_dir: str | Path) -> list[str]:
     stamp = _stamp(p / "Package.swift")
     if stamp is None:
         return []
-    cache = CACHE / "products" / f"{_key(p)}.json"
+    cache = CACHE / "products" / f"{fileio.path_key(p)}.json"
     entry = fileio.load_json(cache)
     if isinstance(entry, dict) and entry.get("stamp") == stamp and isinstance(entry.get("products"), list):
         return entry["products"]
@@ -524,22 +499,13 @@ def pick_product(products: list[str]) -> str | None:
 
 # ================================================================ app target
 
-def _xtool_product(root: Path) -> str | None:
-    try:
-        text = (root / "xtool.yml").read_text(errors="replace")
-    except OSError:
-        return None
-    m = re.search(r"^product:\s*['\"]?([^'\"\n#]+?)['\"]?\s*(#.*)?$", text, re.M)
-    return m.group(1).strip() if m else None
-
-
 def app_target(root: Path, dump: dict) -> str | None:
     """The app's target: xtool.yml's product (a library product) -> its first target; else the first library
     product's first target; else the first executable or regular target."""
     targets = [t for t in dump.get("targets") or [] if isinstance(t, dict)]
     names = {str(t.get("name")): str(t.get("type") or "regular") for t in targets}
     libs = [p for p in dump.get("products") or [] if isinstance(p, dict) and "library" in (p.get("type") or {})]
-    wanted = _xtool_product(root)
+    wanted = xtool_yml.read(root / "xtool.yml").get("product")
     for prod in ([p for p in libs if p.get("name") == wanted] if wanted else []) + libs:
         for t in prod.get("targets") or []:
             if names.get(str(t)) in TARGET_TYPES_FIRST:
@@ -1453,7 +1419,7 @@ def cmd_remove(flags: dict) -> int:
             transitive = _transitive_only(root, plan["identity"])
             backup = Backup(root)
             try:
-                _write_bytes(root / "Package.swift", plan["new_text"].encode("utf-8"), backup.mode)
+                fileio.atomic_write(root / "Package.swift", plan["new_text"].encode("utf-8"), backup.mode)
                 _forget_dump(root)
                 dump_package(root, use_cache=False)
             except HelperError as exc:
