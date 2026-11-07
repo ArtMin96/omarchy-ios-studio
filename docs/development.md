@@ -304,6 +304,8 @@ Users install a release by cloning its tag or from the tarball, see the README's
 
 ## Where things live
 
+The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_CACHE_HOME` and `$XDG_DATA_HOME` replace `~/.config`, `~/.local/state`, `~/.cache` and `~/.local/share` when set, for the app, helper, daemon and MCP server alike.
+
 | What | Path |
 |---|---|
 | Settings | `~/.config/ios-studio/settings.json` |

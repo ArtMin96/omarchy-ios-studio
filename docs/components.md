@@ -85,7 +85,7 @@ PageFrame {
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch` | Services (`app.watch`: watch mode, see WatchService below) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
-| `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths |
+| `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths. `configDir`/`stateDir`/`cacheDir` follow `$XDG_CONFIG_HOME`/`$XDG_STATE_HOME`/`$XDG_CACHE_HOME` like the helper (`core/appdirs.py`; unset or empty = the default), so the app reads the daemon's `device.json` and the helper's `builds.json` where they were written; `app.xdgConfigHome`/`xdgStateHome`/`xdgCacheHome` are the base folders |
 | `app.xdgRuntimeDir`, `app.runtimeDir` | The helper's runtime-folder rule (`helper/iosstudio/device/client.py` `runtime_base`: `$IOSSTUDIO_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR`, else `/run/user/<uid>`), in one place. Daemon paths use `app.device.runtimeDir` / `app.device.logPath`: what the daemon's `ready` event reports (`runtimeDir`, `log`), falling back to `app.runtimeDir` until then. WatchService reads `watch.json` there. |
 | `app.refreshAll()`, `app.refreshCurrent()` | |
 
@@ -916,7 +916,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   stderr-only (when the streams are split), pause, copy, export and clear. Read-only `view`, `search`;
   `togglePause()`, `copySelected()`. See [features/app-console.md](features/app-console.md).
 - **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history, then the selected build's summary,
-  problems and full log.
+  problems and full log. The detail pane shrinks with the window: the build name elides with its result pill
+  beside it, and below 560 px (`detail.narrow`) Rebuild shows only its hammer (the tooltip names it) and the log
+  toolbar takes two rows (the filter, then the level chips and the line count).
 - **CrashBrowser / CrashReportView**: the Logs page's Crashes tab (`app`; `scope` `mine`/`all`) and one report
   (`app`, `item` = a CrashItem): a plain-language summary card, the crashed thread and the full report, with
   `save()` (to `~/Downloads`) and `copy()`. The crashed thread's frames are **CrashFrameRow**s (`text`, `info` =
@@ -945,7 +947,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **DeviceAppsView**: installed apps (search, launch, stop, remove). Stop keeps its slot (invisible) while an app
   isn't running, so the row actions form fixed columns. Props: `app`, `cursor`, `sortBy` (`dev`: your own builds
   first, `az`, `size`: largest first, which asks for sizes with `app.device.wantAppSizes()`); read-only `search`
-  (the FilterField), `shown` (the filtered, sorted apps); `current()`; signals `cursorMoved(index)` and
+  (the FilterField, whose placeholder says "Filter apps" until the list has loaded, then counts them), `shown`
+  (the filtered, sorted apps); `current()`; signals `cursorMoved(index)` and
   `openApp(bundleId)` (a click on a row; launching is the ▶ button). The page owns the cursor; cursor moves scroll
   the page to the row. The rows are a ListView inside the page's scroll: only the rows near the viewport exist, and
   `shown` changes only with the list, the filter or the sort. The loading / error / empty states are a StateView on
