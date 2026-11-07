@@ -3,12 +3,12 @@ product, a product choice then add-product, failures and cancel/SIGTERM putting 
 back and killing swift, update with changes, remove dry run and confirm, a refused edit, busy, and demo mode."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -18,6 +18,15 @@ from iosstudio.features.packages import project as PP
 from support import HELPER
 from support.fakes import FAKE_SWIFT
 from support.projects import package_project as make_project
+from support.waiting import until
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class CLI(unittest.TestCase):
@@ -158,9 +167,7 @@ class CLI(unittest.TestCase):
         self.assertEqual(done["error"]["code"], "cancelled")
         self.assertEqual((self.proj / "Package.resolved").read_text(), resolved)
         pid = int(pidfile.read_text())
-        time.sleep(0.2)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        asyncio.run(until(lambda: not _alive(pid), timeout=10, what="the killed swift to exit"))
 
     def test_sigterm_during_add_restores(self):
         before = (self.proj / "Package.swift").read_text()
