@@ -254,8 +254,9 @@ Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app
 | Everything CI runs | `tests/` | `.venv/bin/pytest --durations=10` |
 
 `pytest` skips `network` tests by default (`addopts` in `pyproject.toml`); `-m ""` runs everything, `-m "not slow"` skips
-the subprocess and toolchain tests. `tests/conftest.py` points every `XDG_*` folder and `IOSSTUDIO_RUNTIME_DIR` at a temp
-folder and sets `IOSSTUDIO_DEMO_DELAY=0`. Shared fakes are in `tests/support/` (`import support`), fixtures in
+the subprocess and toolchain tests. `tests/conftest.py` points every `XDG_*` folder, `IOSSTUDIO_RUNTIME_DIR` and `TMPDIR`
+into pytest's own numbered temp folder (`/tmp/pytest-of-$USER/pytest-N`, of which pytest keeps the last 3; a killed
+run's folder rotates out too) and sets `IOSSTUDIO_DEMO_DELAY=0`. Shared fakes are in `tests/support/` (`import support`), fixtures in
 `tests/fixtures/<area>/`, and `pyproject.toml` puts `helper/`, `mcp/` and `tests/` on the path. Patch a shared folder
 or output where the code reads it (`mock.patch.object(appdirs, "STATE_DIR", …)`). No test needs xtool, pymobiledevice3,
 an iPhone or your home folder; tests that use Swift, `swift-format` or `llvm-symbolizer` skip without them.
@@ -280,26 +281,6 @@ shellcheck --severity=warning install.sh bin/ios-studio bin/iosstudio-helper bin
 /usr/lib/qt6/bin/qmllint $(git ls-files '*.qml') >/dev/null; echo $?   # 0 unless there's a syntax error
 actionlint                                         # the workflow files themselves
 ```
-
-## Releases
-
-Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. It checks that the tag matches the version files (`.github/scripts/check-version.sh`), runs the CI jobs above, then creates a GitHub Release with notes generated from the merged pull requests, grouped by label as set in `.github/release.yml` (enhancement, bug, mcp, ui/accessibility, documentation, ci, then everything else). It attaches `ios-studio-X.Y.Z.tar.gz` (a `git archive` of the tag) and `ios-studio-X.Y.Z.tar.gz.sha256`. A tag with a suffix, like `v0.2.0-rc1`, is published as a pre-release and checked against its base version (0.2.0). Only the last job can write to the repo (`contents: write`).
-
-To make a release:
-
-1. Bump the version in both files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it) and `version` in `mcp/pyproject.toml`. Changing `pyproject.toml` makes each user's MCP venv rebuild once on its next start.
-2. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
-
-   ```bash
-   git switch main && git pull
-   .github/scripts/check-version.sh v0.2.0    # prints 0.2.0, or says which file is still behind
-   git tag -a v0.2.0 -m "iOS Studio 0.2.0"
-   git push origin v0.2.0
-   ```
-
-3. Watch Actions › Release. If the version check fails, the job names the file that differs: delete the tag (`git push origin :v0.2.0 && git tag -d v0.2.0`), fix it and tag again.
-
-Users install a release by cloning its tag or from the tarball, see the README's Install section.
 
 ## Releases
 
