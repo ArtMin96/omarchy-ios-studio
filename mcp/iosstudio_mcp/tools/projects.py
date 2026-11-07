@@ -141,11 +141,10 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Create app", kind="write")
     async def ios_project_create(
         ctx: Context,
-        name: Annotated[str | None, Field(description="Letters, digits, _ (starts with a letter), e.g. "
-                                                      "'WeatherGlance'. Not needed with job_id")] = None,
+        name: Annotated[str | None, Field(description="Letters, digits, _, e.g. 'WeatherGlance' (not with "
+                                                      "job_id)")] = None,
         template: Annotated[str, Field(description="Id from ios_project_templates")] = "swiftui-app",
-        directory: Annotated[str | None, Field(description="Parent folder in the home folder (default: usually "
-                                                           "~/Developer)")] = None,
+        directory: Annotated[str | None, Field(description="Parent folder (default: ~/Developer)")] = None,
         bundle_id: Annotated[str | None, Field(description="Default: <prefix>.<name>")] = None,
         git: Annotated[bool, Field(description="git init with a first commit")] = True,
         wait_seconds: WaitSeconds = 20,

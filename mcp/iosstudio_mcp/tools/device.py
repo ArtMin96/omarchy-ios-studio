@@ -305,7 +305,7 @@ def register(mcp: MCPServer) -> None:
         project_path: Annotated[str | None, Field(description="With preset: the app's project (default: found "
                                                               "from bundle_id)")] = None,
     ) -> AppLaunchResult:
-        """Open an installed app and return its pid. A running copy is restarted so args and env apply
+        """Open an installed app and return its pid. A running copy is ended and started again so args and env apply
         (unsaved state is lost). The phone must be unlocked. For logs and crashes too, prefer
         ios_app_run_and_capture. preset= uses a run preset of the app's project; `env` overrides its env."""
         state = get_state(ctx)

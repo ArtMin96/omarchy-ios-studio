@@ -28,8 +28,8 @@ from ..core import budget as B
 from ..core.errors import device_error
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import BundleId, Udid
-from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
+from ..core.params import BundleId, MaxBytes, OptJobId, Udid, WaitSeconds
+from ..core.registry import dry_run, fit_page, page_of, tool
 from ..models import ActionResult, CrashDetail, Out
 from ..state import AppState, get_state
 
@@ -370,15 +370,14 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "List camera roll", kind="read_remote")
     async def ios_media_list(
         ctx: Context,
-        kind: Annotated[Literal["all", "photo", "video"], Field(description="Only photos or only videos")] = "all",
-        offset: Annotated[int, Field(ge=0, description="Skip this many items (newest first)")] = 0,
-        limit: Annotated[int, Field(ge=1, le=200, description="Max items to return")] = 50,
-        refresh: Annotated[bool, Field(description="Re-read the camera roll instead of the last few seconds' copy")] = False,
+        kind: Annotated[Literal["all", "photo", "video"], Field(description="Only photos or videos")] = "all",
+        offset: Annotated[int, Field(ge=0, description="Skip this many items")] = 0,
+        limit: Annotated[int, Field(ge=1, le=200, description="Max items")] = 50,
+        refresh: Annotated[bool, Field(description="Re-read instead of the last few seconds' copy")] = False,
         udid: Udid = None,
     ) -> MediaList:
-        """Photos and videos in the iPhone's camera roll, newest first: id (path), kind, date, size,
-        dimensions and video duration. Metadata only, no images. The first call can take ~10 s while
-        the Photos library index is copied. Import items with ios_media_pull(ids=[...])."""
+        """Camera roll photos and videos, newest first: id, kind, date, size, dimensions, duration (no images).
+        The first call can take ~10 s. Import with ios_media_pull(ids=[...])."""
         state = get_state(ctx)
         a: dict = {"offset": offset, "limit": limit, "refresh": refresh}
         if kind != "all":
@@ -403,20 +402,17 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Import from camera roll", kind="write", idempotent=True, open_world=True)
     async def ios_media_pull(
         ctx: Context,
-        ids: Annotated[list[str] | None, Field(description="Item ids from ios_media_list, e.g. "
-                                                           "['DCIM/100APPLE/IMG_0001.HEIC']")] = None,
+        ids: Annotated[list[str] | None, Field(description="Item ids from ios_media_list")] = None,
         latest: Annotated[int | None, Field(ge=1, le=500, description="Instead of ids: the newest N items")] = None,
         kind: Annotated[Literal["all", "photo", "video"], Field(description="With latest: only photos or videos")] = "all",
-        dest: Annotated[str, Field(description="Folder on this computer (inside your home folder)")] = "~/Pictures/iPhone",
+        dest: Annotated[str, Field(description="Folder in your home folder")] = "~/Pictures/iPhone",
         convert_heic: Annotated[bool, Field(description="Save HEIC photos as JPEG")] = False,
-        job_id: Annotated[str | None, Field(description="Wait for an import started earlier (its job_id)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
-                                                                           "state='running'")] = 20,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> TransferStatus:
-        """Copy photos/videos from the iPhone's camera roll to a folder on this computer (read-only on the
-        phone; files already imported are skipped). Big imports keep running in the background: if
-        state is 'running', call again with job_id to wait for it (ios_job_cancel stops it)."""
+        """Copy camera roll photos/videos to a folder here (read-only on the phone; already imported files are
+        skipped). A job: state='running' + job_id, call again with job_id."""
         if job_id:
             return await _poll_transfer(ctx, job_id, "ios_media_pull", wait_seconds)
         state = get_state(ctx)
@@ -445,18 +441,15 @@ def register(mcp: MCPServer) -> None:
     async def ios_files_list(
         ctx: Context,
         bundle_id: BundleId,
-        path: Annotated[str | None, Field(description="Folder in the app's container, e.g. '/Documents'. Default: "
-                                                      "the top ('/' for your own apps, '/Documents' otherwise)")] = None,
-        depth: Annotated[int, Field(ge=1, le=4, description="How many folder levels to walk")] = 1,
+        path: Annotated[str | None, Field(description="Folder in the container (default: the top)")] = None,
+        depth: Annotated[int, Field(ge=1, le=4, description="Folder levels to walk")] = 1,
         offset: Annotated[int, Field(ge=0, description="Skip this many entries")] = 0,
-        limit: Annotated[int, Field(ge=1, le=500, description="Max entries to return")] = 100,
+        limit: Annotated[int, Field(ge=1, le=500, description="Max entries")] = 100,
         documents_only: Annotated[bool, Field(description="Your own apps: show only Documents")] = False,
         udid: Udid = None,
     ) -> FilesList:
-        """Files in an app's container on the iPhone. Your own development builds expose the whole
-        container (Documents, Library, tmp); App Store apps only their Documents folder, and only when
-        they turn on file sharing (others fail with no-file-sharing). Returns entries with type, size
-        and date plus totals; walk deeper with depth or a narrower path."""
+        """Files in an app's container: the whole container for your own builds, only Documents for App Store
+        apps with file sharing on. Entries with type, size and date; go deeper with depth or path."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         bid = app["bundleId"]
@@ -510,19 +503,15 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Copy app files to this computer", kind="write", idempotent=True, open_world=True)
     async def ios_files_pull(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed when polling)")] = None,
-        paths: Annotated[list[str] | None, Field(description="Files or folders in the container, e.g. "
-                                                             "['/Documents/export.csv']; folders are copied whole")] = None,
-        dest: Annotated[str, Field(description="Folder on this computer (inside your home folder)")] = "~/Downloads",
-        job_id: Annotated[str | None, Field(description="Wait for a copy started earlier (its job_id)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
-                                                                           "returning state='running' with the "
-                                                                           "job_id")] = 20,
+        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
+        paths: Annotated[list[str] | None, Field(description="Files or folders in the container")] = None,
+        dest: Annotated[str, Field(description="Folder in your home folder")] = "~/Downloads",
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> TransferStatus:
-        """Copy files or folders from an app's container on the iPhone to this computer. Existing local
-        files are never overwritten ('name (2).ext'). Long copies continue in the background: poll with
-        job_id (ios_job_cancel stops it)."""
+        """Copy files or folders from an app's container to this computer (never overwrites: 'name (2).ext').
+        A job: state='running' + job_id, call again with job_id."""
         if job_id:
             return await _poll_transfer(ctx, job_id, "ios_files_pull", wait_seconds)
         if not bundle_id or not paths:
@@ -541,24 +530,18 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Copy files into an app", kind="destructive", open_world=True)
     async def ios_files_push(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed when polling)")] = None,
-        sources: Annotated[list[str] | None, Field(description="Files or folders on this computer (inside your home "
-                                                               "folder); folders are copied whole")] = None,
-        path: Annotated[str | None, Field(description="Folder in the container to copy into, e.g. '/Documents/In' "
-                                                      "(created if missing). Default: Documents")] = None,
-        confirm: Annotated[bool, Field(description="Replace files that already exist there. Without it a push "
-                                                   "that would overwrite returns state='needs_confirm' and changes "
-                                                   "nothing")] = False,
-        job_id: Annotated[str | None, Field(description="Wait for a push started earlier (its job_id)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
-                                                                           "returning state='running' with the "
-                                                                           "job_id")] = 20,
+        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
+        sources: Annotated[list[str] | None, Field(description="Files or folders in your home folder")] = None,
+        path: Annotated[str | None, Field(description="Container folder (created if missing; default "
+                                                      "Documents)")] = None,
+        confirm: Annotated[bool, Field(description="Replace existing files, only after the user agreed")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> TransferStatus:
-        """Copy files from this computer into an app's container on the iPhone (your own builds, or App
-        Store apps with file sharing: Documents only). If any file already exists there, nothing is
-        copied and state='needs_confirm' lists what would be replaced: ask the user, then repeat with
-        confirm=true."""
+        """Copy files from this computer into an app's container (own builds; App Store apps with file sharing:
+        Documents only). If a file exists there, nothing is copied and state='needs_confirm' lists it: ask the
+        user, then repeat with confirm=true. A job: call again with job_id."""
         if job_id:
             return await _poll_transfer(ctx, job_id, "ios_files_push", wait_seconds)
         if not bundle_id or not sources:
@@ -589,14 +572,12 @@ def register(mcp: MCPServer) -> None:
     async def ios_files_delete(
         ctx: Context,
         bundle_id: BundleId,
-        paths: Annotated[list[str], Field(description="Files or folders in the container, e.g. ['/Documents/old.json']; "
-                                                      "folders are deleted with everything in them")],
+        paths: Annotated[list[str], Field(description="Files or folders in the container (folders whole)")],
         confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
         udid: Udid = None,
     ) -> ActionResult:
-        """Delete files or folders from an app's container on the iPhone. Cannot be undone. With
-        confirm=false (default) it changes nothing and lists what would go; ask the user, then repeat
-        with confirm=true."""
+        """Delete files or folders from an app's container; cannot be undone. confirm=false (default) lists
+        what would go; ask the user, then repeat with confirm=true."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         bid = app["bundleId"]
@@ -631,29 +612,21 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Run camera test", kind="write", open_world=True)
     async def ios_camera_test(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="Your app's bundle id, e.g. 'com.example.myapp'. Not needed "
-                                                           "when polling")] = None,
-        project_path: Annotated[str | None, Field(description="Instead of bundle_id: a project name or path; its "
-                                                              "bundle id is used")] = None,
-        inputs: Annotated[list[str] | None, Field(description="Test images/videos on this computer (inside your home "
-                                                              "folder)")] = None,
-        args: Annotated[list[str] | None, Field(description="Launch arguments; default ['-cameraTestMode', '1']")] = None,
-        env: Annotated[dict[str, str] | None, Field(description="Environment variables for the app")] = None,
-        timeout_s: Annotated[int, Field(ge=5, le=600, description="How long the app gets to write done.json")] = 60,
-        job_id: Annotated[str | None, Field(description="Wait for a test started earlier (its job_id)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait (≤25 s) before "
-                                                                           "returning state='running' with the "
-                                                                           "job_id")] = 20,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        bundle_id: Annotated[str | None, Field(description="Your app's bundle id (not needed with job_id)")] = None,
+        project_path: Annotated[str | None, Field(description="Instead of bundle_id: a project name or path")] = None,
+        inputs: Annotated[list[str] | None, Field(description="Test images/videos in your home folder")] = None,
+        args: Annotated[list[str] | None, Field(description="Launch arguments (default -cameraTestMode 1)")] = None,
+        env: Annotated[dict[str, str] | None, Field(description="Environment variables")] = None,
+        timeout_s: Annotated[int, Field(ge=5, le=600, description="Seconds the app gets to write done.json")] = 60,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> CameraTestResult:
-        """Test your app's camera pipeline with files instead of the camera: copies the inputs to the
-        app's Documents/CameraTestInput, relaunches it with -cameraTestMode, waits for
-        Documents/CameraTestOutput/done.json (or the timeout), copies the outputs here, and reports a
-        summary of done.json's results, the output files, key log lines and any new crash. Needs the
-        test hook in the app (docs/camera-testing.md). Runs as a job: if state='running', call again
-        with job_id (ios_job_cancel stops it)."""
+        """Run your app's camera code on test files instead of the camera: copies inputs into the app,
+        relaunches it in test mode, waits for its done.json, copies the outputs back and reports results, log
+        lines and any new crash. Needs the hook in docs/camera-testing.md. A job: state='running' + job_id,
+        call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "cameratest")

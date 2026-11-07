@@ -96,25 +96,15 @@ def register(mcp: MCPServer) -> None:
     async def ios_editor_setup(
         ctx: Context,
         editor: Annotated[EditorId, Field(description="vscode, zed, neovim, or auto: every installed one")] = "auto",
-        project_path: Annotated[str | None, Field(description="Also write this project's missing files now "
-                                                              "(.bsp/xtool.json; .vscode/ for VS Code) instead of "
-                                                              "waiting for its next build")] = None,
-        confirm: Annotated[bool, Field(description="false = dry run listing every change. true only after the "
-                                                   "user agreed")] = False,
+        project_path: Annotated[str | None, Field(description="Also write this project's .bsp/xtool.json "
+                                                              "(and .vscode/) now")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         max_bytes: MaxBytes = None,
     ) -> EditorSetupResult:
-        """Set up an editor for Swift completion and errors (SourceKit-LSP through xtool's build server), once
-        per machine. A dry run unless confirm=true: it lists each file it would write or merge.
-
-        - neovim: changes the user's Neovim config (LazyVim's lang.swift extra in lazyvim.json, backed up
-          first, or a new lua/plugins/ios-studio-swift.lua). Non-LazyVim configs are left alone (notes say why).
-        - zed, vscode: their Swift extension is a step the user does (notes); nothing in the project is needed
-          for Zed. sourcekit-lsp's path goes into the editor's user settings only when it isn't on PATH.
-        - The editor is remembered in iOS Studio's settings. With VS Code, projects get .vscode/settings.json
-          and extensions.json (merged, never overwritten) on their next build.
-        Projects get .bsp/xtool.json by themselves after a successful build and on create/convert; pass
-        project_path to write a project's missing files now. ios_project_info's `editor` shows a project's
-        state. Existing files are never overwritten; values the user set differently are kept and listed."""
+        """Set up VS Code, Zed or Neovim for Swift completion (SourceKit-LSP via xtool's build server), once per
+        machine. A dry run listing each file it would write or merge until confirm=true after the user agrees.
+        Installing the editor's Swift extension is the user's step (see notes). Existing files and the
+        user's own values are kept."""
         state = get_state(ctx)
         machine = await helper.call("editor", "status")
         installed = {e.get("id"): e for e in (machine.get("editors") or []) if isinstance(e, dict)}

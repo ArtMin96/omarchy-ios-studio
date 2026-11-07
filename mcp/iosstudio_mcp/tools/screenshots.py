@@ -521,9 +521,8 @@ def register(mcp: MCPServer) -> None:
         project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")] = None,
         presets: Annotated[list[str] | None, Field(description="Run preset names, one launch each")] = None,
         configs: Annotated[list[ConfigIn] | None, Field(description="Inline launch configs")] = None,
-        names: Annotated[list[str | NameIn] | None, Field(description="Screens to capture after each launch, e.g. "
-                                                                      "['Home', {'name': 'Settings', 'press': "
-                                                                      "'Settings'}]; default ['launch']")] = None,
+        names: Annotated[list[str | NameIn] | None, Field(description="Screens per launch: 'Home' or {'name', 'press'}; "
+                                                                      "default ['launch']")] = None,
         bundle_id: Annotated[str | None, Field(description="Default: the project's bundle id")] = None,
         settle_seconds: Annotated[float, Field(ge=0, le=30, description="Wait after each launch")] = 3.0,
         job_id: OptJobId = None,

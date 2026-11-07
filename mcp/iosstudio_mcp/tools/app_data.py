@@ -443,13 +443,12 @@ def register(mcp: MCPServer) -> None:
         key: Annotated[str | None, Field(description="set/delete: the key")] = None,
         value: Annotated[Any, Field(description="set: the value as JSON (or tagged {'$type': 'date'|'data', ...})")] = None,
         type: Annotated[Literal["string", "int", "float", "bool", "date", "data", "json"] | None,
-                        Field(description="set: store as this type (date: ISO 8601; data: base64). Default: from "
-                                          "the JSON")] = None,
+                        Field(description="set: store as (date: ISO 8601; data: base64); default from JSON")] = None,
         confirm: Annotated[bool, Field(description="false = dry run (old -> new); true only after the user "
                                                    "agreed")] = False,
         stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
-        refresh: Annotated[bool, Field(description="Reinstall the last build afterwards so the app sees the change "
-                                                   "(false for several changes, then action='refresh')")] = True,
+        refresh: Annotated[bool, Field(description="Reinstall the last build so the app sees it (false: batch, "
+                                                   "then action='refresh')")] = True,
         job_id: OptJobId = None,
         wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
@@ -517,8 +516,7 @@ def register(mcp: MCPServer) -> None:
     async def ios_app_store(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
-        store: Annotated[str | None, Field(description="Store path or name from the summary (default: the one "
-                                                       "with `table`)")] = None,
+        store: Annotated[str | None, Field(description="Store path or name (default: the one with `table`)")] = None,
         table: Annotated[str | None, Field(description="Table or entity ('ZITEM' or 'Item'); omit for the summary")] = None,
         offset: Annotated[int, Field(ge=0, description="First row")] = 0,
         limit: Annotated[int, Field(ge=1, le=200, description="Rows per page")] = 20,
@@ -555,8 +553,8 @@ def register(mcp: MCPServer) -> None:
     async def ios_app_reset(
         ctx: Context,
         bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
-        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe: empty Documents, Library, tmp; "
-                                                                        "reinstall: uninstall + install last build")] = "wipe",
+        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe the data folders, or reinstall "
+                                                                        "the last build")] = "wipe",
         confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
         project_path: Annotated[str | None, Field(description="reinstall: use this project's last signed build")] = None,

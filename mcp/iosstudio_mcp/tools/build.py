@@ -278,7 +278,7 @@ def register(mcp: MCPServer) -> None:
     ) -> JobStatus:
         """Build, sign, install and launch the app on the iPhone (the "run it" button). Returns state='running'
         + job_id if not done within wait_seconds: poll ios_job_status. Needs an Apple ID and a connected iPhone
-        (ios_status). preset='<name>' launches with that run preset; without it, no preset is used."""
+        (ios_status). preset='<name>' launches with that run preset. Without preset= none is used."""
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds, preset)
 

@@ -177,10 +177,8 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
     return out
 
 
-DebounceMs = Annotated[int | None, Field(ge=100, le=10_000, description="Wait this long after the last save "
-                                                                        "before compiling (rapid saves make one "
-                                                                        "build); omit to keep the running "
-                                                                        "watcher's value (600 for a new one)")]
+DebounceMs = Annotated[int | None, Field(ge=100, le=10_000, description="Delay after the last save (default "
+                                                                        "600)")]
 
 
 def register(mcp: MCPServer) -> None:
@@ -189,20 +187,13 @@ def register(mcp: MCPServer) -> None:
     async def ios_watch_start(
         ctx: Context,
         project_path: ProjectPath,
-        auto_run: Annotated[bool | None, Field(description="After each clean compile, also Run it (build, "
-                                                           "install, launch) when an iPhone is connected and an "
-                                                           "Apple ID is signed in; otherwise the status says why "
-                                                           "it was skipped. Omit to keep the running watcher's "
-                                                           "setting (off for a new one)")] = None,
+        auto_run: Annotated[bool | None, Field(description="Also run each clean compile on the iPhone")] = None,
         debounce_ms: DebounceMs = None,
     ) -> WatchStatus:
-        """Compile on save: watch the project's Sources/, Package.swift and xtool.yml and run a compile-only build
-        (no Apple ID or iPhone needed) a moment after files change. Saves during a build cancel it and start one
-        more; there is never more than one build at a time and one watched project per user (starting another
-        project moves the watcher there, reported in `replaced`). The app shares the same watcher. It starts
-        with one build of the current state. Then edit files and call ios_watch_status(wait_seconds=20) to get
-        the result: state, counts and the first errors (file:line:col). Stops by itself when this MCP session
-        ends and the app isn't using it."""
+        """Compile on save: a compile-only build (no Apple ID or iPhone) shortly after the project's files
+        change; a save during a build restarts it. One watched project per user, shared with the app (another
+        project moves it: `replaced`). After edits, ios_watch_status(wait_seconds=20) gives the result. If
+        state='starting', call again."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         flags: dict[str, Any] = {"project": p["path"], "detach": True, "owner": os.getpid()}
@@ -227,11 +218,11 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Stop watch mode", kind="write", idempotent=True)
     async def ios_watch_stop(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Only stop if this project is the one watched; "
-                                                              "omit to stop whatever is watched")] = None,
+        project_path: Annotated[str | None, Field(description="Only if this project is watched (omit: "
+                                                              "any)")] = None,
     ) -> WatchStatus:
-        """Stop watch mode, also when the app started it, and cancel a compile that is running (it shows as
-        cancelled in the build history). The last status stays readable with ios_watch_status for a while."""
+        """Stop watch mode (also when the app started it) and cancel a running compile. The last status stays
+        readable with ios_watch_status."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}
         path = None
@@ -250,17 +241,13 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Watch mode status", kind="read")
     async def ios_watch_status(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Report on this project (says so when another one "
-                                                              "is watched)")] = None,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: return when the next build "
-                                                                         "finishes (or the watcher stops), at "
-                                                                         "most after this many seconds")] = 0,
+        project_path: Annotated[str | None, Field(description="Report on this project")] = None,
+        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait for the next build to "
+                                                                         "finish")] = 0,
     ) -> WatchStatus:
-        """The watcher's state (watching, changed, compiling, ok, failed, stopped, off), the latest finished
-        build (w-N id, result, duration, error and warning counts) and its first ≤ 5 errors as
-        'file:line:col' + message. wait_seconds blocks until a build that finishes after this call (use it right
-        after saving a file); timed_out says it was still busy. The full list: ios_build_diagnostics(job_id=
-        last_build.job_id)."""
+        """The watcher's state, the latest build (w-N, result, counts) and its first ≤ 5 errors (file:line:col).
+        wait_seconds waits for a build that finishes after this call (use it right after saving). Full list:
+        ios_build_diagnostics(job_id=last_build.job_id)."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}
         path = None

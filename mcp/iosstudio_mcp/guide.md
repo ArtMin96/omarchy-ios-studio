@@ -40,3 +40,18 @@ How the tools fit together. The server's instructions are the short version; doc
 - Network testing: ios_network_conditions lists slow-network, thermal and GPU profiles; ios_network_condition_set (dry run first, then confirm=true) applies one to the whole phone for a few minutes, ios_network_condition_clear ends it. ios_pcap_capture records traffic over USB and returns a header-only summary and a pcapng path.
 - Performance: ios_metrics_start(bundle_id) samples CPU, memory, energy, FPS, network and battery about once a second; ios_metrics_summary gives stats and anomalies (possible leak, spikes, hangs, jetsam); ios_metrics_stop ends it. ios_launch_profile and ios_memory_leaks change the app's state: confirm with the user first.
 - Debugger (your own apps only; attaching pauses the app): ios_debug_backtrace(bundle_id, confirm=true) for every thread's stack; ios_debug_session_start with breakpoints, then ios_debug_session_wait / ios_debug_session_command, and always ios_debug_session_end.
+
+## Details
+
+- ios_run: xtool installs over USB; over Wi-Fi the server installs the .ipa through the device service. Either way the server then launches the app. When it can't install, result.needs_install is true. A cancelled Wi-Fi install may still finish on the phone, but the app isn't launched.
+- ios_logs_read lines read `<seq> <time> <level> <process>[<pid>] <subsystem>: <message>`; the buffer holds 5000 lines, and `dropped` means the phone outpaced the stream. App console: attaching to an app that was already running gives no output; more than 2,000 lines a second are dropped (`dropped`).
+- ios_project_check findings also appear as category='config' in ios_build_diagnostics.
+- ios_package_add: packages with binary targets or macOS-only plugins may not build for iOS. ios_package_remove can't safely edit manifests built from variables or `.append` (edit-invalid).
+- Run presets: language adds `-AppleLanguages (de)`, region `-AppleLocale de_DE`.
+- ios_format never writes outside the project and skips .build/ and hidden folders. ios_project_autorenew's timer renews projects with under 2 days left.
+- ios_editor_setup: Neovim uses LazyVim's lang.swift extra (backed up first) or writes a new lua/plugins file; other Neovim configs are left alone. VS Code projects get .vscode/ files on their next build.
+- ios_screenshot: JPEG, quality 80 → 65 → 50 until it fits 350 KB; png only if it fits. ios_location_set is simulated only while iOS Studio's device service runs.
+- ios_ui_press: in changed_values, `label` can be the element's identifier when the label itself changed.
+- ios_metrics_series units: rss MB, wakeups /s, diskR/diskW KB/s, gpuMem MB, battMw mW; energy parts eCpu, eGpu, eNet, eDisplay, eLoc, eOverhead.
+- ios_screenshot_matrix relaunches the app plainly at the end if it was running before, else stops it; a cancel keeps the shots so far.
+- ios_network_conditions profiles include Edge, 3G, LTE, DSL, 100% loss and high-latency DNS.

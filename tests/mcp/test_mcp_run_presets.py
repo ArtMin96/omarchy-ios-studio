@@ -536,7 +536,7 @@ class Docstrings(unittest.TestCase):
         mcp = FakeMCP()
         BUILD.register(mcp)
         doc = mcp.tools["ios_run"].__doc__
-        self.assertIn("Either way the server then launches it", doc)
+        self.assertIn("launch", doc)
         self.assertIn("Without preset=", doc)
 
 

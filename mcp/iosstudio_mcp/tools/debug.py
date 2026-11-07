@@ -35,7 +35,7 @@ from ..core import budget as B
 from ..core import deadline
 from ..core.job_status import wait_with_progress
 from ..core.jobs import Job
-from ..core.params import BundleId, Udid
+from ..core.params import BundleId, OptJobId, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, tool
 from ..models import ActionResult, ErrorInfo, Out
 from ..state import AppState, get_state
@@ -527,20 +527,17 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Capture a backtrace", kind="write", open_world=True)
     async def ios_debug_backtrace(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="Your app's bundle id (the XTL-<TEAM>. form also works). "
-                                                           "Not needed when job_id is given")] = None,
-        confirm: Annotated[bool, Field(description="Attaching PAUSES the app for a few seconds. false = only explain; "
-                                                   "true after the user agreed")] = False,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a capture started earlier")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for it")] = 20,
+        bundle_id: Annotated[str | None, Field(description="Your app's bundle id (not needed with job_id)")] = None,
+        confirm: Annotated[bool, Field(description="false = only explain; true after the user agreed (pauses the "
+                                                   "app)")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> DebugBacktrace:
-        """Attach LLDB to one of your own running apps, read every thread's stack, and detach (the app
-        pauses for a few seconds, then carries on). Call with confirm=false first: it only explains; ask
-        the user, then repeat with confirm=true to capture. Returns the crashed (else main) thread's top 20
-        frames with file:line for your code, the other threads grouped by identical stacks, and the
-        path of a file with every frame. Runs as a job: if state is running, call again with job_id.
-        Use it when the app hangs or misbehaves; for crashes that already happened use ios_crash_get."""
+        """Every thread's stack of one of your running apps (LLDB attaches, the app pauses a few seconds,
+        then carries on): the crashed (else main) thread's frames with file:line, others grouped. For hangs; past crashes:
+        ios_crash_get. confirm=false only explains; ask the user, then confirm=true. A job: call again with
+        job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id)
@@ -578,21 +575,17 @@ def register(mcp: MCPServer) -> None:
     async def ios_debug_session_start(
         ctx: Context,
         bundle_id: BundleId,
-        breakpoints: Annotated[list[str] | None, Field(max_length=20, description="'File.swift:42' (a file in the app's "
-                                                                          "Sources) or a function name such as "
-                                                                          "'ForecastModel.refresh'")] = None,
+        breakpoints: Annotated[list[str] | None, Field(max_length=20, description="'File.swift:42' or a function "
+                                                                          "name, e.g. 'Model.refresh'")] = None,
         launch: Annotated[Literal["auto", "attach", "suspended"],
-                          Field(description="attach: the running app. suspended: (re)launch it paused so startup "
-                                            "breakpoints hit (stops a running copy). auto: attach if running, else "
-                                            "launch suspended")] = "auto",
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait this long for the first stop")] = 20,
+                          Field(description="attach: the running app; suspended: relaunch it paused (startup "
+                                            "breakpoints); auto: attach if running")] = "auto",
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait for the first stop")] = 20,
         udid: Udid = None,
     ) -> DebugSession:
-        """Attach LLDB to one of your own apps with breakpoints, then let it run. Returns a session_id;
-        the result says where it stopped (frames, frame 0's locals) or that it's running. Drive it with
-        ios_debug_session_wait / ios_debug_session_command and always finish with ios_debug_session_end
-        (the app is detached and keeps running). At most 2 sessions; a session nobody polls for 10
-        minutes detaches by itself."""
+        """Attach LLDB to one of your own apps with breakpoints and let it run: a session_id and where it
+        stopped (frames, locals) or 'running'. Drive it with ios_debug_session_wait / _command; always end
+        with ios_debug_session_end. At most 2 sessions; idle ones detach after 10 minutes."""
         state = get_state(ctx)
         _prune(state)
         live = [s for s in _sessions(state).values() if not s.ended]
@@ -621,10 +614,10 @@ def register(mcp: MCPServer) -> None:
     async def ios_debug_session_wait(
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Return early at a new stop or the end")] = 20,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait for a new stop or the end")] = 20,
     ) -> DebugSession:
-        """The session's state: running, or stopped with the reason, file:line, top 20 frames and frame 0's
-        locals. Waits up to wait_seconds for a stop newer than the last one returned (or the end)."""
+        """A debug session's state: running, or stopped (reason, file:line, frames, locals). Waits up to
+        wait_seconds for a new stop or the end."""
         state = get_state(ctx)
         s = _get(state, session_id)
         seen = s.reported_stop
@@ -637,16 +630,14 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
         command: Annotated[Literal["continue", "next", "step", "finish", "pause", "frame_variables", "evaluate"],
-                           Field(description="continue: run to the next breakpoint. next: step over. step: step "
-                                             "into. finish: step out. pause: stop a running app. frame_variables: "
-                                             "locals of `frame`. evaluate: a Swift expression in the current frame "
-                                             "(it may call code)")],
+                           Field(description="next: step over; step: into; finish: out; frame_variables: locals "
+                                             "of `frame`; evaluate: Swift `expr` (may run code)")],
         expr: Annotated[str | None, Field(max_length=EXPR_CUT, description="For evaluate")] = None,
-        frame: Annotated[int | None, Field(ge=0, le=200, description="For frame_variables (default: the current frame)")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait this long for the resulting stop")] = 15,
+        frame: Annotated[int | None, Field(ge=0, le=200, description="For frame_variables (default: current)")] = None,
+        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait for the resulting stop")] = 15,
     ) -> DebugSession:
-        """Step, continue or inspect a paused debug session. Run commands (continue/next/step/finish) return
-        at the next stop or after wait_seconds; frame_variables and evaluate answer in `result`."""
+        """Step, continue or inspect a paused debug session; run commands return at the next stop or after
+        wait_seconds, frame_variables and evaluate answer in `result`."""
         state = get_state(ctx)
         s = _get(state, session_id)
         if s.ended:
@@ -681,8 +672,7 @@ def register(mcp: MCPServer) -> None:
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
         kill: Annotated[bool, Field(description="Quit the app instead of letting it run on")] = False,
     ) -> ActionResult:
-        """Detach the debugger (the app keeps running), or quit the app with kill=true. Always call this
-        when you're done with a session."""
+        """End a debug session: detach (the app keeps running) or quit the app with kill=true. Always call it."""
         state = get_state(ctx)
         s = _get(state, session_id)
         if not s.ended:
@@ -700,11 +690,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Debugger and symbols status", kind="read_remote")
     async def ios_debug_symbols_status(ctx: Context, udid: Udid = None) -> DebugSymbols:
-        """Whether the debugger (lldb) is installed and the state of this iPhone's debug symbols (the
-        Swift runtime and system libraries of its iOS build, a one-time ~7 GB download done by the
-        user in iOS Studio › iPhone › Debug). Without them backtraces still work, but Swift values can
-        read wrong; an outdated or incomplete set makes attaching slow (minutes over Wi-Fi), and
-        how_to_fix names the button that fixes it."""
+        """Whether lldb is installed and the state of this iPhone's debug symbols (a one-time ~7 GB download
+        the user starts in iOS Studio › iPhone › Debug). Without them Swift values can read wrong; a stale set
+        makes attaching slow. how_to_fix names the fix."""
         state = get_state(ctx)
         chk = await helper.call("debug", "check", timeout=30) or {}
         st = await dcall(state, "debug.symbols", {"action": "status"}, udid=udid, timeout=30) or {}

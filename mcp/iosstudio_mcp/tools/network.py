@@ -22,7 +22,7 @@ from ..backends.device import dcall
 from ..core import budget as B
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import Udid
+from ..core.params import OptJobId, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, dry_run, tool
 from ..models import ActionResult, Out, iso
 from ..state import get_state
@@ -174,10 +174,9 @@ async def _follow(state, job: Job, started: dict) -> dict:
 def register(mcp: MCPServer) -> None:
     @tool(mcp, "List network conditions", kind="read_remote")
     async def ios_network_conditions(ctx: Context, udid: Udid = None) -> ConditionList:
-        """Conditions the iPhone can simulate (Developer Mode needed): slow networks (Edge, 3G, LTE, DSL, 100% loss,
-        high-latency DNS...), thermal states and GPU performance states, and the one active now if any. Over Wi-Fi
-        the network profiles also slow this computer's link to the phone; the worst two are refused (allowed=false).
-        Apply one with ios_network_condition_set(profile, minutes)."""
+        """Conditions the iPhone can simulate (Developer Mode needed): slow networks, thermal and GPU states,
+        and the active one. Over Wi-Fi they also slow this computer's link, so the worst are refused
+        (allowed=false). Apply one with ios_network_condition_set."""
         state = get_state(ctx)
         r = await _call(state, "condition.list", {}, udid=udid, timeout=MAX_WAIT) or {}
         groups = []
@@ -197,17 +196,14 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Simulate network condition", kind="write", idempotent=True, open_world=True)
     async def ios_network_condition_set(
         ctx: Context,
-        profile: Annotated[str, Field(description="Profile id from ios_network_conditions, e.g. 'SlowNetwork3G', "
-                                                  "'SlowNetworkLTE', 'ThermalSerious'")],
+        profile: Annotated[str, Field(description="Profile id from ios_network_conditions, e.g. 'SlowNetwork3G'")],
         minutes: Annotated[int, Field(ge=1, le=30, description="Switches off by itself after this long")] = 5,
-        confirm: Annotated[bool, Field(description="false = dry run that explains the effect. true only after the "
-                                                   "user agreed")] = False,
+        confirm: Annotated[bool, Field(description="false = dry run; true after the user agreed")] = False,
         udid: Udid = None,
     ) -> ActionResult:
-        """Make the whole iPhone behave as if on a slow network (or hot, or with a throttled GPU) to test how an
-        app copes. Call with confirm=false first: it changes nothing and explains the effect (including the
-        Wi-Fi caveat). Ask the user, then call with confirm=true. It replaces any active condition, and switches
-        off after `minutes`, on ios_network_condition_clear, or when this MCP server stops."""
+        """Make the whole iPhone act as if on a slow network (or hot, or GPU-throttled) to test an app. A dry
+        run that explains the effect unless confirm=true (ask the user first). Replaces any active condition;
+        ends after `minutes`, on ios_network_condition_clear, or when this server stops."""
         state = get_state(ctx)
         r = await _call(state, "condition.list", {}, udid=udid, timeout=MAX_WAIT) or {}
         hit = None
@@ -252,20 +248,15 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Capture network traffic", kind="read_remote", idempotent=False)
     async def ios_pcap_capture(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="Only this app's traffic (bundle id, plain or XTL- form); "
-                                                           "omit for the whole phone")] = None,
+        bundle_id: Annotated[str | None, Field(description="Only this app's traffic (default: the whole phone)")] = None,
         seconds: Annotated[int, Field(ge=3, le=120, description="How long to capture")] = 10,
-        job_id: Annotated[str | None, Field(description="Wait for a running capture (its job_id) instead of starting "
-                                                        "one")] = None,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="How long this call waits for the result")] = MAX_WAIT,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
         udid: Udid = None,
     ) -> PcapCapture:
-        """Record the iPhone's network traffic (needs a USB cable) and summarize it: packets and bytes per process,
-        top remote hosts:ports, protocols and services (HTTPS, QUIC, DNS...). Only headers are read, never payloads.
-        The full capture is saved as pcapng (file) for Wireshark. Captures of more than ~20 s come back as
-        state='running' with job_id: call again with job_id (and wait_seconds) for the result; ios_job_cancel ends
-        it early and keeps what was captured. Reproduce the
-        app's network activity while it records (ios_app_launch)."""
+        """Record the iPhone's network traffic over USB and summarize headers only: bytes per process, top
+        hosts:ports, protocols; the pcapng file is kept for Wireshark. Long captures: state='running' + job_id,
+        call again with job_id (ios_job_cancel ends it early, keeping the capture)."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "pcap")
