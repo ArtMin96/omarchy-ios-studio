@@ -19,8 +19,8 @@ import re
 import struct
 import sys
 import xml.etree.ElementTree as ET
-from xml.parsers.expat import ExpatError
 import zlib
+from xml.parsers.expat import ExpatError
 
 MEMBER = re.compile(r"^[^/]+\.app/Contents/version\.plist$")
 MAX_MEMBER = 1 << 20  # cap on a member read into memory

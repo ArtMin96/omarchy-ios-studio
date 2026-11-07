@@ -137,6 +137,16 @@ def read_stdin_json() -> dict:
 
 # ---------------------------------------------------------------- processes
 
+def demo_delay(seconds: float) -> float:
+    """A demo-mode pause scaled by IOSSTUDIO_DEMO_DELAY (a multiplier, default 1; 0 makes the demo instant, which
+    the tests use). Only for pretend work: never for timeouts, polling or rates."""
+    try:
+        factor = float(os.environ.get("IOSSTUDIO_DEMO_DELAY", "1"))
+    except ValueError:
+        factor = 1.0
+    return max(0.0, seconds * factor)
+
+
 def which(name: str) -> str | None:
     found = shutil.which(name)
     if found:

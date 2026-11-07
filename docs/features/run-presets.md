@@ -198,5 +198,5 @@ Unknown names fail as they would for real, and a demo Run echoes the preset's ar
 in `make_installer`), `tools/device.py` and `tools/logs.py` (`preset` on `ios_app_launch` and
 `ios_app_run_and_capture`), `services/ProjectService.qml` (the preset API, `--preset` on Run),
 `components/RunSplitButton.qml`, `components/RunPresetsSheet.qml`, `components/ProjectCard.qml`,
-`components/BuildPanel.qml`, `Model.js` (the preset helpers). Tests: `tests/test_run_presets.py` and
-`tests/test_mcp_run_presets.py`.
+`components/BuildPanel.qml`, `Model.js` (the preset helpers). Tests: `tests/helper/test_run_presets.py`, `tests/cli/test_run_presets_cli.py` and
+`tests/mcp/test_mcp_run_presets.py`.

@@ -16,10 +16,10 @@ from __future__ import annotations
 import plistlib
 import uuid
 
+from pymobiledevice3.remote.core_device.open_stdio_socket import OpenStdioSocketService
+
 import app_console
 from deviced_core import dlog, emit, err
-
-from pymobiledevice3.remote.core_device.open_stdio_socket import OpenStdioSocketService
 
 READ_CHUNK = 64 * 1024
 

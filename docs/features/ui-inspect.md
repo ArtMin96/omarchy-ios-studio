@@ -222,5 +222,5 @@ matching, the change summary, audit types and issues), `helper/deviced_features/
 the error codes), `components/DeviceInspectView.qml`, `components/DeviceInspectRow.qml`,
 `components/DeviceScreenView.qml` (the tabs), `components/DevicePhoneFrame.qml` (`highlight`),
 `pages/DevicePage.qml` (keys), `services/DeviceService.qml` (60 s timeouts for `ui.*`), `Model.js`
-(glyphs). Tests: `tests/test_ui_inspect.py` and `tests/test_mcp_ui_inspect.py`, with fixtures in
+(glyphs). Tests: `tests/helper/test_ui_inspect.py` and `tests/mcp/test_mcp_ui_inspect.py`, with fixtures in
 `tests/fixtures/ui-inspect/`.

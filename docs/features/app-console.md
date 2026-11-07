@@ -77,8 +77,8 @@ full buffering, or a library writes without newlines, output arrives in chunks. 
 ## Testing without an iPhone
 
 ```bash
-python3 -m unittest tests.test_app_console                                   # splitting, caps, cursor, lifecycle
-~/.local/share/ios-studio/mcp-venv/bin/python -m unittest tests.test_mcp_console  # paging, budget, filters
+python3 -m pytest tests/helper/test_app_console.py      # splitting, caps, cursor, lifecycle
+.venv/bin/pytest tests/mcp/test_mcp_console.py           # paging, budget, filters
 ```
 
 Demo mode (`ios-studio --demo`, or `IOSSTUDIO_DEMO=1` for the daemon and the MCP server) has a fake

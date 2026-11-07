@@ -185,7 +185,7 @@ warning and `launchArgs`. The demo has no cfprefsd, so nothing is ever waited fo
 
 ## Tests
 
-- `tests/test_app_data.py` covers:
+- `tests/helper/test_app_data.py` covers:
   - plist ↔ JSON round trips: binary and XML, Data, dates, UIDs, nested values, infinities, a `$type` key
   - shortened values and the reply limit
   - type inference and explicit types with their errors
@@ -198,7 +198,7 @@ warning and `launchArgs`. The demo has no cfprefsd, so nothing is ever waited fo
     there: its late save over the first write, a copy that always wins, and a value put back
     (`reverted`). These runs also cover the refresh install, the 10 s wait after a kill (also after another
     client's kill), and no build or a failed install keeping the file change with `launchArgs`.
-- `tests/test_mcp_app_data.py` runs the three tools against the demo modules: the budget and
+- `tests/mcp/test_mcp_app_data.py` runs the three tools against the demo modules: the budget and
   `full_output_path`, dry runs, `stop_app`, a change as a job (`job_id`), `refresh=false` with `launch_args`
   then `action='refresh'`, paging by entity name, and the reset job.
 

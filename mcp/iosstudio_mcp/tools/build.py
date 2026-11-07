@@ -23,7 +23,7 @@ from .. import helper
 from ..jobs import Job
 from ..models import ActionResult, BuildHistory, BuildStatus, DiagGroup, DiagnosticsPage, HistoryEntry, LogPage
 from ..state import AppState, get_state, resolve_project
-from . import MAX_WAIT, READ, ann, dry_run, job_status, page_of, start_and_wait, wait_with_progress, tool
+from . import MAX_WAIT, READ, ann, dry_run, job_status, page_of, start_and_wait, tool, wait_with_progress
 from .projects import ProjectPath
 
 BuildId = Annotated[str, Field(description="Id from ios_build_start / ios_run / ios_project_renew / "

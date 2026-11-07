@@ -27,8 +27,19 @@ from ..models import ActionResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state, resolve_project
 from . import MAX_WAIT, READ_REMOTE, ann, tool
 from .console import ConsoleSummary, capture_summary, fmt_line
-from .device import (AppInstallStatus, Udid, dcall, device_tool_error, get_install, install_status, new_client,
-                     package_for, resolve_app, start_install, wait_install)
+from .device import (
+    AppInstallStatus,
+    Udid,
+    dcall,
+    device_tool_error,
+    get_install,
+    install_status,
+    new_client,
+    package_for,
+    resolve_app,
+    start_install,
+    wait_install,
+)
 from .run_presets import PresetName, merge_launch, resolve_preset
 
 log = logging.getLogger("iosstudio.logs")

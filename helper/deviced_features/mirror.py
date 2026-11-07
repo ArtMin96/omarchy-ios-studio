@@ -70,7 +70,10 @@ def load_media() -> None:
         from packaging.version import Version
         from pymobiledevice3.exceptions import DeviceVersionNotSupportedError
         from pymobiledevice3.remote.core_device.display_service import (
-            VIDEO_STREAM_MIN_VERSION, DisplayService, is_media_in_use_error)
+            VIDEO_STREAM_MIN_VERSION,
+            DisplayService,
+            is_media_in_use_error,
+        )
         from pymobiledevice3.remote.core_device.screen_stream import depacketize_hevc
     except Exception as exc:  # noqa: BLE001 - only the stream mode is lost
         DisplayService = None

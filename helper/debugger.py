@@ -98,7 +98,7 @@ def toolchain() -> Toolchain:
 
 
 def _toolchain() -> Toolchain:
-    from setup import toolchain_root   # the same lookup Setup uses (realpath of /usr/bin/swift)
+    from setup import toolchain_root  # the same lookup Setup uses (realpath of /usr/bin/swift)
     root = toolchain_root()
     lldb = root / "usr/bin/lldb" if root else None
     if lldb is None or not lldb.is_file():

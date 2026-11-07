@@ -16,7 +16,7 @@ import time
 
 import demo_art
 import device_files as df
-from common import HelperError
+from common import HelperError, demo_delay
 from deviced_demo_core import DIR, event
 from deviced_demo_features import files as F
 
@@ -69,7 +69,7 @@ def register(reg):
         with tr.track(tid, ctx.client(), "cameratest.run"):
             try:
                 step("check", "running")
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(demo_delay(0.3))
                 info, _, _, base = F._access({"bundleId": bid})
                 if not info["developer"]:
                     raise HelperError("not-dev-app", "Camera tests need one of your own apps, built and installed from "
@@ -81,7 +81,7 @@ def register(reg):
                 for d in (cin, cout):
                     shutil.rmtree(d, ignore_errors=True)
                     d.mkdir(parents=True)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(demo_delay(0.3))
                 step("clear", "done")
                 step("push", "running")
                 prog = df.Progress(event, tid, "cameratest.push", sum(p.stat().st_size for p in inputs), len(inputs),
@@ -93,7 +93,7 @@ def register(reg):
                 prog.send("done", force=True)
                 step("push", "done", f"{len(inputs)} file(s)")
                 step("launch", "running", " ".join(args))
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(demo_delay(0.6))
                 step("launch", "done", "pid 812")
                 say("default", f"Launched with arguments: {' '.join(args) or '(none)'}")
                 hooked = "-cameraTestMode" in args
@@ -103,7 +103,7 @@ def register(reg):
                 if hooked:
                     say("info", f"CameraTest: {len(inputs)} input file(s) in CameraTestInput")
                     for i, p in enumerate(sorted(inputs, key=lambda x: x.name)):
-                        await asyncio.sleep(0.7)
+                        await asyncio.sleep(demo_delay(0.7))
                         video = df.media_kind(p.name) == "video"
                         for f in range(rnd.randint(3, 6) if video else 1):
                             lab = rnd.choice(LABELS)
@@ -136,7 +136,7 @@ def register(reg):
                 prog.send("done", force=True)
                 step("pull", "done", f"{len(files)} file(s)")
                 step("crashes", "running")
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(demo_delay(0.3))
                 step("crashes", "done", "none")
             except asyncio.CancelledError:
                 if cur[0] and state[cur[0]] == "running":

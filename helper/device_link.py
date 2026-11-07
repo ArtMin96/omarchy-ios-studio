@@ -52,10 +52,9 @@ def load_pmd3() -> argparse.Namespace:
             get_remote_pairing_record_filename,
             iter_remote_pair_records_by_identifier,
         )
-        from pymobiledevice3.remote import tunnel_service
+        from pymobiledevice3.remote import tunnel_service, userspace_tunnel
         from pymobiledevice3.remote.core_device.app_service import AppServiceService
         from pymobiledevice3.remote.core_device.icon_service import IconService
-        from pymobiledevice3.remote import userspace_tunnel
         from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscoveryService
         from pymobiledevice3.remote.userspace_tunnel import UserspaceDialPlane, UserspaceRsdTunnel
         from pymobiledevice3.services.afc import AfcService
@@ -377,6 +376,7 @@ _INSTALL_ERRORS = [
 def install_error(exc: BaseException, classify):
     """Plain-language HelperError for a failed installation (classify = deviced.classify)."""
     import re
+
     from common import HelperError, fix
     text = f"{type(exc).__name__}: {exc}"
     for pattern, code, message in _INSTALL_ERRORS:

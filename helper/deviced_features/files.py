@@ -20,13 +20,18 @@ import posixpath
 import time
 from pathlib import Path
 
-from pymobiledevice3.exceptions import AfcException, AfcFileNotFoundError, AppNotInstalledError, PyMobileDevice3Exception
+from pymobiledevice3.exceptions import (
+    AfcException,
+    AfcFileNotFoundError,
+    AppNotInstalledError,
+    PyMobileDevice3Exception,
+)
 from pymobiledevice3.services.house_arrest import HouseArrestService
 
 import device_files as df
+from common import CACHE_DIR, HOME, fix
 from deviced_core import classify, dlog, emit, err, installed_apps, safe_name
 from deviced_core import is_connection_error as _is_conn
-from common import CACHE_DIR, HOME, fix
 
 MEDIA_DIR = CACHE_DIR / "media"
 THUMBS_DIR = CACHE_DIR / "thumbs"

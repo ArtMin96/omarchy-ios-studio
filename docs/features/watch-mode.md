@@ -103,4 +103,4 @@ With `IOSSTUDIO_DEMO` set, `watch serve` watches nothing and builds nothing. It 
 
 ## Tests
 
-`tests/test_watch.py` and `tests/test_mcp_watch.py`, see [development.md](../development.md#running-from-source).
+`tests/helper/test_watch.py`, `tests/cli/test_watch_cli.py` and `tests/mcp/test_mcp_watch.py`, see [development.md](../development.md#tests).

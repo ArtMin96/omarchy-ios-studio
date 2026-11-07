@@ -46,8 +46,8 @@ from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from device_client import runtime_dir, socket_path_error  # noqa: E402
 import deviced_kit  # noqa: E402
+from device_client import runtime_dir, socket_path_error  # noqa: E402
 
 VERSION = "1"
 IDLE_DEFAULT_S = 120.0

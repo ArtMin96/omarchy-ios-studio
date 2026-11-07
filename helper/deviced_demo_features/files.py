@@ -15,7 +15,7 @@ from pathlib import Path
 
 import demo_art
 import device_files as df
-from common import HelperError
+from common import HelperError, demo_delay
 from deviced_demo_core import APPS, DIR, FILE_SHARING, event, installed
 
 ROOT = DIR / "containers"
@@ -155,7 +155,7 @@ async def _copy(src: Path, dst: Path, prog: df.Progress) -> None:
                     break
                 fo.write(chunk)
                 prog.add(len(chunk))
-                await asyncio.sleep(len(chunk) / DEMO_RATE)
+                await asyncio.sleep(demo_delay(len(chunk) / DEMO_RATE))
         os.replace(tmp, dst)
     finally:
         tmp.unlink(missing_ok=True)
@@ -167,7 +167,7 @@ async def _fake_bytes(n: int, prog: df.Progress) -> None:
         step = min(n - sent, 1_000_000)
         sent += step
         prog.add(step)
-        await asyncio.sleep(step / DEMO_RATE)
+        await asyncio.sleep(demo_delay(step / DEMO_RATE))
 
 
 def register(reg):

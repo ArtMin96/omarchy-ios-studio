@@ -20,12 +20,12 @@ from pathlib import Path
 
 from pymobiledevice3.exceptions import AfcException
 
-import deviced_core as core
+import common
 import device_files as df
+import deviced_core as core
+from common import CACHE_DIR
 from deviced_core import classify, dlog, emit, err, safe_name
 from deviced_features import files as F
-import common
-from common import CACHE_DIR
 
 OUT_DIR = CACHE_DIR / "cameratest"
 RUNS_KEEP = 20                  # test result folders kept (newest first)

@@ -19,8 +19,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import deviced_demo_core as core  # noqa: E402
 import device_broker  # noqa: E402
+import deviced_demo_core as core  # noqa: E402
 import deviced_kit as kit  # noqa: E402
 from deviced_demo_core import DEVICE, FRESH, INFO, SCENARIO, STARTED, UDID  # noqa: E402
 

@@ -21,8 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import common  # noqa: E402
-from common import HelperError, fix  # noqa: E402
 import device_link as link  # noqa: E402
+from common import HelperError, fix  # noqa: E402
 
 VERSION = "1"
 SCREENS_DIR = common.CACHE_DIR / "screens"

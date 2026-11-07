@@ -29,8 +29,21 @@ from pydantic import Field
 from .. import budget as B
 from .. import helper
 from ..jobs import Job
-from ..models import (ActionResult, AppBrief, AppInstallResult, AppLaunchResult, AppList, DeviceDetails, DeviceEntry,
-                      DeviceList, DevicePrepare, LocationResult, ProcessInfo, ProcessList, ScreenshotInfo)
+from ..models import (
+    ActionResult,
+    AppBrief,
+    AppInstallResult,
+    AppLaunchResult,
+    AppList,
+    DeviceDetails,
+    DeviceEntry,
+    DeviceList,
+    DevicePrepare,
+    LocationResult,
+    ProcessInfo,
+    ProcessList,
+    ScreenshotInfo,
+)
 from ..state import AppState, get_state, resolve_project
 from . import MAX_WAIT, READ_REMOTE, ann, dry_run, fit_page, page_of, tool
 from .run_presets import PresetName, merge_launch, resolve_preset

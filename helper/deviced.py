@@ -32,14 +32,25 @@ import deviced_core as core  # noqa: E402
 core.init_output()
 
 import common  # noqa: E402
-from common import HelperError, fix  # noqa: E402
 import device_broker  # noqa: E402
 import device_link as link  # noqa: E402
 import deviced_kit as kit  # noqa: E402
+from common import HelperError, fix  # noqa: E402
 from device_models import marketing_name  # noqa: E402
 from deviced_core import (  # noqa: E402
-    DEVICE_CACHE, DEVICE_STATE, LAST_DEVICE, PAIR_FIX, TUNNEL_WAIT_S, VERSION,
-    battery_view, classify, dlog, emit, err, is_connection_error, send,
+    DEVICE_CACHE,
+    DEVICE_STATE,
+    LAST_DEVICE,
+    PAIR_FIX,
+    TUNNEL_WAIT_S,
+    VERSION,
+    battery_view,
+    classify,
+    dlog,
+    emit,
+    err,
+    is_connection_error,
+    send,
 )
 
 BACKOFF = [3, 5, 10, 20, 30]
@@ -915,7 +926,7 @@ def _other_real_daemon() -> str | None:
     second tunnel and knock out the phone link of the user's own daemon. Refuse while that one is up."""
     if not os.environ.get("IOSSTUDIO_RUNTIME_DIR") or os.environ.get("IOSSTUDIO_ALLOW_SECOND_TUNNEL") == "1":
         return None
-    import device_client   # the default base, as if IOSSTUDIO_RUNTIME_DIR weren't set
+    import device_client  # the default base, as if IOSSTUDIO_RUNTIME_DIR weren't set
     base = device_client.xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}"
     default = Path(base) / "ios-studio" / "deviced.sock"
     if default != device_broker.paths(None)["sock"] and device_broker.socket_alive(default):

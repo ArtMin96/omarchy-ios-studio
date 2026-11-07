@@ -10,6 +10,7 @@ import threading
 import time
 
 import ui_inspect as U
+from common import demo_delay
 from deviced_demo_core import APPS, pids, running
 
 WEATHER = next(b for n, b, *_ in APPS if n == "WeatherGlance")
@@ -117,7 +118,7 @@ def register(reg):
     @reg.command("ui.tree")
     def ui_tree(ctx, a):
         _guard(a)
-        time.sleep(0.3)
+        time.sleep(demo_delay(0.3))
         with _lock:
             return _tree(a)
 
@@ -142,7 +143,7 @@ def register(reg):
                     raise HelperError(e.code, e.message, None, e.detail)
             _press(target)
             after = _tree(a)
-        time.sleep(0.8)
+        time.sleep(demo_delay(0.8))
         return {"pressed": target, "changes": U.diff_trees(before, after["elements"]),
                 "after": {"count": after["count"], "complete": after["complete"]}, "elapsedMs": 1100,
                 "bundleId": front(), "pid": pids.get(front(), 812)}
@@ -157,6 +158,6 @@ def register(reg):
         want = {U.audit_slug(r) for r in run}
         issues = [U.normalize_issue(i, elements) for i in AUDIT[front()]
                   if U.audit_slug(i["IssueClassificationValue_v1"]) in want]
-        time.sleep(0.6)
+        time.sleep(demo_delay(0.6))
         return {"issues": issues, "supported": slugs, "unsupported": missing, "elapsedMs": 2400,
                 "bundleId": front(), "pid": pids.get(front(), 812)}

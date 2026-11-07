@@ -316,7 +316,7 @@ def _build_stream(kind: str, flags: dict) -> int:
         for j in range(3):
             common.progress((i * 3 + j + 1) / (len(steps) * 3), title + "…", max(1, 12 - (i * 3 + j) * 0.8))
             common.log(lines[min(i + j // 2, len(lines) - 1)])
-            time.sleep(0.45)
+            time.sleep(common.demo_delay(0.45))
         common.step(sid, title, "done")
     data = {"project": name, "name": name, "path": path, "kind": kind, "config": "debug", "result": "ok", "duration": 11.8,
             "time": NOW, "errors": 0, "warnings": len(pre), "udid": flags.get("udid"), "via": "wifi", "bundleId": bundle,
@@ -380,7 +380,7 @@ def _failing_build(kind: str, path: str, name: str, bundle: str, steps: list, li
         for j in range(2):
             common.progress((i * 2 + j + 1) / 6, title + "…", 6)
             common.log(lines[min(i + j, len(lines) - 1)])
-            time.sleep(0.4)
+            time.sleep(common.demo_delay(0.4))
         if sid == "compile":
             for d in diags:
                 common.log(f"{d['file']}:{d['line']}:{d['col']}: error: {d['message']}")
@@ -435,7 +435,7 @@ def _parsed_failure(fail: str, kind: str, path: str, name: str, bundle: str, ste
     for i, (sid, title) in enumerate(steps):
         common.step(sid, title, "running", detail=title + "…")
         common.progress((i + 1) / (len(steps) + 1), title + "…", 4)
-        time.sleep(0.4)
+        time.sleep(common.demo_delay(0.4))
         if sid != fail_step:
             common.log(f"[{i + 1}/{len(steps)}] {title}")
             common.step(sid, title, "done")

@@ -16,8 +16,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import helper
-from ..models import (ActionResult, Convertible, ProjectBrief, ProjectChange, ProjectDetail, ProjectList, Template,
-                      TemplateList)
+from ..models import (
+    ActionResult,
+    Convertible,
+    ProjectBrief,
+    ProjectChange,
+    ProjectDetail,
+    ProjectList,
+    Template,
+    TemplateList,
+)
 from ..state import existing_dir, get_state, resolve_project
 from . import MAX_WAIT, READ, ann, dry_run, fit_page, page_of, tool
 

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import demo_art
+from common import demo_delay
 from deviced_demo_core import APPS, DIR, FILE_SHARING, TEAM, event, installed, pids, running
 
 
@@ -47,7 +48,7 @@ def register(reg):
     def install(ctx, a):
         for pct in (0, 35, 70, 100):
             event("installProgress", {"path": a.get("path"), "percent": pct, "status": "done" if pct == 100 else ("uploading" if pct == 0 else "installing")})
-            time.sleep(0.5)
+            time.sleep(demo_delay(0.5))
         name = Path(str(a.get("path") or "App.ipa")).stem
         bid = next((b for n, b, *_ in APPS if n == name), f"XTL-{TEAM}.com.example." + name.lower())
         installed.add(bid)

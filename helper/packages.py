@@ -1536,12 +1536,12 @@ def _demo_steps(steps: list[tuple[str, str]], details: dict[str, list[str]], pau
     for i, (sid, title) in enumerate(steps):
         common.step(sid, title, "running")
         for d in details.get(sid, []):
-            time.sleep(pause)
+            time.sleep(common.demo_delay(pause))
             frac = min(0.95, frac + 0.12)
             common.step(sid, title, "running", detail=d)
             common.progress(round(frac, 2), d)
             common.log(d)
-        time.sleep(pause)
+        time.sleep(common.demo_delay(pause))
         common.step(sid, title, "done")
 
 

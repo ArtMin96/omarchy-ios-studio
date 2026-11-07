@@ -10,6 +10,7 @@ from ..models import DeviceBrief, HistoryEntry, Problem, StatusReport, iso
 from ..state import get_state, last_device_state
 from . import READ, tool
 
+
 async def _safe(coro):
     try:
         return await coro

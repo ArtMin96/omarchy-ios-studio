@@ -547,7 +547,7 @@ def cmd_remove(flags: dict) -> int:
         if sp not in state["hidden"] and Path(sp).is_dir():
             state["hidden"].append(sp)
         state["meta"].pop(sp, None)
-    import screenshots   # its saved screenshot baselines and diffs go with its settings (not the project's files)
+    import screenshots  # its saved screenshot baselines and diffs go with its settings (not the project's files)
     shots = screenshots.forget_project(sp)
     return common.ok({"path": sp, "removed": True, "filesDeleted": False, "screenshotsDeleted": shots})
 

@@ -76,6 +76,6 @@ to clear it; nothing else depends on it.
 
 ## Tests
 
-`tests/test_crash_symbolication.py` (stdlib) and `tests/test_mcp_crash_symbolication.py` (MCP venv). The
+`tests/helper/test_crash_symbolication.py` (stdlib) and `tests/mcp/test_mcp_crash_symbolication.py` (MCP venv). The
 fixture `tests/fixtures/crash-symbolication/Crashy.dwarf` is the dSYM of `Crashy.swift` built for
 arm64-apple-ios (`build.sh` rebuilds it); synthetic `.ips` reports point at its UUID and known offsets.

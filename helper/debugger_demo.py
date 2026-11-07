@@ -163,7 +163,7 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
     for sid, title, detail in (("lldb", "Checking the debugger", "lldb version 21.0.0 (demo)"),
                                ("project", "Finding the app's build on this computer", name)):
         common.step(sid, title, "running")
-        time.sleep(0.25)
+        time.sleep(common.demo_delay(0.25))
         common.step(sid, title, "done", detail=detail)
     common.step("forward", "Starting the debugger on your iPhone", "running")
     launch = str(flags.get("launch") or ("attach" if mode == "backtrace" else "auto"))
@@ -174,7 +174,7 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
         return None, name, path
     st = st or {"port": 52917, "pid": 400, "launched": False, "remotePath": f"/private/var/containers/Bundle/Application/DEMO/{name}.app/{name}",
                 "executable": name, "ios": "27.2", "build": "24B115", "symbolsReady": True}
-    time.sleep(0.4)
+    time.sleep(common.demo_delay(0.4))
     common.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
     exe = f"{path}/xtool/{name}.app/{name}"
     common.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable", "ios",
@@ -192,10 +192,10 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
     _console("(lldb) platform select remote-ios --sysroot \"~/.cache/ios-studio/DeviceSupport/27.2 (24B115)\"\n"
              "  Platform: remote-ios\n Connected: no\n  SDK Path: \"~/.cache/ios-studio/DeviceSupport/27.2 (24B115)\"")
     _console(f"(lldb) process connect connect://127.0.0.1:{st.get('port')}")
-    time.sleep(0.6)
+    time.sleep(common.demo_delay(0.6))
     common.step("connect", "Connecting to the debugger on your iPhone", "done")
     common.step("attach", "Attaching to the app (it pauses)", "running")
-    time.sleep(1.2)
+    time.sleep(common.demo_delay(1.2))
     _console(f"(lldb) process attach --pid {st.get('pid')}\nProcess {st.get('pid')} stopped\n"
              f"* thread #1, queue = 'com.apple.main-thread', stop reason = signal SIGSTOP\n"
              f"    frame #0: 0x00000001a2b30000 libsystem_kernel.dylib`mach_msg2_trap + 8")
@@ -217,7 +217,7 @@ def backtrace(flags: dict) -> int:
     if st is None:
         return 1
     common.step("read", "Reading every thread", "running")
-    time.sleep(0.7)
+    time.sleep(common.demo_delay(0.7))
     threads = _threads(name)
     bt = {"pid": st.get("pid"), "threads": threads, "selectedThread": 1, "crashedThread": 3, "module": name}
     common.step("read", "Reading every thread", "done")
@@ -342,7 +342,7 @@ def session(flags: dict) -> int:
                 resume_at = time.time() + 2.0 if bps else 0
             elif cmd in ("next", "step", "finish"):
                 common.event("running", cmd=cmd)
-                time.sleep(0.5)
+                time.sleep(common.demo_delay(0.5))
                 stop({"next": [1, 2, 1], "step": [2, 2, 1], "finish": [1, 1, 1]}[cmd][idx])
             elif cmd in ("frame_variables", "select_frame"):
                 fr = int(m.get("frame") or 0)

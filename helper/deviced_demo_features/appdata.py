@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 import app_data as AD
-from common import HOME, HelperError
+from common import HOME, HelperError, demo_delay
 from deviced_demo_core import DIR, event, installed, running
 from deviced_demo_features import files as FD
 
@@ -223,7 +223,7 @@ def _wait_grace(bid: str) -> float:
     left = DEMO_GRACE - (time.monotonic() - at) if at else 0.0
     if left <= 0:
         return 0.0
-    time.sleep(left)
+    time.sleep(demo_delay(left))
     return round(left, 1)
 
 
@@ -319,7 +319,7 @@ def register(reg):
         for pct in (0, 20, 40, 60, 80, 100):
             event("installProgress", {"path": build["artifact"], "percent": pct,
                                       "status": "done" if pct == 100 else ("uploading" if pct == 0 else "installing")})
-            time.sleep(INSTALL_STEP)
+            time.sleep(demo_delay(INSTALL_STEP))
         return {"refreshed": True, "artifact": build["artifact"]}
 
     def edit(a, change, action):
@@ -340,7 +340,7 @@ def register(reg):
                     "needsRelaunch": False}
         stopped = _ensure_stopped(a, bid, "changing its settings")
         waited = _wait_grace(bid)
-        time.sleep(DEMO_SETTLE)
+        time.sleep(demo_delay(DEMO_SETTLE))
         backup = AD.backup_plist(bid, data or b"")
         f.parent.mkdir(parents=True, exist_ok=True)
         tmp = f.with_name(f.name + ".iosstudio-new")
@@ -436,7 +436,7 @@ def register(reg):
         stopped = _ensure_stopped(a, bid, "resetting its data")
         t0 = time.monotonic()
         await asyncio.to_thread(_wait_grace, bid)
-        await asyncio.sleep(DEMO_SETTLE)
+        await asyncio.sleep(demo_delay(DEMO_SETTLE))
         for path in plan["all"]:
             p = _local(base, path)
             if p.is_dir():
@@ -457,7 +457,7 @@ def register(reg):
             for pct in (0, 35, 70, 100):
                 event("installProgress", {"path": build["artifact"], "percent": pct,
                                           "status": "done" if pct == 100 else ("uploading" if pct == 0 else "installing")})
-                await asyncio.sleep(INSTALL_STEP)
+                await asyncio.sleep(demo_delay(INSTALL_STEP))
             installed.add(bid)
             out.update(reinstalled=True, artifact=build["artifact"], project=build.get("project"))
         out["seconds"] = round(time.monotonic() - t0, 1)

@@ -36,8 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import common
-from common import (CACHE_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR, VENV_DIR, HelperError,
-                    event, fix, ok)
+from common import CACHE_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR, VENV_DIR, HelperError, event, fix, ok
 
 # ------------------------------------------------------------------ pins (one place)
 

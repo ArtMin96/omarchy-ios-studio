@@ -12,7 +12,7 @@ import random
 import time
 
 import metrics_core
-from common import HelperError
+from common import HelperError, demo_delay
 from deviced_demo_core import APPS, DIR, event, pids, running
 
 SEED_S = 300
@@ -142,7 +142,7 @@ class DemoBackend:
         name, bid = _app(str(a["bundleId"]))
         if bid is None:
             raise _err("not-found", "That app isn't installed on your iPhone.")
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(demo_delay(2.5))
         running.add(bid)
         pids[bid] = 812
         return {"bundleId": bid, "name": name, "pid": 812, "seconds": 4.2,
@@ -157,7 +157,7 @@ class DemoBackend:
         name, bid = _app(str(a["bundleId"]))
         if bid is None:
             raise _err("not-found", "That app isn't installed on your iPhone.")
-        await asyncio.sleep(3)
+        await asyncio.sleep(demo_delay(3))
         p = DIR / "metrics" / f"{name.replace(' ', '')}-demo.memgraph"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"demo memgraph (made up)\n")

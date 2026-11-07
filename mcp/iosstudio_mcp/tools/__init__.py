@@ -17,9 +17,8 @@ from __future__ import annotations
 import functools
 import inspect
 import json
-from typing import Annotated, Any
-
 import logging
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
@@ -29,8 +28,17 @@ from pydantic import BaseModel
 from .. import budget as B
 from .. import helper
 from ..jobs import Job
-from ..models import (ActionResult, BuildResult, BuildStatus, DiagGroup, ErrorInfo, PendingPrompt, PromptOption,
-                      StepInfo, iso)
+from ..models import (
+    ActionResult,
+    BuildResult,
+    BuildStatus,
+    DiagGroup,
+    ErrorInfo,
+    PendingPrompt,
+    PromptOption,
+    StepInfo,
+    iso,
+)
 from ..state import AppState
 
 log = logging.getLogger("iosstudio.tools")

@@ -76,5 +76,5 @@ Installing and Launching, like any other project.
 `helper/build_settings.py` (validation, patches, diffs, the open-file limit, suggestions),
 `helper/projects.py` (`projects build-settings`, the prebuild step in `_do_build`),
 `mcp/iosstudio_mcp/tools/build_settings.py`, `components/ProjectBuildSettingsSheet.qml`. Tests:
-`tests/test_build_settings.py` (including builds through a fake xtool) and
-`tests/test_mcp_build_settings.py` (the tool over stdio).
+`tests/helper/test_build_settings.py`, `tests/cli/test_build_settings_cli.py` (builds through a fake xtool) and
+`tests/mcp/test_mcp_build_settings.py` (the tool over stdio).
