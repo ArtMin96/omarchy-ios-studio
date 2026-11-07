@@ -363,10 +363,10 @@ class DemoCommands(unittest.TestCase):
     WEATHER = "XTL-A1B2C3D4E5.com.example.weatherglance"
 
     def setUp(self):
-        from iosstudio.device import deviced_demo_core as core
-        from iosstudio.device.demo_features import appdata as demo
-        from iosstudio.device.demo_features import files as demo_files
-        from iosstudio.device.deviced_kit import FeatureRegistry
+        from iosstudio.device.demo import core
+        from iosstudio.device.features.appdata import demo
+        from iosstudio.device.features.files import demo as demo_files
+        from iosstudio.device.kit import FeatureRegistry
         self.core, self.demo = core, demo
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -562,10 +562,10 @@ class RealModule(unittest.IsolatedAsyncioTestCase):
     PREFS = "Library/Preferences/com.example.app.plist"
 
     async def asyncSetUp(self):
-        from iosstudio.device.deviced_kit import FeatureRegistry
-        from iosstudio.device.features import appdata as real
-        from iosstudio.device.features import apps as A
-        from iosstudio.device.features import files as F
+        from iosstudio.device.features.appdata import real
+        from iosstudio.device.features.apps import real as A
+        from iosstudio.device.features.files import real as F
+        from iosstudio.device.kit import FeatureRegistry
         self.real = real
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)

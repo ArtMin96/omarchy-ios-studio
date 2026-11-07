@@ -1,4 +1,4 @@
-"""Project config checks (helper/iosstudio/features/project_check.py, `projects check`, the pre-build run in projects.py).
+"""Project config checks (helper/iosstudio/features/project_check.py, `projects check`, the pre-build run in projects/build.py).
 
 One fixture project per check in tests/fixtures/project-check/<case>/, plus key parsing from xtool's source,
 the time budget and the output cap (the CLI and a build through a fake xtool: tests/cli/test_project_check_cli.py).

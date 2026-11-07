@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio.device import device_crash
+from iosstudio.device.features.crashes import core as device_crash
 from iosstudio.features import crash_symbols as S
 from iosstudio_mcp.backends import crashes as T
 from iosstudio_mcp.state import AppState

@@ -1,7 +1,7 @@
-"""The device daemon backend contract: what the broker (device_broker.py) calls on a daemon. Stdlib only.
+"""The device daemon backend contract: what the broker (broker.py) calls on a daemon. Stdlib only.
 
-Three backends subclass Backend: deviced.Daemon (the real iPhone), deviced.BrokenBackend
-(pymobiledevice3 unusable: every request answers with one error) and deviced_demo.DemoBackend (the
+Three backends subclass Backend: real.daemon.Daemon (the real iPhone), real.daemon.BrokenBackend
+(pymobiledevice3 unusable: every request answers with one error) and demo.daemon.DemoBackend (the
 made-up iPhone). The backend is also the `ctx` / `d` every feature handler gets as its first
 argument: ctx.registry, ctx.resources, ctx.bg, ctx.client().
 
@@ -22,8 +22,7 @@ import asyncio
 import inspect
 from typing import Callable
 
-from iosstudio.device import deviced_kit as kit
-from iosstudio.device import protocol
+from iosstudio.device import kit, protocol
 from iosstudio.device.protocol import DeviceError
 
 
@@ -71,7 +70,7 @@ def unknown_command(cmd: str) -> DeviceError:
 class Backend:
     """Shared dispatch, errors, hooks and background tasks; subclasses add welcome() and syslog_*.
 
-    `features` names the feature package loaded into the registry ("features", "demo_features");
+    `features` names the side of features/<name>/ loaded into the registry ("real" or "demo");
     None loads none. Subclasses register their own core commands in register_core(reg)."""
 
     features: str | None = None
@@ -94,8 +93,8 @@ class Backend:
 
     def client(self):
         """The broker client whose request is running (key for ctx.resources); None outside the broker."""
-        from iosstudio.device import device_broker
-        return device_broker.current_client()
+        from iosstudio.device import broker
+        return broker.current_client()
 
     # -- requests
     async def dispatch(self, cmd: str, args: dict):

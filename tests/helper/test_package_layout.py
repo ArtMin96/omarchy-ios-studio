@@ -1,5 +1,5 @@
 """The helper as one package (helper/iosstudio): no sys.path hacks inside it, run.py starts it under `python -I`,
-the daemon's feature loader finds both feature folders, and device_client stays loadable by file path."""
+the daemon's feature loader finds every feature folder's demo side, and device/client.py stays loadable by file path."""
 from __future__ import annotations
 
 import ast
@@ -33,15 +33,17 @@ class Layout(unittest.TestCase):
         self.assertIn('"code":"usage"', r.stdout)
 
     def test_feature_folders_load(self):
-        from iosstudio.device import deviced_kit as kit
-        reg = kit.load_features(kit.FeatureRegistry(log=lambda _msg: None), "demo_features")
+        from iosstudio.device import kit
+        reg = kit.load_features(kit.FeatureRegistry(log=lambda _msg: None), "demo")
         self.assertEqual(reg.failed, {})
         self.assertIn("apps", reg.loaded)
-        real = {p.stem for p in (PKG / "device" / "features").glob("[!_]*.py")}
-        self.assertLessEqual(set(reg.loaded), real)   # every demo feature has a real twin
+        folders = PKG / "device" / "features"
+        real = {p.parent.name for p in folders.glob("*/real.py")}
+        self.assertEqual(set(reg.loaded), real)   # every feature has both sides
+        self.assertEqual(list(folders.glob("*.py")), [folders / "__init__.py"])   # features live in folders only
 
     def test_device_client_loads_by_path(self):
-        spec = importlib.util.spec_from_file_location("layout_device_client", PKG / "device" / "device_client.py")
+        spec = importlib.util.spec_from_file_location("layout_device_client", PKG / "device" / "client.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.assertEqual(mod.deviced_path(), ROOT / "bin" / "iosstudio-deviced")

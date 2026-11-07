@@ -289,13 +289,13 @@ class Storage(unittest.TestCase):
         import contextlib
         import io
 
-        from iosstudio.features import projects
+        from iosstudio.features.projects import commands, store
         self.cli("save", name="Home", shot=str(FIX / "base.png"))
         state = Path(self.tmp.name) / "state"
         with mock.patch.object(appdirs, "STATE_DIR", state), \
-                mock.patch.object(projects, "PROJECTS_FILE", state / "projects.json"), \
+                mock.patch.object(store, "PROJECTS_FILE", state / "projects.json"), \
                 contextlib.redirect_stdout(io.StringIO()) as buf:
-            projects.cmd_remove({"path": str(self.proj)})
+            commands.cmd_remove({"path": str(self.proj)})
         out = json.loads(buf.getvalue())["data"]
         self.assertEqual((out["screenshotsDeleted"], out["filesDeleted"]), (1, False))
         self.assertFalse(self.d.exists())

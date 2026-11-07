@@ -1,4 +1,4 @@
-"""Swift package dependencies (helper/iosstudio/features/packages.py, helper/iosstudio/features/package_manifest.py): Package.resolved v1, v2 and v3
+"""Swift package dependencies (helper/iosstudio/features/packages/): Package.resolved v1, v2 and v3
 (real files in tests/fixtures/packages/), version rules from `dump-package` (captured output), the list merge
 (declared packages + pins + target dependencies, bare-name products), resolved diffs (`changes`), product picking,
 URL and version checks, swift output -> progress, the remove edit on many manifest shapes (fixtures in
@@ -16,8 +16,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from iosstudio.features import package_manifest as M
-from iosstudio.features import packages as P
+from iosstudio.core.output import HelperError
+from iosstudio.features.packages import add as PA
+from iosstudio.features.packages import manifest as M
+from iosstudio.features.packages import manifest_edit as E
+from iosstudio.features.packages import project as PP
+from iosstudio.features.packages import swift as PS
+from iosstudio.features.packages import update as PU
 from support import ROOT
 
 FIX = ROOT / "tests/fixtures/packages"
@@ -132,7 +137,7 @@ class ListMerge(unittest.TestCase):
         dump = json.loads((FIX / "dump-bare-strings.json").read_text())
         pins = {"alamofire": {"identity": "alamofire", "version": "5.9.1", "revision": "f455c2975872ccd2d9c81594c658af65716e9b9a"}}
         products = {"alamofire": ["Alamofire"], "snapkit": ["SnapKit"]}
-        out = {p["identity"]: p for p in P.build_list(Path("/x"), dump, pins, {}, lambda i: products.get(i, []))}
+        out = {p["identity"]: p for p in PP.build_list(Path("/x"), dump, pins, {}, lambda i: products.get(i, []))}
         a = out["alamofire"]
         self.assertEqual(a["resolved"], {"version": "5.9.1", "revision": "f455c29"})
         self.assertEqual(a["requirement"]["text"], "from 5.8.0")
@@ -145,14 +150,14 @@ class ListMerge(unittest.TestCase):
     def test_product_deps_and_local_target_names(self):
         dump = json.loads((FIX / "dump-product-vs-target.json").read_text())
         products = ["Collections", "DequeModule", "OrderedCollections"]
-        (entry,) = P.build_list(Path("/x"), dump, {}, {}, lambda i: products)
+        (entry,) = PP.build_list(Path("/x"), dump, {}, {}, lambda i: products)
         # "Collections" is a local target there, so only DequeModule (bare) and OrderedCollections (.product) count
         self.assertEqual(sorted(entry["products_used"]), ["DequeModule", "OrderedCollections"])
         self.assertEqual(entry["used_by"], ["Mixed"])
 
     def test_legacy_name_product_refs(self):
         dump = json.loads((FIX / "dump-legacy-name.json").read_text())
-        out = {p["identity"]: p for p in P.build_list(Path("/x"), dump, {}, {})}
+        out = {p["identity"]: p for p in PP.build_list(Path("/x"), dump, {}, {})}
         self.assertEqual(out["lottie-spm"]["products_used"], ["Lottie"])
         self.assertEqual(out["lottie-spm"]["name"], "Lottie")
 
@@ -160,93 +165,93 @@ class ListMerge(unittest.TestCase):
         dump = json.loads((FIX / "dump-bare-strings.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.assertEqual(P.app_target(root, dump), "Legacy")       # the library product's target
+            self.assertEqual(PP.app_target(root, dump), "Legacy")       # the library product's target
             (root / "xtool.yml").write_text("version: 1\nproduct: Legacy\n")
-            ts = P.target_list(root, dump)
+            ts = PP.target_list(root, dump)
             self.assertEqual([t["name"] for t in ts], ["Legacy", "Core", "LegacyTests"])
             self.assertTrue(ts[0]["app"])
 
     def test_find_declared(self):
         dump = json.loads((FIX / "dump-legacy-name.json").read_text())
-        self.assertEqual(P.find_declared(dump, "Kingfisher")["identity"], "kingfisher")
-        self.assertEqual(P.find_declared(dump, "https://github.com/airbnb/lottie-spm")["identity"], "lottie-spm")
-        self.assertIsNone(P.find_declared(dump, "nope"))
+        self.assertEqual(PP.find_declared(dump, "Kingfisher")["identity"], "kingfisher")
+        self.assertEqual(PP.find_declared(dump, "https://github.com/airbnb/lottie-spm")["identity"], "lottie-spm")
+        self.assertIsNone(PP.find_declared(dump, "nope"))
 
 
 # ================================================================ small pieces
 
 class Pieces(unittest.TestCase):
     def test_pick_product(self):
-        self.assertEqual(P.pick_product(["ArgumentParser"]), "ArgumentParser")
-        self.assertEqual(P.pick_product(["Collections", "_RopeModule"]), "Collections")
-        self.assertIsNone(P.pick_product(["Collections", "DequeModule"]))
-        self.assertIsNone(P.pick_product([]))
+        self.assertEqual(PA.pick_product(["ArgumentParser"]), "ArgumentParser")
+        self.assertEqual(PA.pick_product(["Collections", "_RopeModule"]), "Collections")
+        self.assertIsNone(PA.pick_product(["Collections", "DequeModule"]))
+        self.assertIsNone(PA.pick_product([]))
 
     def test_newest_tag(self):
         lines = ["abc\trefs/tags/1.0.0", "abc\trefs/tags/v1.10.0", "abc\trefs/tags/1.9.3", "abc\trefs/tags/2.0.0-beta.1",
                  "abc\trefs/tags/latest", "abc\trefs/heads/main"]
-        self.assertEqual(P.newest_tag(lines), "1.10.0")
-        self.assertIsNone(P.newest_tag(["abc\trefs/tags/nightly"]))
+        self.assertEqual(PS.newest_tag(lines), "1.10.0")
+        self.assertIsNone(PS.newest_tag(["abc\trefs/tags/nightly"]))
 
     def test_check_location(self):
         root = Path("/tmp/x")
-        self.assertEqual(P.check_location("https://github.com/apple/swift-collections.git/", root),
+        self.assertEqual(PA.check_location("https://github.com/apple/swift-collections.git/", root),
                          ("url", "https://github.com/apple/swift-collections.git", "swift-collections"))
-        self.assertEqual(P.check_location("git@github.com:onevcat/Kingfisher.git", root)[2], "kingfisher")
-        self.assertEqual(P.check_location("https://github.com/apple/swift-log/tree/main/Sources", root)[1],
+        self.assertEqual(PA.check_location("git@github.com:onevcat/Kingfisher.git", root)[2], "kingfisher")
+        self.assertEqual(PA.check_location("https://github.com/apple/swift-log/tree/main/Sources", root)[1],
                          "https://github.com/apple/swift-log")
         for bad in ("", "swift-collections", "http://github.com/a/b", "https://github.com/a/b\"x", "ftp://x/y"):
-            with self.assertRaises(P.HelperError) as cm:
-                P.check_location(bad, root)
+            with self.assertRaises(HelperError) as cm:
+                PA.check_location(bad, root)
             self.assertEqual(cm.exception.code, "bad-url", bad)
         with tempfile.TemporaryDirectory() as tmp:
             proj = Path(tmp) / "App"
             local = Path(tmp) / "Kit"
             proj.mkdir()
             local.mkdir()
-            with self.assertRaises(P.HelperError):
-                P.check_location("../Kit", proj)                      # no Package.swift there
+            with self.assertRaises(HelperError):
+                PA.check_location("../Kit", proj)                      # no Package.swift there
             (local / "Package.swift").write_text("")
-            self.assertEqual(P.check_location("../Kit", proj), ("path", "../Kit", "kit"))
+            self.assertEqual(PA.check_location("../Kit", proj), ("path", "../Kit", "kit"))
 
     def test_check_requirement(self):
-        P.check_requirement("from", "1.2.0")
-        P.check_requirement("exact", "2.0.0-beta.1")
-        P.check_requirement("branch", "feature/x")
-        P.check_requirement("revision", "38ca4ec")
+        PA.check_requirement("from", "1.2.0")
+        PA.check_requirement("exact", "2.0.0-beta.1")
+        PA.check_requirement("branch", "feature/x")
+        PA.check_requirement("revision", "38ca4ec")
         for rule, v in (("from", "1.2"), ("from", None), ("branch", "two words"), ("revision", "xyz"),
                         ("nope", "1.0.0")):
-            with self.assertRaises(P.HelperError):
-                P.check_requirement(rule, v)
+            with self.assertRaises(HelperError):
+                PA.check_requirement(rule, v)
 
     def test_progress_detail(self):
-        self.assertEqual(P.progress_detail("Fetching https://github.com/apple/swift-collections from cache"),
+        self.assertEqual(PS.progress_detail("Fetching https://github.com/apple/swift-collections from cache"),
                          ("Fetching swift-collections", "swift-collections", False))
-        self.assertEqual(P.progress_detail("Computed https://github.com/apple/swift-collections at 1.7.5 (1.60s)"),
+        self.assertEqual(PS.progress_detail("Computed https://github.com/apple/swift-collections at 1.7.5 (1.60s)"),
                          ("swift-collections 1.7.5", "swift-collections", True))
-        self.assertEqual(P.progress_detail("Working copy of https://github.com/apple/swift-argument-parser resolved "
+        self.assertEqual(PS.progress_detail("Working copy of https://github.com/apple/swift-argument-parser resolved "
                                            "at main (38ca4ec)")[0], "swift-argument-parser main (38ca4ec)")
-        self.assertEqual(P.progress_detail("[120/29848] Fetching swift-collections")[0],
+        self.assertEqual(PS.progress_detail("[120/29848] Fetching swift-collections")[0],
                          "Fetching swift-collections 0%")
-        self.assertIsNone(P.progress_detail("    Cloning into bare repository '/x'..."))
-        self.assertIn("Waiting", P.progress_detail("Another instance of SwiftPM is already running using "
+        self.assertIsNone(PS.progress_detail("    Cloning into bare repository '/x'..."))
+        self.assertIn("Waiting", PS.progress_detail("Another instance of SwiftPM is already running using "
                                                    "'/x/.build', waiting until that process has finished")[0])
 
     def test_summary(self):
-        self.assertEqual(P.summary([], "update"), "Everything is up to date")
-        self.assertEqual(P.summary([{"identity": "swift-collections", "from": "1.1.3", "to": "1.1.4"},
+        self.assertEqual(PU.summary([], "update"), "Everything is up to date")
+        self.assertEqual(PU.summary([{"identity": "swift-collections", "from": "1.1.3", "to": "1.1.4"},
                                     {"identity": "swift-log", "from": None, "to": "1.6.1"}], "update"),
                          "2 packages updated: swift-collections 1.1.3 → 1.1.4, swift-log 1.6.1 (new)")
 
     def test_swift_failure_classifies(self):
-        e = P.swift_failure(["Fetching https://x/y", "error: Failed to clone repository https://x/y:",
+        e = PS.swift_failure(["Fetching https://x/y", "error: Failed to clone repository https://x/y:",
                              "    fatal: repository 'https://x/y/' not found"], "Couldn't fetch y")
         self.assertEqual(e.code, "fetch-failed")
         self.assertEqual(e.extra["diagnostics"][0]["category"], "package")
-        self.assertEqual(e.extra["diagnostics"][0]["hint"], P.HINT_FETCH)
-        e = P.swift_failure(["error: Dependencies could not be resolved because no versions of 'a' match"], "x")
+        self.assertEqual(e.extra["diagnostics"][0]["hint"], PS.HINT_FETCH)
+        e = PS.swift_failure(["error: Dependencies could not be resolved because no versions of 'a' match"], "x")
         self.assertEqual(e.code, "resolve-failed")
-        e = P.swift_failure(["fatal: unable to access 'https://x/': Could not resolve host: x"], "x")
+        e = PS.swift_failure(["fatal: unable to access 'https://x/': Could not resolve host: x"], "x")
         self.assertEqual(e.code, "network")
         self.assertEqual(len(e.extra["diagnostics"]), 1)      # synthesized from the message
 
@@ -255,7 +260,7 @@ class Pieces(unittest.TestCase):
 
 class Lexer(unittest.TestCase):
     def kinds(self, text):
-        return [(t.kind, text[t.start:t.end]) for t in M.tokenize(text) if t.kind not in ("ws", "nl")]
+        return [(t.kind, text[t.start:t.end]) for t in E.tokenize(text) if t.kind not in ("ws", "nl")]
 
     def test_strings_and_comments(self):
         text = ('let a = #"x ")" y"# // .package(\n/* a /* nested ) */ ] */ "b\\"(" """\n  ok ) "\n  """ '
@@ -269,8 +274,8 @@ class Lexer(unittest.TestCase):
 
     def test_values(self):
         def val(src):
-            (tok,) = [t for t in M.tokenize(src) if t.kind == "string"]
-            return M.string_value(src, tok)
+            (tok,) = [t for t in E.tokenize(src) if t.kind == "string"]
+            return E.string_value(src, tok)
         self.assertEqual(val('"a\\"b\\u{41}"'), 'a"bA')
         self.assertEqual(val('#"a\\nb"#'), "a\\nb")
         self.assertEqual(val('"""\n    one\n    two\n    """'), "one\ntwo")
@@ -279,10 +284,10 @@ class Lexer(unittest.TestCase):
 
     def test_errors(self):
         for bad in ('"open', '/* open', '"""\nnever', '"\\(x"'):
-            with self.assertRaises(M.LexError):
-                M.tokenize(bad)
-        with self.assertRaises(M.LexError):
-            M.Code.parse("let a = [1, 2)")
+            with self.assertRaises(E.LexError):
+                E.tokenize(bad)
+        with self.assertRaises(E.LexError):
+            E.Code.parse("let a = [1, 2)")
 
 
 class RemoveEdit(unittest.TestCase):
@@ -292,7 +297,7 @@ class RemoveEdit(unittest.TestCase):
         c = self.cases[name]
         with open(FIX / "remove" / f"{c.get('source', name)}.swift", newline="") as fh:
             text = fh.read()
-        return c, text, M.remove_package(text, c["identity"], url=c.get("url"), names=c.get("names", []),
+        return c, text, E.remove_package(text, c["identity"], url=c.get("url"), names=c.get("names", []),
                                          products=c.get("products", []), local_targets=c.get("local_targets", []))
 
     def test_fixtures(self):
@@ -309,7 +314,7 @@ class RemoveEdit(unittest.TestCase):
                     self.assertEqual(edit.text, fh.read())
                 self.assertEqual(sorted([d["target"] or "", d["product"]] for d in edit.target_deps),
                                  sorted([t or "", p] for t, p in c["target_deps"]))
-                again = M.remove_package(edit.text, c["identity"], url=c.get("url"), names=c.get("names", []),
+                again = E.remove_package(edit.text, c["identity"], url=c.get("url"), names=c.get("names", []),
                                          products=c.get("products", []), local_targets=c.get("local_targets", []))
                 self.assertFalse(again.removed_package)        # nothing left to remove
                 self.assertEqual(again.text, edit.text)
@@ -327,7 +332,7 @@ class RemoveEdit(unittest.TestCase):
 
     def test_unknown_package_changes_nothing(self):
         text = (FIX / "remove/template.swift").read_text()
-        edit = M.remove_package(text, "not-there")
+        edit = E.remove_package(text, "not-there")
         self.assertEqual((edit.text, edit.removed_package, edit.target_deps), (text, False, []))
 
 if __name__ == "__main__":

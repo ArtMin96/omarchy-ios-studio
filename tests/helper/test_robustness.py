@@ -19,7 +19,14 @@ from unittest import mock
 
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError
-from iosstudio.features import packages, projects, setup, watch
+from iosstudio.features.packages import swift as package_swift
+from iosstudio.features.projects import build as projects_build
+from iosstudio.features.projects import renew as projects_renew
+from iosstudio.features.projects import runner as projects_runner
+from iosstudio.features.projects import store as projects_store
+from iosstudio.features.setup import runtime as setup_runtime
+from iosstudio.features.setup import sources as setup_sources
+from iosstudio.features.watch import fswatch, lifecycle
 from support import write_exe
 
 # A fake tool that starts a long-lived grandchild (its pid goes to $1), prints one line, then hangs.
@@ -128,10 +135,10 @@ class Timeouts(Tmp):
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "hi\n", "err\n"))
 
     def test_setup_run_stream_lingering_child(self):
-        with Captured(), mock.patch.object(setup, "EXIT_GRACE", 0.3):
+        with Captured(), mock.patch.object(setup_runtime, "EXIT_GRACE", 0.3):
             t0 = time.monotonic()
             with self.assertRaises(HelperError) as cm:
-                setup.run_stream([self.exe("linger", LINGERS)], None, mutating=False)
+                setup_runtime.run_stream([self.exe("linger", LINGERS)], None, mutating=False)
         self.assertEqual(cm.exception.code, "timeout")
         self.assertLess(time.monotonic() - t0, 5)
 
@@ -140,9 +147,9 @@ class Timeouts(Tmp):
         bindir.mkdir()
         write_exe(bindir / "git", "#!/bin/sh\nsleep 30\n")
         env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(setup, "GIT_TIMEOUT", 0.3):
+        with mock.patch.dict(os.environ, env), mock.patch.object(setup_sources, "GIT_TIMEOUT", 0.3):
             with self.assertRaises(HelperError) as cm:
-                setup._patch_id(self.tmp, "a", "b")
+                setup_sources.git_patch_id(self.tmp, "a", "b")
         self.assertEqual(cm.exception.code, "timeout")
 
     def test_systemctl_timeout(self):
@@ -150,19 +157,19 @@ class Timeouts(Tmp):
         bindir.mkdir()
         write_exe(bindir / "systemctl", "#!/bin/sh\nsleep 30\n")
         env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(projects, "SYSTEMCTL_TIMEOUT", 0.3):
+        with mock.patch.dict(os.environ, env), mock.patch.object(projects_renew, "SYSTEMCTL_TIMEOUT", 0.3):
             with self.assertRaises(HelperError) as cm:
-                projects._systemctl("daemon-reload")
+                projects_renew.systemctl("daemon-reload")
             self.assertEqual(cm.exception.code, "systemd-timeout")
-            st = projects._timer_status()      # status stays best-effort
+            st = projects_renew.timer_status()      # status stays best-effort
         self.assertNotIn("enabled", st)
 
     def test_ls_remote_timeout(self):
         git = self.exe("git", "#!/bin/sh\nsleep 30 &\necho $! > " + str(self.tmp / "pid") + "\nsleep 30\n")
-        with mock.patch.object(packages.shutil, "which", return_value=git), \
-                mock.patch.object(packages, "LS_REMOTE_TIMEOUT", 0.5):
+        with mock.patch.object(package_swift.shutil, "which", return_value=git), \
+                mock.patch.object(package_swift, "LS_REMOTE_TIMEOUT", 0.5):
             t0 = time.monotonic()
-            self.assertIsNone(packages.latest_version("https://example.invalid/x.git"))
+            self.assertIsNone(package_swift.latest_version("https://example.invalid/x.git"))
         self.assertLess(time.monotonic() - t0, 5)
         self.assertTrue(gone_soon(self.grandchild()))
 
@@ -171,16 +178,16 @@ class Buffers(Tmp):
     def test_setup_run_stream_splits_a_newline_less_flood(self):
         exe = self.exe("flood", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n")
         with Captured() as events:
-            rc = setup.run_stream([exe], "s", mutating=False)
+            rc = setup_runtime.run_stream([exe], "s", mutating=False)
         self.assertEqual(rc, 0)
         logs = [e for e in events if e.get("event") == "log"]
-        self.assertGreaterEqual(len(logs), 300000 // setup.MAX_LINE)
+        self.assertGreaterEqual(len(logs), 300000 // subproc.MAX_LINE)
 
     def test_build_runner_caps_its_line_buffer(self):
         exe = self.exe("flood", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n")
         got: list[int] = []
         with Captured(), open(os.devnull) as null, mock.patch.object(sys, "stdin", null):
-            runner = projects.BuildRunner(["compile"], False, self.tmp / "b.log", None)
+            runner = projects_runner.BuildRunner(["compile"], False, self.tmp / "b.log", None)
             runner.on_line = lambda text: got.append(len(text))
             runner.on_partial = lambda text: False
             try:
@@ -189,12 +196,12 @@ class Buffers(Tmp):
                 runner.close()
         self.assertEqual(rc, 0)
         self.assertEqual(sum(got), 300000)
-        self.assertLessEqual(max(got), projects.MAX_LINE)
+        self.assertLessEqual(max(got), subproc.MAX_LINE)
 
     def test_build_runner_lingering_child(self):
         with Captured(), open(os.devnull) as null, mock.patch.object(sys, "stdin", null), \
-                mock.patch.object(projects, "EXIT_GRACE", 0.3):
-            runner = projects.BuildRunner(["compile"], False, self.tmp / "b.log", None)
+                mock.patch.object(projects_runner, "EXIT_GRACE", 0.3):
+            runner = projects_runner.BuildRunner(["compile"], False, self.tmp / "b.log", None)
             try:
                 with self.assertRaises(HelperError) as cm:
                     runner.run([self.exe("linger", LINGERS)], self.tmp)
@@ -231,38 +238,38 @@ class Tails(Tmp):
 
     def test_watch_log_is_trimmed(self):
         log = self.tmp / "watch.log"
-        log.write_bytes(b"x" * (watch.WATCH_LOG_MAX + 10) + b"\nlast line\n")
-        watch._trim_log(log, keep=1000)
+        log.write_bytes(b"x" * (lifecycle.WATCH_LOG_MAX + 10) + b"\nlast line\n")
+        lifecycle._trim_log(log, keep=1000)
         self.assertEqual(log.stat().st_size, 1000)
         self.assertTrue(log.read_text().endswith("last line\n"))
         small = self.tmp / "small.log"
         small.write_text("keep me\n")
-        watch._trim_log(small)
+        lifecycle._trim_log(small)
         self.assertEqual(small.read_text(), "keep me\n")
 
 
 class Locks(Tmp):
     def test_build_lock_is_a_context_manager(self):
-        with mock.patch.object(projects, "LOCK_DIR", self.tmp / "locks"):
-            with projects._lock(self.tmp):
-                with self.assertRaises(HelperError) as cm, projects._lock(self.tmp):
+        with mock.patch.object(projects_store, "LOCK_DIR", self.tmp / "locks"):
+            with projects_build.project_lock(self.tmp):
+                with self.assertRaises(HelperError) as cm, projects_build.project_lock(self.tmp):
                     pass
                 self.assertEqual(cm.exception.code, "busy")
-                with projects._lock(self.tmp / "other"):     # another project isn't blocked
+                with projects_build.project_lock(self.tmp / "other"):     # another project isn't blocked
                     pass
-            with projects._lock(self.tmp):     # released on exit
+            with projects_build.project_lock(self.tmp):     # released on exit
                 pass
             with self.assertRaises(RuntimeError):
-                with projects._lock(self.tmp):
+                with projects_build.project_lock(self.tmp):
                     raise RuntimeError
-            with projects._lock(self.tmp):     # and on an exception
+            with projects_build.project_lock(self.tmp):     # and on an exception
                 pass
 
 
 class Output(unittest.TestCase):
     def test_setup_does_not_patch_write(self):
         self.assertEqual(output._write.__module__, "iosstudio.core.output")
-        self.assertFalse(hasattr(setup, "_locked_write"))
+        self.assertFalse(hasattr(setup_runtime, "_locked_write"))
 
     def test_write_is_thread_safe(self):
         buf = io.StringIO()
@@ -300,8 +307,8 @@ class PollCap(Tmp):
         src.mkdir(parents=True)
         for i in range(30):
             (src / f"F{i}.swift").write_text("")
-        with mock.patch.object(watch, "POLL_MAX_FILES", 10):
-            w = watch.PollWatcher(self.tmp)
+        with mock.patch.object(fswatch, "POLL_MAX_FILES", 10):
+            w = fswatch.PollWatcher(self.tmp)
         self.assertLessEqual(len(w.snap), 10)
 
 

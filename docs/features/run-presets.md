@@ -192,7 +192,7 @@ Unknown names fail as they would for real, and a demo Run echoes the preset's ar
 ## Code
 
 `helper/run_presets.py` (fields, `normalize`, `validate`, `resolve`, storage, `act`),
-`helper/projects.py` (`projects presets`, `_launch_preset` and the `launch` data of `build run`),
+`helper/iosstudio/features/projects/` (`projects presets` in commands.py, `model.launch_preset` and the `launch` data of `build run` in build.py),
 `helper/demo.py` (demo presets), `mcp/iosstudio_mcp/tools/run_presets.py` (`ios_project_presets`),
 `mcp/iosstudio_mcp/backends/projects.py` (`resolve_preset`, `merge_launch`), `mcp/iosstudio_mcp/tools/build.py`
 (`preset` on `ios_run`), `mcp/iosstudio_mcp/backends/builds.py` (the launch in `make_installer`), `tools/device.py` and `tools/logs.py` (`preset` on `ios_app_launch` and

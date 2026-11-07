@@ -2,7 +2,7 @@
 
 Clients: `services/DeviceService.qml` (iPhone page), `services/LogService.qml` (Logs page, through
 `app.device.request()` / `app.device.daemonEvent`) and the MCP server (`mcp/`, through
-`helper/iosstudio/device/device_client.py`).
+`helper/iosstudio/device/client.py`).
 
 The daemon is one long-running Python process per user (pymobiledevice3 venv, see
 `subproc.pymd3_python()` in helper/iosstudio/core/). It owns the only tunnel to the iPhone and is shared: the GUI, the MCP
@@ -20,20 +20,20 @@ $XDG_RUNTIME_DIR/ios-studio-demo/deviced.sock    demo mode    (IOSSTUDIO_DEMO se
 ```
 
 `IOSSTUDIO_RUNTIME_DIR=<dir>` replaces `$XDG_RUNTIME_DIR` in both paths, for the bridge, the
-daemons and `device_client.py`. It gives a checkout or test run a private daemon. A real daemon
+daemons and `client.py`. It gives a checkout or test run a private daemon. A real daemon
 under a custom directory answers every request with `busy` while the default one is live, because
 a second tunnel would break the first one's link.
 
 | invocation | what it does |
 |---|---|
 | `iosstudio-deviced` | connects to the socket; if nothing answers it starts `iosstudio-deviced --serve` detached (own session) and waits for the socket (≤30 s). Then it bridges stdin↔socket until either side closes. stdlib python, starts in ~0.1 s. |
-| `iosstudio-deviced --serve` | becomes the daemon: takes the lock (exits 0 if another daemon is live), removes a stale socket, listens, then loads pymobiledevice3. Normally only started by the bridge or `device_client.py`. |
+| `iosstudio-deviced --serve` | becomes the daemon: takes the lock (exits 0 if another daemon is live), removes a stale socket, listens, then loads pymobiledevice3. Normally only started by the bridge or `client.py`. |
 | `iosstudio-deviced --once <cmd> '<json>'` | one request through the live daemon if there is one (no second tunnel), otherwise the standalone one-shot mode below. |
 
-Implementation: `helper/iosstudio/device/device_broker.py` (stdlib), shared by `helper/iosstudio/device/deviced.py` and
-`helper/iosstudio/device/deviced_demo.py`. Each daemon is a small core (session, tunnel, devices, dispatch) plus
-one feature module per command group in `helper/iosstudio/device/features/` (demo:
-`helper/iosstudio/device/demo_features/`). A module that fails to load is skipped and logged, and its
+Implementation: `helper/iosstudio/device/broker.py` (stdlib), shared by `helper/iosstudio/device/real/daemon.py` and
+`helper/iosstudio/device/demo/daemon.py`. Each daemon is a small core (session, tunnel, devices, dispatch) plus
+one folder per command group in `helper/iosstudio/device/features/<name>/`, with `real.py` and `demo.py` side by
+side (see [Inside the daemon](#inside-the-daemon-helperiosstudiodevice)). A module that fails to load is skipped and logged, and its
 commands answer `bad-args` ("Unknown command"); `daemon.features` reports it. How to add one:
 [development.md](development.md#device-daemon-features).
 
@@ -101,7 +101,7 @@ frames stop only when no client holds it (the reply then says `{running: false, 
 while others still do). A client disconnecting releases its reference. `frame` events go to every
 subscribed client. A recording holds the mirror too, so it keeps running until the recording ends.
 
-### Python client (`helper/iosstudio/device/device_client.py`)
+### Python client (`helper/iosstudio/device/client.py`)
 
 Stdlib asyncio; import it from the repo, or load it by file path as the MCP server does
 (`protocol.py` next to it is then loaded by path too, so the pair can be copied together). Its module
@@ -109,7 +109,7 @@ docstring is the full API.
 
 ```python
 import sys; sys.path.insert(0, "<repo>/helper")
-from iosstudio.device.device_client import DeviceClient, DeviceError
+from iosstudio.device.client import DeviceClient, DeviceError
 
 async with DeviceClient(name="mcp") as dev:          # spawns the daemon if needed
     info = await dev.request("device.info", {}, timeout=40)
@@ -125,14 +125,14 @@ async with DeviceClient(name="mcp") as dev:          # spawns the daemon if need
 After a daemon restart the client reconnects by itself and emits a local `reconnected` event;
 syslog subscriptions and mirror references must be re-requested then.
 
-`python3 helper/iosstudio/device/device_client.py device.info '{}'` sends one request from a shell (debugging).
+`python3 helper/iosstudio/device/client.py device.info '{}'` sends one request from a shell (debugging).
 
 ## Framing
 
 `helper/iosstudio/device/protocol.py` is the one implementation of what follows (stdlib only): `encode`/`decode`,
 `read_lines`/`write_line` (blocking) and `read_lines_async`/`write_line_async` (asyncio), the message
 builders (`request`, `reply_ok`, `reply_error`, `event`), the one error type `DeviceError` and
-`error_json(exc)`. The daemons, the broker, `--once` and `device_client.py` all use it. Lines are at
+`error_json(exc)`. The daemons, the broker, `--once` and `client.py` all use it. Lines are at
 most 16 MiB (`MAX_LINE`); a longer request line ends that client's connection, a malformed one is
 skipped with a `log` warning event.
 
@@ -213,7 +213,7 @@ the tunnel is up.
 
 | event | data | when |
 |---|---|---|
-| `ready` | `{version, pymobiledevice3, python, pid, socket, runtimeDir, log, error?}` | first, to every new client. `log` is the daemon's log file: clients show it from here instead of working out the runtime-dir rules (`device_client.runtime_base()` is the only place they live). `error` = the iPhone tools can't be used (`needs-setup`, `pmd3-api`, `busy`); every request but `daemon.ping` then answers with it |
+| `ready` | `{version, pymobiledevice3, python, pid, socket, runtimeDir, log, error?}` | first, to every new client. `log` is the daemon's log file: clients show it from here instead of working out the runtime-dir rules (`client.runtime_base()` is the only place they live). `error` = the iPhone tools can't be used (`needs-setup`, `pmd3-api`, `busy`); every request but `daemon.ping` then answers with it |
 | `devices` | `[Device…]` | at start and whenever the list or any field changes |
 | `connection` | Connection (below) | on every connection state change of the active device |
 | `deviceInfo` | `{udid, …partial DeviceInfo}` | after connect and every 60 s (battery etc.) |
@@ -324,7 +324,7 @@ can be opened).
 
 `developer` = signed with a development profile (e.g. built with xtool).
 
-**The app list cache** (helper/iosstudio/device/features/app_index.py). The list is kept per device and kind
+**The app list cache** (helper/iosstudio/device/features/apps/index.py). The list is kept per device and kind
 (user apps / with `system`) in memory and in `~/.cache/ios-studio/apps-<udid>.json`, so the Phone page
 opens instantly, also right after a daemon restart. `running`/`pid` are always live (one process list
 per request). With no cache the daemon fetches now (one installation_proxy Lookup limited to the
@@ -334,7 +334,7 @@ daemon refreshes it in the background; it sends `apps` only if the list changed.
 `app.uninstall` drop the cache, so the next `apps.list` is fetched fresh. `fetchedAt` is when the
 list was read from the phone. In `--once` mode the list is always fetched (no background work).
 Features that need one app by bundle id (`pcap.start`, `metrics.*`, `ui.*`) use the same cache
-(helper/iosstudio/device/features/_app_lookup.py): a cached match, else a Lookup of just that bundle id, else
+(helper/iosstudio/device/features/apps/lookup.py): a cached match, else a Lookup of just that bundle id, else
 the user app list (for a free team's `XTL-<TEAM>.` id); `debug.start` always looks its one bundle up
 fresh, because the bundle path changes on every reinstall. None of them reads the full app list.
 
@@ -348,7 +348,7 @@ events (the first icon at once, then at most every 250 ms or every 10 icons).
 ### Installing apps (`app.install`)
 
 Works over the active tunnel, Wi-Fi or USB (installation_proxy over RSD, the same path the transport in
-helper/iosstudio/device/device_link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes after the phone reports
+helper/iosstudio/device/link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes after the phone reports
 "Complete". Error codes besides the common ones:
 
 | code | message |
@@ -443,7 +443,7 @@ open their own connection to the accessibility inspector service
 (`com.apple.accessibility.axAuditDaemon.remoteserver.shim.remote`, pymobiledevice3's
 `AccessibilityAudit`) over the session's RSD, not the shared DVT connection, and close it when done.
 Commands for one device run one at a time. Code: `helper/iosstudio/features/ui_inspect.py` (shaping, no device),
-`helper/iosstudio/device/features/ui.py` (iPhone), `helper/iosstudio/device/demo_features/ui.py` (demo). More in
+`helper/iosstudio/device/features/ui/real.py` (iPhone), `helper/iosstudio/device/features/ui/demo.py` (demo). More in
 [features/ui-inspect.md](features/ui-inspect.md).
 
 | cmd | args | reply data |
@@ -771,8 +771,8 @@ What an app prints (Swift `print()`, stdout and stderr). `app.launch` with `cons
 `console.launch`, same arguments) opens CoreDevice's stdio socket (`com.apple.coredevice.openstdiosocket`)
 and launches the app attached to it; the daemon keeps everything the app writes until it exits. The
 console only exists for apps the daemon launched: an app that was already running has no stdout to
-attach to. Code: `helper/iosstudio/device/app_console.py` (buffers, commands), `helper/iosstudio/device/features/console.py` (iPhone),
-`helper/iosstudio/device/demo_features/console.py` (demo). More in [features/app-console.md](features/app-console.md).
+attach to. Code: `helper/iosstudio/device/features/console/core.py` (buffers, commands), `features/console/real.py` (iPhone),
+`features/console/demo.py` (demo). More in [features/app-console.md](features/app-console.md).
 
 | cmd | args | reply data |
 |---|---|---|
@@ -941,7 +941,7 @@ Stats (also what `metrics.stop` returns as `summary`):
                 "text": "Memory grew 3.26 MB/min for 4 minutes (138.4 → 152.2 MB): a possible leak. Run Check for leaks."}]}
 ```
 
-The rules live in `helper/iosstudio/device/metrics_stats.py`. The memory trend is a linear fit of the footprint since the
+The rules live in `helper/iosstudio/device/features/metrics/stats.py`. The memory trend is a linear fit of the footprint since the
 app's last launch, over the whole run and the last 10 and 5 minutes; the most leak-like window is
 reported, and it counts as a likely leak at 1 MB/min or more with R² ≥ 0.6 over at least 2 minutes. A CPU
 spike is above 80% for 3 s or more. An FPS drop is 10 to 50 fps for 2 s or more (below 10 the screen is
@@ -973,8 +973,8 @@ exports, for `leaks` or Xcode on a Mac.
 ### Files
 
 The camera roll (read-only) and app containers, used by iPhone › Files and the MCP file tools.
-Implementation: `helper/iosstudio/device/features/files.py` and `cameratest.py`, shared helpers in
-`helper/iosstudio/device/device_files.py`.
+Implementation: `helper/iosstudio/device/features/files/real.py` and `features/cameratest/real.py` (demo twins
+`demo.py`), shared helpers in `helper/iosstudio/device/features/files/core.py`.
 
 | cmd | args | reply data |
 |---|---|---|
@@ -1071,7 +1071,7 @@ valid JSON. `logLines` keeps the last 400 lines; `syslog.txt` has all of them. S
 
 An app's UserDefaults and SwiftData / Core Data / SQLite stores, and resets to first launch. Your own
 development builds only (house_arrest VendContainer, like `container.*`); any other app is `not-developer`.
-Implementation: `helper/iosstudio/device/features/appdata.py` (demo twin `helper/iosstudio/device/demo_features/appdata.py`),
+Implementation: `helper/iosstudio/device/features/appdata/real.py` (demo twin `features/appdata/demo.py`),
 shared logic in `helper/iosstudio/features/app_data.py`. See [features/app-data.md](features/app-data.md).
 
 | cmd | args | reply data |
@@ -1241,7 +1241,7 @@ there, `state` stays `outdated` or `incomplete` and `error` holds the failure. `
 `unpack` when a whole download is kept (`canUnpack`), else `download`. `libs` counts the unpacked
 libraries, `sizeOnDisk` is the size of `Symbols/`, `downloadKept` the size of `dsc/`.
 
-What gets unpacked (`SYSTEM_LIBS` in `helper/iosstudio/device/features/debug.py`, format 2): every dylib under
+What gets unpacked (`SYSTEM_LIBS` in `helper/iosstudio/device/features/debug/real.py`, format 2): every dylib under
 `/usr/lib/swift/`, plus `/usr/lib/libobjc.A.dylib`, `/usr/lib/system/libdispatch.dylib`,
 `libsystem_pthread`, `libsystem_kernel`, `libsystem_platform`, `libsystem_c` and `libdyld` (all
 `/usr/lib/system/*.dylib`), `/usr/lib/libc++.1.dylib` and `/usr/lib/libc++abi.dylib`. libdispatch
@@ -1329,7 +1329,7 @@ be the active device) and the reply is printed in the same format. Otherwise it 
 USB, first Wi-Fi pair record), runs one command, prints **one** JSON object
 `{"ok": true, "data": …}` / `{"ok": false, "error": {…}}` on stdout and exits (0 ok, 1 error).
 Events and diagnostics go to stderr only. Any command works, e.g.
-`--once app.install '{"path": "/…/App.ipa"}'` (background renewals: helper/iosstudio/features/projects.py
+`--once app.install '{"path": "/…/App.ipa"}'` (background renewals: helper/iosstudio/features/projects/renew.py
 `renew-due`), `--once device.info '{}'`. The tunnel wait is 25 s, so an unreachable phone answers
 `unreachable` in ~25–35 s. Standalone, the real daemon needs an iPhone for every command (no paired
 one around: `no-device`); the demo daemon answers any command. Bad JSON arguments answer `bad-args`.
@@ -1340,11 +1340,15 @@ one around: `no-device`); the demo daemon answers any command. Bad JSON argument
 |---|---|
 | `protocol.py` | wire format: framing, message builders, `DeviceError`, `error_json` |
 | `backend.py` | `Backend`: the contract the broker calls (`welcome`, `dispatch`, `error_json`, `syslog_*`, `client_gone`, `shutdown`) with the shared parts: dispatch (`async def` handlers awaited, plain ones run in a worker thread), feature registry, hooks, `TaskSet` of background tasks cancelled at shutdown, `handle()` for `--once` |
-| `deviced.py` | the real iPhone: `Daemon(Backend)` (discovery, `Session`, core commands, classify errors and drop a dead tunnel), `BrokenBackend(Backend)` (pymobiledevice3 unusable or another daemon owns the phone: `daemon.ping` answers, everything else returns the one error) |
-| `deviced_demo.py` | `DemoBackend(Backend)`: the made-up iPhone, same commands (a test checks real and demo register the same set; demo adds `demo.transport`) |
-| `device_broker.py` | the socket server: clients, subscriptions, the shared syslog stream, per-client resources, idle exit, the stdio bridge |
-| `deviced_core.py` | what real feature modules share: `emit`, `err`, `classify`, `reclassify`, cache paths, `PortForward` |
-| `features/`, `demo_features/` | one module per feature, `register(reg)` each |
+| `kit.py` | `FeatureRegistry` + `load_features()`, `Resources` (per-client holds), `CursorRing` |
+| `broker.py` | the socket server: clients, subscriptions, the shared syslog stream, per-client resources, idle exit, the stdio bridge |
+| `client.py` | the stdlib client (`DeviceClient`), runtime-dir rules; also loaded by file path by the MCP server |
+| `link.py`, `models.py`, `network.py` | pymobiledevice3 names and tunnels, marketing names, network conditions/pcap helpers |
+| `real/daemon.py` | the real iPhone: `Daemon(Backend)` (discovery, `Session`, core commands, classify errors and drop a dead tunnel), `BrokenBackend(Backend)` (pymobiledevice3 unusable or another daemon owns the phone: `daemon.ping` answers, everything else returns the one error) |
+| `real/core.py` | what real feature modules share: `emit`, `err`, `classify`, `reclassify`, cache paths, `PortForward` |
+| `demo/daemon.py` | `DemoBackend(Backend)`: the made-up iPhone, same commands (a test checks real and demo register the same set; demo adds `demo.transport`) |
+| `demo/core.py` | the made-up iPhone's shared state (apps, pids, `event()`) for demo feature modules |
+| `features/<name>/` | one folder per feature: `real.py` (loaded by the real daemon) and `demo.py` (loaded by the demo daemon), each with `register(reg)`, plus shared logic either side imports (`core.py` in console, crashes, files, metrics; `apps/index.py` the app list cache, `apps/lookup.py`, `apps/install.py`) |
 
 Real features reach the phone only through the `Session`: `async with s.open_service(Cls, fail=err(...))`
 opens a service on the current tunnel with a bounded open (30 s; a hang reads as a dropped link) and

@@ -7,7 +7,7 @@ One JSON object per line, UTF-8, in both directions:
     event     {"event": "devices", "data": ...}
 
 Used by the daemons (deviced.py, deviced_demo.py), the broker (device_broker.py) and the client
-(device_client.py). device_client.py is also loaded by file path outside the iosstudio package (the
+(client.py). client.py is also loaded by file path outside the iosstudio package (the
 MCP server does that), so this module must stay importable on its own as well: no imports from the
 repo except the optional HelperError base below.
 """
@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator, Callable, Iterable, Iterator
 
 try:   # inside the iosstudio package: a DeviceError is a HelperError (same fields, same to_json)
     from iosstudio.core.output import HelperError as _ErrorBase
-except ImportError:   # loaded standalone (the MCP server loads device_client.py by path)
+except ImportError:   # loaded standalone (the MCP server loads client.py by path)
     _ErrorBase = Exception
 
 MAX_LINE = 16 * 1024 * 1024   # longest line either side reads (asyncio StreamReader limit)

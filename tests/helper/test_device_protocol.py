@@ -1,5 +1,5 @@
 """The device daemon's wire format and backend contract: helper/iosstudio/device/protocol.py, backend.py, and how
-deviced.py (real), deviced_demo.py (demo), device_broker.py and device_client.py use them.
+real/daemon.py (real), demo/daemon.py (demo), broker.py and client.py use them.
 
     python -m pytest tests/helper/test_device_protocol.py
 
@@ -25,7 +25,7 @@ from unittest import mock
 
 from iosstudio.core.output import HelperError
 from iosstudio.device import backend, protocol
-from iosstudio.device.device_client import DeviceClient, DeviceError
+from iosstudio.device.client import DeviceClient, DeviceError
 from support import ROOT
 from support.pmd3_stub import stub_pmd3
 
@@ -98,7 +98,7 @@ class StandaloneClient(unittest.TestCase):
         """As the MCP server loads it: by file path, outside the package (protocol.py comes along by path)."""
         code = (
             "import importlib.util, sys\n"
-            f"spec = importlib.util.spec_from_file_location('iosstudio_device_client', {str(HELPER / 'iosstudio/device/device_client.py')!r})\n"
+            f"spec = importlib.util.spec_from_file_location('iosstudio_device_client', {str(HELPER / 'iosstudio/device/client.py')!r})\n"
             "m = importlib.util.module_from_spec(spec); sys.modules[spec.name] = m; spec.loader.exec_module(m)\n"
             "e = m.DeviceError('timeout', 'Slow.', None, 'd')\n"
             "assert 'iosstudio' not in sys.modules, sorted(k for k in sys.modules if 'iosstudio' in k)\n"
@@ -210,7 +210,7 @@ class RealDaemon(unittest.IsolatedAsyncioTestCase):
         stub = stub_pmd3()
         stub.__enter__()
         self.addCleanup(stub.__exit__, None, None, None)
-        from iosstudio.device import deviced
+        from iosstudio.device.real import daemon as deviced
         self.deviced = deviced
         self.d = deviced.Daemon(fake_pmd3(self.tmp))
         self.addAsyncCleanup(self.d.shutdown)
@@ -280,7 +280,7 @@ class RealDaemon(unittest.IsolatedAsyncioTestCase):
             self.assertLess(time.monotonic() - t0, 2)
 
     async def test_broken_backend(self):
-        from iosstudio.device import device_link as link
+        from iosstudio.device import link
         b = self.deviced.BrokenBackend(link.ApiError("pymobiledevice3 isn't installed in this Python"))
         ready = dict(await b.welcome())["ready"]
         self.assertEqual(ready["error"]["code"], "pmd3-api")
@@ -295,9 +295,9 @@ class Parity(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         with stub_pmd3():
-            from iosstudio.device import deviced
+            from iosstudio.device.real import daemon as deviced
             real = deviced.Daemon(fake_pmd3(tmp)).registry
-        from iosstudio.device.deviced_demo import DemoBackend
+        from iosstudio.device.demo.daemon import DemoBackend
         demo = DemoBackend(None).registry
         self.assertEqual(real.failed, {})
         self.assertEqual(demo.failed, {})
@@ -311,7 +311,8 @@ class Parity(unittest.TestCase):
 SERVE = """
 import sys, types
 sys.path.insert(0, {helper!r})
-from iosstudio.device import device_link as link, deviced
+from iosstudio.device import link
+from iosstudio.device.real import daemon as deviced
 
 class Usbmux:
     @staticmethod

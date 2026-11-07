@@ -176,7 +176,7 @@ unknown `bundleId` key, the camera used without `NSCameraUsageDescription`, an i
 ## Code
 
 `helper/project_check.py` (the checks, the trigger and entitlement tables, key lookup, `summarize`),
-`helper/projects.py` (`projects check`, `_precheck` in `_do_build`), `helper/demo.py` (demo issues),
+`helper/iosstudio/features/projects/` (`projects check` in commands.py, `precheck` in build.py), `helper/demo.py` (demo issues),
 `mcp/iosstudio_mcp/tools/project_check.py`, `services/ProjectService.qml` (`check`, `checkSoon`,
 `checkAll`, `checkFor`, `configCount`), `components/ProjectCheckView.qml`,
 `components/BuildDiagnosticRow.qml` (the chip). Tests: `tests/helper/test_project_check.py` and `tests/cli/test_project_check_cli.py` with one fixture

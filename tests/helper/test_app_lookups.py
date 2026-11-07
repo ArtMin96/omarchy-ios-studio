@@ -1,5 +1,5 @@
 """Features that need one installed app (pcap, metrics, ui) go through the cached AppIndex, never a
-full `get_apps` (helper/iosstudio/device/features/_app_lookup.py), plus the metrics crash-check task.
+full `get_apps` (helper/iosstudio/device/features/apps/lookup.py), plus the metrics crash-check task.
 
     python -m pytest tests/helper/test_app_lookups.py
 
@@ -22,8 +22,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from iosstudio.device.features import _app_lookup as L
-from iosstudio.device.features import app_index as AI
+from iosstudio.device.features.apps import index as AI
+from iosstudio.device.features.apps import lookup as L
 
 UDID = "00008150-LOOKUP"
 APP_DIR = "/private/var/containers/Bundle/Application/AAAA/Habits.app"
@@ -63,7 +63,7 @@ class _StubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         pass
 
 
-FEATURES = ("iosstudio.device.features.pcap", "iosstudio.device.features.metrics", "iosstudio.device.features.ui")
+FEATURES = ("iosstudio.device.features.pcap.real", "iosstudio.device.features.metrics.real", "iosstudio.device.features.ui.real")
 
 
 @contextlib.contextmanager
