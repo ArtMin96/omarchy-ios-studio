@@ -51,17 +51,12 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Open iOS Studio", kind="write", idempotent=True)
     async def ios_open_app(
-        page: Annotated[Literal[PAGES], Field(description="Page to show. 'account' for Apple ID sign-in, 'device' "
-                                                          "for pairing/Developer Mode, 'setup' for manual setup "
-                                                          "steps, 'logs'/'crashes' for the live log")] = "home",
+        page: Annotated[Literal[PAGES], Field(description="account: Apple ID sign-in; device: pairing, Developer "
+                                                          "Mode; setup: manual setup steps")] = "home",
     ) -> ActionResult:
-        """Open (or focus) the iOS Studio window on a page, for steps only the human can do.
-
-        Use it when a tool reports a human step: signing in to the Apple ID (password and 2FA are typed
-        in the app, never through MCP), pairing the iPhone, enabling Developer Mode, or Setup steps that
-        need the user's password or a download. Tell the user what to do there, then re-check with
-        ios_status / ios_account_status. Returns immediately; it doesn't wait for the user.
-        """
+        """Open the iOS Studio window on a page for a step only the human can do: Apple ID sign-in (password
+        and 2FA never go through MCP), iPhone pairing, Developer Mode, Setup steps. Tell the user what to do,
+        then re-check with ios_status. Returns at once."""
         if not helper.APP_LAUNCHER.exists():
             raise ToolError("The iOS Studio launcher (bin/ios-studio) is missing from this install.")
         env = _session_env()

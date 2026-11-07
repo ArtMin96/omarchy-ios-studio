@@ -25,16 +25,15 @@ from ..backends.projects import resolve_project
 from ..core import budget as B
 from ..core.job_status import start_and_wait
 from ..core.jobs import Job
-from ..core.params import MaxBytes, ProjectPath, Udid, WaitSeconds
+from ..core.params import MaxBytes, PresetName, ProjectPath, Udid, WaitSeconds
 from ..core.registry import dry_run, page_of, tool
 from ..models import ActionResult, BuildHistory, DiagGroup, DiagnosticsPage, HistoryEntry, JobStatus, LogPage
 from ..state import AppState, get_state
 
-Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="How to install: auto prefers the USB cable "
-                                                                  "when plugged in, else Wi-Fi")]
+Via = Annotated[Literal["auto", "usb", "wifi"], Field(description="auto: USB if plugged in, else Wi-Fi")]
 Config = Annotated[Literal["debug", "release"], Field(description="Build configuration")]
 
-# The helper's build logs (helper/iosstudio/features/projects.py BUILD_LOGS); ios_build_log reads them directly.
+# The helper's build logs (helper/iosstudio/features/projects/store.py BUILD_LOGS); ios_build_log reads them directly.
 BUILD_LOGS = helper.appdirs.state_dir() / "build-logs"
 MAX_LOG_READ = 32 * 1024 * 1024    # a bigger log is read from its tail; line numbers stay those of the file
 
@@ -254,23 +253,16 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         project_path: ProjectPath,
         action: Annotated[Literal["compile", "ipa", "install", "run"],
-                          Field(description="compile: build only (no Apple ID or iPhone needed, fastest check "
-                                            "for errors). ipa: signed .ipa. install: install the last signed "
-                                            "build. run: build, sign, install and launch on the iPhone")] = "compile",
+                          Field(description="compile: no Apple ID/iPhone needed; ipa: signed .ipa; install: last "
+                                            "signed build; run: build, install, launch")] = "compile",
         config: Config = "debug",
         udid: Udid = None,
         via: Via = "auto",
         wait_seconds: WaitSeconds = 0,
     ) -> JobStatus:
-        """Start a build in the background and return its job_id immediately (or after wait_seconds).
-
-        Then poll ios_job_status(job_id, wait_seconds=20) until state is succeeded/failed; on failure
-        read ios_build_diagnostics (compiler, linker, package, signing and device errors with fix hints) and,
-        only if that isn't enough, ios_build_log. A first build resolves packages
-        and can take several minutes; later ones are much faster. ipa/install/run sign with the user's
-        Apple ID (free teams: 7-day profiles, 3 apps per iPhone). Use ios_run for the
-        build-install-launch shortcut. One job per project at a time.
-        """
+        """Start a build job and return its job_id. Poll ios_job_status(job_id, wait_seconds=20) until
+        succeeded/failed, then read ios_build_diagnostics. A first build can take minutes. ipa/install/run sign
+        with the user's Apple ID. One job per project at a time; ios_run is the build-install-launch shortcut."""
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, action, config, udid, via, wait_seconds)
 
@@ -282,53 +274,31 @@ def register(mcp: MCPServer) -> None:
         udid: Udid = None,
         via: Via = "auto",
         wait_seconds: WaitSeconds = 20,
-        preset: Annotated[str | None, Field(description="Launch with this run preset of the project (saved launch "
-                                                        "args, env, language; see ios_project_presets), e.g. "
-                                                        "'German'")] = None,
+        preset: PresetName = None,
     ) -> JobStatus:
-        """Build, sign, install and launch the app on the iPhone in one call: the "run it" button.
-
-        Waits up to wait_seconds; if the build is still going it returns state='running' with the job_id,
-        so keep polling ios_job_status. Over USB xtool installs the app; over Wi-Fi the server installs
-        the signed .ipa through the device tools. Either way the server then launches it (xtool doesn't).
-        When it can't install, `result.needs_install` is true and next_steps says what to do. Needs a
-        signed-in Apple ID and a connected iPhone (check ios_status first). preset='<name>' launches with
-        that run preset's arguments, environment and language (an unknown name fails at once and lists the
-        presets). Without preset= it runs with no preset, even if the user selected one in the app;
-        ios_project_presets shows the presets and the selection.
-        """
+        """Build, sign, install and launch the app on the iPhone (the "run it" button). Returns state='running'
+        + job_id if not done within wait_seconds: poll ios_job_status. Needs an Apple ID and a connected iPhone
+        (ios_status). preset='<name>' launches with that run preset. Without preset= none is used."""
         state = get_state(ctx)
         return await start_build(state, ctx, project_path, "run", config, udid, via, wait_seconds, preset)
 
     @tool(mcp, "Build diagnostics", kind="read")
     async def ios_build_diagnostics(
         ctx: Context,
-        job_id: Annotated[str | None, Field(description="A build job from this session, or a watch build 'w-N' "
-                                                          "(ios_watch_status); omit to use project_path")] = None,
-        project_path: Annotated[str | None, Field(description="Use the latest build of this project (live or "
-                                                              "from history)")] = None,
-        severity: Annotated[Literal["all", "error", "warning"], Field(description="Only errors, only warnings, or both")] = "all",
-        category: Annotated[Literal["all", "compiler", "linker", "package", "signing", "device", "toolchain", "config",
-                                    "other"], Field(description="Only this kind of problem")] = "all",
-        include_notes: Annotated[bool, Field(description="Also return compiler notes")] = False,
-        grouped: Annotated[bool, Field(description="Group repeated messages (count + first 3 locations); false "
-                                                   "lists every diagnostic")] = True,
-        offset: Annotated[int, Field(ge=0, description="Skip this many entries (pagination)")] = 0,
-        limit: Annotated[int, Field(ge=1, le=100, description="Max entries to return")] = 25,
+        job_id: Annotated[str | None, Field(description="Build job, or watch build 'w-N'")] = None,
+        project_path: Annotated[str | None, Field(description="Instead: this project's latest build")] = None,
+        severity: Literal["all", "error", "warning"] = "all",
+        category: Literal["all", "compiler", "linker", "package", "signing", "device", "toolchain", "config",
+                          "other"] = "all",
+        include_notes: Annotated[bool, Field(description="Also compiler notes")] = False,
+        grouped: Annotated[bool, Field(description="Group repeated messages; false lists each")] = True,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 25,
         max_bytes: MaxBytes = None,
     ) -> DiagnosticsPage:
-        """Why a build failed, as structured entries, errors first, grouped by message. Each entry has severity,
-        category (compiler, linker, package, signing, device, toolchain, config, other), message, count, the
-        first 3 'file:line:col' locations (relative to the project) when there is one, and for non-compiler
-        problems a one-line `hint` (naming the tool that fixes it) plus a few `details` (e.g. the undefined
-        symbols and who references them). `config` warnings come from the pre-build project check (see
-        ios_project_check). `categories` counts entries per category. Paginated with
-        offset/next_offset; notes are left out unless include_notes=true.
-
-        Pass job_id for a build started in this session, or project_path for that project's latest
-        build (also from earlier sessions, builds done in the app or watch mode's, whichever is newest). Fix the files, then rebuild with
-        ios_build_start(action='compile').
-        """
+        """Why a build failed: entries grouped by message, errors first, each with severity, category, count,
+        file:line:col locations and, for non-compiler problems, a fix `hint` naming the tool. Pass job_id, or
+        project_path for its newest build (app and watch builds too). Paged with offset."""
         state = get_state(ctx)
         diags: list[dict]
         result = project = root = None
@@ -423,33 +393,24 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Build log", kind="read")
     async def ios_build_log(
         ctx: Context,
-        job_id: Annotated[str | None, Field(description="A build job from this session (live output)")] = None,
-        project_path: Annotated[str | None, Field(description="Latest build log of this project")] = None,
+        job_id: Annotated[str | None, Field(description="Build job (live output)")] = None,
+        project_path: Annotated[str | None, Field(description="This project's latest log")] = None,
         log_file: Annotated[str | None, Field(description="A log_file from ios_build_history")] = None,
-        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Case-insensitive regex; only "
-                                                                               "matching lines, e.g. 'error|warning'")] = None,
-        context: Annotated[int, Field(ge=0, le=10, description="With grep/level: context lines around each "
-                                                               "match")] = 0,
-        level: Annotated[Literal["all", "warning", "error"], Field(description="error: lines saying error, fatal "
-                                                                    "or failed; warning: also warnings")] = "all",
-        max_matches: Annotated[int, Field(ge=1, le=500, description="With grep/level: max matches")] = 50,
-        tail: Annotated[int, Field(ge=1, le=2000, description="The last N lines (the default mode)")] = 60,
-        head: Annotated[int | None, Field(ge=1, le=2000, description="The first N lines instead")] = None,
-        before: Annotated[int | None, Field(ge=0, description="With tail: the N lines before this line number "
-                                                              "(page back with the result's `before`)")] = None,
-        offset: Annotated[int | None, Field(ge=0, description="`limit` lines from this line number on (page "
-                                                              "forward with next_offset)")] = None,
-        limit: Annotated[int, Field(ge=1, le=2000, description="Lines per page with offset")] = 200,
-        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut each line after this many "
-                                                                     "characters")] = B.LINE_CUT,
+        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Case-insensitive regex")] = None,
+        context: Annotated[int, Field(ge=0, le=10, description="Lines around each grep/level match")] = 0,
+        level: Annotated[Literal["all", "warning", "error"], Field(description="Only error (or warning) lines")] = "all",
+        max_matches: Annotated[int, Field(ge=1, le=500)] = 50,
+        tail: Annotated[int, Field(ge=1, le=2000, description="Last N lines (default mode)")] = 60,
+        head: Annotated[int | None, Field(ge=1, le=2000, description="First N lines instead")] = None,
+        before: Annotated[int | None, Field(ge=0, description="With tail: lines before this line (page back)")] = None,
+        offset: Annotated[int | None, Field(ge=0, description="`limit` lines from this line on (page forward)")] = None,
+        limit: Annotated[int, Field(ge=1, le=2000)] = 200,
+        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut lines after this many chars")] = B.LINE_CUT,
         max_bytes: MaxBytes = None,
     ) -> LogPage:
-        """Raw build output (xtool, swift-build): the last 60 lines by default. Page back with before=, forward
-        with offset=, or search with grep (plus context) or level='error'. The lines come as plain text
-        after the JSON header, numbered '<n>: text' (grep context lines '<n>- text'); repeated lines fold
-        into one with ×N and lines are cut at 300 characters (line_chars). Results stay under 12 KB unless
-        max_bytes raises it, and `note` says what was left out. Use ios_build_diagnostics first: it already
-        sums up compiler, linker, package, signing and device errors. Read this for context it doesn't give."""
+        """Raw build output, last 60 lines by default, numbered '<n>: text' after the JSON header. Page with
+        before=/offset=, search with grep or level='error'. Try ios_build_diagnostics first; read this only for
+        context it doesn't give."""
         state = get_state(ctx)
         source, lfile = "", None
         lines: list[str]
@@ -526,11 +487,11 @@ def register(mcp: MCPServer) -> None:
     async def ios_build_history(
         ctx: Context,
         project_path: Annotated[str | None, Field(description="Only this project's builds")] = None,
-        result: Annotated[Literal["any", "ok", "failed", "cancelled"], Field(description="Only builds with this result")] = "any",
-        limit: Annotated[int, Field(ge=1, le=50, description="Max builds to return, newest first")] = 10,
+        result: Literal["any", "ok", "failed", "cancelled"] = "any",
+        limit: Annotated[int, Field(ge=1, le=50)] = 10,
     ) -> BuildHistory:
-        """Recent builds, newest first, from this server and from the iOS Studio app: project, kind, result,
-        time, duration, error/warning counts, error message and log_file (pass it to ios_build_log)."""
+        """Recent builds (this server and the app), newest first: result, time, duration, error counts and
+        log_file for ios_build_log."""
         state = get_state(ctx)
         path = (await resolve_project(state, project_path))["path"] if project_path else None
         builds = await history(path, 200)
@@ -546,11 +507,10 @@ def register(mcp: MCPServer) -> None:
     async def ios_build_clean(
         ctx: Context,
         project_path: ProjectPath,
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+        confirm: Annotated[bool, Field(description="false = dry run; true after the user agreed")] = False,
     ) -> ActionResult:
-        """Delete a project's build output (.build/ and xtool/, including the last signed .ipa) to force a
-        clean rebuild. Sources are untouched; the next build takes longer. Call with confirm=false first
-        and repeat with confirm=true once the user agrees."""
+        """Delete a project's build output (.build/, xtool/, the last .ipa) for a clean rebuild; sources stay.
+        Dry run unless confirm=true (after the user agrees)."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         if state.jobs.running_for(p["path"]):

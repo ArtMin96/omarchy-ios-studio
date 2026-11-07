@@ -24,20 +24,12 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         job_id: JobId,
         wait_seconds: WaitSeconds = 20,
-        verbose: Annotated[bool, Field(description="Full view (steps, diagnostics) even while running")] = False,
+        verbose: Annotated[bool, Field(description="Full view even while running")] = False,
     ) -> JobStatus:
-        """State of any background job: running / needs_input / succeeded / failed / cancelled.
-
-        While running it returns a small delta (view='delta'): step, progress, ETA, error and warning counts,
-        and what is new since your last poll (new_log_lines, new_errors). When the job finishes or needs
-        input, or with verbose=true, it returns the full view: steps, the top 5 grouped diagnostics, any
-        prompt for the human, the result (a build's ipa path, installed, launched; a feature job's `detail`)
-        and next_steps. `tool` names the feature tool that returns a feature job's full result.
-
-        Long-polls: returns early when the job finishes or needs input, else after wait_seconds (≤25), with
-        progress notifications. If state is needs_input, show pending_prompt to the user and answer with
-        ios_job_respond.
-        """
+        """State of any job (running / needs_input / succeeded / failed / cancelled), long-polled. While running:
+        a delta since your last poll; when done or needing input: steps, top diagnostics, result, next_steps.
+        `tool` returns a feature job's full result. needs_input: show pending_prompt to the user, answer with
+        ios_job_respond."""
         state = get_state(ctx)
         job = state.jobs.get(job_id)
         await wait_with_progress(state, job, wait_seconds, ctx)
@@ -47,18 +39,13 @@ def register(mcp: MCPServer) -> None:
     async def ios_job_respond(
         ctx: Context,
         job_id: JobId,
-        prompt_id: Annotated[str, Field(description="pending_prompt.id from ios_job_status, e.g. 'p1'")],
-        value: Annotated[str, Field(description="One of pending_prompt.options[].value, e.g. 'no'")],
-        confirm: Annotated[bool, Field(description="Required (true) for a destructive option, only after the user "
-                                                   "explicitly chose it")] = False,
+        prompt_id: Annotated[str, Field(description="pending_prompt.id")],
+        value: Annotated[str, Field(description="One of pending_prompt.options[].value")],
+        confirm: Annotated[bool, Field(description="true for a destructive option the user chose")] = False,
     ) -> JobStatus:
-        """Answer a question a running job is waiting on (state needs_input), e.g. "Replace your signing
-        certificate?" during a build or "Install everything?" during a toolchain install.
-
-        Always show the prompt to the user and send THEIR answer; never decide for them. Options marked
-        destructive (like revoking a certificate, which stops apps signed elsewhere from opening) also
-        need confirm=true. Returns the job status after the answer.
-        """
+        """Answer the question a job waits on (state needs_input), e.g. "Replace your signing certificate?".
+        Show the prompt to the user and send THEIR answer; never decide for them. Destructive options also
+        need confirm=true."""
         state = get_state(ctx)
         job = state.jobs.get(job_id)
         p = job.pending_prompt or {}
@@ -77,11 +64,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Cancel job", kind="write", idempotent=True)
     async def ios_job_cancel(ctx: Context, job_id: JobId) -> JobStatus:
-        """Stop a running job and everything it started, and wait until it has stopped. A build stops xtool
-        and swift-build: cancelled before the install step, nothing is installed or launched; cancelled while
-        an ios_run is installing over Wi-Fi, the iPhone may still finish that install but the app isn't
-        launched (the status `error` says which). A package change puts Package.swift back; a file copy is
-        stopped on the iPhone; a screenshot matrix keeps the shots taken so far. Returns the final status."""
+        """Stop a running job and everything it started; returns the final status. A cancelled build installs
+        and launches nothing (a Wi-Fi install already underway may finish); a package change is undone; a
+        screenshot matrix keeps its shots."""
         state = get_state(ctx)
         job = await state.jobs.cancel(state.jobs.get(job_id))
         return job_status(job)

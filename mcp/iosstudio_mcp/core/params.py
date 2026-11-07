@@ -11,19 +11,14 @@ from pydantic import Field
 from . import budget as B
 from .registry import MAX_WAIT
 
-Udid = Annotated[str | None, Field(description="iPhone udid; default: the active iPhone (see ios_device_list)")]
-BundleId = Annotated[str, Field(description="Bundle id, e.g. 'com.example.myapp'. The installed "
-                                            "'XTL-<TEAM>.com.example.myapp' form also works")]
-ProjectPath = Annotated[str, Field(description="Project folder (absolute or ~/…) or a project name from "
-                                               "ios_project_list, e.g. '~/Developer/WeatherGlance' or 'WeatherGlance'")]
-MaxBytes = Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                         "structuredContent together (default 12000 bytes)")]
-WaitSeconds = Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: return as soon as the job finishes "
-                                                                  "or needs input, or after this many seconds")]
-PresetName = Annotated[str | None, Field(description="A run preset saved for the app's project (see "
-                                                     "ios_project_presets), e.g. 'German'. Its launch arguments come "
-                                                     "first, then `args`; `env` overrides its environment")]
-JobId = Annotated[str, Field(description="A job id from a tool that started a background job (e.g. 'b-1' from "
-                                         "ios_build_start, 'install-3' from ios_app_install)")]
-OptJobId = Annotated[str | None, Field(description="Keep waiting for a job this tool started earlier (its job_id) "
-                                                   "instead of starting one")]
+Udid = Annotated[str | None, Field(description="iPhone udid (default: the active iPhone)")]
+BundleId = Annotated[str, Field(description="e.g. 'com.example.myapp' (the installed XTL-<TEAM>. form works too)")]
+ProjectPath = Annotated[str, Field(description="Project folder (absolute or ~/…) or name from ios_project_list")]
+MaxBytes = Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Result size cap in bytes (default "
+                                                                         "12000)")]
+WaitSeconds = Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: return when done or after this many "
+                                                                  "seconds")]
+PresetName = Annotated[str | None, Field(description="Run preset of the app's project (ios_project_presets), e.g. "
+                                                     "'German'; its args come first, then `args`")]
+JobId = Annotated[str, Field(description="Job id from a tool that started a job (e.g. 'b-1')")]
+OptJobId = Annotated[str | None, Field(description="Wait for a job this tool started earlier instead of starting one")]

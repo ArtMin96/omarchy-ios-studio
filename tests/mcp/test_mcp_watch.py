@@ -71,10 +71,36 @@ class WatchTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((group, action), ("watch", "run"))
         self.assertEqual(flags, {"project": PROJ, "auto_run": "true", "debounce_ms": 900, "detach": True,
                                  "owner": os.getpid()})
-        self.assertEqual(opts["timeout"], 25)      # stop the old watcher (12 s) + start (8 s), within MAX_WAIT
+        self.assertEqual(opts["timeout"], 40)      # in a job: stop the old watcher (12+3 s) + start (8 s)
         self.assertEqual(data["state"], "compiling")
         self.assertEqual(data["current_job_id"], "w-3")
         self.assertIn("wait_seconds=20", " ".join(data["next_steps"]))
+
+    async def test_a_slow_start_keeps_going_and_the_next_call_joins_it(self):
+        """Replacing another project's watcher can take ~15 s: the start runs as a job past the call's budget."""
+        import asyncio
+
+        from iosstudio_mcp.core import deadline
+
+        async def slow_call(group, action, flags=None, **opts):
+            self.calls.append((group, action, dict(flags or {}), opts))
+            await asyncio.sleep(1.5)
+            return snapshot("compiling", 0, replaced={"path": "/home/u/Developer/Other", "project": "Other"})
+
+        async def fake_resolve(state, project):
+            return {"name": "Glance", "path": PROJ}
+        start = self.tools["ios_watch_start"]
+        with mock.patch.object(T.helper, "call", slow_call), mock.patch.object(T, "resolve_project", fake_resolve):
+            with deadline.call_budget(1.5):
+                first = (await start(self.ctx, project_path="Glance")).structured_content
+            self.assertEqual((first["state"], first["watching"]), ("starting", False))
+            self.assertIn("ios_watch_start(project_path='/home/u/Developer/Glance') again", first["next_steps"][0])
+            await asyncio.sleep(0.6)
+            with deadline.call_budget(1.5):
+                done = (await start(self.ctx, project_path="Glance")).structured_content
+        self.assertEqual(done["state"], "compiling")
+        self.assertEqual(done["replaced"], "/home/u/Developer/Other")
+        self.assertEqual(len(self.calls), 1)                  # joined, not started twice
 
     async def test_start_passes_only_given_settings(self):
         await self.run_tool("ios_watch_start", snapshot("ok", 0), project_path="Glance")
@@ -229,7 +255,7 @@ class Registration(unittest.TestCase):
         from iosstudio_mcp import server
         names = {t.name for t in server.mcp._tool_manager.list_tools()}
         self.assertTrue({"ios_watch_start", "ios_watch_stop", "ios_watch_status"} <= names)
-        self.assertIn("ios_watch_start", server.INSTRUCTIONS)
+        self.assertIn("ios_watch_start", server.resources.GUIDE.read_text())
 
 
 if __name__ == "__main__":

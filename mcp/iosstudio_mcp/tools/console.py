@@ -1,6 +1,6 @@
 """App console: an app's stdout and stderr (Swift print()) for apps launched with the console on.
 
-The device daemon keeps one ring buffer per launch (helper/app_console.py: 10,000 lines / 2 MB, lines
+The device daemon keeps one ring buffer per launch (helper/iosstudio/device/features/console/core.py: 10,000 lines / 2 MB, lines
 cut at 8 KB, at most 2,000 lines a second). An app launched by ios_app_launch(console=true),
 ios_app_run_and_capture or ios_run has one; ios_app_console_read pages through it with a cursor.
 Pure helpers (fmt_line, select_lines, page) are used by tests and by ios_app_run_and_capture.
@@ -15,7 +15,7 @@ from pydantic import Field
 
 from ..backends.console import FETCH, cursors, daemon_read, fmt_line
 from ..core import budget as B
-from ..core.params import Udid
+from ..core.params import MaxBytes, Udid
 from ..core.registry import MAX_WAIT, tool
 from ..models import Out
 from ..state import get_state
@@ -77,32 +77,24 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Read app console", kind="read_remote")
     async def ios_app_console_read(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="The app, e.g. 'com.example.myapp': its latest console "
-                                                           "session")] = None,
-        session_id: Annotated[str | None, Field(description="A console session id (console.session_id from "
-                                                            "ios_app_run_and_capture / ios_app_launch)")] = None,
-        cursor: Annotated[int | None, Field(ge=0, description="next_cursor from the previous read (0 = from the "
-                                                              "start); omit to continue where the last read ended")] = None,
-        limit: Annotated[int, Field(ge=1, le=2000, description="Max lines to return")] = 200,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: if nothing new is "
-                                                                         "buffered, wait up to this long")] = 0,
-        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Case-insensitive regex; only "
-                                                                              "matching lines")] = None,
-        stream: Annotated[Stream, Field(description="stderr: only lines the app wrote to stderr (when the "
-                                                    "session's streams are split)")] = "all",
-        newest: Annotated[bool, Field(description="Skip to the newest `limit` matching lines")] = False,
-        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut lines after this many characters")] = B.LINE_CUT,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        bundle_id: Annotated[str | None, Field(description="The app: its latest console session")] = None,
+        session_id: Annotated[str | None, Field(description="console.session_id from a launch")] = None,
+        cursor: Annotated[int | None, Field(ge=0, description="next_cursor of the last read (0 = start; omit: "
+                                                              "continue)")] = None,
+        limit: Annotated[int, Field(ge=1, le=2000, description="Max lines")] = 200,
+        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="If nothing new, wait up to this "
+                                                                         "long")] = 0,
+        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Case-insensitive regex")] = None,
+        stream: Annotated[Stream, Field(description="stderr: only stderr lines (split streams)")] = "all",
+        newest: Annotated[bool, Field(description="Skip to the newest `limit` lines")] = False,
+        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut lines after this many chars")] = B.LINE_CUT,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> ConsoleRead:
-        """Read what an app printed (Swift print(), stdout and stderr) after `cursor`, oldest first, as
-        plain text after the JSON header: '<n> <time> [stderr] <text>'. Only apps launched with the console
-        on have one: ios_app_run_and_capture and ios_run do it, ios_app_launch with console=true. Attaching to
-        an app that was already running gives no output. Returns next_cursor, has_more, `missed` if the
-        10,000-line buffer overwrote lines you hadn't read, and `dropped` if the app printed faster than
-        2,000 lines a second. grep / stream / newest narrow this read. wait_seconds (≤25) waits for new
-        lines. Results stay under 12 KB unless max_bytes raises it."""
+        """Read what an app printed (print(), stdout/stderr) after `cursor`, oldest first, as lines
+        '<n> <time> [stderr] <text>'. Only apps launched with the console on (ios_run, ios_app_run_and_capture,
+        ios_app_launch(console=true)). Returns next_cursor and has_more; `missed` counts lines the 10,000-line
+        buffer overwrote."""
         state = get_state(ctx)
         if not bundle_id and not session_id:
             raise ToolError("Pass bundle_id (its latest console session) or session_id.")

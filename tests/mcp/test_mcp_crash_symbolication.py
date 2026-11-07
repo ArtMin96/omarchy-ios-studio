@@ -17,6 +17,7 @@ from iosstudio.device.features.crashes import core as device_crash
 from iosstudio.features import crash_symbols as S
 from iosstudio_mcp.backends import crashes as T
 from iosstudio_mcp.core import budget as B
+from iosstudio_mcp.state import AppState
 from support.crash import ips
 
 PROJECT = "/work/Crashy"
@@ -49,8 +50,10 @@ class CrashGet(unittest.TestCase):
 
         async def fake(state, cmd, args, **_):
             return {"path": str(self.path), "summary": summary}
+        async def go():
+            return await T.crash_detail(AppState(), "/" + self.path.name, **kw)
         with mock.patch.object(T, "dcall", fake):
-            return asyncio.run(T.crash_detail(None, "/" + self.path.name, **kw))
+            return asyncio.run(go())
 
     def test_summary_has_app_frames(self):
         out = self.get(self.res)

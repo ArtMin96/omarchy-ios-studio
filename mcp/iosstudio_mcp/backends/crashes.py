@@ -16,6 +16,8 @@ from mcp.types import ResourceLink
 
 from .. import helper
 from ..core import budget as B
+from ..core.job_status import job_result, settle, shared_job
+from ..core.jobs import Job
 from ..core.registry import MAX_WAIT
 from ..models import CrashDetail, CrashFrame
 from ..state import AppState
@@ -23,8 +25,26 @@ from .device import dcall
 
 FRAMES = 15
 REPORT_CAP = 8 * 1024 * 1024    # bytes of a .ips (or its .symbols.json) read into memory
-PULL_TIMEOUT_NEXT = ("Copying and symbolicating the report took longer than one call; the iPhone service keeps "
-                     "going and keeps the copy. Call ios_crash_get again in a few seconds.")
+PULL_TIMEOUT = 120              # crash.pull: copy off the iPhone + symbolicate, in a job (kind 'crash-pull')
+PULL_REUSE = 60                 # seconds a finished pull answers repeat calls for the same report
+PULL_RUNNING = ("Copying and symbolicating {name} takes longer than one call; it keeps going in the background "
+                "(job {job}). Call ios_crash_get again in a few seconds [running].")
+
+
+async def pull(state: AppState, name: str, udid: str | None = None) -> dict:
+    """crash.pull as a shared job: a call that runs out of time leaves the copy running, and the next call for
+    the same report joins it (or takes its result) instead of pulling and symbolicating it again. Outside a
+    tool call (a job needs the report) it waits until the pull ends."""
+    async def run(job: Job) -> dict:
+        job.report(None, "copying and symbolicating the crash report")
+        return await dcall(state, "crash.pull", {"name": name}, udid=udid, timeout=PULL_TIMEOUT,
+                           hints={"not-found": _not_found(name)}) or {}
+    job = shared_job(state, "crash-pull", f"{udid or ''}|{name}", run, title=f"Pull crash report {name}",
+                     reuse_seconds=PULL_REUSE)
+    await settle(state, None, job)
+    if not job.finished:
+        raise ToolError(PULL_RUNNING.format(name=name, job=job.id))
+    return job_result(job) or {}
 
 
 def _not_found(name: str) -> str:
@@ -131,8 +151,7 @@ def render_section(raw: str, section: str, frames_per_thread: int = 25, symbols:
 async def crash_detail(state: AppState, name: str, udid: str | None = None, section: str = "summary",
                        start_line: int = 0, max_lines: int = 400, max_bytes: int | None = None) -> CrashDetail:
     name = await _lookup_name(state, name, udid)
-    res = await dcall(state, "crash.pull", {"name": name}, udid=udid, timeout=MAX_WAIT,
-                      hints={"not-found": _not_found(name), "timeout": PULL_TIMEOUT_NEXT}) or {}
+    res = await pull(state, name, udid)
     s = res.get("summary") or {}
     path = str(res.get("path") or "")
     file = Path(path).name if path else None

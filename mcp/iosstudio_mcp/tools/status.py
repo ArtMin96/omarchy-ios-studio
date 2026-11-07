@@ -46,14 +46,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "iOS Studio status", kind="read")
     async def ios_status(ctx: Context) -> StatusReport:
-        """START HERE. One-call readiness check for iPhone development on this computer.
-
-        Reports whether the toolchain (Swift, xtool, iOS SDK) is installed, whether an Apple ID is signed in
-        (free or paid team), the active iPhone and its connection, the known projects, the last build,
-        running jobs and apps whose 7-day signing is about to expire. Every problem comes with the tool to
-        call (or the human-only step) that fixes it, in `problems` and `next_steps`.
-        Fast (about 1 s) and read-only.
-        """
+        """START HERE. Readiness check: toolchain, Apple ID, active iPhone, projects, last build, running jobs
+        and apps whose 7-day signing expires soon. Each problem names the tool (or human step) that fixes it.
+        Fast (~1 s), read-only."""
         state = get_state(ctx)
         setup, account, projects, history = await asyncio.gather(
             _safe(helper.call("setup", "check")), _safe(helper.call("account", "status")),

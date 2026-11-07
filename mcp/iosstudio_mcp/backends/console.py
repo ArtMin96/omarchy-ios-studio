@@ -1,4 +1,4 @@
-"""App console (an app's stdout/stderr, Swift print()) as kept by the device daemon (helper/app_console.py).
+"""App console (an app's stdout/stderr, Swift print()) as kept by the device daemon (helper/iosstudio/device/features/console/core.py).
 
     await daemon_read(state, {"sessionId": …}, cursor)   one console.read
     await capture_summary(state, launch_result, udid, max_lines, room)   after a run-and-capture

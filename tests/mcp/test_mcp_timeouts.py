@@ -278,14 +278,35 @@ class CappedCalls(Base):
         self.assertIsInstance(res, ToolError)
         self.assertLess(took, BUDGET + SLACK)
 
-    async def test_a_slow_crash_pull_says_to_call_again(self):
+    async def test_a_slow_crash_pull_keeps_going_and_the_next_call_joins_it(self):
         from iosstudio_mcp.tools import crashes as CR
-        self.daemon.replies["crash.pull"] = (10, {})
-        res, took = await self.timed(self.tools(CR)["ios_crash_get"](self.ctx, name="/App-2026-11-01-142233.ips"))
+        ips = Path(self.tmp) / "App.ips"
+        ips.write_text('{"app_name":"App"}\n{"threads": []}\n')
+        self.daemon.replies["crash.pull"] = (BUDGET + 0.5, {"path": str(ips), "summary": {"process": "App"}})
+        get = self.tools(CR)["ios_crash_get"]
+        res, took = await self.timed(get(self.ctx, name="/App.ips"))
         self.assertIsInstance(res, ToolError)
-        self.assertIn("[timeout]", str(res))
+        self.assertIn("[running]", str(res))
         self.assertIn("Call ios_crash_get again", str(res))
         self.assertLess(took, BUDGET + SLACK)
+        await asyncio.sleep(1)          # the agent waits a moment, as told
+        res, took = await self.timed(get(self.ctx, name="/App.ips"))
+        self.assertLess(took, BUDGET + SLACK)
+        self.assertEqual(res.structured_content["process"], "App")
+        res, _ = await self.timed(get(self.ctx, name="/App.ips", section="raw"))   # right after: the same pull
+        self.assertEqual(self.daemon.count("crash.pull"), 1)
+
+    async def test_a_crash_pull_inside_a_job_waits_for_the_whole_pull(self):
+        from iosstudio_mcp.backends import crashes as BCR
+        ips = Path(self.tmp) / "App.ips"
+        ips.write_text('{"app_name":"App"}\n{"threads": []}\n')
+        self.daemon.replies["crash.pull"] = (BUDGET + 0.5, {"path": str(ips), "summary": {"process": "App"}})
+
+        async def work(job):          # e.g. ios_app_run_and_capture reading the new crash
+            return (await BCR.crash_detail(self.state, "/App.ips")).process
+        job = self.state.jobs.run(work, "t", title="t")
+        await asyncio.wait({job.task})
+        self.assertEqual((job.state, job.result), ("succeeded", "App"))
 
     async def test_a_pulled_report_is_read_off_the_event_loop_and_bounded(self):
         from iosstudio_mcp.backends import crashes as BCR
@@ -466,6 +487,109 @@ class RunAndCaptureJob(Base):
         await self.state.jobs.cancel(job)
         self.assertEqual(job.state, "cancelled")
         self.assertEqual(LOGS._sessions(self.state), {})
+
+
+# ------------------------------------------------------------------ slow reads that became jobs
+
+STORES = {"running": False, "stores": [{"name": "default.store", "path": "/Library/Application Support/default.store",
+                                         "size": 4096, "kind": "swiftdata",
+                                         "tables": [{"name": "ZITEM", "entity": "Item", "rows": 2,
+                                                     "columns": [{"name": "ZTITLE", "type": "VARCHAR"}]}]}]}
+
+
+class SlowReads(Base):
+    """Calls whose daemon step used to wait up to 10 minutes: now a job (or a joined job) that answers small
+    reads at once and big ones with state='running' + job_id, never asking the iPhone twice."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.daemon.replies["apps.list"] = (0, [APP])
+
+    async def poll(self, fn, **kw):
+        out = None
+        for _ in range(5):
+            res, took = await self.timed(fn(self.ctx, **kw))
+            self.assertLess(took, BUDGET + SLACK)
+            out = res.structured_content
+            if out.get("state") != "running":
+                break
+        return out
+
+    async def test_a_big_store_summary_is_a_job(self):
+        from iosstudio_mcp.tools import app_data as AD
+        self.daemon.replies["appdata.stores"] = (BUDGET + 0.5, STORES)
+        store = self.tools(AD)["ios_app_store"]
+        res, took = await self.timed(store(self.ctx, bundle_id="com.example.app", wait_seconds=1))
+        self.assertLess(took, BUDGET + SLACK)
+        first = res.structured_content
+        self.assertEqual(first["state"], "running")
+        self.assertIn("ios_app_store(job_id=", " ".join(first["next_steps"]))
+        done = await self.poll(store, job_id=first["job_id"])
+        self.assertEqual(done["stores"][0]["tables"][0]["entity"], "Item")
+        self.assertEqual(self.daemon.count("appdata.stores"), 1)
+
+    async def test_a_small_store_read_answers_in_one_call(self):
+        from iosstudio_mcp.tools import app_data as AD
+        self.daemon.replies["appdata.stores"] = (0.1, STORES)
+        self.daemon.replies["appdata.rows"] = (0.1, {"table": "ZITEM", "columns": [{"name": "ZTITLE", "type": "VARCHAR"}],
+                                                     "rows": [["Milk"], ["Eggs"]], "total": 2})
+        res, _ = await self.timed(self.tools(AD)["ios_app_store"](self.ctx, bundle_id="com.example.app", table="Item"))
+        out = res.structured_content
+        self.assertEqual((out["state"], out["table"], out["rows"]), ("succeeded", "ZITEM", [["Milk"], ["Eggs"]]))
+        self.assertEqual(self.daemon.requests[-1][1]["store"], "/Library/Application Support/default.store")
+
+    async def test_slow_rows_come_back_through_the_job(self):
+        from iosstudio_mcp.tools import app_data as AD
+        self.daemon.replies["appdata.rows"] = (BUDGET + 0.5, {"table": "ZITEM", "columns": [], "rows": [[1]] * 30,
+                                                              "total": 90})
+        store = self.tools(AD)["ios_app_store"]
+        res, _ = await self.timed(store(self.ctx, bundle_id="com.example.app", store="/x/default.store",
+                                        table="ZITEM", offset=30, limit=30))
+        first = res.structured_content
+        self.assertEqual(first["state"], "running")
+        done = await self.poll(store, job_id=first["job_id"])
+        self.assertEqual((done["offset"], done["count"], done["next_offset"]), (30, 30, 60))
+        self.assertEqual(self.daemon.count("appdata.stores"), 0)      # a store path needs no summary first
+
+    async def test_an_unknown_table_is_the_error_of_the_call(self):
+        from iosstudio_mcp.tools import app_data as AD
+        self.daemon.replies["appdata.stores"] = (0, STORES)
+        res, _ = await self.timed(self.tools(AD)["ios_app_store"](self.ctx, bundle_id="com.example.app", table="Nope"))
+        self.assertIsInstance(res, ToolError)
+        self.assertIn("No table 'Nope'", str(res))
+
+    async def test_a_slow_reset_dry_run_is_a_job(self):
+        from iosstudio_mcp.tools import app_data as AD
+        self.daemon.replies["appdata.reset"] = (BUDGET + 0.5, {"items": [{"path": "Documents", "kind": "dir",
+                                                                          "size": 2000, "files": 3}],
+                                                               "count": 1, "files": 3, "bytes": 2000})
+        reset = self.tools(AD)["ios_app_reset"]
+        res, took = await self.timed(reset(self.ctx, bundle_id="com.example.app"))
+        self.assertLess(took, BUDGET + SLACK)
+        first = res.structured_content
+        self.assertEqual(first["state"], "running")
+        done = await self.poll(reset, job_id=first["job_id"])
+        self.assertEqual(done["state"], "dry_run")
+        self.assertIn("This would delete 1 item(s)", done["message"])
+        self.assertNotIn("confirm", self.daemon.requests[-1][1])       # still only a dry run
+
+    async def test_a_slow_disk_image_mount_keeps_going_and_is_joined(self):
+        from iosstudio_mcp.tools import device as DEV
+        self.daemon.replies.update({"devmode.status": (0, {"enabled": True}), "ddi.status": (0, {"mounted": False}),
+                                    "ddi.mount": (BUDGET + 0.5, {"mounted": True})})
+        prepare = self.tools(DEV)["ios_device_prepare"]
+        res, took = await self.timed(prepare(self.ctx))
+        self.assertLess(took, BUDGET + SLACK)
+        first = res.structured_content
+        self.assertFalse(first["ready"])
+        self.assertTrue(first["mount_job_id"])
+        self.assertIn("call ios_device_prepare again", " ".join(first["next_steps"]))
+        await asyncio.sleep(1)          # the agent waits a moment, as told
+        res, took = await self.timed(prepare(self.ctx))
+        self.assertLess(took, BUDGET + SLACK)
+        self.assertTrue(res.structured_content["ddi_mounted"])
+        self.assertTrue(res.structured_content["ready"])
+        self.assertEqual(self.daemon.count("ddi.mount"), 1)
 
 
 if __name__ == "__main__":

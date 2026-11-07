@@ -28,7 +28,7 @@ APP_LAUNCHER = REPO / "bin" / "ios-studio"
 HOME = Path.home()
 if str(REPO / "helper") not in sys.path:      # the helper's stdlib-only `iosstudio.core` (one set of path rules)
     sys.path.append(str(REPO / "helper"))
-from iosstudio.core import appdirs  # noqa: E402,F401  (tools use helper.appdirs)
+from iosstudio.core import appdirs  # noqa: E402  (tools use helper.appdirs)
 
 
 def demo_mode() -> bool:
@@ -317,11 +317,8 @@ def device_client_module():
 # ------------------------------------------------------------------ paths
 
 def tilde(path: str | None) -> str | None:
-    """~-relative display form (keeps outputs short and free of the user's home path)."""
-    if not path:
-        return path
-    h = str(HOME)
-    return "~" + path[len(h):] if path == h or path.startswith(h + "/") else path
+    """~-relative display form (keeps outputs short and free of the user's home path); None stays None."""
+    return appdirs.tilde(path) if path else path
 
 
 def expand(path: str) -> Path:

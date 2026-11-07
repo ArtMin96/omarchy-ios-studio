@@ -14,7 +14,8 @@ from .. import helper
 from ..backends.crashes import Section, crash_detail
 from ..backends.device import apps, dcall, match_app
 from ..core import budget as B
-from ..core.params import Udid
+from ..core import deadline
+from ..core.params import MaxBytes, Udid
 from ..core.registry import MAX_WAIT, page_of, tool
 from ..models import CrashBrief, CrashDetail, CrashList
 from ..state import get_state
@@ -35,7 +36,7 @@ def capped(p: Path, tool_hint: str) -> str:
 
 
 def _crash_dirs() -> list[Path]:
-    dirs = [Path.home() / ".cache/ios-studio/crashes"]
+    dirs = [helper.appdirs.cache_dir() / "crashes"]   # where the device daemon keeps pulled reports
     if helper.demo_mode():
         try:
             import importlib.util
@@ -53,15 +54,12 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "List crash reports", kind="read_remote")
     async def ios_crash_list(
         ctx: Context,
-        process: Annotated[str | None, Field(description="Only reports of this process (the app's executable "
-                                                         "name, e.g. 'MyApp')")] = None,
-        bundle_id: Annotated[str | None, Field(description="Only this app's reports (resolved to its process "
-                                                           "name)")] = None,
+        process: Annotated[str | None, Field(description="Only this process (executable name, e.g. 'MyApp')")] = None,
+        bundle_id: Annotated[str | None, Field(description="Only this app's reports")] = None,
         kind: Annotated[Literal["any", "crash", "fault", "resource", "jetsam", "hang", "other"],
-                        Field(description="crash = the process died (exception/signal); fault = a non-fatal "
-                                          "user-space fault report; jetsam = killed for memory; resource = too much "
-                                          "CPU/disk/wakeups; hang = froze")] = "any",
-        limit: Annotated[int, Field(ge=1, le=200, description="Max reports to return, newest first")] = 20,
+                        Field(description="crash: died; fault: non-fatal; jetsam: killed for memory; resource: too "
+                                          "much CPU/disk; hang: froze")] = "any",
+        limit: Annotated[int, Field(ge=1, le=200, description="Max reports, newest first")] = 20,
         udid: Udid = None,
     ) -> CrashList:
         """Crash and diagnostic reports on the iPhone, newest first: name (pass it to ios_crash_get),
@@ -100,26 +98,19 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Crash report", kind="read_remote")
     async def ios_crash_get(
         ctx: Context,
-        name: Annotated[str, Field(description="name from ios_crash_list (e.g. '/MyApp-2026-11-01-142233.ips'); "
-                                               "the bare file name also works")],
-        section: Annotated[Section, Field(description="summary: parsed facts and crashed-thread frames. threads: "
-                                                     "every thread's frames. images: binary images. raw: the "
+        name: Annotated[str, Field(description="name from ios_crash_list (bare file name works too)")],
+        section: Annotated[Section, Field(description="summary (facts + crashed thread), threads, images or raw "
                                                      ".ips text")] = "summary",
-        start_line: Annotated[int, Field(ge=0, description="With a section other than summary: first line "
-                                                           "(page with the result's end_line)")] = 0,
-        max_lines: Annotated[int, Field(ge=1, le=5000, description="Lines of the section to return")] = 400,
+        start_line: Annotated[int, Field(ge=0, description="Not summary: first line (page with end_line)")] = 0,
+        max_lines: Annotated[int, Field(ge=1, le=5000, description="Lines of the section")] = 400,
         full_text: Annotated[bool, Field(description="Same as section='raw'")] = False,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> CrashDetail:
-        """One crash report, parsed: process, bundle id, app and iOS version, exception type, signal,
-        termination reason (e.g. the Swift fatal error message), and the top 15 frames of the crashed
-        thread, plus the local .ips path (and a resource link). The app's own frames are resolved against
-        the build that crashed (kept on every build): app_frames has function, file (relative to
-        project_path) and line, and symbolicated says full/partial/none with symbolication_note saying why
-        and what to do (usually: rebuild that exact version). Unresolved frames read '<image> + 0xOFFSET'. For more, pick a section (threads, images, raw); its lines come as plain text after the
-        JSON, paged with start_line, under 12 KB unless max_bytes raises it."""
+        """One crash report, parsed: exception, signal, termination reason, the crashed thread's top frames
+        and the local .ips path. app_frames resolve your code to file:line from the build that crashed;
+        symbolicated (full/partial/none) and symbolication_note say why not. Other sections come as text
+        paged with start_line."""
         state = get_state(ctx)
         return await crash_detail(state, name, udid, "raw" if full_text and section == "summary" else section,
                                   start_line, max_lines, max_bytes)
@@ -146,7 +137,8 @@ def register(mcp: MCPServer) -> None:
             return text
         state = get_state(ctx)
         try:
-            det = await crash_detail(state, file)
+            with deadline.call_budget():     # a resource read answers in time too; a long pull keeps going
+                det = await crash_detail(state, file)
         except ToolError as exc:
             raise ResourceError(B.clip_error(str(exc)))
         try:

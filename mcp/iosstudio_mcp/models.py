@@ -581,6 +581,7 @@ class DevicePrepare(Out):
     ready: bool = Field(description="True when Developer Mode is on and the developer disk image is mounted")
     developer_mode: bool | None = None
     ddi_mounted: bool | None = None
+    mount_job_id: str | None = Field(None, description="The disk image is still mounting (ios_job_status shows it)")
     actions: list[str] = Field(default_factory=list, description="What this call did")
     human_steps: list[str] = Field(default_factory=list, description="Steps only the user can do on the iPhone")
     next_steps: list[str] = Field(default_factory=list)

@@ -536,7 +536,7 @@ class Docstrings(unittest.TestCase):
         mcp = FakeMCP()
         BUILD.register(mcp)
         doc = mcp.tools["ios_run"].__doc__
-        self.assertIn("Either way the server then launches it", doc)
+        self.assertIn("launch", doc)
         self.assertIn("Without preset=", doc)
 
 
@@ -555,7 +555,7 @@ class Registration(unittest.TestCase):
         for name in ("ios_run", "ios_app_launch", "ios_app_run_and_capture"):
             self.assertIn("preset", tools[name].parameters["properties"], name)
         self.assertIn("project_path", tools["ios_app_launch"].parameters["properties"])
-        self.assertIn("ios_project_presets", server.INSTRUCTIONS)
+        self.assertIn("ios_project_presets", server.resources.GUIDE.read_text())
         self.assertIn("unknown-preset", H.NEXT_BY_CODE)
         self.assertTrue(hasattr(LOGS, "RunCaptureResult"))
 

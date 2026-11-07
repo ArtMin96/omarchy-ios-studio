@@ -16,8 +16,8 @@ from .. import helper
 from ..backends.projects import existing_dir, resolve_project
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import ProjectPath
-from ..core.registry import MAX_WAIT, dry_run, fit_page, page_of, tool
+from ..core.params import OptJobId, ProjectPath, WaitSeconds
+from ..core.registry import dry_run, fit_page, page_of, tool
 from ..models import (
     ActionResult,
     Convertible,
@@ -88,16 +88,12 @@ def register(mcp: MCPServer) -> None:
     async def ios_project_list(
         ctx: Context,
         query: Annotated[str | None, Field(description="Case-insensitive filter on name, path or bundle id")] = None,
-        offset: Annotated[int, Field(ge=0, description="Skip this many projects (pagination)")] = 0,
-        limit: Annotated[int, Field(ge=1, le=100, description="Max projects to return")] = 20,
+        offset: Annotated[int, Field(ge=0, description="Skip this many")] = 0,
+        limit: Annotated[int, Field(ge=1, le=100, description="Max projects")] = 20,
     ) -> ProjectList:
-        """List the user's iPhone app projects (most recently built first).
-
-        Each project has its absolute `path` (pass it as project_path elsewhere), bundle id, minimum iOS,
-        git branch, last build result and signing expiry. Also lists SwiftUI packages that could become
-        apps (`convertible`, see ios_project_convert) and the folders that are scanned. Use
-        ios_project_info for one project's details.
-        """
+        """The user's iPhone app projects, most recently built first: path (pass as project_path), bundle id,
+        minimum iOS, branch, last build and signing expiry. Also SwiftUI packages that could become apps
+        (`convertible`, see ios_project_convert)."""
         state = get_state(ctx)
         state.invalidate_projects()
         data = await state.projects()
@@ -124,13 +120,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Project details", kind="read")
     async def ios_project_info(project_path: ProjectPath, ctx: Context) -> ProjectDetail:
-        """Details of one project: path, Swift sources folder, product, bundle id, minimum iOS, branch,
-        last build (result, errors, log file), signing expiry, auto-renew, the last signed .ipa, its build
-        settings (prebuild, env, open-file limit, allow generated) and the settings its own build scripts
-        suggest (see ios_project_build_settings), its run preset names with the one selected in the app
-        (see ios_project_presets), and `editor`: whether editors get completion here (.bsp/xtool.json present
-        and not stale, ready, a hint such as 'Build once to enable completion'; see ios_editor_setup).
-        """
+        """One project: sources folder, bundle id, minimum iOS, last build, signing expiry, auto-renew, last
+        .ipa, build settings and the ones its scripts suggest (ios_project_build_settings), run presets, and
+        `editor`: whether editors get completion (see ios_editor_setup)."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         p = await helper.call("projects", "info", {"path": p["path"]})
@@ -138,8 +130,7 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "App templates", kind="read")
     async def ios_project_templates() -> TemplateList:
-        """List the templates ios_project_create accepts, the default bundle-id prefix and the default folder
-        for new apps."""
+        """Templates ios_project_create accepts, the default bundle-id prefix and folder for new apps."""
         data = await helper.call("projects", "templates")
         return TemplateList(
             templates=[Template(id=t.get("id", ""), title=t.get("title"), description=t.get("description"),
@@ -150,26 +141,18 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Create app", kind="write")
     async def ios_project_create(
         ctx: Context,
-        name: Annotated[str | None, Field(description="App name: starts with a letter; letters, digits, _ only "
-                                                      "(no spaces), e.g. 'WeatherGlance'. Not needed with job_id")] = None,
-        template: Annotated[str, Field(description="Template id from ios_project_templates")] = "swiftui-app",
-        directory: Annotated[str | None, Field(description="Parent folder inside the home folder; default: "
-                                                           "the app's default folder (usually ~/Developer)")] = None,
-        bundle_id: Annotated[str | None, Field(description="e.g. 'com.yourname.WeatherGlance'; default: "
-                                                           "<prefix>.<name>")] = None,
-        git: Annotated[bool, Field(description="Initialise a git repo with a first commit")] = True,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for it (≤25 s); "
-                                                                           "if it isn't done by then, call again "
-                                                                           "with job_id")] = 20,
-        job_id: Annotated[str | None, Field(description="Wait for a creation started earlier (its job_id)")] = None,
+        name: Annotated[str | None, Field(description="Letters, digits, _, e.g. 'WeatherGlance' (not with "
+                                                      "job_id)")] = None,
+        template: Annotated[str, Field(description="Id from ios_project_templates")] = "swiftui-app",
+        directory: Annotated[str | None, Field(description="Parent folder (default: ~/Developer)")] = None,
+        bundle_id: Annotated[str | None, Field(description="Default: <prefix>.<name>")] = None,
+        git: Annotated[bool, Field(description="git init with a first commit")] = True,
+        wait_seconds: WaitSeconds = 20,
+        job_id: OptJobId = None,
     ) -> ProjectChange:
-        """Create a new SwiftUI iPhone app from a template and register it with iOS Studio.
-
-        Writes <directory>/<name>/ with Package.swift, xtool.yml and Sources/<name>/. Fails if the folder
-        exists. Returns the new project; next, edit its sources and build with ios_build_start. Usually
-        takes a few seconds; if it is still running after wait_seconds, the result says so (done=false, with
-        a job_id): call again with job_id (or the same arguments) to wait for the same creation.
-        """
+        """Create a SwiftUI iPhone app from a template (<directory>/<name>/ with Package.swift, xtool.yml,
+        Sources/<name>/) and register it; fails if the folder exists. Next: edit sources, ios_build_start. If
+        still running after wait_seconds: done=false + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             return await _creation(state, ctx, state.jobs.get(job_id, "project-create"), wait_seconds)
@@ -203,11 +186,10 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Add existing project", kind="write", idempotent=True)
     async def ios_project_add(
         ctx: Context,
-        project_path: Annotated[str, Field(description="Existing folder with Package.swift and xtool.yml")],
+        project_path: Annotated[str, Field(description="Folder with Package.swift and xtool.yml")],
     ) -> ProjectChange:
-        """Register an existing xtool app folder (Package.swift + xtool.yml) so it shows in the project list,
-        even outside the scanned folders, and un-hide it if it was removed. A plain Swift package
-        without xtool.yml needs ios_project_convert instead."""
+        """Register an existing xtool app folder (Package.swift + xtool.yml) so it shows in the project list
+        (also un-hides a removed one). A package without xtool.yml needs ios_project_convert."""
         p = existing_dir(project_path, "project folder")
         data = await helper.call("projects", "add", {"path": str(p)})
         get_state(ctx).invalidate_projects()
@@ -220,12 +202,11 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Convert package to app", kind="write", idempotent=True)
     async def ios_project_convert(
         ctx: Context,
-        project_path: Annotated[str, Field(description="Swift package folder: one library product, iOS platform, "
-                                                       "a SwiftUI @main App")],
-        bundle_id: Annotated[str | None, Field(description="e.g. 'com.yourname.MyApp'; default <prefix>.<library>")] = None,
+        project_path: Annotated[str, Field(description="Package with one library product and a SwiftUI @main App")],
+        bundle_id: Annotated[str | None, Field(description="Default: <prefix>.<library>")] = None,
     ) -> ProjectChange:
-        """Turn a SwiftUI Swift package into an iOS Studio app by writing an xtool.yml (bundle id + product),
-        then register it. Only adds that one file. ios_project_list shows candidates under `convertible`."""
+        """Turn a SwiftUI Swift package into an app: writes only an xtool.yml (bundle id + product) and
+        registers it. Candidates: ios_project_list `convertible`."""
         p = existing_dir(project_path, "package folder")
         if not (p / "Package.swift").is_file() and not helper.demo_mode():
             raise ToolError("That folder has no Package.swift. Use ios_project_create for a new app.")
@@ -243,12 +224,12 @@ def register(mcp: MCPServer) -> None:
     async def ios_project_set(
         ctx: Context,
         project_path: ProjectPath,
-        auto_renew: Annotated[bool | None, Field(description="Include this app in the daily automatic re-signing "
-                                                             "(free 7-day profiles); see ios_project_autorenew")] = None,
+        auto_renew: Annotated[bool | None, Field(description="Include in the daily re-signing "
+                                                             "(ios_project_autorenew)")] = None,
         udid: Annotated[str | None, Field(description="Default iPhone udid for this project")] = None,
     ) -> ProjectChange:
-        """Change per-project settings: the auto-renew flag and the default iPhone. Only the given fields
-        change. (Bundle id and product live in the project's xtool.yml; edit that file directly.)"""
+        """Set a project's auto-renew flag and default iPhone (only the given fields change). Bundle id and
+        product live in its xtool.yml."""
         if auto_renew is None and udid is None:
             raise ToolError("Nothing to change: pass auto_renew and/or udid.")
         state = get_state(ctx)
@@ -270,11 +251,10 @@ def register(mcp: MCPServer) -> None:
     async def ios_project_remove(
         ctx: Context,
         project_path: ProjectPath,
-        confirm: Annotated[bool, Field(description="false = dry run. true only after the user agreed")] = False,
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
     ) -> ActionResult:
-        """Hide a project from iOS Studio's list and forget its settings (auto-renew, default iPhone).
-        The project's files are NOT deleted. Destructive for settings: call with confirm=false first,
-        show the user the dry run, and repeat with confirm=true only if they agree."""
+        """Hide a project from iOS Studio's list and forget its settings; its files are NOT deleted. Dry run
+        first; repeat with confirm=true only after the user agrees."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         would = [f"Hide {p.get('name')} ({p.get('path')}) from the project list",

@@ -25,7 +25,7 @@ from ..backends.device import dcall
 from ..core import budget as B
 from ..core.job_status import wait_with_progress
 from ..core.jobs import Job
-from ..core.params import Udid
+from ..core.params import OptJobId, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, tool
 from ..models import Out
 from ..state import AppState, get_state
@@ -186,22 +186,18 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Record the screen", kind="read_remote", idempotent=False)
     async def ios_screen_record(
         ctx: Context,
-        seconds: Annotated[int, Field(ge=1, le=60, description="Length of the recording")] = 10,
-        job_id: Annotated[str | None, Field(description="Wait for a recording started earlier (its job_id) instead "
-                                                        "of starting a new one")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long this call waits for the "
-                                                                            "file before returning")] = MAX_WAIT,
+        seconds: Annotated[int, Field(ge=1, le=60, description="Length")] = 10,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
         mode: Annotated[Literal["auto", "stream", "screenshot"], Field(
-            description="auto: smooth stream on iOS 27+ (falls back to screenshots); only used when the iPhone "
-                        "isn't already being mirrored")] = "auto",
-        thumbnail: Annotated[bool, Field(description="Include a small preview image of the last picture")] = True,
+            description="auto: smooth stream on iOS 27+, else screenshots")] = "auto",
+        thumbnail: Annotated[bool, Field(description="Include a small preview image")] = True,
         udid: Udid = None,
     ) -> Annotated[CallToolResult, RecordingInfo]:
-        """Record the iPhone's screen for a few seconds (at most 60) into an MP4 for a bug report, while you
-        or the user reproduce the problem. Returns the file path, length, size, frame rate and mode, plus one
-        small preview image. Runs in the background: if it isn't saved within wait_seconds, call again with
-        the returned job_id (ios_job_cancel stops it early and keeps what was recorded). The phone must be unlocked with the screen on. In stream mode the phone
-        shows a screen-sharing indicator and apps can't use the camera or microphone until it ends."""
+        """Record the iPhone's screen (≤ 60 s) into an MP4 for a bug report while the problem is reproduced.
+        Returns path, length, fps and a small preview. A job: state='running' + job_id, call again with job_id
+        (ios_job_cancel stops early, keeping the video). The phone must be unlocked; stream mode blocks the
+        camera and microphone while it runs."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "recording")
@@ -232,10 +228,9 @@ def register(mcp: MCPServer) -> None:
 
     @tool(mcp, "Screen mirror status", kind="read_remote")
     async def ios_mirror_status(ctx: Context, udid: Udid = None) -> MirrorStatus:
-        """How the live screen view of the iPhone works right now: whether it runs, in which mode (stream =
-        smooth, iOS 27+; screenshot = a few frames a second), the frame rate it actually reaches, which modes
-        are available and why not, whether the AirPlay receiver (UxPlay) and ffmpeg are installed, and the
-        current or last screen recording. Read-only: it never starts the mirror."""
+        """The live screen view right now: running, mode (stream: smooth, iOS 27+; screenshot: a few fps), real
+        frame rate, which modes are available and why not, UxPlay/ffmpeg installed, and the current or last
+        recording. Read-only."""
         state = get_state(ctx)
         st = await dcall(state, "mirror.status", udid=udid, timeout=30) or {}
         av = st.get("available") or {}

@@ -31,7 +31,7 @@ from ..core import deadline
 from ..core.errors import device_error
 from ..core.job_status import follow_job, job_result, still_running
 from ..core.jobs import Job
-from ..core.params import PresetName, Udid, WaitSeconds
+from ..core.params import MaxBytes, OptJobId, PresetName, Udid, WaitSeconds
 from ..core.registry import MAX_WAIT, tool
 from ..models import ActionResult, LogRead, LogSession, RunCapture
 from ..state import AppState, get_state
@@ -246,23 +246,17 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Start iPhone log", kind="write", open_world=True)
     async def ios_logs_start(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="Only this app's lines (its process, plus lines naming "
-                                                           "it), e.g. 'com.example.myapp'")] = None,
-        process: Annotated[list[str] | None, Field(description="Exact process names, e.g. ['MyApp', "
-                                                               "'SpringBoard']")] = None,
-        pid: Annotated[int | None, Field(description="One process id (cheapest: filtered on the phone)")] = None,
-        min_level: Annotated[Level | None, Field(description="Minimum level: debug < info < default < error < "
-                                                             "fault. 'default' alone is enough as a filter")] = None,
-        text: Annotated[str | None, Field(description="Case-insensitive substring of message, process or "
-                                                      "subsystem")] = None,
-        subsystem: Annotated[str | None, Field(description="os_log subsystem prefix, e.g. 'com.example.myapp'")] = None,
+        bundle_id: Annotated[str | None, Field(description="Only this app's lines")] = None,
+        process: Annotated[list[str] | None, Field(description="Exact process names")] = None,
+        pid: Annotated[int | None, Field(description="One process id (filtered on the phone)")] = None,
+        min_level: Annotated[Level | None, Field(description="Minimum level (debug < … < fault)")] = None,
+        text: Annotated[str | None, Field(description="Case-insensitive substring")] = None,
+        subsystem: Annotated[str | None, Field(description="os_log subsystem prefix")] = None,
         udid: Udid = None,
     ) -> LogSession:
-        """Start capturing the iPhone's live log into a server-side buffer and return a session_id plus
-        cursor 0. Needs at least one filter (the phone logs ~2000 lines/s): usually bundle_id, optionally
-        min_level. Then call ios_logs_read(session_id, cursor, wait_seconds=10) repeatedly, and
-        ios_logs_stop when done. Only lines logged after this call are captured. For "launch my app
-        and tell me what happened", ios_app_run_and_capture does all of this in one call."""
+        """Start buffering the iPhone's live log; returns session_id and cursor 0. Needs a filter (usually
+        bundle_id). Then ios_logs_read(session_id, cursor, wait_seconds=10) repeatedly and ios_logs_stop.
+        For "launch it and tell me what happened" use ios_app_run_and_capture."""
         state = get_state(ctx)
         f = build_filters(bundle_id, process, pid, min_level, text, subsystem)
         s = await open_session(state, f, udid)
@@ -274,32 +268,21 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Read iPhone log", kind="read_remote")
     async def ios_logs_read(
         ctx: Context,
-        session_id: Annotated[str, Field(description="From ios_logs_start, e.g. 'L1'")],
-        cursor: Annotated[int | None, Field(ge=0, description="next_cursor from the previous read (0 = from the "
-                                                              "start); omit to continue where the last read "
-                                                              "ended")] = None,
-        limit: Annotated[int, Field(ge=1, le=500, description="Max lines to return")] = 60,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: if nothing new is "
-                                                                         "buffered, wait up to this long")] = 0,
-        min_level: Annotated[Level | None, Field(description="Extra filter for this read only")] = None,
-        text: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Extra case-insensitive "
-                                                                              "substring filter for this read")] = None,
-        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Extra case-insensitive regex "
-                                                                              "filter for this read")] = None,
-        newest: Annotated[bool, Field(description="Skip to the newest `limit` matching lines instead of the "
-                                                  "oldest unread ones")] = False,
-        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut messages after this many "
-                                                                     "characters")] = B.LINE_CUT,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        session_id: Annotated[str, Field(description="From ios_logs_start")],
+        cursor: Annotated[int | None, Field(ge=0, description="next_cursor of the last read (0: start; omit: "
+                                                              "continue)")] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 60,
+        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait this long for new lines")] = 0,
+        min_level: Annotated[Level | None, Field(description="This read only")] = None,
+        text: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Substring, this read only")] = None,
+        grep: Annotated[str | None, Field(max_length=B.MAX_PATTERN, description="Regex, this read only")] = None,
+        newest: Annotated[bool, Field(description="The newest `limit` lines instead of the oldest unread")] = False,
+        line_chars: Annotated[int, Field(ge=80, le=4000, description="Cut messages after this many chars")] = B.LINE_CUT,
+        max_bytes: MaxBytes = None,
     ) -> LogRead:
-        """Read buffered log lines after `cursor`, oldest first (newest=true: the latest ones), as plain text
-        after the JSON header, one line each: '<seq> <time> <level> <process>[<pid>] <subsystem>: <message>'.
-        Messages are cut at 300 characters (line_chars) and repeated messages fold into one line with ×N.
-        Returns next_cursor to pass next time, has_more when more is already buffered, `missed` if the
-        5000-entry ring buffer overwrote lines you hadn't read, and `dropped` if the phone outpaced the
-        stream. Use wait_seconds (≤25) to wait for new lines. min_level/text/grep narrow this read without
-        changing the session. Results stay under 12 KB unless max_bytes raises it."""
+        """Read buffered log lines after `cursor`, oldest first, as plain text after the JSON header. Pass the
+        returned next_cursor next time; `missed` means the buffer overwrote unread lines. wait_seconds waits for
+        new lines; min_level/text/grep narrow this read only."""
         state = get_state(ctx)
         s = _get(state, session_id)
         s.last_read = time.time()
@@ -367,10 +350,9 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Stop iPhone log", kind="write", idempotent=True, open_world=True)
     async def ios_logs_stop(
         ctx: Context,
-        session_id: Annotated[str | None, Field(description="Session to stop; omit to stop all of yours")] = None,
+        session_id: Annotated[str | None, Field(description="Omit to stop all of yours")] = None,
     ) -> ActionResult:
-        """Stop a log session and free its buffer (unread lines are discarded). Omit session_id to stop
-        every session this server started."""
+        """Stop a log session and drop its buffer."""
         state = get_state(ctx)
         targets = [_get(state, session_id)] if session_id else [s for s in _sessions(state).values()
                                                                   if not s.internal]
@@ -384,43 +366,27 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Run app and capture", kind="write", open_world=True)
     async def ios_app_run_and_capture(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App to launch, e.g. 'com.example.myapp' (installed "
-                                                           "XTL-<TEAM>. form also works)")] = None,
-        project_path: Annotated[str | None, Field(description="Instead of bundle_id: a project name or path; its "
-                                                              "bundle id is used")] = None,
-        install: Annotated[bool, Field(description="First install the project's last signed build (or ipa_path). "
-                                                   "Does not build: use ios_run to rebuild")] = False,
+        bundle_id: Annotated[str | None, Field(description="App to launch")] = None,
+        project_path: Annotated[str | None, Field(description="Instead of bundle_id: its project")] = None,
+        install: Annotated[bool, Field(description="First install the last signed build (no rebuild)")] = False,
         ipa_path: Annotated[str | None, Field(description="A signed .ipa/.app to install first")] = None,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a run started earlier (state='running'): "
-                                                        "its job_id; the other arguments are ignored")] = None,
+        job_id: OptJobId = None,
         wait_seconds: WaitSeconds = MAX_WAIT,
-        seconds: Annotated[int, Field(ge=1, le=MAX_WAIT, description="How long to capture after launch")] = 8,
-        min_level: Annotated[Level, Field(description="Lowest log level to capture")] = "default",
-        relaunch: Annotated[bool, Field(description="Stop the app first if it's running, so you see a fresh "
-                                                    "start")] = True,
+        seconds: Annotated[int, Field(ge=1, le=MAX_WAIT, description="Capture time after launch")] = 8,
+        min_level: Level = "default",
+        relaunch: Annotated[bool, Field(description="Stop the app first for a fresh start")] = True,
         args: Annotated[list[str] | None, Field(description="Launch arguments")] = None,
-        env: Annotated[dict[str, str] | None, Field(description="Launch environment variables")] = None,
-        max_lines: Annotated[int, Field(ge=5, le=200, description="Max log lines in the summary")] = 40,
-        console: Annotated[bool, Field(description="Also capture what the app prints (stdout/stderr, Swift "
-                                                   "print())")] = True,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        env: Annotated[dict[str, str] | None, Field(description="Launch environment")] = None,
+        max_lines: Annotated[int, Field(ge=5, le=200, description="Log lines in the summary")] = 40,
+        console: Annotated[bool, Field(description="Also capture print() / stdout / stderr")] = True,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
         preset: PresetName = None,
     ) -> RunCaptureResult:
-        """"Launch it and tell me what happened" in one call: (optionally installs a signed build,) starts
-        a log capture filtered to the app, launches it, records for `seconds`, checks whether it is still
-        running and whether a NEW crash report appeared, then stops and summarizes: launched?, pid,
-        log counts per level, key lines (faults and errors first, then the latest), the new crash's
-        exception, reason and top frames, what the app printed (console: stderr lines and the latest
-        print() output, after the log lines), and next steps. The key lines come as plain text after the JSON
-        (repeats folded with ×N); the whole capture is saved to full_output_path. Takes about seconds + 5 s
-        (plus the install). It runs as a job: when it isn't done within wait_seconds the result is
-        state='running' with job_id; call again with job_id to wait for the rest.
-        Use after ios_run, or to reproduce a crash. For longer observation use ios_logs_start/read.
-        preset='<name>' launches with a run preset of the app's project (ios_project_presets; the project is
-        project_path, else the one that builds bundle_id): its args come first, then `args`, and `env`
-        overrides its environment."""
+        """"Launch it and tell me what happened": launches the app (optionally installing first), captures its
+        log and print() output for `seconds`, then reports launched/pid, key log lines, any NEW crash and next
+        steps. A job: state='running' + job_id if not done within wait_seconds; call again with job_id. For
+        longer observation use ios_logs_start."""
         state = get_state(ctx)
         if not job_id:
             proj = None

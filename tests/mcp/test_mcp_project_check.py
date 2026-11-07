@@ -151,8 +151,8 @@ class Registration(unittest.TestCase):
         self.assertIn("ios_project_check", tools)
         t = tools["ios_project_check"]
         self.assertTrue(t.annotations.read_only_hint)
-        self.assertEqual(t.parameters["properties"]["check"]["enum"][:-1], CHECKS)
-        self.assertIn("ios_project_check", server.INSTRUCTIONS)
+        self.assertEqual(t.parameters["properties"]["check"]["enum"], CHECKS)   # optional: null not published
+        self.assertIn("ios_project_check", server.resources.GUIDE.read_text())
 
 
 if __name__ == "__main__":

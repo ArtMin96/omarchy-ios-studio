@@ -3,8 +3,10 @@
 Daemon commands appdata.defaults / defaults.set / defaults.delete / stores / rows / reset
 (docs/deviced-protocol.md, "App data"; docs/features/app-data.md). Your own development builds only. Writes
 (defaults set/delete, resets) are dry runs until confirm=true and never happen while the app runs:
-stop_app=true stops it first. A reset with confirm runs in the background (a reinstall over Wi-Fi can take a
-minute): they are jobs (core/jobs.py, kinds 'app-defaults' and 'app-reset'): state='running' + job_id, call
+stop_app=true stops it first. Anything that can outlast a call is a job (core/jobs.py): defaults changes
+('app-defaults'), resets and their dry runs ('app-reset': a reinstall over Wi-Fi can take a minute, listing a big
+container a while), and store reads ('app-store': a big SwiftData / Core Data store is copied off a real iPhone
+first). The tool waits up to wait_seconds, so small reads answer at once; else state='running' + job_id, call
 again with job_id.
 """
 from __future__ import annotations
@@ -23,14 +25,15 @@ from ..core import budget as B
 from ..core.errors import rehint
 from ..core.job_status import still_running, wait_with_progress
 from ..core.jobs import Job
-from ..core.params import BundleId, Udid
-from ..core.registry import MAX_WAIT, fit_page, tool
+from ..core.params import BundleId, MaxBytes, OptJobId, Udid, WaitSeconds
+from ..core.registry import fit_page, tool
 from ..models import Out
 from ..state import AppState, get_state
 
 ITEMS_SHOWN = 20            # reset dry run: items listed
 COLUMNS_SHOWN = 40          # store summary: columns per table
 KEYS_LISTED = 60            # defaults: names of keys left out
+READ_TIMEOUT = 600          # store reads and reset dry runs (jobs): copying a big store off a real iPhone
 
 NEXT = {
     "app-running": "The app is running, and it would write its own copy of this data back. Ask the user, then "
@@ -116,6 +119,8 @@ class StoreInfo(Out):
 
 class StoreResult(B.Budgeted, Out):
     bundle_id: str
+    state: Literal["running", "succeeded"] = "succeeded"
+    job_id: str | None = Field(None, description="state=running: call ios_app_store(job_id=...) again")
     running: bool | None = None
     stores: list[StoreInfo] = Field(default_factory=list, description="Without table: every store")
     store: str | None = Field(None, description="With table: the store read")
@@ -186,11 +191,39 @@ def _job_error(job: Job) -> ToolError:
     return ToolError((job.error or {}).get("message") or f"The job {job.state}.")
 
 
+def _dry_run(bid: str, name: str | None, mode: str, r: dict) -> ResetResult:
+    """What a reset would remove (the dry run's reply)."""
+    items = [f"{x.get('path')}{'/' if x.get('kind') == 'dir' else ''} ({_size(int(x.get('size') or 0))}"
+             + (f", {x.get('files')} files" if x.get("kind") == "dir" else "") + ")"
+             for x in (r.get("items") or [])]
+    n, b = int(r.get("count") or 0), int(r.get("bytes") or 0)
+    if mode == "wipe":
+        msg = f"This would delete {n} item(s), {r.get('files') or 0} file(s), {_size(b)} from {name}."
+    else:
+        msg = (f"This would uninstall {name} (its {n} data item(s), {_size(b)}, go with it) and "
+               f"install {helper.tilde(r.get('artifact'))}.")
+    nxt = ["Ask the user whether to proceed; only then repeat the call with confirm=true."]
+    if r.get("running"):
+        nxt.append("The app is running: confirm needs stop_app=true (it stops the app first).")
+    out = ResetResult(state="dry_run", mode=mode, bundle_id=bid, running=bool(r.get("running")),
+                      items=items[:ITEMS_SHOWN], count=n, files=int(r.get("files") or 0), bytes=b,
+                      project=r.get("project"), artifact=helper.tilde(r.get("artifact")),
+                      message=msg + " Nothing was changed.", next_steps=nxt)
+    if n > ITEMS_SHOWN:
+        out.truncated, out.omitted = True, n - ITEMS_SHOWN
+        out.note = f"Showing the {ITEMS_SHOWN} biggest of {n} items."
+    return out
+
+
 def _reset_status(job: Job) -> ResetResult:
     bundle_id = job.data["bundle_id"]
+    dry = bool(job.data.get("dry_run"))
+    if dry and job.state == "succeeded":
+        return _dry_run(bundle_id, job.data.get("name"), job.action, job.result or {})
     common = dict(mode=job.action, bundle_id=bundle_id, job_id=job.id, elapsed_seconds=job.elapsed)
     if not job.finished:
-        what = "Reinstalling the app" if job.action == "reinstall" else "Deleting the app's data"
+        what = ("Listing what the reset would remove" if dry else
+                "Reinstalling the app" if job.action == "reinstall" else "Deleting the app's data")
         return ResetResult(state="running", **common, message=f"{what}…", next_steps=[still_running(job)])
     if job.state != "succeeded":
         return ResetResult(state="cancelled" if job.state == "cancelled" else "failed", **common,
@@ -269,6 +302,76 @@ def _start_job(state: AppState, bid: str, mode: str, kind: str, cmd: str, args: 
                           data={"bundle_id": bid, **(meta or {})})
 
 
+async def _store_read(state: AppState, bid: str, store: str | None, table: str | None, offset: int, limit: int,
+                      udid: str | None) -> dict:
+    """The daemon reads behind one ios_app_store call (in its job): {'summary': appdata.stores} without table,
+    else {'rows': appdata.rows} of the table, found by name or entity in the stores when no store path is given."""
+    if not table or not (store and store.startswith("/")):
+        s = await call(state, "appdata.stores", {"bundleId": bid}, udid, timeout=READ_TIMEOUT) or {}
+        if not table:
+            return {"summary": s}
+        want = table.lower()
+        cands = [x for x in s.get("stores") or [] if not store or x.get("name") == store or x.get("path") == store]
+        hit = [(x, t) for x in cands for t in x.get("tables") or []
+               if want in (str(t.get("name")).lower(), str(t.get("entity") or "").lower())]
+        if not hit:
+            names = sorted({str(t.get("entity") or t.get("name")) for x in cands for t in x.get("tables") or []})
+            raise ToolError(f"No table '{table}' in {store or 'any store of ' + bid}. Tables: "
+                            f"{', '.join(names)[:300] or 'none'}. Next: call ios_app_store(bundle_id) for the summary.")
+        if len({x.get("path") for x, _ in hit}) > 1:
+            raise ToolError(f"'{table}' is in several stores: {', '.join(x.get('path') for x, _ in hit)}. "
+                            "Next: pass store=<path>.")
+        store, table = hit[0][0].get("path"), hit[0][1].get("name")
+    r = await call(state, "appdata.rows", {"bundleId": bid, "store": store, "table": table, "offset": offset,
+                                           "limit": limit}, udid, timeout=READ_TIMEOUT) or {}
+    return {"rows": r, "store": store, "table": table}
+
+
+def _store_result(bid: str, data: dict, offset: int, max_bytes: int | None) -> StoreResult:
+    if "summary" in data:
+        s = data["summary"]
+        stores = s.get("stores") or []
+        infos = []
+        for x in stores:
+            tables = [TableInfo(name=t.get("name"), entity=t.get("entity"), rows=t.get("rows"),
+                                meta=bool(t.get("meta")),
+                                columns=[_col(c) for c in (t.get("columns") or [])][:COLUMNS_SHOWN])
+                      for t in x.get("tables") or []]
+            e = x.get("error")
+            infos.append(StoreInfo(name=x.get("name"), path=x.get("path"), size=int(x.get("size") or 0),
+                                   kind=x.get("kind") or "sqlite", tables=tables,
+                                   error=(e.get("message") if isinstance(e, dict) else e) or None))
+        out = StoreResult(bundle_id=bid, running=bool(s.get("running")), stores=infos)
+        out.with_budget(max_bytes)
+        if B.result_size(B.dump(out)) > B.ceiling(out):        # columns go first, then metadata tables
+            for st in out.stores:
+                for t in st.tables:
+                    t.columns = []
+            out.truncated = True
+            out.note = "Columns left out to fit; ios_app_store(table=...) shows a table's columns."
+        if B.result_size(B.dump(out)) > B.ceiling(out):
+            for st in out.stores:
+                st.tables = [t for t in st.tables if not t.meta]
+            out.note = "Columns and Core Data's metadata tables left out to fit; raise max_bytes to see them."
+        if not stores:
+            out.next_steps = ["The app has no SwiftData, Core Data or SQLite store under Library/Application "
+                              "Support or Documents (yet)."]
+        else:
+            out.next_steps = ["Read rows with ios_app_store(bundle_id, store=<path>, table=<name or entity>)."]
+        return out
+    r = data.get("rows") or {}
+    rows = r.get("rows") or []
+    total = int(r.get("total") or 0)
+    end = offset + len(rows)
+    page = StoreResult(bundle_id=bid, store=data.get("store"), table=r.get("table") or data.get("table"),
+                       columns=[_col(c) for c in r.get("columns") or []], rows=rows, offset=offset, count=len(rows),
+                       total=total, has_more=end < total, next_offset=end if end < total else None)
+    if end < total:
+        page.next_steps = [f"Next page: ios_app_store(bundle_id, store, table, offset={end})."]
+    page.with_budget(max_bytes)
+    return fit_page(page, "rows", offset, lambda k, e: f"Showing {k} of {total} rows; call again with offset={e}.")
+
+
 # ------------------------------------------------------------------ tools
 
 def register(mcp: MCPServer) -> None:
@@ -278,12 +381,11 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         bundle_id: BundleId,
         key: Annotated[str | None, Field(description="Only this key, whole")] = None,
-        max_bytes: Annotated[int | None, Field(ge=3000, le=B.MAX_BYTES, description="Output budget")] = None,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> AppDefaults:
-        """An app's UserDefaults (Library/Preferences/<bundle id>.plist) as JSON with each key's type, for your
-        own development builds. Bounded: the full JSON goes to full_output_path when it doesn't fit. Change a
-        key with ios_app_defaults_set. Read-only."""
+        """An app's UserDefaults as JSON with each key's type (your own development builds). What doesn't fit
+        goes to full_output_path. Change a key with ios_app_defaults_set."""
         state = get_state(ctx)
         app = await resolve_app(state, bundle_id, udid)
         bid = app["bundleId"]
@@ -335,34 +437,26 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Change an app's UserDefaults", kind="destructive", idempotent=True, open_world=True)
     async def ios_app_defaults_set(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
         action: Annotated[Literal["set", "delete", "refresh"],
-                          Field(description="set or delete one key, or refresh: install the last build over the "
-                                            "app after changes made with refresh=false")] = "set",
+                          Field(description="refresh: reinstall the last build after refresh=false changes")] = "set",
         key: Annotated[str | None, Field(description="set/delete: the key")] = None,
-        value: Annotated[Any, Field(description="set: the new value as JSON (string, number, bool, array, object, "
-                                                "or a tagged {'$type': 'date'|'data', ...})")] = None,
+        value: Annotated[Any, Field(description="set: the value as JSON (or tagged {'$type': 'date'|'data', ...})")] = None,
         type: Annotated[Literal["string", "int", "float", "bool", "date", "data", "json"] | None,
-                        Field(description="set: store the value as this type (date: ISO 8601 text; data: base64; "
-                                          "json: text holding JSON). Default: from the JSON type")] = None,
-        confirm: Annotated[bool, Field(description="set/delete: false = dry run showing old -> new. true only after "
-                                                   "the user agreed")] = False,
-        stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running (otherwise a "
-                                                    "running app is an error)")] = False,
-        refresh: Annotated[bool, Field(description="set/delete: install the app's last signed build over it "
-                                                   "afterwards (keeps its data) so iOS drops its cached settings and "
-                                                   "the app sees the change. false for several changes in a row; "
-                                                   "then action='refresh' once")] = True,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a change started earlier")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
-                                                                           "state='running'")] = 20,
+                        Field(description="set: store as (date: ISO 8601; data: base64); default from JSON")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run (old -> new); true only after the user "
+                                                   "agreed")] = False,
+        stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
+        refresh: Annotated[bool, Field(description="Reinstall the last build so the app sees it (false: batch, "
+                                                   "then action='refresh')")] = True,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> AppDefaults:
-        """Set or delete one UserDefaults key of your own development build (read them with ios_app_defaults).
-        A dry run (previous -> new) unless confirm=true, and never while the app runs (stop_app=true stops it).
-        iOS keeps a cached copy of an app's settings, so a change also installs the app's last signed build over
-        it (its data stays); then the app sees it on its next launch. That takes about 20 s and runs as a job:
-        state='running' + job_id, call again with job_id."""
+        """Set or delete one UserDefaults key of your own development build. A dry run (old -> new) unless
+        confirm=true; never while the app runs (stop_app=true stops it). The app's last signed build is then
+        installed over it (data kept) so iOS drops its cached settings: a ~20 s job, state='running' + job_id,
+        call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-defaults")
@@ -421,103 +515,57 @@ def register(mcp: MCPServer) -> None:
     @tool(mcp, "Read an app's SwiftData / Core Data stores", kind="read_remote")
     async def ios_app_store(
         ctx: Context,
-        bundle_id: BundleId,
-        store: Annotated[str | None, Field(description="Store path (or file name) from the summary. Default: the "
-                                                       "store that has `table`")] = None,
-        table: Annotated[str | None, Field(description="Table or entity name (e.g. 'ZITEM' or 'Item'). Without it: "
-                                                       "the summary of every store")] = None,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
+        store: Annotated[str | None, Field(description="Store path or name (default: the one with `table`)")] = None,
+        table: Annotated[str | None, Field(description="Table or entity ('ZITEM' or 'Item'); omit for the summary")] = None,
         offset: Annotated[int, Field(ge=0, description="First row")] = 0,
         limit: Annotated[int, Field(ge=1, le=200, description="Rows per page")] = 20,
-        max_bytes: Annotated[int | None, Field(ge=3000, le=B.MAX_BYTES, description="Output budget")] = None,
+        max_bytes: MaxBytes = None,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> StoreResult:
-        """Read-only look at an app's SwiftData / Core Data / SQLite stores (your own development builds):
-        without table, each store with its tables, entity names, row counts and columns; with table, one page
-        of rows (bounded cells) and next_offset. Stores are copied to this computer with their -wal/-shm and
-        opened read-only; the app's files are never changed."""
+        """An app's SwiftData / Core Data / SQLite stores, read-only (your own builds). Without table: each
+        store's tables, entities, row counts and columns; with table: a page of rows. A big store can outlast a
+        call: state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
-        app = await resolve_app(state, bundle_id, udid)
-        bid = app["bundleId"]
-        if not table or not (store and store.startswith("/")):
-            s = await call(state, "appdata.stores", {"bundleId": bid}, udid, timeout=600) or {}
-            stores = s.get("stores") or []
-        if not table:
-            infos = []
-            for x in stores:
-                tables = [TableInfo(name=t.get("name"), entity=t.get("entity"), rows=t.get("rows"),
-                                    meta=bool(t.get("meta")),
-                                    columns=[_col(c) for c in (t.get("columns") or [])][:COLUMNS_SHOWN])
-                          for t in x.get("tables") or []]
-                e = x.get("error")
-                infos.append(StoreInfo(name=x.get("name"), path=x.get("path"), size=int(x.get("size") or 0),
-                                       kind=x.get("kind") or "sqlite", tables=tables,
-                                       error=(e.get("message") if isinstance(e, dict) else e) or None))
-            out = StoreResult(bundle_id=bid, running=bool(s.get("running")), stores=infos)
-            out.with_budget(max_bytes)
-            if B.result_size(B.dump(out)) > B.ceiling(out):        # columns go first, then metadata tables
-                for st in out.stores:
-                    for t in st.tables:
-                        t.columns = []
-                out.truncated = True
-                out.note = "Columns left out to fit; ios_app_store(table=...) shows a table's columns."
-            if B.result_size(B.dump(out)) > B.ceiling(out):
-                for st in out.stores:
-                    st.tables = [t for t in st.tables if not t.meta]
-                out.note = "Columns and Core Data's metadata tables left out to fit; raise max_bytes to see them."
-            if not stores:
-                out.next_steps = ["The app has no SwiftData, Core Data or SQLite store under Library/Application "
-                                  "Support or Documents (yet)."]
-            else:
-                out.next_steps = ["Read rows with ios_app_store(bundle_id, store=<path>, table=<name or entity>)."]
-            return out
-        want = table.lower()
-        if not (store and store.startswith("/")):
-            cands = [x for x in stores if not store or x.get("name") == store or x.get("path") == store]
-            hit = [(x, t) for x in cands for t in x.get("tables") or []
-                   if want in (str(t.get("name")).lower(), str(t.get("entity") or "").lower())]
-            if not hit:
-                names = sorted({str(t.get("entity") or t.get("name")) for x in cands for t in x.get("tables") or []})
-                raise ToolError(f"No table '{table}' in {store or 'any store of ' + bid}. Tables: "
-                                f"{', '.join(names)[:300] or 'none'}. Next: call ios_app_store(bundle_id) for the summary.")
-            if len({x.get("path") for x, _ in hit}) > 1:
-                raise ToolError(f"'{table}' is in several stores: {', '.join(x.get('path') for x, _ in hit)}. "
-                                "Next: pass store=<path>.")
-            store, table = hit[0][0].get("path"), hit[0][1].get("name")
-        r = await call(state, "appdata.rows", {"bundleId": bid, "store": store, "table": table, "offset": offset,
-                                               "limit": limit}, udid, timeout=600) or {}
-        rows = r.get("rows") or []
-        total = int(r.get("total") or 0)
-        end = offset + len(rows)
-        page = StoreResult(bundle_id=bid, store=store, table=r.get("table") or table,
-                        columns=[_col(c) for c in r.get("columns") or []], rows=rows, offset=offset, count=len(rows),
-                        total=total, has_more=end < total, next_offset=end if end < total else None)
-        if end < total:
-            page.next_steps = [f"Next page: ios_app_store(bundle_id, store, table, offset={end})."]
-        page.with_budget(max_bytes)
-        return fit_page(page, "rows", offset, lambda k, e: f"Showing {k} of {total} rows; call again with offset={e}.")
+        if job_id:
+            job = state.jobs.get(job_id, "app-store")
+        else:
+            if not bundle_id:
+                raise ToolError("Pass bundle_id (or job_id to wait for a read started earlier).")
+            bid = (await resolve_app(state, bundle_id, udid))["bundleId"]
+
+            async def read(job: Job) -> dict:
+                job.report(None, "copying the app's stores from the iPhone")
+                return await _store_read(state, bid, store, table, offset, limit, udid)
+            job = state.jobs.run(read, "app-store", title=f"Read the stores of {bid}", tool="ios_app_store",
+                                 data={"bundle_id": bid, "offset": offset, "max_bytes": max_bytes})
+        await wait_with_progress(state, job, wait_seconds, ctx)
+        if not job.finished:
+            return StoreResult(state="running", bundle_id=job.data["bundle_id"], job_id=job.id,
+                               next_steps=[still_running(job)])
+        if job.state != "succeeded":
+            raise _job_error(job)
+        return _store_result(job.data["bundle_id"], job.result or {}, job.data["offset"], job.data["max_bytes"])
 
     @tool(mcp, "Reset an app's data", kind="destructive", open_world=True)
     async def ios_app_reset(
         ctx: Context,
-        bundle_id: Annotated[str | None, Field(description="App bundle id (not needed with job_id)")] = None,
-        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe: delete Documents, Library and tmp "
-                                                                        "contents; reinstall: uninstall, then install "
-                                                                        "the last signed build")] = "wipe",
-        confirm: Annotated[bool, Field(description="false = dry run listing what would be removed. true only after "
-                                                   "the user agreed")] = False,
+        bundle_id: Annotated[str | None, Field(description="Not needed with job_id")] = None,
+        mode: Annotated[Literal["wipe", "reinstall"], Field(description="wipe the data folders, or reinstall "
+                                                                        "the last build")] = "wipe",
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         stop_app: Annotated[bool, Field(description="With confirm: stop the app first if it's running")] = False,
-        project_path: Annotated[str | None, Field(description="reinstall: install this project's last signed build "
-                                                              "(default: found from the bundle id)")] = None,
-        job_id: Annotated[str | None, Field(description="Keep waiting for a reset started earlier")] = None,
-        wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait before returning "
-                                                                           "state='running'")] = 20,
+        project_path: Annotated[str | None, Field(description="reinstall: use this project's last signed build")] = None,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         udid: Udid = None,
     ) -> ResetResult:
-        """Reset one of your own apps to first-launch state. wipe deletes everything in its Documents, Library
-        (preferences, caches, Application Support: SwiftData / Core Data stores) and tmp, keeping the folders;
-        reinstall uninstalls it and installs the last signed build again. Cannot be undone: with confirm=false
-        (default) it lists what would go; ask the user, then repeat with confirm=true. The app must be stopped
-        (stop_app=true stops it)."""
+        """Reset one of your own apps to first-launch state: wipe empties Documents, Library (settings,
+        SwiftData / Core Data stores) and tmp; reinstall reinstalls the last signed build. Cannot be undone:
+        confirm=false (default) lists what would go; ask the user, then confirm=true. A job: state='running' +
+        job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id, "app-reset")
@@ -531,28 +579,16 @@ def register(mcp: MCPServer) -> None:
         if mode == "reinstall" and project_path:
             art, proj = await package_for(state, None, project_path)
             args.update(artifact=art, project=(proj or {}).get("name"))
-        if not confirm:
-            r = await call(state, "appdata.reset", args, udid, timeout=300) or {}
-            items = [f"{x.get('path')}{'/' if x.get('kind') == 'dir' else ''} ({_size(int(x.get('size') or 0))}"
-                     + (f", {x.get('files')} files" if x.get("kind") == "dir" else "") + ")"
-                     for x in (r.get("items") or [])]
-            n, b = int(r.get("count") or 0), int(r.get("bytes") or 0)
-            if mode == "wipe":
-                msg = f"This would delete {n} item(s), {r.get('files') or 0} file(s), {_size(b)} from {app.get('name')}."
-            else:
-                msg = (f"This would uninstall {app.get('name')} (its {n} data item(s), {_size(b)}, go with it) and "
-                       f"install {helper.tilde(r.get('artifact'))}.")
-            nxt = ["Ask the user whether to proceed; only then repeat the call with confirm=true."]
-            if r.get("running"):
-                nxt.append("The app is running: confirm needs stop_app=true (it stops the app first).")
-            out = ResetResult(state="dry_run", mode=mode, bundle_id=bid, running=bool(r.get("running")),
-                              items=items[:ITEMS_SHOWN], count=n, files=int(r.get("files") or 0), bytes=b,
-                              project=r.get("project"), artifact=helper.tilde(r.get("artifact")),
-                              message=msg + " Nothing was changed.", next_steps=nxt)
-            if n > ITEMS_SHOWN:
-                out.truncated, out.omitted = True, n - ITEMS_SHOWN
-                out.note = f"Showing the {ITEMS_SHOWN} biggest of {n} items."
-            return out
+        if not confirm:     # the dry run lists the container: a big one on a real iPhone takes a while
+            async def dry(job: Job) -> dict:
+                return await call(state, "appdata.reset", args, udid, timeout=READ_TIMEOUT) or {}
+            job = state.jobs.run(dry, "app-reset", action=mode, title=f"List what a reset of {bid} removes",
+                                 tool="ios_app_reset", data={"bundle_id": bid, "dry_run": True, "name": app.get("name")})
+            await wait_with_progress(state, job, wait_seconds, ctx)
+            if job.finished and job.state == "failed":
+                state.jobs.jobs.pop(job.id, None)     # failed within the call: the error is the answer
+                raise _job_error(job)
+            return _reset_status(job)
         if stop_app:
             args["stopApp"] = True
         job = _start_job(state, bid, mode, "app-reset", "appdata.reset", {**args, "confirm": True}, udid)
