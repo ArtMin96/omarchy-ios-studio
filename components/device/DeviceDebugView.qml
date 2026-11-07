@@ -31,9 +31,15 @@ ColumnLayout {
     return devApps.length ? devApps[0] : null
   }
 
-  // debugger availability (`debug check`)
-  property string checkStatus: "unknown"    // unknown | loading | ready | error
-  property var checkError: null
+  // debugger availability (`debug check`), checked the first time the tab is shown and on Check again;
+  // a reply with ready: false counts as a failure (its error is what's missing)
+  Resource {
+    id: debugCheck
+    fetch: function(done, fail) {
+      root.app.cli.call(["debug", "check"], "", function(d) { if (d.ready) done(d); else fail(d.error) }, fail)
+    }
+  }
+  readonly property string checkStatus: debugCheck.status   // idle | loading | ready | error
   // sources of the picked app (`debug sources`)
   property var sources: ({ project: null, files: [], localBuild: null })
   // backtrace
@@ -65,13 +71,6 @@ ColumnLayout {
   }
   readonly property bool symOnDisk: !!symbols && ((symbols.sizeOnDisk || 0) > 0 || (symbols.downloadKept || 0) > 0)
 
-  function check() {
-    root.checkStatus = "loading"
-    root.app.cli.call(["debug", "check"], "", function(d) {
-      if (d.ready) { root.checkStatus = "ready"; root.checkError = null }
-      else { root.checkStatus = "error"; root.checkError = d.error }
-    }, function(e) { root.checkStatus = "error"; root.checkError = e })
-  }
   function loadSources() {
     if (!root.current) return
     var bid = root.current.bundleId
@@ -89,7 +88,7 @@ ColumnLayout {
   function activate() {
     var before = root.current
     root.updateDevApps()   // a different app here loads its sources through onCurrentChanged
-    if (root.checkStatus === "unknown") root.check()
+    if (debugCheck.status === "idle") debugCheck.load()
     root.refreshSymbols()
     if (root.svc.appsStatus === "unknown" && root.svc.connected) root.svc.refreshApps()
     if (root.current === before) root.loadSources()
@@ -190,9 +189,9 @@ ColumnLayout {
     visible: root.checkStatus === "error"
     app: root.app
     title: "The debugger isn't ready"
-    error: root.checkError
+    error: debugCheck.error
     retryText: "Check again"
-    onRetry: root.check()
+    onRetry: debugCheck.load(true)
   }
 
   // ---------------------------------------------------------------- which app

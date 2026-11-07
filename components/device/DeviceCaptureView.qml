@@ -56,13 +56,12 @@ ColumnLayout {
     root.svc.request("pcap.stop", {}, function(ok, d) {
       root.stopping = false
       if (ok) root.svc.capture = d
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
-  function folder(p) { return String(p || "").replace(/\/[^\/]*$/, "") }
   function openWireshark() { Util.execArgv(["wireshark", root.cap.file]) }
-  function showInFolder() { Util.execArgv(["xdg-open", root.folder(root.cap.file)]) }
+  function showInFolder() { root.app.showInFolder(root.cap.file) }
 
   function stopText(r) {
     return { time: "Stopped at the time limit", size: "Stopped at the size limit", stopped: "Stopped",
@@ -213,7 +212,7 @@ ColumnLayout {
         IconButton { glyph: Model.Glyph.folderOpen; tooltip: "Show in folder"; onClicked: root.showInFolder() },
         IconButton {
           glyph: Model.Glyph.copy; tooltip: "Copy the file's path"
-          onClicked: { Util.execArgv(["wl-copy", "--", root.cap.file]); root.app.toast("Copied the file's path") }
+          onClicked: root.app.copyText(root.cap.file, "the file's path")
         }
       ]
     }

@@ -24,41 +24,37 @@ ColumnLayout {
     text: "A provisioning profile lets one of your apps run on this iPhone. With a free Apple ID each one lasts 7 days — when it runs out the app stops opening until you run it again from Projects."
   }
 
-  Skeleton { Layout.fillWidth: true; visible: root.svc.profilesStatus === "loading" && root.svc.profiles.length === 0; lines: 3; rowHeight: Style.space(40) }
-  ErrorState {
+  // nothing at all before the first load (not connected yet), like the other tabs' quiet idle state
+  StateView {
     Layout.fillWidth: true
-    visible: root.svc.profilesStatus === "error" && root.svc.profiles.length === 0
-    app: root.app; error: root.svc.profilesError; title: "Couldn't read the profiles"
-    onRetry: root.svc.refreshProfiles()
-  }
-  EmptyState {
-    Layout.fillWidth: true
-    visible: root.svc.profilesStatus === "ready" && root.svc.profiles.length === 0
-    compact: true; glyph: Model.Glyph.signature
-    title: "No profiles on this iPhone"
-    text: "They're installed automatically when you run one of your apps from Projects."
-  }
+    visible: root.svc.profilesResource.status !== "idle"
+    app: root.app; resource: root.svc.profilesResource
+    errorTitle: "Couldn't read the profiles"
+    emptyGlyph: Model.Glyph.signature; emptyTitle: "No profiles on this iPhone"
+    emptyText: "They're installed automatically when you run one of your apps from Projects."
+    contentSpacing: Style.spacing.lg
 
-  SectionHeader {
-    Layout.fillWidth: true
-    visible: root.active.length > 0
-    text: "Active"; detail: String(root.active.length)
-    trailing: [ IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload"; busy: root.svc.profilesStatus === "loading"; onClicked: root.svc.refreshProfiles() } ]
-  }
-  Repeater {
-    model: root.active
-    delegate: profileRow
-  }
+    SectionHeader {
+      Layout.fillWidth: true
+      visible: root.active.length > 0
+      text: "Active"; detail: String(root.active.length)
+      trailing: [ IconButton { glyph: Model.Glyph.refresh; tooltip: "Reload"; busy: root.svc.profilesResource.busy; onClicked: root.svc.refreshProfiles() } ]
+    }
+    Repeater {
+      model: root.active
+      delegate: profileRow
+    }
 
-  RowLayout {
-    Layout.fillWidth: true
-    visible: root.expired.length > 0
-    SectionHeader { Layout.fillWidth: true; text: "Expired"; detail: String(root.expired.length) }
-    ActionButton { text: root.showExpired ? "Hide" : "Show"; kind: "ghost"; compact: true; onClicked: root.showExpired = !root.showExpired }
-  }
-  Repeater {
-    model: root.showExpired ? root.expired : []
-    delegate: profileRow
+    RowLayout {
+      Layout.fillWidth: true
+      visible: root.expired.length > 0
+      SectionHeader { Layout.fillWidth: true; text: "Expired"; detail: String(root.expired.length) }
+      ActionButton { text: root.showExpired ? "Hide" : "Show"; kind: "ghost"; compact: true; onClicked: root.showExpired = !root.showExpired }
+    }
+    Repeater {
+      model: root.showExpired ? root.expired : []
+      delegate: profileRow
+    }
   }
 
   Component {
@@ -77,7 +73,7 @@ ColumnLayout {
       subtitle: "Installed " + Model.relativeTime(modelData.created) + " · " + (modelData.teamName ? modelData.teamName + " · " : "") + "Team " + modelData.team
       trailing: [
         StatusPill { level: exp.level; text: exp.text; anchors.verticalCenter: parent ? parent.verticalCenter : undefined },
-        IconButton { glyph: Model.Glyph.copy; tooltip: "Copy profile UUID"; onClicked: { Util.execArgv(["wl-copy", modelData.uuid]); root.app.toast("Copied the profile UUID") } }
+        IconButton { glyph: Model.Glyph.copy; tooltip: "Copy profile UUID"; onClicked: root.app.copyText(modelData.uuid, "the profile UUID") }
       ]
     }
   }

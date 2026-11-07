@@ -164,7 +164,8 @@ StateView: `phase` is `"loading" | "error" | "empty" | "ready"`; data already lo
 reloads. Retry calls `retry()` when set, else `resource.load(true)`. Other properties: `compact` (empty state,
 default true), `errorCompact`, `emptyActionText`/`emptyActionGlyph` + `onEmptyAction`, `skeletonGap`.
 Users: DeviceNetworkView (condition list), DeviceService `profilesResource` (provisioning profiles;
-`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it) and `appsResource` (the app list;
+`profiles`/`profilesStatus`/`profilesError` stay as read-only views of it; DeviceProfilesView binds a StateView to
+it) and `appsResource` (the app list;
 `apps`/`appsStatus`/`appsError` likewise), DeviceAppsView (StateView), and the view-local reads of
 DeviceAppDataDefaults, DeviceAppDataStores (stores + a table page), DeviceContainerView (the open folder) and
 DeviceMediaView (the first page of the camera roll). Those panes keep a `status` string derived from the Resource
@@ -176,8 +177,12 @@ read-only views of their Resources the same way: AccountService (`account status
 (`infoResource` → `items`/`sdks`/`status`/`summary`; `diskResource` → `disk`, fetched only once the Toolchain
 page has set `diskWanted`), SetupService (`setup check` → `raw`/`checking`/`checkedAt`/`loaded`/`error`) and
 LogService (`crashResource`, crash.list while the phone is connected → `crashes`/`crashStatus`/`crashError`).
-SettingsPage (`app status`, `app about`) and AgentsSection (`agents list`) hold view-local Resources. Tests: `tests/qml/tst_resource.qml`
-(`qmltestrunner`, run by pytest).
+SettingsPage (`app status`, `app about`) and AgentsSection (`agents list`) hold view-local Resources.
+Device tool views: ScreenshotCompareView (baselines), DeviceDebugView (`debug check`; a `ready: false` reply fails with its
+error) and DeviceInspectView (`ui.tree`, `ui.audit`, read on demand). For "the last attempt's outcome" (an error
+banner that goes away when the next read starts) derive it: `busy ? "loading" : status === "idle" ? "idle" :
+error ? "error" : "ready"` (DeviceInspectView `treeStatus`/`auditStatus`). Tests: `tests/qml/tst_resource.qml`,
+`tests/qml/tst_resource_last_outcome.qml` (`qmltestrunner`, run by pytest).
 
 ## Shared helpers
 
@@ -578,7 +583,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   and the `showElements()` signal switch the pane). `highlight` is the cursor row's frame (an audit issue's own
   frame, else its element's) and `space` the screen size in points: ui.tree's `screen`, else the size of the
   screenshot each read takes, divided by the iPhone's scale. `no-app-in-front` shows as an empty state, Developer
-  Mode off as a blocked state with `devModeHelp()`. When no element has a frame (iOS 27.3), the footer says rows
+  Mode off as a blocked state with `devModeHelp()`. Both reads are view-local `Resource`s (`treeStatus` /
+  `auditStatus` are their last outcome; a read already on its way isn't started twice). When no element has a frame (iOS 27.3), the footer says rows
   can't be outlined. `handleKey(action)` (`up`, `down`, `home`, `end`, `activate`) and `focusFilter()`.
   ```qml
   DeviceInspectView { app: root.app; section: "elements"; availableHeight: phone.height - y
@@ -603,7 +609,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   changed areas and the ignored status bar, then baseline | current | diff in three equal `ScreenshotDiffPane`s,
   and Accept as new baseline (`screenshots save` with the compared `current_path`, confirms when it replaces one)
   and Delete baseline (`screenshots delete --confirm` after `app.confirm`). The list is read when the pane is
-  shown and after every save or delete; nothing polls. Every image reloads after a save (`revision`).
+  shown and after every save or delete (a view-local `Resource`, reset when another project is picked; a failed
+  reload shows an error banner over the old list); nothing polls. Every image reloads after a save (`revision`).
   `setName(name)` fills the name field. Disabled buttons say why (no iPhone, no project, no name, busy).
   ```qml
   ScreenshotCompareView { app: root.app }
@@ -992,7 +999,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       `installProgress` (a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
       `warning`). Signal `done()`: the other panes reload on their next show.
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
-  copyable), Profiles tab (read-only, expired ones behind `showExpired`) and Location tab (a simulated GPS
+  copyable), Profiles tab (read-only, expired ones behind `showExpired`; a `StateView` on
+  `app.device.profilesResource`, nothing shown before the first load) and Location tab (a simulated GPS
   location from presets or latitude/longitude). Props: `app`.
 - **EditorSection**: Settings › Code editor (a Card). Props: `app` (uses `app.projects`: `editorInfo`,
   `loadEditors()`, `editorSetup(id, confirm, …)`). "Your editor" is a Dropdown (Omarchy default, each installed

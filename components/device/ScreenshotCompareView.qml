@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // Screen › Compare, beside the phone (DeviceScreenView picks the pane). A baseline is a saved
@@ -47,14 +48,21 @@ ColumnLayout {
   onProjectsChanged: pickDefaultProject()
   Component.onCompleted: pickDefaultProject()
   // The list is read when the pane is shown (and again after every save or delete), never in the background.
-  onProjectPathChanged: { root.result = null; root.actionError = null; root.baselines = []; root.listStatus = "idle"; if (root.visible) root.loadBaselines() }
-  onVisibleChanged: if (root.visible && root.listStatus === "idle") root.loadBaselines()
+  onProjectPathChanged: { root.result = null; root.actionError = null; baselineList.reset(); if (root.visible) root.loadBaselines() }
+  onVisibleChanged: if (root.visible && baselineList.status === "idle") root.loadBaselines()
 
   // ---------------------------------------------------------------- baselines
-  property string listStatus: "idle"      // idle | loading | ready | error
-  property var baselines: []
-  property var listError: null
-  property int _listGen: 0
+  // the project's baselines; reset() when another project is picked drops a reply still on its way
+  Resource {
+    id: baselineList
+    active: root.projectPath !== ""
+    initial: []
+    fetch: function(done, fail) {
+      root.app.cli.call(["screenshots", "list", "--project", root.projectPath], "", function(d) { done(d.baselines || []) }, fail, { timeout: 30000 })
+    }
+  }
+  readonly property string listStatus: baselineList.status   // idle | loading | ready | error
+  readonly property var baselines: baselineList.data || []
   property int revision: 0                // bumps when a baseline file is rewritten, so images reload
 
   function baselineNamed(n) {
@@ -63,21 +71,7 @@ ColumnLayout {
     for (var i = 0; i < baselines.length; i++) if (String(baselines[i].name).toLowerCase() === k) return baselines[i]
     return null
   }
-  function loadBaselines() {
-    if (root.projectPath === "") { root.baselines = []; root.listStatus = "idle"; return }
-    var gen = ++root._listGen
-    root.listStatus = "loading"
-    root.listError = null
-    root.app.cli.call(["screenshots", "list", "--project", root.projectPath], "", function(d) {
-      if (gen !== root._listGen) return
-      root.baselines = d.baselines || []
-      root.listStatus = "ready"
-    }, function(e) {
-      if (gen !== root._listGen) return
-      root.listError = e
-      root.listStatus = "error"
-    }, { timeout: 30000 })
-  }
+  function loadBaselines() { baselineList.load(true) }
 
   // ---------------------------------------------------------------- name
   readonly property string name: nameField.text.trim()
@@ -454,7 +448,7 @@ ColumnLayout {
       Layout.fillWidth: true
       text: "Baselines"
       detail: root.listStatus === "ready" && root.baselines.length ? String(root.baselines.length) : ""
-      trailing: [ IconButton { glyph: Model.Glyph.refresh; tooltip: "Read the list again"; busy: root.listStatus === "loading"; onClicked: root.loadBaselines() } ]
+      trailing: [ IconButton { glyph: Model.Glyph.refresh; tooltip: "Read the list again"; busy: baselineList.busy; onClicked: root.loadBaselines() } ]
     }
 
     Skeleton {
@@ -467,11 +461,11 @@ ColumnLayout {
 
     ErrorState {
       Layout.fillWidth: true
-      visible: root.listStatus === "error"
+      visible: !!baselineList.error          // a failed reload too (the old list stays below)
       banner: true
       app: root.app
       title: "Couldn't list the baselines"
-      error: root.listError
+      error: baselineList.error
       onRetry: root.loadBaselines()
     }
 

@@ -22,7 +22,6 @@ ColumnLayout {
   function isOpen(t) { return root.open[t.index] !== undefined ? root.open[t.index] : t.index === root.focusIndex }
   function toggle(t) { var o = Object.assign({}, root.open); o[t.index] = !root.isOpen(t); root.open = o }
   function setAll(v) { var o = {}; for (var i = 0; i < threads.length; i++) o[threads[i].index] = v; root.open = o }
-  function copy(text, what) { Util.execArgv(["wl-copy", "--", text]); root.app.toast("Copied " + what) }
 
   function asText() {
     var out = []
@@ -51,7 +50,7 @@ ColumnLayout {
     }
     ActionButton { text: "Expand all"; compact: true; kind: "ghost"; onClicked: root.setAll(true) }
     ActionButton { text: "Collapse all"; compact: true; kind: "ghost"; onClicked: root.setAll(false) }
-    ActionButton { text: "Copy all"; glyph: Model.Glyph.copy; compact: true; onClicked: root.copy(root.asText(), "the backtrace") }
+    ActionButton { text: "Copy all"; glyph: Model.Glyph.copy; compact: true; onClicked: root.app.copyText(root.asText(), "the backtrace") }
   }
 
   Repeater {
@@ -107,7 +106,7 @@ ColumnLayout {
             required property var modelData
             Layout.fillWidth: true
             frame: modelData
-            onActivated: root.copy(copyText, "frame #" + modelData.index)
+            onActivated: root.app.copyText(copyText, "frame #" + modelData.index)
           }
         }
         AppText {

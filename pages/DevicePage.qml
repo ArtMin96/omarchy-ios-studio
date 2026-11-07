@@ -137,7 +137,7 @@ PageFrame {
       var open = svc.apps.filter(function(x) { return x.bundleId === page.appDetail })[0]
       if (!open) return false
       if (event.text === "o") { svc.launchApp(open); return true }
-      if (a === "copy") { Util.execArgv(["wl-copy", open.bundleId]); app.toast("Copied " + open.bundleId); return true }
+      if (a === "copy") { app.copyText(open.bundleId); return true }
       return false
     }
     var n = appsView.shown.length
@@ -151,7 +151,7 @@ PageFrame {
     if (a === "activate") { page.openApp(cur.bundleId); return true }
     if (event.text === "o") { svc.launchApp(cur); return true }
     if (a === "delete") { if (cur.removable) svc.uninstallApp(cur); return true }
-    if (a === "copy") { Util.execArgv(["wl-copy", cur.bundleId]); app.toast("Copied " + cur.bundleId); return true }
+    if (a === "copy") { app.copyText(cur.bundleId); return true }
     return false
   }
 

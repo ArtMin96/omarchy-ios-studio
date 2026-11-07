@@ -156,14 +156,14 @@ ColumnLayout {
     svc.request("metrics.stop", { sessionId: root.sess.sessionId }, function(ok, d) {
       root.stopping = false
       if (ok) { root.sess = d; if (d.summary) root.stats = d.summary }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
   function exportCsv() {
     if (!root.sess) return
     svc.request("metrics.export", { sessionId: root.sess.sessionId }, function(ok, d) {
-      if (!ok) { root.app.toast(Model.errorMessage(d), "error"); return }
+      if (!ok) { root.app.toastError(d); return }
       var name = d.path.split("/").pop()
       var dir = root.app.home + "/Downloads"
       Util.execArgv(["sh", "-c", "mkdir -p \"$1\" && cp -f \"$2\" \"$1/$3\"", "sh", dir, d.path, name])
@@ -179,7 +179,7 @@ ColumnLayout {
       onConfirm: function() {
         svc.request("metrics.hitches", { sessionId: root.sess.sessionId, seconds: 60 }, function(ok, d) {
           if (ok) root.sess = d
-          else root.app.toast(Model.errorMessage(d), "error")
+          else root.app.toastError(d)
         })
       }
     })
@@ -236,7 +236,11 @@ ColumnLayout {
         root.revision++
       } else if (name === "metrics.event") {
         if (!root.sess || data.sessionId !== root.sess.sessionId) return
-        root.events = root.events.concat([data]).slice(-2000)
+        // in place (hitch tracking sends many): the charts repaint on revision, not on a new array
+        var ev = root.events
+        ev.push(data)
+        if (ev.length > 2000) ev.splice(0, ev.length - 2000)
+        root.revision++
         if (data.kind === "jetsam" || data.kind === "crash" || data.kind === "watchdog")
           root.app.notify(data.kind === "crash" ? "App crashed" : "App was killed", data.text, Model.Glyph.warn)
       } else if (name === "metrics.state") {
@@ -253,7 +257,7 @@ ColumnLayout {
   }
 
   Timer { interval: 5000; repeat: true; running: root.running && root.active; onTriggered: root.refreshStats() }
-  Timer { interval: 1000; repeat: true; running: root.active; onTriggered: root.nowMs = Date.now() }
+  Timer { interval: 1000; repeat: true; running: root.active && !!root.sess; onTriggered: root.nowMs = Date.now() }
 
   // First shown (and every time after): the app list, and the daemon's session if there is one.
   function activate() {
@@ -685,7 +689,7 @@ ColumnLayout {
       spacing: Style.spacing.lg
       ActionButton {
         compact: true; glyph: Model.Glyph.folderOpen; text: "Show the memory graph"
-        onClicked: Util.execArgv(["xdg-open", root.leakReport.memgraphPath.substring(0, root.leakReport.memgraphPath.lastIndexOf("/"))])
+        onClicked: root.app.showInFolder(root.leakReport.memgraphPath)
       }
       AppText { size: "small"; tone: "faint"; text: "Open the .memgraph in Xcode or with leaks on a Mac for sizes and stacks." }
     }
