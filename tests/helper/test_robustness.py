@@ -19,7 +19,9 @@ from unittest import mock
 
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError
-from iosstudio.features import packages, projects, setup, watch
+from iosstudio.features import packages, projects, watch
+from iosstudio.features.setup import runtime as setup_runtime
+from iosstudio.features.setup import sources as setup_sources
 from support import write_exe
 
 # A fake tool that starts a long-lived grandchild (its pid goes to $1), prints one line, then hangs.
@@ -128,10 +130,10 @@ class Timeouts(Tmp):
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "hi\n", "err\n"))
 
     def test_setup_run_stream_lingering_child(self):
-        with Captured(), mock.patch.object(setup, "EXIT_GRACE", 0.3):
+        with Captured(), mock.patch.object(setup_runtime, "EXIT_GRACE", 0.3):
             t0 = time.monotonic()
             with self.assertRaises(HelperError) as cm:
-                setup.run_stream([self.exe("linger", LINGERS)], None, mutating=False)
+                setup_runtime.run_stream([self.exe("linger", LINGERS)], None, mutating=False)
         self.assertEqual(cm.exception.code, "timeout")
         self.assertLess(time.monotonic() - t0, 5)
 
@@ -140,9 +142,9 @@ class Timeouts(Tmp):
         bindir.mkdir()
         write_exe(bindir / "git", "#!/bin/sh\nsleep 30\n")
         env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(setup, "GIT_TIMEOUT", 0.3):
+        with mock.patch.dict(os.environ, env), mock.patch.object(setup_sources, "GIT_TIMEOUT", 0.3):
             with self.assertRaises(HelperError) as cm:
-                setup._patch_id(self.tmp, "a", "b")
+                setup_sources.git_patch_id(self.tmp, "a", "b")
         self.assertEqual(cm.exception.code, "timeout")
 
     def test_systemctl_timeout(self):
@@ -171,10 +173,10 @@ class Buffers(Tmp):
     def test_setup_run_stream_splits_a_newline_less_flood(self):
         exe = self.exe("flood", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n")
         with Captured() as events:
-            rc = setup.run_stream([exe], "s", mutating=False)
+            rc = setup_runtime.run_stream([exe], "s", mutating=False)
         self.assertEqual(rc, 0)
         logs = [e for e in events if e.get("event") == "log"]
-        self.assertGreaterEqual(len(logs), 300000 // setup.MAX_LINE)
+        self.assertGreaterEqual(len(logs), 300000 // subproc.MAX_LINE)
 
     def test_build_runner_caps_its_line_buffer(self):
         exe = self.exe("flood", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n")
@@ -262,7 +264,7 @@ class Locks(Tmp):
 class Output(unittest.TestCase):
     def test_setup_does_not_patch_write(self):
         self.assertEqual(output._write.__module__, "iosstudio.core.output")
-        self.assertFalse(hasattr(setup, "_locked_write"))
+        self.assertFalse(hasattr(setup_runtime, "_locked_write"))
 
     def test_write_is_thread_safe(self):
         buf = io.StringIO()
