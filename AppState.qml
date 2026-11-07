@@ -29,9 +29,14 @@ Item {
   readonly property string runtimeDir: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || xdgRuntimeDir) + (demo !== "" ? "/ios-studio-demo" : "/ios-studio")
   readonly property string _uid: { var m = /^Uid:\s+(\d+)/m.exec(procStatus.text()); return m ? m[1] : "" }
   FileView { id: procStatus; path: "/proc/self/status"; blockLoading: true; printErrors: false }
-  readonly property string configDir: demo !== "" ? demoDir + "/config" : home + "/.config/ios-studio"
-  readonly property string stateDir: demo !== "" ? demoDir + "/state" : home + "/.local/state/ios-studio"
-  readonly property string cacheDir: demo !== "" ? demoDir + "/cache" : home + "/.cache/ios-studio"
+  // The XDG base folders, the helper's rule (helper/iosstudio/core/appdirs.py): the variable, or the default
+  // when it is unset or empty. The helper, daemon and app must agree, e.g. on the daemon's device.json.
+  readonly property string xdgConfigHome: Model.xdgHome(Quickshell.env("XDG_CONFIG_HOME"), home, ".config")
+  readonly property string xdgStateHome: Model.xdgHome(Quickshell.env("XDG_STATE_HOME"), home, ".local/state")
+  readonly property string xdgCacheHome: Model.xdgHome(Quickshell.env("XDG_CACHE_HOME"), home, ".cache")
+  readonly property string configDir: demo !== "" ? demoDir + "/config" : xdgConfigHome + "/ios-studio"
+  readonly property string stateDir: demo !== "" ? demoDir + "/state" : xdgStateHome + "/ios-studio"
+  readonly property string cacheDir: demo !== "" ? demoDir + "/cache" : xdgCacheHome + "/ios-studio"
   readonly property string version: "0.1.0"
 
   // ------------------------------------------------------------ navigation

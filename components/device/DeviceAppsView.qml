@@ -47,7 +47,7 @@ ColumnLayout {
   RowLayout {
     Layout.fillWidth: true
     spacing: Style.spacing.lg
-    FilterField { id: searchField; Layout.fillWidth: true; placeholder: "Filter " + root.svc.apps.length + " apps by name or bundle ID" }
+    FilterField { id: searchField; Layout.fillWidth: true; placeholder: root.svc.appsResource.loaded ? "Filter " + Model.plural(root.svc.apps.length, "app") + " by name or bundle ID" : "Filter apps by name or bundle ID" }
     ButtonGroupLite {
       options: [{ value: "dev", label: "Yours first" }, { value: "az", label: "A–Z" }, { value: "size", label: "Size" }]
       value: root.sortBy

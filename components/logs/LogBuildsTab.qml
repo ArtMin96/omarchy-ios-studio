@@ -98,7 +98,7 @@ Item {
     ListView {
       id: list
       Layout.fillWidth: false
-      Layout.preferredWidth: Math.max(Style.space(280), Math.min(Style.space(360), root.width * 0.34))
+      Layout.preferredWidth: Math.max(Style.space(240), Math.min(Style.space(360), root.width * 0.34))
       Layout.fillHeight: true
       clip: true
       spacing: Style.spacing.xxs
@@ -123,8 +123,12 @@ Item {
 
     // ---- detail
     ColumnLayout {
+      id: detail
+      // A narrow pane (small window): Rebuild shows only its icon and the log toolbar takes two rows.
+      readonly property bool narrow: width < Style.space(560)
       Layout.fillWidth: true
       Layout.fillHeight: true
+      Layout.minimumWidth: 0          // the pane shrinks with the window; its rows elide and wrap instead
       spacing: Style.spacing.xl
       visible: !!root.selected
 
@@ -133,11 +137,24 @@ Item {
         spacing: Style.spacing.xl
         ColumnLayout {
           Layout.fillWidth: true
+          Layout.minimumWidth: 0
           spacing: Style.spacing.xs
           RowLayout {
+            Layout.fillWidth: true
             spacing: Style.spacing.lg
-            AppText { text: root.selected ? (root.selected.name || root.selected.project) : ""; size: "title"; strong: true }
+            AppText {
+              id: detailTitle
+              Layout.fillWidth: true
+              // Shrinks (elided) in a narrow pane but never grows past the name, so the pill stays next to it.
+              // (TextMetrics: an elided Text's own implicitWidth follows the elided text.)
+              Layout.preferredWidth: Math.ceil(titleMetrics.advanceWidth) + 1
+              Layout.maximumWidth: Layout.preferredWidth
+              text: root.selected ? (root.selected.name || root.selected.project) : ""
+              size: "title"; strong: true; elide: Text.ElideRight
+              TextMetrics { id: titleMetrics; font: detailTitle.font; text: detailTitle.text }
+            }
             StatusPill { visible: !!root.selected; level: root.selected ? root.resultLevel(root.selected) : "info"; text: root.selected ? root.resultText(root.selected) : "" }
+            Item { Layout.fillWidth: true }
           }
           AppText {
             Layout.fillWidth: true
@@ -152,9 +169,9 @@ Item {
         IconButton { glyph: Model.Glyph.openExternal; tooltip: "Open the log in your editor"; enabled: !!root.selected && !!root.selected.logFile && !!root.app.projects
           onClicked: root.app.projects.openBuildLog(root.selected.logFile) }
         ActionButton {
-          text: "Rebuild"; glyph: Model.Glyph.hammer; kind: "primary"
+          text: detail.narrow ? "" : "Rebuild"; glyph: Model.Glyph.hammer; kind: "primary"
           enabled: !!root.selected && !(root.app.projects && root.app.projects.building)
-          tooltip: "Run this build again in Projects"
+          tooltip: detail.narrow ? "Rebuild: run this build again in Projects" : "Run this build again in Projects"
           onClicked: root.svc.rebuild(root.selected)
         }
       }
@@ -204,18 +221,33 @@ Item {
         showRetry: false
       }
 
-      RowLayout {
+      // ---- log toolbar (two rows in a narrow pane: the filter, then the level chips and the line count)
+      GridLayout {
         Layout.fillWidth: true
         visible: !root.logLoading && !root.logError && root.logText !== ""
-        spacing: Style.spacing.lg
-        FilterField { id: logFilter; Layout.fillWidth: true; Layout.maximumWidth: Style.space(300); placeholder: "Filter this log" }
+        columns: detail.narrow ? 2 : 4
+        columnSpacing: Style.spacing.lg
+        rowSpacing: Style.spacing.md
+        FilterField {
+          id: logFilter
+          Layout.fillWidth: true
+          Layout.columnSpan: detail.narrow ? 2 : 1
+          Layout.minimumWidth: Style.space(140)
+          Layout.maximumWidth: detail.narrow ? Number.POSITIVE_INFINITY : Style.space(300)
+          placeholder: "Filter this log"
+        }
         ButtonGroupLite {
           id: logLevel
           options: [{ value: "", label: "All" }, { value: "warn", label: "Warnings" }, { value: "error", label: "Errors" }]
           onPicked: function(v) { value = v }
         }
-        Item { Layout.fillWidth: true }
-        AppText { text: buildLog.shownCount === buildLog.count ? Model.plural(buildLog.count, "line") : buildLog.shownCount + " of " + buildLog.count; size: "small"; tone: "faint" }
+        Item { Layout.fillWidth: true; visible: !detail.narrow }
+        AppText {
+          Layout.fillWidth: detail.narrow
+          horizontalAlignment: Text.AlignRight
+          text: buildLog.shownCount === buildLog.count ? Model.plural(buildLog.count, "line") : buildLog.shownCount + " of " + buildLog.count
+          size: "small"; tone: "faint"; elide: Text.ElideRight
+        }
       }
 
       LogView {
