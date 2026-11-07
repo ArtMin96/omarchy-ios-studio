@@ -28,11 +28,20 @@ Sheet {
   property var project: ({})
   property string view: "list"            // list | add | job | products | added | remove
 
-  // ---- list
-  property string listPhase: "idle"       // loading | ready | error
-  property var list: null                 // `packages list` answer
-  property var listError: null
-  property int _ticket: 0                 // drops answers for a project the sheet no longer shows
+  // ---- list: the `packages list` answer
+  Resource {
+    id: listRes
+    fetch: (done, fail) => root.svc.packagesList(root.project, done, fail)
+    onSucceeded: function(d) {
+      if (root.target === "" || root.targets.map(function(x) { return x.name }).indexOf(root.target) < 0)
+        root.target = d.app_target || (root.targets.length ? root.targets[0].name : "")
+      root._loadAgainIfAsked()
+    }
+    onFailed: root._loadAgainIfAsked()
+  }
+  readonly property var list: listRes.data
+  property bool _loadAgain: false         // load() came while one ran: that one may predate the change
+  property int _ticket: 0                 // drops dry-run answers for a removal the sheet no longer shows
   readonly property var packages: list && list.packages ? list.packages : []
   readonly property var targets: list && list.targets ? list.targets : []
   readonly property var unresolved: list && list.unresolved ? list.unresolved : []
@@ -176,28 +185,14 @@ Sheet {
       root.view = "list"
       root.notice = null
       root.job = null
-      root.list = null
+      listRes.reset()                     // never show another project's packages while loading
     }
     root.open()
     root.load()
   }
 
-  function load() {
-    var t = ++root._ticket
-    if (!root.list) root.listPhase = "loading"
-    root.listError = null
-    svc.packagesList(root.project, function(d) {
-      if (t !== root._ticket) return
-      root.list = d
-      root.listPhase = "ready"
-      if (root.target === "" || root.targets.map(function(x) { return x.name }).indexOf(root.target) < 0)
-        root.target = d.app_target || (root.targets.length ? root.targets[0].name : "")
-    }, function(e) {
-      if (t !== root._ticket) return
-      root.listError = e
-      root.listPhase = "error"
-    })
-  }
+  function load() { if (!listRes.load(true)) root._loadAgain = true }
+  function _loadAgainIfAsked() { if (root._loadAgain) { root._loadAgain = false; Qt.callLater(root.load) } }
 
   onClosed: { root._ticket++; if (!root.jobRunning) root.view = "list" }
 
@@ -406,26 +401,26 @@ Sheet {
   LoadingState {
     Layout.fillWidth: true
     Layout.preferredHeight: Style.space(200)
-    visible: root.view === "list" && root.listPhase === "loading"
+    visible: root.view === "list" && listRes.status === "loading"
     text: "Reading Package.swift…"
     detail: "The first look at a project takes a few seconds."
   }
 
   ErrorState {
     Layout.fillWidth: true
-    visible: root.view === "list" && root.listPhase === "error"
+    visible: root.view === "list" && listRes.status === "error"
     compact: true
     app: root.app
     title: "Couldn't read the packages"
-    error: root.listError
-    message: root.errorText(root.listError)
+    error: listRes.error
+    message: root.errorText(listRes.error)
     onRetry: root.load()
     onFixed: root.close()
   }
 
   EmptyState {
     Layout.fillWidth: true
-    visible: root.view === "list" && root.listPhase === "ready" && root.packages.length === 0
+    visible: root.view === "list" && listRes.status === "ready" && root.packages.length === 0
     compact: true
     glyph: Model.Glyph.packages
     title: "No packages yet"
@@ -450,7 +445,7 @@ Sheet {
     // a compact ghost button's label ends xs further right than an IconButton's glyph: this puts "Add package…"
     // on the same right edge as the header's × and the rows' bin (measured: both end at body right − 12)
     Layout.rightMargin: Style.spacing.xs
-    visible: root.view === "list" && root.listPhase === "ready" && root.packages.length > 0
+    visible: root.view === "list" && listRes.status === "ready" && root.packages.length > 0
     spacing: Style.spacing.md
     AppText { Layout.fillWidth: true; text: Model.plural(root.packages.length, "package"); strong: true; elide: Text.ElideRight }
     ActionButton {
@@ -464,134 +459,85 @@ Sheet {
   }
 
   // update / resolve running: the latest progress line, and Cancel
-  RowLayout {
+  SheetGlyphRow {
     Layout.fillWidth: true
     visible: root.view === "list" && root.jobRunning && root.job.kind !== "add"
-    spacing: Style.spacing.xxl
-    FontMetrics { id: runMetrics; font: runTitle.font }
-    Item {
-      Layout.alignment: Qt.AlignTop
-      Layout.preferredWidth: root.glyphW
-      Layout.preferredHeight: runMetrics.height
-      Spinner { anchors.centerIn: parent; running: root.jobRunning; size: Style.font.icon }
-    }
-    ColumnLayout {
-      Layout.fillWidth: true
-      Layout.alignment: Qt.AlignTop
-      spacing: Style.spacing.xxs
-      AppText {
-        id: runTitle
-        Layout.fillWidth: true
-        text: !root.job ? "" : root.job.kind === "resolve" ? "Fetching the packages…"
-              : root.job.pkg ? "Updating " + root.job.pkg + "…" : "Updating all packages…"
-        elide: Text.ElideRight
-      }
-      AppText { Layout.fillWidth: true; text: root.job ? root.job.detail || "" : ""; tone: "dim"; size: "small"; elide: Text.ElideMiddle }
-    }
-    ActionButton { Layout.rightMargin: Style.spacing.xs; text: "Cancel"; kind: "ghost"; compact: true; tooltip: "Stop it. Package.resolved stays as it was."; onClicked: root.cancelJob() }
+    glyphWidth: root.glyphW
+    spinner: root.jobRunning
+    title: !root.job ? "" : root.job.kind === "resolve" ? "Fetching the packages…"
+           : root.job.pkg ? "Updating " + root.job.pkg + "…" : "Updating all packages…"
+    AppText { Layout.fillWidth: true; text: root.job ? root.job.detail || "" : ""; tone: "dim"; size: "small"; elide: Text.ElideMiddle }
+    trailing: [ ActionButton { Layout.rightMargin: Style.spacing.xs; text: "Cancel"; kind: "ghost"; compact: true; tooltip: "Stop it. Package.resolved stays as it was."; onClicked: root.cancelJob() } ]
   }
 
   // update / resolve finished
-  RowLayout {
+  SheetGlyphRow {
     id: noticeBox
     readonly property string level: !root.notice ? "" : root.notice.ok ? "ok" : root.notice.cancelled ? "info" : "error"
     readonly property var changes: root.notice ? root.notice.changes : []
     Layout.fillWidth: true
-    visible: root.view === "list" && !!root.notice && root.listPhase !== "loading"
-    spacing: Style.spacing.xxl
-    FontMetrics { id: noticeMetrics; font: noticeTitle.font }
-    Item {
-      Layout.alignment: Qt.AlignTop
-      Layout.preferredWidth: root.glyphW
-      Layout.preferredHeight: noticeMetrics.height
-      Icon {
-        anchors.centerIn: parent
-        glyph: noticeBox.level === "ok" ? Model.Glyph.checkCircle : noticeBox.level === "error" ? Model.Glyph.error : Model.Glyph.info
-        size: Style.font.icon
-        color: Theme.levelColor(noticeBox.level)
-      }
+    visible: root.view === "list" && !!root.notice && listRes.status !== "loading"
+    glyphWidth: root.glyphW
+    glyph: level === "ok" ? Model.Glyph.checkCircle : level === "error" ? Model.Glyph.error : Model.Glyph.info
+    glyphColor: Theme.levelColor(level)
+    titleWraps: true
+    title: {
+      var n = root.notice
+      if (!n) return ""
+      var what = n.kind === "resolve" ? "Fetching the packages" : n.pkg ? "Updating " + n.pkg : "The update"
+      if (n.cancelled) return what + " was cancelled. Nothing changed."
+      if (!n.ok) return (n.kind === "resolve" ? "Couldn't fetch the packages: " : "Couldn't update: ") + root.errorText(n.error)
+      if (noticeBox.changes.length === 0) return n.kind === "resolve" ? "All packages are fetched." : "Everything is up to date."
+      return Model.plural(noticeBox.changes.length, "package") + (n.kind === "resolve" ? " fetched" : " updated")
+             + (n.demo ? " (demo mode, nothing was written)" : "")
     }
-    ColumnLayout {
-      Layout.fillWidth: true
-      Layout.alignment: Qt.AlignTop
-      spacing: Style.spacing.xxs
-      AppText {
-        id: noticeTitle
+    trailingAlignment: Qt.AlignTop
+    Repeater {
+      model: noticeBox.changes.slice(0, 8)
+      delegate: AppText {
+        required property var modelData
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        text: {
-          var n = root.notice
-          if (!n) return ""
-          var what = n.kind === "resolve" ? "Fetching the packages" : n.pkg ? "Updating " + n.pkg : "The update"
-          if (n.cancelled) return what + " was cancelled. Nothing changed."
-          if (!n.ok) return (n.kind === "resolve" ? "Couldn't fetch the packages: " : "Couldn't update: ") + root.errorText(n.error)
-          if (noticeBox.changes.length === 0) return n.kind === "resolve" ? "All packages are fetched." : "Everything is up to date."
-          return Model.plural(noticeBox.changes.length, "package") + (n.kind === "resolve" ? " fetched" : " updated")
-                 + (n.demo ? " (demo mode, nothing was written)" : "")
-        }
-      }
-      Repeater {
-        model: noticeBox.changes.slice(0, 8)
-        delegate: AppText {
-          required property var modelData
-          Layout.fillWidth: true
-          text: root.changeLine(modelData)
-          tone: "dim"; size: "small"; elide: Text.ElideRight
-        }
-      }
-      AppText {
-        Layout.fillWidth: true
-        visible: noticeBox.changes.length > 8
-        text: "and " + (noticeBox.changes.length - 8) + " more"
-        tone: "faint"; size: "small"
-      }
-    }
-    IconButton { Layout.alignment: Qt.AlignTop; glyph: Model.Glyph.close; tooltip: "Dismiss"; onClicked: root.notice = null }
-  }
-
-  // some declared packages aren't in Package.resolved yet
-  RowLayout {
-    Layout.fillWidth: true
-    visible: root.view === "list" && root.listPhase === "ready" && root.needsResolve && !(root.jobRunning && root.job.kind === "resolve")
-    spacing: Style.spacing.xxl
-    FontMetrics { id: unresMetrics; font: unresTitle.font }
-    Item {
-      Layout.alignment: Qt.AlignTop
-      Layout.preferredWidth: root.glyphW
-      Layout.preferredHeight: unresMetrics.height
-      Icon { anchors.centerIn: parent; glyph: Model.Glyph.warn; size: Style.font.icon; color: Theme.warn }
-    }
-    ColumnLayout {
-      Layout.fillWidth: true
-      Layout.alignment: Qt.AlignTop
-      spacing: Style.spacing.xxs
-      AppText {
-        id: unresTitle
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        tone: "warn"
-        text: root.unresolved.length ? "Unresolved: " + Model.plural(root.unresolved.length, "package") + " not fetched yet"
-                                     : "Unresolved: there's no Package.resolved yet"
-      }
-      AppText {
-        Layout.fillWidth: true
-        text: root.unresolved.length ? root.unresolved.map(root.nameOf).join(", ") : "Resolve fetches every package and pins its version."
+        text: root.changeLine(modelData)
         tone: "dim"; size: "small"; elide: Text.ElideRight
       }
     }
-    ActionButton {
-      Layout.alignment: Qt.AlignVCenter
-      text: "Resolve"; glyph: Model.Glyph.download; kind: "secondary"; compact: true
-      disabled: root.lockReason !== ""
-      tooltip: root.lockReason !== "" ? root.lockReason : "Fetch the packages and write Package.resolved (swift package resolve)"
-      onClicked: root.resolve()
+    AppText {
+      Layout.fillWidth: true
+      visible: noticeBox.changes.length > 8
+      text: "and " + (noticeBox.changes.length - 8) + " more"
+      tone: "faint"; size: "small"
     }
+    trailing: [ IconButton { glyph: Model.Glyph.close; tooltip: "Dismiss"; onClicked: root.notice = null } ]
+  }
+
+  // some declared packages aren't in Package.resolved yet
+  SheetGlyphRow {
+    Layout.fillWidth: true
+    visible: root.view === "list" && listRes.status === "ready" && root.needsResolve && !(root.jobRunning && root.job.kind === "resolve")
+    glyphWidth: root.glyphW
+    glyph: Model.Glyph.warn; glyphColor: Theme.warn
+    titleWraps: true; titleTone: "warn"
+    title: root.unresolved.length ? "Unresolved: " + Model.plural(root.unresolved.length, "package") + " not fetched yet"
+                                  : "Unresolved: there's no Package.resolved yet"
+    AppText {
+      Layout.fillWidth: true
+      text: root.unresolved.length ? root.unresolved.map(root.nameOf).join(", ") : "Resolve fetches every package and pins its version."
+      tone: "dim"; size: "small"; elide: Text.ElideRight
+    }
+    trailing: [
+      ActionButton {
+        text: "Resolve"; glyph: Model.Glyph.download; kind: "secondary"; compact: true
+        disabled: root.lockReason !== ""
+        tooltip: root.lockReason !== "" ? root.lockReason : "Fetch the packages and write Package.resolved (swift package resolve)"
+        onClicked: root.resolve()
+      }
+    ]
   }
 
   // the packages: like ListRow, the requirement, version and buttons are centred on the whole row
   ColumnLayout {
     Layout.fillWidth: true
-    visible: root.view === "list" && root.listPhase === "ready" && root.packages.length > 0
+    visible: root.view === "list" && listRes.status === "ready" && root.packages.length > 0
     spacing: 0
 
     Repeater {
@@ -965,47 +911,33 @@ Sheet {
     spacing: Style.spacing.xl
 
     // glyph centred on the headline's line; the text starts on the sheet title's left edge
-    RowLayout {
+    SheetGlyphRow {
       Layout.fillWidth: true
-      spacing: Style.spacing.xxl
-      FontMetrics { id: addedMetrics; font: addedHead.font }
-      Item {
-        Layout.alignment: Qt.AlignTop
-        Layout.preferredWidth: root.glyphW
-        Layout.preferredHeight: addedMetrics.height
-        Icon { anchors.centerIn: parent; glyph: Model.Glyph.checkCircle; size: Style.font.iconLarge; color: Theme.success }
-      }
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: Style.spacing.xxs
-        AppText {
-          id: addedHead
-          Layout.fillWidth: true
-          text: "Added " + (root.added && root.added["package"] ? root.pkgName(root.added["package"]) : (root.job ? root.job.pkg : "the package"))
-          strong: true; elide: Text.ElideRight
+      glyphWidth: root.glyphW
+      glyph: Model.Glyph.checkCircle; glyphColor: Theme.success; glyphSize: Style.font.iconLarge
+      titleStrong: true
+      title: "Added " + (root.added && root.added["package"] ? root.pkgName(root.added["package"]) : (root.job ? root.job.pkg : "the package"))
+      // one fact per line, so none breaks mid-phrase
+      Repeater {
+        model: {
+          var a = root.added
+          if (!a) return []
+          var lines = []
+          if (a.products.length) lines.push(a.products.join(", ") + (a.products.length > 1 ? " are" : " is") + " linked to " + a.target)
+          else lines.push("No library linked yet")
+          var p = a["package"]
+          if (p) {
+            var req = root.reqText(p), res = root.resolvedText(p)
+            if (req || res) lines.push((req ? "Requirement " + req : "") + (req && res ? " · " : "") + (res ? "resolved " + res : ""))
+          }
+          if (a.demo) lines.push("Demo mode: nothing was written")
+          return lines
         }
-        // one fact per line, so none breaks mid-phrase
-        Repeater {
-          model: {
-            var a = root.added
-            if (!a) return []
-            var lines = []
-            if (a.products.length) lines.push(a.products.join(", ") + (a.products.length > 1 ? " are" : " is") + " linked to " + a.target)
-            else lines.push("No library linked yet")
-            var p = a["package"]
-            if (p) {
-              var req = root.reqText(p), res = root.resolvedText(p)
-              if (req || res) lines.push((req ? "Requirement " + req : "") + (req && res ? " · " : "") + (res ? "resolved " + res : ""))
-            }
-            if (a.demo) lines.push("Demo mode: nothing was written")
-            return lines
-          }
-          delegate: AppText {
-            required property string modelData
-            Layout.fillWidth: true
-            text: modelData
-            tone: "dim"; size: "small"; elide: Text.ElideRight
-          }
+        delegate: AppText {
+          required property string modelData
+          Layout.fillWidth: true
+          text: modelData
+          tone: "dim"; size: "small"; elide: Text.ElideRight
         }
       }
     }
@@ -1064,28 +996,19 @@ Sheet {
       onRetry: root.confirmRemove()
     }
 
-    RowLayout {
+    SheetGlyphRow {
       Layout.fillWidth: true
       visible: root.removePhase !== "invalid"
-      spacing: Style.spacing.xxl
-      FontMetrics { id: removeMetrics; font: removeHead.font }
-      Item {
-        Layout.alignment: Qt.AlignTop
-        Layout.preferredWidth: root.glyphW
-        Layout.preferredHeight: removeMetrics.height
-        Icon { anchors.centerIn: parent; glyph: Model.Glyph.trash; size: Style.font.iconLarge; color: Commons.Color.urgent }
-      }
-      ColumnLayout {
+      glyphWidth: root.glyphW
+      glyph: Model.Glyph.trash; glyphColor: Commons.Color.urgent; glyphSize: Style.font.iconLarge
+      titleStrong: true
+      title: "Remove " + root.pkgName(root.removing) + " from Package.swift"
+      AppText {
         Layout.fillWidth: true
-        spacing: Style.spacing.xxs
-        AppText { id: removeHead; Layout.fillWidth: true; text: "Remove " + root.pkgName(root.removing) + " from Package.swift"; strong: true; elide: Text.ElideRight }
-        AppText {
-          Layout.fillWidth: true
-          tone: "dim"; size: "small"; wrapMode: Text.WordWrap
-          text: root.removeTargetDeps.length
-                ? "Also unlinks it from " + root.removeTargetDeps.map(root.targetDepText).join(", ") + ". Code that imports it stops compiling."
-                : "No target uses it."
-        }
+        tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+        text: root.removeTargetDeps.length
+              ? "Also unlinks it from " + root.removeTargetDeps.map(root.targetDepText).join(", ") + ". Code that imports it stops compiling."
+              : "No target uses it."
       }
     }
 

@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // "Format project…" sheet (projects slice): what swift-format would change in a project, before it
@@ -20,17 +21,20 @@ Sheet {
   property var app: null
   property var svc: null
   property var project: ({})
-  property string phase: "idle"          // loading | ready | error | applying
-  property var result: null              // the dry run's answer
-  property var error: null               // the dry run failed
+  // The dry run: its answer is `result`, its failure `error`.
+  Resource { id: preview; fetch: (done, fail) => root.svc.formatPreview(root.project, done, fail) }
+  readonly property var result: preview.data
+  readonly property var error: preview.error
+  property bool applying: false
   property var applyError: null          // apply failed; the diff stays
-  property int _ticket: 0                // drops answers for a project the sheet no longer shows
+  property int _ticket: 0                // drops apply answers for a sheet that closed
+  // idle | loading | ready | error | applying
+  readonly property string phase: applying ? "applying" : preview.status
 
   readonly property var changed: result && result.files_changed ? result.files_changed : []
   readonly property int changedCount: result ? (result.files_changed_total !== undefined ? result.files_changed_total : changed.length) : 0
   readonly property var fileErrors: result && result.errors ? result.errors : []
   readonly property bool loading: phase === "loading"
-  readonly property bool applying: phase === "applying"
   readonly property string applyBlocker: loading ? "Still checking what would change"
                                          : phase === "error" ? "swift-format didn't run; nothing to apply"
                                          : changedCount === 0 ? "Nothing to change: the project is already formatted"
@@ -58,35 +62,24 @@ Sheet {
   }
 
   function check() {
-    var t = ++root._ticket
-    root.phase = "loading"
-    root.result = null
-    root.error = null
     root.applyError = null
-    svc.formatPreview(root.project, function(d) {
-      if (t !== root._ticket) return
-      root.result = d
-      root.phase = "ready"
-    }, function(e) {
-      if (t !== root._ticket) return
-      root.error = e
-      root.phase = "error"
-    })
+    preview.reset()
+    preview.load()
   }
 
   function apply() {
     if (root.applyBlocker !== "" || root.applying) return
     var t = ++root._ticket
-    root.phase = "applying"
+    root.applying = true
     root.applyError = null
     svc.formatApply(root.project, function(d) {
       if (t !== root._ticket) return
-      root.phase = "ready"
+      root.applying = false
       root.close()
     }, function(e) {
       if (t !== root._ticket) return
       root.applyError = e
-      root.phase = "ready"
+      root.applying = false
     })
   }
 
@@ -105,7 +98,7 @@ Sheet {
                                          root.height - Style.spacing.huge * 4 - _chromeH - _othersH))
 
   // Answers that arrive after the sheet closed are dropped.
-  onClosed: { root._ticket++; if (root.phase === "loading") root.phase = "idle" }
+  onClosed: { root._ticket++; root.applying = false; if (preview.status === "loading") preview.reset() }
 
   function errorText(e) {
     return Model.errorMessage(e) + (e && e.hint ? " " + e.hint : "")

@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../common"
+import "../../core"
 import "../../lib/Model.js" as Model
 
 // "Run presets" sheet for one project (projects slice): saved launch arguments, environment variables,
@@ -20,10 +21,17 @@ Sheet {
   property var app: null
   property var svc: null
   property var project: ({})
-  property bool loading: false
   property bool working: false
-  property var error: null
-  property var loaded: null              // the helper's answer: { path, presets, selected }
+  property var saveError: null           // saving failed (the editor stays open)
+  // The helper's answer: { path, presets, selected }; saving, deleting and choosing a preset answer with it too.
+  Resource {
+    id: presetsRes
+    fetch: (done, fail) => root.svc.loadPresets(root.project, done, fail)
+    onSucceeded: if (root._openWith !== "") { var n = root._openWith; root._openWith = ""; root.edit(n) }
+  }
+  readonly property var loaded: presetsRes.data
+  readonly property bool loading: presetsRes.busy
+  readonly property var error: root.saveError || presetsRes.error
   property var editing: null             // null = the list; { renameFrom: "" (new) | old name }
   property string _openWith: ""
   property int cursor: -1
@@ -118,23 +126,12 @@ Sheet {
     root.project = p || {}
     root.editing = null
     root._openWith = presetName || ""
-    if (!again) root.loaded = null       // never show another project's presets while loading
+    if (!again) presetsRes.reset()       // never show another project's presets while loading
     if (root.opened) root.load()         // shown() only fires on the first open
     else root.open()
   }
 
-  function load() {
-    root.loading = true
-    root.error = null
-    svc.loadPresets(root.project, function(d) {
-      root.loading = false
-      root.loaded = d
-      if (root._openWith !== "") { var n = root._openWith; root._openWith = ""; root.edit(n) }
-    }, function(e) {
-      root.loading = false
-      root.error = e
-    })
-  }
+  function load() { root.saveError = null; presetsRes.load(true) }
 
   function presetNamed(name) {
     for (var i = 0; i < root.presets.length; i++) if (root.presets[i].name === name) return root.presets[i]
@@ -146,7 +143,7 @@ Sheet {
     var p = name ? root.presetNamed(name) : null
     if (name && !p) return
     p = p || {}
-    root.error = null
+    root.saveError = null
     nameField.text = p.name || ""
     root.argRows = (p.args || []).slice()
     var rows = []
@@ -167,31 +164,31 @@ Sheet {
 
   function back() {
     root.editing = null
-    root.error = null
+    root.saveError = null
   }
 
   function save() {
     root.saveTried = true
     if (!root.canSave) return
     root.working = true
-    root.error = null
+    root.saveError = null
     svc.savePreset(root.project, root.draft, root.editing.renameFrom || "", function(d) {
       root.working = false
-      root.loaded = d
+      presetsRes.set(d)
       root.editing = null
     }, function(e) {
       root.working = false
-      root.error = e
+      root.saveError = e
     })
   }
 
   function remove(name) {
-    svc.deletePreset(root.project, name, function(d) { root.loaded = d })
+    svc.deletePreset(root.project, name, function(d) { presetsRes.set(d) })
   }
 
   function use(name) {
-    root.loaded = Object.assign({}, root.loaded, { selected: name || null })
-    svc.selectPreset(root.project, name, function(d) { root.loaded = d }, function() { root.load() })
+    presetsRes.set(Object.assign({}, root.loaded, { selected: name || null }))
+    svc.selectPreset(root.project, name, function(d) { presetsRes.set(d) }, function() { root.load() })
   }
 
   function addArg() { root.argRows = root.argRows.concat([""]) ; Qt.callLater(function() { var it = argRepeater.itemAt(root.argRows.length - 1); if (it) it.focusField() }) }

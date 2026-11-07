@@ -520,7 +520,7 @@ PageFrame {
               id: rowIcon
               anchors.fill: parent
               visible: status === Image.Ready
-              source: prow.modelData.icon ? "file://" + prow.modelData.icon : ""
+              source: Util.fileUrl(prow.modelData.icon)
               sourceSize.width: Style.space(64); sourceSize.height: Style.space(64)
               fillMode: Image.PreserveAspectCrop
               asynchronous: true
