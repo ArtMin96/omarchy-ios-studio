@@ -1,7 +1,7 @@
 import QtQuick
 import QtTest
-import "../.."
-import "../../Model.js" as Model
+import "../../core"
+import "../../lib/Model.js" as Model
 
 // Resource.qml (loading state, ttl, de-dup, stale data on error, reset) and Model.clock/elapsedSeconds.
 // Run by tests/qml/test_qml_core.py through qmltestrunner.

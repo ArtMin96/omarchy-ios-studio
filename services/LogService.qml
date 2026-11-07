@@ -2,9 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../lib/Model.js" as Model
 
 // Logs slice: live device log (syslog over the device daemon), crash reports
 // and build logs (from the projects slice's build history).

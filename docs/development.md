@@ -17,12 +17,19 @@ iOS Studio is a standalone [Quickshell](https://quickshell.org/) config with a P
 ```
 shell.qml            window, sidebar, page loader, global keys, IPC handler, overlays
 AppState.qml         shared state: current page, nav(), toast(), confirm(), settings
-Cli.qml, Stream.qml  wrappers for one-shot and streaming helper calls
-ThemeWatcher.qml     follows Omarchy theme changes
-Model.js             pure helpers: glyphs, PAGES, SHORTCUTS, formatting, run preset rules
-components/          shared UI building blocks (see components.md), including AgentsSection
-services/            one QML service per area: Setup, Toolchain, Account, Device, Project, Log
+core/                non-visual plumbing: Cli.qml, Stream.qml (one-shot and streaming helper calls),
+                     Resource.qml (one piece of backend data + its state), ThemeWatcher.qml (follows the
+                     Omarchy theme), Host.qml (overlay stack, singleton), CommandCheck.qml (`command -v`, singleton)
+lib/Model.js         pure helpers: glyphs, PAGES, SHORTCUTS, formatting, run preset rules
+services/            one QML service per area: Setup, Toolchain, Account, Device, Project, Log, Watch
 pages/               one page per sidebar entry
+components/          UI building blocks (see components.md), one folder per area:
+  common/            shared widgets used by several areas (Card, ListRow, Sheet, StateView, Theme, LogView, …)
+  device/            the iPhone page: hero, tabs (Device*View), app data, debug, perf chart, screenshot compare
+  projects/          the Projects page: cards, build panel, sheets (new, packages, format, presets, build settings)
+  logs/              the Logs page: device/console/build log tabs, crash browser
+  account/           the Apple ID page: sign-in sheet, revoke warning
+  settings/          Settings parts: AI agents, editor setup
 helper/
   main.py            helper router: group name -> module
   common.py          shared helper code: ok()/fail()/event(), paths, fix links
@@ -73,6 +80,14 @@ templates/           Swift app templates used by "New app"
 install.sh           launcher integration (and --uninstall)
 .github/             CI and release workflows, release-note categories, scripts/check-version.sh (see CI and Releases below)
 ```
+
+QML imports between these folders are relative, so qmllint can follow them: a page imports
+`"../components/common"` and its own area folder, a component in `components/device/` imports `"../common"`
+(and `"../../core"` if it uses Stream, Resource, Host or CommandCheck), and everything imports
+`"<up>/lib/Model.js" as Model`. Files in the same folder see each other without an import. Quickshell only
+resolves folders it found by following imports from `shell.qml`; pages load by URL, so `shell.qml` imports
+`"pages"` to make Quickshell scan them (and through them every `components/` folder). A new folder must be
+imported from a file that is already reached, or its types are "not a type" at runtime.
 
 `shell.qml` creates one `AppState` (`app`) and every service on it: `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`. Each page gets `required property var app`. Every service exposes `status` (`unknown`, `loading`, `ready`, `needs-setup`, `error`), a `summary` for the Home page and sidebar badges, and `refresh()`.
 
@@ -206,7 +221,7 @@ qs ipc -p . call iosstudio nav projects   # drive it over IPC
 bin/iosstudio-helper setup check          # call the helper directly
 ```
 
-IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, `status()`, `applyTheme()`, `toast(text, level)`. `ios-studio <page>` uses `nav` to deep-link. Page names and aliases are in `Model.js`.
+IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, `status()`, `applyTheme()`, `toast(text, level)`. `ios-studio <page>` uses `nav` to deep-link. Page names and aliases are in `lib/Model.js`.
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 

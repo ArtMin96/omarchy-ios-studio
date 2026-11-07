@@ -3,8 +3,8 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Home: one glance at readiness, the next best action, the iPhone, the Apple ID
 // signing countdown, recent apps (one-click Run), builds and new crashes.

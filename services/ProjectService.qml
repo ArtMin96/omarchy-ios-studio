@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Projects and builds (projects slice). Owns the one build stream, so a build keeps running
 // while the user moves between pages; the Projects page only renders this state.
