@@ -82,9 +82,11 @@ class WatchTools(unittest.IsolatedAsyncioTestCase):
 
         from iosstudio_mcp.core import deadline
 
+        replaced = asyncio.Event()                 # the other project's watcher stops when the test says so
+
         async def slow_call(group, action, flags=None, **opts):
             self.calls.append((group, action, dict(flags or {}), opts))
-            await asyncio.sleep(1.5)
+            await replaced.wait()
             return snapshot("compiling", 0, replaced={"path": "/home/u/Developer/Other", "project": "Other"})
 
         async def fake_resolve(state, project):
@@ -95,7 +97,7 @@ class WatchTools(unittest.IsolatedAsyncioTestCase):
                 first = (await start(self.ctx, project_path="Glance")).structured_content
             self.assertEqual((first["state"], first["watching"]), ("starting", False))
             self.assertIn("ios_watch_start(project_path='/home/u/Developer/Glance') again", first["next_steps"][0])
-            await asyncio.sleep(0.6)
+            replaced.set()
             with deadline.call_budget(1.5):
                 done = (await start(self.ctx, project_path="Glance")).structured_content
         self.assertEqual(done["state"], "compiling")

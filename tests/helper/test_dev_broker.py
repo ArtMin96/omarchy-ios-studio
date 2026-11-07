@@ -547,9 +547,11 @@ class Idle(BrokerCase):
         self.assertFalse(self.sock.exists())
 
     async def test_stays_up_while_a_client_is_connected_then_exits(self):
+        self.b.idle = 60.0                                      # no idling out before the client gets here
         await self.start()
         c = await self.connect()
         await c.call("hello")
+        self.b.idle = Idle.idle                                 # the timer armed when it leaves is short
         self.assertIsNone(self.b._idle_handle)                  # no idle timer while someone is here
         self.b._idle_exit()                                     # a stale timer firing anyway
         self.assertFalse(self.b._stopping.is_set())
@@ -559,6 +561,7 @@ class Idle(BrokerCase):
 
     async def test_a_client_waiting_for_a_slow_start_is_not_dropped(self):
         self.ready.clear()                                      # the backend is still coming up
+        self.b.idle = 60.0                                      # the test fires the idle timer itself
         await self.start()
         c = await self.connect()
         await self.until(lambda: self.b._connecting == 1)

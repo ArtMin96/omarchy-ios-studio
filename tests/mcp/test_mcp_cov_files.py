@@ -103,7 +103,8 @@ class MediaList(FilesCase):
 class MediaPull(FilesCase):
     async def test_a_slow_import_is_a_job_with_progress_then_its_files(self):
         dest = self.tmp / "Pictures"
-        self.daemon.replies["media.pull"] = lambda a: (0.6, {
+        gate = asyncio.Event()                         # the daemon answers once the test has seen progress
+        self.daemon.replies["media.pull"] = lambda a: (gate, {
             "transferId": a["transferId"], "dest": a["dest"], "files": [f"{a['dest']}/IMG_0001.HEIC"],
             "skipped": [], "failed": [], "bytes": 2310044, "converted": 0, "notConverted": 0, "seconds": 0.6})
         first = await self.data(FILES, "ios_media_pull", ids=["DCIM/100APPLE/IMG_0001.HEIC"], dest=str(dest),
@@ -111,18 +112,21 @@ class MediaPull(FilesCase):
         self.assertEqual(first["state"], "running")
         jid = first["job_id"]
         self.assertIn(f"ios_media_pull(job_id='{jid}'", first["next_steps"][0])
-        await asyncio.sleep(0.05)                      # the request reaches the daemon
-        sent = self.daemon.sent("media.pull")[0]
+        sent = (await self.until(lambda: self.daemon.sent("media.pull"), what="media.pull"))[0]
         self.assertEqual((sent["transferId"], sent["ids"], sent["dest"], sent["convertHeic"]),
                          (jid, ["DCIM/100APPLE/IMG_0001.HEIC"], str(dest), False))
         self.daemon.emit("transfer", {"id": jid, "kind": "media.pull", "state": "running", "bytes": 1000,
                                       "total": 4000, "files": 0, "count": 1, "file": "IMG_0001.HEIC", "seconds": 0.1,
                                       "dest": str(dest)})
-        await asyncio.sleep(0.05)
-        mid = await self.data(FILES, "ios_media_pull", job_id=jid, wait_seconds=0)
+
+        async def progressed():
+            d = await self.data(FILES, "ios_media_pull", job_id=jid, wait_seconds=0)
+            return d if d.get("progress") else None
+        mid = await self.until(progressed, what="transfer progress")
         self.assertEqual((mid["progress"], mid["current_file"], mid["total_bytes"]), (0.25, "IMG_0001.HEIC", 4000))
         st = await self.status(jid)
         self.assertEqual((st["job_id"], st["kind"], st["state"]), (jid, "transfer", "running"))
+        gate.set()
         done = await self.poll(FILES, "ios_media_pull", jid, wait_seconds=3)
         self.assertEqual(done["state"], "succeeded")
         self.assertEqual(done["files"], [f"{dest}/IMG_0001.HEIC"])
@@ -154,7 +158,7 @@ class MediaPull(FilesCase):
         self.assertTrue(d["next_steps"])
 
     async def test_a_job_is_polled_with_the_tool_that_started_it(self):
-        self.daemon.replies["media.pull"] = (1.5, {"files": []})
+        self.daemon.replies["media.pull"] = (asyncio.Event(), {"files": []})     # never answers: stays running
         jid = (await self.data(FILES, "ios_media_pull", ids=["DCIM/1/a.jpg"], dest=str(self.tmp),
                                wait_seconds=0))["job_id"]
         text = await self.error(FILES, "ios_files_pull", job_id=jid)
@@ -351,22 +355,26 @@ class CameraTest(FilesCase):
         self.img.write_bytes(b"\xff\xd8\xff")
 
     async def test_a_run_is_a_job_with_steps_then_a_bounded_result(self):
-        self.daemon.replies["cameratest.run"] = lambda a: (0.6, {**CAMERA_RESULT, "testId": a["testId"]})
+        gate = asyncio.Event()
+        self.daemon.replies["cameratest.run"] = lambda a: (gate, {**CAMERA_RESULT, "testId": a["testId"]})
         first = await self.data(FILES, "ios_camera_test", bundle_id="com.example.app", inputs=[str(self.img)],
                                 timeout_s=30, wait_seconds=0)
         self.assertEqual(first["state"], "running")
         jid = first["job_id"]
-        await asyncio.sleep(0.05)
-        sent = self.daemon.sent("cameratest.run")[0]
+        sent = (await self.until(lambda: self.daemon.sent("cameratest.run"), what="cameratest.run"))[0]
         self.assertEqual((sent["testId"], sent["bundleId"], sent["inputs"], sent["timeout"]),
                          (jid, OWN, [str(self.img)], 30))
         self.assertNotIn("args", sent)                 # the daemon's default -cameraTestMode 1
         self.daemon.emit("cameratest", {"testId": jid, "step": "push", "state": "running", "title": "Copy inputs",
                                         "detail": ""})
-        await asyncio.sleep(0.05)
-        mid = await self.data(FILES, "ios_camera_test", job_id=jid, wait_seconds=0)
+
+        async def stepped():
+            d = await self.data(FILES, "ios_camera_test", job_id=jid, wait_seconds=0)
+            return d if d.get("steps") else None
+        mid = await self.until(stepped, what="cameratest step")
         self.assertEqual((mid["step"], mid["steps"][0]["id"]), ("push", "push"))
         self.assertEqual((await self.status(jid))["kind"], "cameratest")
+        gate.set()
         res = None
         for _ in range(10):
             res = await self.call(FILES, "ios_camera_test", job_id=jid, wait_seconds=2)
@@ -412,7 +420,7 @@ class CameraTest(FilesCase):
         self.assertEqual(self.daemon.count("cameratest.run"), 0)
 
     async def test_a_wrong_job_kind_is_refused(self):
-        self.daemon.replies["container.pull"] = (2, {})
+        self.daemon.replies["container.pull"] = (asyncio.Event(), {})           # never answers: stays running
         jid = (await self.data(FILES, "ios_files_pull", bundle_id=OWN, paths=["/Documents"], dest=str(self.tmp),
                                wait_seconds=0))["job_id"]
         text = await self.error(FILES, "ios_camera_test", job_id=jid)

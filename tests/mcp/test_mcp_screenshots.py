@@ -25,6 +25,7 @@ from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import screenshots as T
 from support import ROOT
 from support.mcp_fakes import FakeMCP, size_of
+from support.waiting import until
 
 FIX = ROOT / "tests" / "fixtures" / "screenshots"
 HOME = str(Path.home())
@@ -324,7 +325,8 @@ class Matrix(Base):
         await self.state.jobs.shutdown()
         job = self.state.jobs.get(res.job_id)
         self.assertEqual(job.state, "cancelled")
-        await asyncio.sleep(0.05)              # cancelled before its first step: the manifest is finished too
+        # cancelled before its first step: the manifest is finished too
+        await until(lambda: any(a == "matrix-finish" for a, _ in self.hcalls), what="matrix-finish")
         self.assertEqual(self.finish()["state"], "cancelled")
 
 
