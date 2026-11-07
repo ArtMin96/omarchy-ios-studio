@@ -72,6 +72,8 @@ START_WAIT = 8.0         # a starter waits this long for a new watcher's first s
 STOPPED_KEEP = 600       # a stopped watcher's status stays readable this long
 BUSY_RETRY = 2.0         # another build of the project holds its lock: try again after this
 POLL_INTERVAL = 1.0
+POLL_MAX_FILES = 20_000  # the polling fallback stats at most this many files per pass
+EVENT_LINE_MAX = 1 << 20  # bytes; a build event line longer than this is dropped, not buffered forever
 FIRST_DIAGS = 5
 CHANGED_SHOWN = 5
 SUPERSEDE_LIMIT = 2      # after this many builds in a row were cancelled by saves, the next one is let finish
@@ -233,6 +235,14 @@ def _pdeathsig() -> None:  # pragma: no cover - runs in the child
         ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
     except Exception:
         pass
+
+
+def _backoff(first: float = 0.05, cap: float = 0.25):
+    """Sleep intervals for a deadline poll: quick at first (the answer usually comes fast), then fewer wakeups."""
+    d = first
+    while True:
+        yield d
+        d = min(cap, d * 1.5)
 
 
 def _killpg(pgid: int | None, sig: int = signal.SIGKILL) -> None:
@@ -501,7 +511,7 @@ class PollWatcher:
         self.root = root
         self.interval = interval
         self.clock = clock
-        self.snap = scan_files(root)
+        self.snap = scan_files(root, POLL_MAX_FILES)
         self.last = clock()
 
     def fileno(self) -> int | None:
@@ -512,7 +522,7 @@ class PollWatcher:
         if now - self.last < self.interval:
             return []
         self.last = now
-        new = scan_files(self.root)
+        new = scan_files(self.root, POLL_MAX_FILES)
         changed = [k for k in new if self.snap.get(k) != new[k]] + [k for k in self.snap if k not in new]
         self.snap = new
         return sorted(changed)
@@ -646,6 +656,8 @@ class HelperBuild:
                 break
             self.buf += chunk
         *lines, self.buf = self.buf.split(b"\n")
+        if len(self.buf) > EVENT_LINE_MAX:
+            self.buf = b""
         if self.eof and self.buf:
             lines.append(self.buf)
             self.buf = b""
@@ -979,7 +991,7 @@ class Watcher:
             if fds:
                 select.select(fds, [], [], max(timeout, 0))
             elif timeout > 0:
-                time.sleep(min(timeout, 0.2))
+                time.sleep(timeout)     # polling mode, idle: the scheduler's due time already bounds timeout
         except InterruptedError:
             pass
         if self.reload:
@@ -1021,7 +1033,14 @@ class Watcher:
         deadline = time.monotonic() + CANCEL_GRACE
         while self.build and not self.build.finished() and time.monotonic() < deadline:
             self.build.read_events()
-            time.sleep(0.1)
+            fd = self.build.fileno()
+            if fd is not None:      # wake on its output (or EOF) instead of a fixed tick
+                try:
+                    select.select([fd], [], [], 0.25)
+                except InterruptedError:
+                    pass
+            else:
+                time.sleep(0.1)
         if self.build:
             self.build.kill()
             self.build = None
@@ -1186,7 +1205,7 @@ class DeviceSteps:
             out, _ = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _killpg(p.pid)
-            p.wait()
+            common.kill_proc(p)
             return {"ok": False, "error": {"message": "timed out"}}
         finally:
             self.job.once = None
@@ -1281,6 +1300,17 @@ def _mark_dead(st: dict) -> dict:
     return st
 
 
+WATCH_LOG_MAX = 1 << 20   # bytes; watch.log (every watcher's stderr) is cut back to its tail beyond this
+
+
+def _trim_log(path: Path, keep: int = 64 * 1024) -> None:
+    try:
+        if path.stat().st_size > WATCH_LOG_MAX:
+            common.atomic_write(path, common.tail_text(path, keep))
+    except OSError:
+        pass
+
+
 def _spawn(root: Path, auto_run: bool, debounce_ms: int, initial: bool, owner: int) -> int:
     argv = [*_python(), str(HELPER_MAIN), "watch", "serve", "--project", str(root), "--debounce-ms",
             str(debounce_ms), "--owner", str(owner)]
@@ -1288,6 +1318,7 @@ def _spawn(root: Path, auto_run: bool, debounce_ms: int, initial: bool, owner: i
         argv.append("--auto-run")
     if not initial:
         argv.append("--no-initial-build")
+    _trim_log(_p("watch.log"))
     log = open(_p("watch.log"), "a")
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
@@ -1303,6 +1334,7 @@ def _signal_and_wait(pid: int, sig: int, wait: float) -> bool:
     except ProcessLookupError:
         return True
     deadline = time.monotonic() + wait
+    delays = _backoff()
     while time.monotonic() < deadline:
         if watcher_pid() is None:
             return True
@@ -1310,7 +1342,7 @@ def _signal_and_wait(pid: int, sig: int, wait: float) -> bool:
             os.waitpid(pid, os.WNOHANG)   # our own child (a follower that started it)
         except ChildProcessError:
             pass
-        time.sleep(0.1)
+        time.sleep(next(delays))
     return watcher_pid() is None
 
 
@@ -1366,11 +1398,12 @@ def ensure(root: Path, auto_run: bool | None, debounce_ms: int | None, owner: in
                 except ProcessLookupError:
                     pass
                 deadline = time.monotonic() + 2
+                delays = _backoff()
                 while time.monotonic() < deadline:
                     s2 = read_status() or {}
                     if bool(s2.get("autoRun")) == auto_run and int(s2.get("debounceMs") or 0) == debounce_ms:
                         break
-                    time.sleep(0.05)
+                    time.sleep(next(delays))
             return {**(read_status() or st), "watching": True, "attached": True}
         if pid is not None:
             old = _stop_locked("replaced")
@@ -1390,6 +1423,7 @@ def ensure(root: Path, auto_run: bool | None, debounce_ms: int | None, owner: in
             pass
         child = _spawn(root, bool(auto_run), debounce_ms or DEFAULT_DEBOUNCE_MS, initial, owner)
         deadline = time.monotonic() + START_WAIT
+        delays = _backoff()
         while time.monotonic() < deadline:
             s2 = read_status() or {}
             if s2.get("pid") == child and s2.get("state"):
@@ -1403,12 +1437,8 @@ def ensure(root: Path, auto_run: bool | None, debounce_ms: int | None, owner: in
                 done_pid = 0
             if done_pid == child:
                 break
-            time.sleep(0.05)
-        tail = ""
-        try:
-            tail = _p("watch.log").read_text()[-1500:]
-        except OSError:
-            pass
+            time.sleep(next(delays))
+        tail = common.tail_text(_p("watch.log"), 1500)   # the log only grows: never read all of it
         raise HelperError("watch-failed", "The watcher didn't start.", detail=tail)
 
 
@@ -1433,8 +1463,9 @@ def wait_status(project: str | None, seconds: float) -> dict:
     if not st.get("watching") or seconds <= 0:
         return {**st, "waited": 0.0, "timedOut": False}
     first_id = (st.get("lastBuild") or {}).get("id")
+    delays = _backoff(0.1, 0.5)
     while time.monotonic() - start < seconds:
-        time.sleep(0.2)
+        time.sleep(min(next(delays), max(0.0, seconds - (time.monotonic() - start))))
         st = current_status()
         if not st.get("watching"):
             break
@@ -1454,6 +1485,7 @@ def cmd_serve(flags: dict) -> int:
     owner = _flag_owner(flags, os.getppid())
     fh = open(lock_path(), "a+")
     deadline = time.monotonic() + 3
+    delays = _backoff()
     while True:
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1462,7 +1494,7 @@ def cmd_serve(flags: dict) -> int:
             if time.monotonic() > deadline:
                 print("another watcher holds the lock", file=sys.stderr)
                 return 1
-            time.sleep(0.1)
+            time.sleep(next(delays))
     fh.seek(0)
     fh.truncate()
     fh.write(f"{os.getpid()}\n")
@@ -1681,7 +1713,7 @@ class DemoWatcher(Watcher):
             self.apply_control()
         now = self.clock()
         if now < self.next_at:
-            time.sleep(min(0.2, self.next_at - now))
+            time.sleep(min(timeout, self.next_at - now))
             self.check_owners()
             return
         _, what = self.SCRIPT[self.i % len(self.SCRIPT)]

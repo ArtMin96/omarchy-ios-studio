@@ -72,6 +72,8 @@ MAX_PRODUCTS = 100
 DUMP_TIMEOUT = 120
 QUICK_TIMEOUT = 60
 LS_REMOTE_TIMEOUT = 45
+EXIT_GRACE = 60          # seconds swift may linger after closing its output
+MAX_LINE = 64 * 1024     # longest output line kept whole
 RULES = ("from", "upToNextMinor", "exact", "branch", "revision")
 TARGET_TYPES_FIRST = ("executable", "regular")
 
@@ -137,11 +139,11 @@ def run_swift(args: list[str], cwd: Path | str, timeout: float = QUICK_TIMEOUT,
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_group(proc.pid)
-        proc.wait()
+        common.kill_proc(proc)
         raise HelperError("timeout", f"swift {args[-1] if args else ''} took longer than {int(timeout)} s.")
     except BaseException:
         _kill_group(proc.pid)
-        proc.wait()
+        common.kill_proc(proc)
         raise
     return subprocess.CompletedProcess(argv, proc.returncode, out, "" if stdout_only else err)
 
@@ -266,6 +268,9 @@ class Runner:
                     buf += chunk
                     parts = re.split(rb"\r\n|\r|\n", buf)
                     buf = parts.pop()
+                    if len(buf) > MAX_LINE:     # a newline-less flood: pass it on in pieces
+                        parts.append(buf[:MAX_LINE])
+                        buf = buf[MAX_LINE:]
                     for p in parts:
                         text = p.decode(errors="replace")
                         lines.append(text)
@@ -274,10 +279,13 @@ class Runner:
                 text = buf.decode(errors="replace")
                 lines.append(text)
                 on_line(text)
-            rc = proc.wait()
+            try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
+                rc = proc.wait(timeout=EXIT_GRACE)
+            except subprocess.TimeoutExpired:
+                raise HelperError("timeout", f"swift {args[0] if args else ''} closed its output but didn't exit.")
         except BaseException:
             _kill_group(proc.pid)
-            proc.wait()
+            common.kill_proc(proc)
             raise
         finally:
             try:
@@ -922,11 +930,24 @@ def latest_version(url: str) -> str | None:
     git = shutil.which("git")
     if not git:
         return None
+    # Own session, killed whole on timeout (git-remote-https / ssh children too); never prompts for a password.
     try:
-        r = subprocess.run([git, "ls-remote", "--tags", "--refs", url], capture_output=True, text=True,
-                           timeout=LS_REMOTE_TIMEOUT, env=swift_env(), stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
+        proc = subprocess.Popen([git, "ls-remote", "--tags", "--refs", url], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env={**swift_env(), "GIT_TERMINAL_PROMPT": "0"},
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
         return None
+    try:
+        out, err = proc.communicate(timeout=LS_REMOTE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc.pid, grace=0.5)
+        common.kill_proc(proc)
+        return None
+    except BaseException:
+        _kill_group(proc.pid, grace=0.5)
+        common.kill_proc(proc)
+        raise
+    r = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
     if r.returncode != 0:
         raise swift_failure((r.stderr or "").splitlines() or ["error: Failed to fetch " + url],
                             "Couldn't read the package's versions")

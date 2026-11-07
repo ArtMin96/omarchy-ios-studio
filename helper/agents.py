@@ -37,6 +37,7 @@ BACKUPS = common.STATE_DIR / "backups"
 HOME = common.HOME
 XDG_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
 DEMO_ENV = {"IOSSTUDIO_DEMO": "1"}
+PREPARE_TIMEOUT = 900    # seconds for the MCP server's first-time venv setup (downloads its Python packages)
 
 MARK_START = "ios-studio: mcp server start"
 MARK_END = "ios-studio: mcp server end"
@@ -1081,7 +1082,13 @@ def prepare(flags: dict) -> int:
                 del lines[:-30]
                 common.progress(None, text[:200])
                 common.log(text)
-        code = common.stream_cmd([_launcher(), "--prepare"], on_line=on_line)
+        try:    # a stalled download can't hang setup: the launcher (and pip under it) is stopped after this long
+            code = common.stream_cmd([_launcher(), "--prepare"], on_line=on_line, timeout=PREPARE_TIMEOUT)
+        except HelperError as exc:
+            if exc.code != "timeout":
+                raise
+            lines.append(exc.message)
+            code = -1
         if code != 0:
             common.step("venv", "Setting up the server's Python environment", "failed")
             return common.done(False, error=HelperError(

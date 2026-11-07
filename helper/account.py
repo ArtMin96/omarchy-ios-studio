@@ -775,7 +775,10 @@ class Login:
                     break
         finally:
             self._kill()
-        rc = self.proc.wait()
+        try:
+            rc = self.proc.wait(timeout=5)     # _kill() ended it; never hang on one that ignores even SIGKILL
+        except subprocess.TimeoutExpired:
+            rc = -9
         if self.out[self.logged_upto:].strip():
             self.out += "\n"
             self._emit_log_lines()

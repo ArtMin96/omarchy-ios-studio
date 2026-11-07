@@ -50,6 +50,8 @@ BUILDS_FILE = common.STATE_DIR / "builds.json"
 RENEWALS_FILE = common.STATE_DIR / "renewals.json"
 BUILD_LOGS = common.STATE_DIR / "build-logs"
 LOCK_DIR = common.STATE_DIR / "locks"
+MAX_LINE = 64 * 1024     # longest build-output line kept whole
+EXIT_GRACE = 60          # seconds a build may linger after closing its output
 TEMPLATES = common.REPO / "templates"
 SYSTEMD_DIR = Path(os.environ.get("XDG_CONFIG_HOME", common.HOME / ".config")) / "systemd/user"
 UNIT = "ios-studio-renew"
@@ -1409,15 +1411,21 @@ class BuildRunner:
                         self.on_line(p.decode(errors="replace"))
                     if buf and self.on_partial(buf.decode(errors="replace")):
                         buf = b""
+                    elif len(buf) > MAX_LINE:     # a newline-less flood: hand it on in pieces, don't grow forever
+                        self.on_line(buf[:MAX_LINE].decode(errors="replace"))
+                        buf = buf[MAX_LINE:]
                 if self.waiting_device_since and _now() - self.waiting_device_since > device_timeout \
                         and self.state.get("install") != "running":
                     raise HelperError("device-not-found",
                                       "Your iPhone didn't show up over the USB cable. Check the cable, unlock the "
                                       "phone and tap Trust if it asks.", fix("Open iPhone", "device"))
-            rc = self.proc.wait()
+            try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
+                rc = self.proc.wait(timeout=EXIT_GRACE)
+            except subprocess.TimeoutExpired:
+                raise HelperError("timeout", f"{Path(argv[0]).name} closed its output but didn't exit.")
         except BaseException:
             _kill_group(pgid)
-            self.proc.wait()
+            common.kill_proc(self.proc)
             raise
         finally:
             for s, h in old.items():
@@ -1520,16 +1528,17 @@ def classify_failure(runner: BuildRunner, rc: int) -> HelperError:
 
 # ================================================================ build group
 
+@contextmanager
 def _lock(path: Path):
+    """Hold the project's build lock for the with-block; HelperError('busy') if another build holds it."""
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha1(str(path).encode()).hexdigest()[:16]
-    fh = open(LOCK_DIR / f"{key}.lock", "w")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        fh.close()
-        raise HelperError("busy", "This project is already being built. Wait for it to finish, or cancel it.")
-    return fh
+    with open(LOCK_DIR / f"{key}.lock", "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise HelperError("busy", "This project is already being built. Wait for it to finish, or cancel it.")
+        yield
 
 
 def _usb_udids() -> list[str]:
@@ -1608,81 +1617,78 @@ def _do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, di
         raise HelperError("not-signed-in", "Sign in with your Apple ID so iOS Studio can sign the app for your iPhone.",
                           fix("Sign in", "account", action="signin"))
 
-    lock = _lock(p)
-    BUILD_LOGS.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    log_file = BUILD_LOGS / f"{stamp}-{re.sub(r'[^A-Za-z0-9_-]', '_', product)}-{kind}.log"
-    ui_steps: list[str] = []
-    if kind == "compile":
-        plan = ["resolve", "compile", "link"]
-        argv = [xtool, "dev", "build", "-c", config]
-    elif kind == "ipa":
-        plan = ["resolve", "compile", "link", "sign", "package"]
-        argv = [xtool, "dev", "build", "-c", config, "--sign", "--ipa"]
-    elif kind == "install":
-        ipa = info.get("ipa")
-        if not ipa:
-            raise HelperError("no-build", "There's no signed build of this app yet. Choose Run to build and install it.",
-                              {"label": "Run", "page": "projects", "action": "run"})
-        if via == "usb":
-            plan = ["install"]
-            argv = [xtool, "install", "-u", udid, "--usb", ipa]
-        else:
-            lock.close()
-            common.step("install", "Installing", "pending", owner="ui")
-            return 0, {"ipa": ipa, "bundleId": bundle, "product": product, "udid": udid, "via": via,
-                       "needsInstall": True, "installed": False, "kind": kind, "path": str(p)}, None
-    else:  # run / renew
-        if via == "usb":
-            plan = ["resolve", "compile", "link", "sign", "install"]
-            argv = [xtool, "dev", "run", "-c", config, "--usb", "--udid", udid]
-        else:
+    with _lock(p):
+        BUILD_LOGS.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        log_file = BUILD_LOGS / f"{stamp}-{re.sub(r'[^A-Za-z0-9_-]', '_', product)}-{kind}.log"
+        ui_steps: list[str] = []
+        if kind == "compile":
+            plan = ["resolve", "compile", "link"]
+            argv = [xtool, "dev", "build", "-c", config]
+        elif kind == "ipa":
             plan = ["resolve", "compile", "link", "sign", "package"]
-            ui_steps = ["install"]
             argv = [xtool, "dev", "build", "-c", config, "--sign", "--ipa"]
-        if kind == "run":
-            ui_steps.append("launch")
-
-    if prebuild:
-        plan = ["prebuild"] + plan
-    est = _estimate(str(p), kind)
-    runner = BuildRunner(plan, interactive, log_file, est, ui_steps)
-    runner.env = build_settings.merged_env(_xtool_env(), bs)
-    runner.open_files = bs["openFiles"]
-    common.event("build", kind=kind, path=str(p), project=product, bundleId=bundle, config=config, udid=udid, via=via,
-                 logFile=str(log_file), estimate=est, plan=plan + ui_steps)
-    runner.announce()
-    runner.enter(plan[0], prebuild or "")
-    started = _now()
-    rc = 1
-    err: HelperError | None = None
-    data: dict | None = None
-    try:
-        if prebuild:
-            rc = _run_prebuild(runner, prebuild, p)
-            if rc == 0:   # the prebuild may have rewritten xtool.yml: build what it wrote
-                if not _is_project(p):
-                    raise HelperError("not-a-project", "The prebuild command finished, but the folder still has no "
-                                      "xtool.yml, so there's nothing to build.",
-                                      {"label": "Build settings", "page": "projects", "action": "build-settings",
-                                       "path": str(p)})
-                info = _project_info(p)
-                product, bundle = info["product"], info["bundleId"]
-                runner.enter(plan[1])
-                _precheck(runner, p)
-                rc = runner.run(argv, p)
+        elif kind == "install":
+            ipa = info.get("ipa")
+            if not ipa:
+                raise HelperError("no-build", "There's no signed build of this app yet. Choose Run to build and install it.",
+                                  {"label": "Run", "page": "projects", "action": "run"})
+            if via == "usb":
+                plan = ["install"]
+                argv = [xtool, "install", "-u", udid, "--usb", ipa]
             else:
-                err = _prebuild_failed(runner, prebuild, rc, p)
-        else:
-            if kind != "install":
-                _precheck(runner, p)
-            rc = runner.run(argv, p)
-    except Cancelled:
-        err = HelperError("cancelled", "Build cancelled.")
-    except HelperError as exc:
-        err = exc
-    finally:
-        lock.close()
+                common.step("install", "Installing", "pending", owner="ui")
+                return 0, {"ipa": ipa, "bundleId": bundle, "product": product, "udid": udid, "via": via,
+                           "needsInstall": True, "installed": False, "kind": kind, "path": str(p)}, None
+        else:  # run / renew
+            if via == "usb":
+                plan = ["resolve", "compile", "link", "sign", "install"]
+                argv = [xtool, "dev", "run", "-c", config, "--usb", "--udid", udid]
+            else:
+                plan = ["resolve", "compile", "link", "sign", "package"]
+                ui_steps = ["install"]
+                argv = [xtool, "dev", "build", "-c", config, "--sign", "--ipa"]
+            if kind == "run":
+                ui_steps.append("launch")
+
+        if prebuild:
+            plan = ["prebuild"] + plan
+        est = _estimate(str(p), kind)
+        runner = BuildRunner(plan, interactive, log_file, est, ui_steps)
+        runner.env = build_settings.merged_env(_xtool_env(), bs)
+        runner.open_files = bs["openFiles"]
+        common.event("build", kind=kind, path=str(p), project=product, bundleId=bundle, config=config, udid=udid, via=via,
+                     logFile=str(log_file), estimate=est, plan=plan + ui_steps)
+        runner.announce()
+        runner.enter(plan[0], prebuild or "")
+        started = _now()
+        rc = 1
+        err: HelperError | None = None
+        data: dict | None = None
+        try:
+            if prebuild:
+                rc = _run_prebuild(runner, prebuild, p)
+                if rc == 0:   # the prebuild may have rewritten xtool.yml: build what it wrote
+                    if not _is_project(p):
+                        raise HelperError("not-a-project", "The prebuild command finished, but the folder still has no "
+                                          "xtool.yml, so there's nothing to build.",
+                                          {"label": "Build settings", "page": "projects", "action": "build-settings",
+                                           "path": str(p)})
+                    info = _project_info(p)
+                    product, bundle = info["product"], info["bundleId"]
+                    runner.enter(plan[1])
+                    _precheck(runner, p)
+                    rc = runner.run(argv, p)
+                else:
+                    err = _prebuild_failed(runner, prebuild, rc, p)
+            else:
+                if kind != "install":
+                    _precheck(runner, p)
+                rc = runner.run(argv, p)
+        except Cancelled:
+            err = HelperError("cancelled", "Build cancelled.")
+        except HelperError as exc:
+            err = exc
     runner.flush_diags(failed=err is None and rc != 0)
     duration = round(_now() - started, 1)
     errors = sum(1 for d in runner.diags if d["severity"] == "error")
@@ -1988,22 +1994,36 @@ WantedBy=timers.target
     return service, timer
 
 
+SYSTEMCTL_TIMEOUT = 20
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess:
+    """`systemctl --user ...`, bounded: a wedged user manager must not hang the helper."""
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True,
+                              timeout=SYSTEMCTL_TIMEOUT, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise HelperError("systemd-timeout", f"systemctl --user {args[0]} didn't answer in {SYSTEMCTL_TIMEOUT} s. "
+                          "Your user systemd may be busy; try again in a moment.")
+
+
 def _timer_status() -> dict:
     svc, tmr = _unit_paths()
     out: dict[str, Any] = {"installed": svc.exists() and tmr.exists(), "unit": f"{UNIT}.timer"}
     if shutil.which("systemctl"):
-        r = subprocess.run(["systemctl", "--user", "is-enabled", f"{UNIT}.timer"], capture_output=True, text=True)
-        out["enabled"] = r.stdout.strip() == "enabled"
-        r = subprocess.run(["systemctl", "--user", "show", f"{UNIT}.timer", "-p", "NextElapseUSecRealtime",
-                            "-p", "LastTriggerUSec"], capture_output=True, text=True)
-        for ln in r.stdout.splitlines():
-            k, _, v = ln.partition("=")
-            out["next" if k == "NextElapseUSecRealtime" else "last"] = v or None
-        r = subprocess.run(["systemctl", "--user", "show", f"{UNIT}.service", "-p", "Result",
-                            "-p", "ExecMainStatus"], capture_output=True, text=True)
-        for ln in (r.stdout.splitlines() if out["installed"] else []):
-            k, _, v = ln.partition("=")
-            out["lastResult" if k == "Result" else "lastExit"] = v
+        try:
+            r = _systemctl("is-enabled", f"{UNIT}.timer")
+            out["enabled"] = r.stdout.strip() == "enabled"
+            r = _systemctl("show", f"{UNIT}.timer", "-p", "NextElapseUSecRealtime", "-p", "LastTriggerUSec")
+            for ln in r.stdout.splitlines():
+                k, _, v = ln.partition("=")
+                out["next" if k == "NextElapseUSecRealtime" else "last"] = v or None
+            r = _systemctl("show", f"{UNIT}.service", "-p", "Result", "-p", "ExecMainStatus")
+            for ln in (r.stdout.splitlines() if out["installed"] else []):
+                k, _, v = ln.partition("=")
+                out["lastResult" if k == "Result" else "lastExit"] = v
+        except HelperError:
+            pass    # status is best-effort: show what the unit files say
     out["projects"] = _renew_due(float(common.settings().get("autoRenewDays") or 2))
     return out
 
@@ -2019,8 +2039,8 @@ def cmd_autorenew(flags: dict) -> int:
             return common.ok({"dryRun": True, "actions": actions, "service": service, "timer": timer})
         common.atomic_write(svc, service)
         common.atomic_write(tmr, timer)
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-        r = subprocess.run(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"], capture_output=True, text=True)
+        _systemctl("daemon-reload")
+        r = _systemctl("enable", "--now", f"{UNIT}.timer")
         if r.returncode != 0:
             raise HelperError("systemd", "Couldn't turn on automatic renewal.", detail=r.stderr)
         return common.ok(_timer_status())
@@ -2029,13 +2049,13 @@ def cmd_autorenew(flags: dict) -> int:
                    "systemctl --user daemon-reload"]
         if dry:
             return common.ok({"dryRun": True, "actions": actions})
-        subprocess.run(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"], capture_output=True)
+        _systemctl("disable", "--now", f"{UNIT}.timer")
         for f in (svc, tmr):
             try:
                 f.unlink()
             except FileNotFoundError:
                 pass
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        _systemctl("daemon-reload")
         return common.ok(_timer_status())
     return common.ok(_timer_status())
 

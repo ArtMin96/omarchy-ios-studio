@@ -106,19 +106,7 @@ DIRECT_XIP = "https://download.developer.apple.com/Developer_Tools/Xcode_{v}/Xco
 
 DRY = False
 
-# ------------------------------------------------------------------ output (thread-safe)
-
-_lock = threading.Lock()
-_orig_write = common._write
-
-
-def _locked_write(obj: dict) -> None:
-    with _lock:
-        _orig_write(obj)
-
-
-common._write = _locked_write
-
+# ------------------------------------------------------------------ output (common._write is thread-safe)
 
 def slog(step_id: str | None, text: str) -> None:
     event("log", text=text.rstrip("\n")[:4000], **({"step": step_id} if step_id else {}))
@@ -202,6 +190,10 @@ BUILD_FRAC = re.compile(r"^\[(\d+)/(\d+)\]")
 PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s?%")
 
 
+MAX_LINE = 64 * 1024     # longest output line kept whole
+EXIT_GRACE = 60          # seconds a command may linger after closing its output
+
+
 def run_stream(argv: list, step_id: str | None, *, label: str = "", estimate: float | None = None,
                env: dict | None = None, cwd=None, parse=None, frac_range=(0.0, 1.0),
                mutating: bool = True, tail: list | None = None) -> int:
@@ -252,6 +244,9 @@ def run_stream(argv: list, step_id: str | None, *, label: str = "", estimate: fl
             buf += chunk
             parts = re.split(rb"[\r\n]", buf)
             buf = parts.pop()
+            if len(buf) > MAX_LINE:     # a newline-less flood: log it in pieces, don't grow forever
+                parts.append(buf[:MAX_LINE])
+                buf = buf[MAX_LINE:]
             for raw in parts:
                 line = raw.decode("utf-8", "replace").rstrip()
                 if not line:
@@ -278,7 +273,13 @@ def run_stream(argv: list, step_id: str | None, *, label: str = "", estimate: fl
                     last_logged = line
         if buf.strip():
             slog(step_id, buf.decode("utf-8", "replace"))
-        rc = proc.wait()
+        try:    # output closed: it's exiting; one that lingers is stopped rather than waited on forever
+            rc = common.wait_or_kill(proc, EXIT_GRACE)
+        except subprocess.TimeoutExpired:
+            raise HelperError("timeout", f"{Path(argv[0]).name} closed its output but didn't exit.")
+    except BaseException:
+        common.kill_proc(proc)
+        raise
     finally:
         stop.set()
         th.join(timeout=3)
@@ -1463,23 +1464,36 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     slog(step_id, f"Installed {_tilde(dest)} ({out.strip()}, built from {build_commit[:7]})")
 
 
+GIT_TIMEOUT = 60
+
+
+def _git(src: Path, *args: str, input: bytes | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+    """A local git command on the xtool checkout, bounded (a locked or huge repo can't hang setup)."""
+    try:
+        return subprocess.run(["git", "-C", str(src), *args], input=input, env=env, capture_output=True,
+                              timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise HelperError("timeout", f"git {args[0]} took longer than {GIT_TIMEOUT} s in {_tilde(src)}.",
+                          fix("Try again", "setup", step="xtool"))
+
+
 def base_has_fix(src: Path, sha: str) -> bool:
     fd, index = tempfile.mkstemp()
     os.close(fd)
     try:
         env = tool_env({"GIT_INDEX_FILE": index})
-        if subprocess.run(["git", "-C", str(src), "read-tree", sha], env=env, capture_output=True).returncode != 0:
+        if _git(src, "read-tree", sha, env=env).returncode != 0:
             return False
-        diff = subprocess.run(["git", "-C", str(src), "diff", f"{XTOOL_FIX_SHA}^", XTOOL_FIX_SHA], capture_output=True).stdout
-        r = subprocess.run(["git", "-C", str(src), "apply", "--cached", "--reverse", "--check"], input=diff, env=env, capture_output=True)
+        diff = _git(src, "diff", f"{XTOOL_FIX_SHA}^", XTOOL_FIX_SHA).stdout
+        r = _git(src, "apply", "--cached", "--reverse", "--check", input=diff, env=env)
         return r.returncode == 0
     finally:
         os.unlink(index)
 
 
 def _patch_id(src: Path, a: str, b: str) -> str:
-    diff = subprocess.run(["git", "-C", str(src), "diff", a, b], capture_output=True).stdout
-    r = subprocess.run(["git", "-C", str(src), "patch-id", "--stable"], input=diff, capture_output=True)
+    diff = _git(src, "diff", a, b).stdout
+    r = _git(src, "patch-id", "--stable", input=diff)
     return (r.stdout.decode().split() or [""])[0]
 
 
