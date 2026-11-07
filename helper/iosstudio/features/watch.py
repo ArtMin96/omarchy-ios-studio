@@ -98,7 +98,7 @@ STATES = ("watching", "changed", "compiling", "ok", "failed", "stopped")
 def runtime_dir() -> Path:
     """device_client.runtime_base() (IOSSTUDIO_RUNTIME_DIR, XDG_RUNTIME_DIR, /run/user/<uid>, /tmp/...), then
     ios-studio (ios-studio-demo in demo mode), like the device daemon."""
-    from iosstudio.device import device_client
+    from iosstudio.device import client as device_client
     d = device_client.runtime_base() / ("ios-studio-demo" if os.environ.get("IOSSTUDIO_DEMO") else "ios-studio")
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d

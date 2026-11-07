@@ -1,4 +1,4 @@
-"""App list cache (helper/iosstudio/device/features/app_index.py) and the demo's apps.list contract.
+"""App list cache (helper/iosstudio/device/features/apps/index.py) and the demo's apps.list contract.
 
     python -m pytest tests/helper/test_app_index.py
 """
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from iosstudio.device.features import app_index as AI
+from iosstudio.device.features.apps import index as AI
 
 UDID = "00008150-TEST"
 
@@ -235,7 +235,7 @@ class Invalidation(Base):
         self.assertEqual(len(apps), 2)
 
     async def test_register_hooks(self):
-        from iosstudio.device.deviced_kit import FeatureRegistry
+        from iosstudio.device.kit import FeatureRegistry
         reg = FeatureRegistry(log=lambda *_: None)
         m = reg.module("app_index")
         AI.register(m)
@@ -397,8 +397,8 @@ class DemoContract(unittest.IsolatedAsyncioTestCase):
     """The demo daemon's apps.list follows the same contract as the real one."""
 
     async def asyncSetUp(self):
-        from iosstudio.device import deviced_demo_core as core
-        from iosstudio.device.demo_features import apps as demo
+        from iosstudio.device.demo import core
+        from iosstudio.device.features.apps import demo
         self.core, self.demo = core, demo
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -515,9 +515,9 @@ class RealHandler(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from unittest import mock
 
-        from iosstudio.device import deviced_core
-        from iosstudio.device.deviced_kit import FeatureRegistry
-        from iosstudio.device.features import apps as A
+        from iosstudio.device.features.apps import real as A
+        from iosstudio.device.kit import FeatureRegistry
+        from iosstudio.device.real import core as deviced_core
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.index = AI.AppIndex(self.tmp)

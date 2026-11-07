@@ -957,7 +957,7 @@ def prepare(flags: dict) -> int:
 def demo(action: str, flags: dict) -> int:
     """Made-up answers for `ios-studio --demo` (screenshots): nothing is read or changed."""
     launcher = "~/.local/share/omarchy-ios-studio/bin/iosstudio-mcp"
-    from iosstudio.device import device_client
+    from iosstudio.device import client as device_client
     state_file = Path(device_client.xdg_runtime_dir() or "/tmp") / "ios-studio-demo" / "agents.json"
     connected = set(fileio.load_json(state_file, ["claude"]) or [])
     installed = {"claude", "codex", "cursor", "zed"}

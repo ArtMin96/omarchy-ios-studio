@@ -135,7 +135,7 @@ def _states(name: str) -> list[dict]:
 
 def _daemon(cmd: str, args: dict) -> tuple[dict | None, dict | None]:
     """(data, error) from the demo device daemon; (None, None) when it isn't reachable."""
-    from iosstudio.device.device_client import DeviceClient, DeviceError
+    from iosstudio.device.client import DeviceClient, DeviceError
 
     async def go():
         async with DeviceClient(name="debug demo", events=[]) as dev:

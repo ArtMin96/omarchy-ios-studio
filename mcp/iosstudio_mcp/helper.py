@@ -288,16 +288,16 @@ _device_client_mod = None
 
 
 def device_client_module():
-    """helper/iosstudio/device/device_client.py (the stdlib asyncio client for the shared device daemon), loaded under a
+    """helper/iosstudio/device/client.py (the stdlib asyncio client for the shared device daemon), loaded under a
     private module name so helper/'s other modules never shadow anything on sys.path."""
     global _device_client_mod
     if _device_client_mod is None:
         import importlib.util
         import sys
-        path = REPO / "helper" / "iosstudio" / "device" / "device_client.py"
+        path = REPO / "helper" / "iosstudio" / "device" / "client.py"
         spec = importlib.util.spec_from_file_location("iosstudio_device_client", path)
         if spec is None or spec.loader is None:
-            raise ToolError("The device client (helper/iosstudio/device/device_client.py) is missing from this install.")
+            raise ToolError("The device client (helper/iosstudio/device/client.py) is missing from this install.")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)

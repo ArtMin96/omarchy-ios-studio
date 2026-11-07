@@ -1,4 +1,4 @@
-"""Device daemon event-loop hygiene (helper/iosstudio/device/deviced_core.py, device_link.py, device_broker.py,
+"""Device daemon event-loop hygiene (helper/iosstudio/device/real/core.py, link.py, broker.py,
 features/syslog.py and mirror.py): tracked background tasks, mtime caches, the tmpfs frame
 folder, syslog parsing and filtering on the worker thread, and the mirror's pure stream parts.
 
@@ -16,11 +16,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from iosstudio.core import appdirs
-from iosstudio.device import device_broker as B
-from iosstudio.device import device_link as link
-from iosstudio.device import deviced_core as core
-from iosstudio.device.features import mirror as M
-from iosstudio.device.features import syslog as SL
+from iosstudio.device import broker as B
+from iosstudio.device import link
+from iosstudio.device.features.mirror import real as M
+from iosstudio.device.features.syslog import real as SL
+from iosstudio.device.real import core
 
 # ---------------------------------------------------------------- tasks and caches
 
