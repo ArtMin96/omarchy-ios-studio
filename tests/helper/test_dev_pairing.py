@@ -272,19 +272,15 @@ class DemoPairing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(out["records"][0]), {"udid", "wifi", "usb", "path"})
         self.assertEqual(await self.b.dispatch("pair.cancel", {}), {})
 
-    # BUG: features/pairing/demo.py answers pair.start with {"started": True}; the real daemon also says which
-    # method it picked ({"started": True, "method": "usb"|"wifi"}).
-    @unittest.expectedFailure
     async def test_start_names_the_method(self):
         out = await self.b.dispatch("pair.start", {"method": "wifi"})
         self.assertEqual(out, {"started": True, "method": "wifi"})
 
-    # BUG: features/pairing/demo.py accepts any pair.start method and any pair.code; the real daemon answers
-    # bad-args for a method other than usb/wifi and for a code nobody asked for.
-    @unittest.expectedFailure
     async def test_bad_args_like_real(self):
         with self.assertRaises(HelperError):
             await self.b.dispatch("pair.start", {"method": "bluetooth"})
+        with self.assertRaises(HelperError):
+            await self.b.dispatch("pair.code", {"code": "123456"})
 
 
 if __name__ == "__main__":
