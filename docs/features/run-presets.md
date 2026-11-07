@@ -136,12 +136,13 @@ to the device service's `app.launch`.
 
 ## MCP
 
-- `ios_project_presets(project_path, action=, preset=, name=, rename_from=, confirm=, max_bytes=)`:
-  `list` (the default; `name=` shows one) returns each preset with `resolved`, the exact args and env a
-  launch gets, and `selected`. `save` takes `preset={'name': 'German', 'language': 'de', 'region':
-  'de_DE'}` (fields `name`, `args`, `env`, `language`, `region`, `ui_test_mode`) and says
-  `replaced=true` when it overwrote one; `rename_from` renames. `delete` is a dry run unless
-  `confirm=true`. `select` sets the preset iOS Studio's Run button uses (`name=''` clears it).
+- `ios_project_presets(project_path, name=, max_bytes=)` (read-only) returns each preset with `resolved`,
+  the exact args and env a launch gets, and `selected`; `name=` shows one.
+- `ios_project_preset_set(project_path, action=, preset=, name=, rename_from=, confirm=)` changes them.
+  `save` takes `preset={'name': 'German', 'language': 'de', 'region': 'de_DE'}` (fields `name`, `args`,
+  `env`, `language`, `region`, `ui_test_mode`) and says `replaced=true` when it overwrote one;
+  `rename_from` renames. `delete` is a dry run unless `confirm=true`. `select` sets the preset iOS Studio's
+  Run button uses (`name=''` clears it).
 - `ios_run(project_path, preset='German')` builds, installs and launches with it. An unknown name fails
   before the build starts and lists the project's presets. The result has `preset`, `launch_args` and
   `launch_env`, and `ios_build_history` shows `preset`.
@@ -191,12 +192,12 @@ Unknown names fail as they would for real, and a demo Run echoes the preset's ar
 
 ## Code
 
-`helper/run_presets.py` (fields, `normalize`, `validate`, `resolve`, storage, `act`),
+`helper/iosstudio/features/run_presets.py` (fields, `normalize`, `validate`, `resolve`, storage, `act`),
 `helper/iosstudio/features/projects/` (`projects presets` in commands.py, `model.launch_preset` and the `launch` data of `build run` in build.py),
-`helper/demo.py` (demo presets), `mcp/iosstudio_mcp/tools/run_presets.py` (`ios_project_presets`),
+`helper/iosstudio/demo/demo.py` (demo presets), `mcp/iosstudio_mcp/tools/run_presets.py` (`ios_project_presets`, `ios_project_preset_set`),
 `mcp/iosstudio_mcp/backends/projects.py` (`resolve_preset`, `merge_launch`), `mcp/iosstudio_mcp/tools/build.py`
 (`preset` on `ios_run`), `mcp/iosstudio_mcp/backends/builds.py` (the launch in `make_installer`), `tools/device.py` and `tools/logs.py` (`preset` on `ios_app_launch` and
 `ios_app_run_and_capture`), `services/ProjectService.qml` (the preset API, `--preset` on Run),
-`components/RunSplitButton.qml`, `components/RunPresetsSheet.qml`, `components/ProjectCard.qml`,
-`components/BuildPanel.qml`, `Model.js` (the preset helpers). Tests: `tests/helper/test_run_presets.py`, `tests/cli/test_run_presets_cli.py` and
+`components/projects/RunSplitButton.qml`, `components/projects/RunPresetsSheet.qml`, `components/projects/ProjectCard.qml`,
+`components/projects/BuildPanel.qml`, `lib/Model.js` (the preset helpers). Tests: `tests/helper/test_run_presets.py`, `tests/cli/test_run_presets_cli.py` and
 `tests/mcp/test_mcp_run_presets.py`.

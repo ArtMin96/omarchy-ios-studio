@@ -13,7 +13,8 @@ launches your app with its stdout and stderr attached to a socket and shows what
   phone sends stderr separately (see the limits below). When there are several launches a picker
   switches between them; the view follows the newest one unless you pick an older one.
 - **MCP**: `ios_run`, `ios_app_run_and_capture` (on by default, `console=false` turns it off) and
-  `ios_app_launch(console=true)` capture it. `ios_app_run_and_capture` returns a `console` summary
+  `ios_app_launch(console=true)` capture it. `ios_app_run_and_capture` is a job (call it again with
+  `job_id` while `state` is `running`) and returns a `console` summary
   and the stderr lines plus the latest ones; `ios_app_console_read(bundle_id or session_id)` pages
   through everything with a cursor (`grep`, `stream`, `newest`, `wait_seconds`, `max_bytes`). See
   [mcp.md](../mcp.md).
@@ -38,15 +39,15 @@ Swift print() ──pty──▶ coredeviced ──stdio socket (tunnel)──�
                                                    Logs › Console               ios_app_console_read
 ```
 
-- `helper/app_console.py`: shared by both daemons. `LineSplitter` turns bytes into lines,
+- `helper/iosstudio/device/features/console/core.py`: shared by both daemons. `LineSplitter` turns bytes into lines,
   `ConsoleSession` holds one launch's lines, `register_commands()` adds the commands, events and
   cleanup.
-- `helper/deviced_features/console.py`: the iPhone side (the stdio socket, the launch).
-  `app.launch` (`deviced_features/apps.py`) hands a `console: true` request to it, and it calls
+- `helper/iosstudio/device/features/console/real.py`: the iPhone side (the stdio socket, the launch).
+  `app.launch` (`device/features/apps/real.py`) hands a `console: true` request to it, and it calls
   `app.launch` back with the socket's identifier, so launch errors (locked, untrusted developer)
   read the same as before.
-- `helper/deviced_demo_features/console.py`: a made-up app that prints, including the awkward cases.
-- `components/LogConsoleTab.qml`: the tab. It reads the daemon's buffer when it opens (and whenever it
+- `helper/iosstudio/device/features/console/demo.py`: a made-up app that prints, including the awkward cases.
+- `components/logs/LogConsoleTab.qml`: the tab. It reads the daemon's buffer when it opens (and whenever it
   falls behind), then appends the live `console` events.
 - `mcp/iosstudio_mcp/tools/console.py`: `ios_app_console_read` and the capture summary.
 

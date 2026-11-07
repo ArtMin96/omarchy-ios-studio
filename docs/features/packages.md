@@ -18,7 +18,7 @@ After adding, Check build compiles the app with the new package. See [UI](#ui) f
 
 ## UI
 
-`components/ProjectPackagesSheet.qml`, opened from Packages… under a project card's More (⋮) or with `P` on the
+`components/projects/ProjectPackagesSheet.qml`, opened from Packages… under a project card's More (⋮) or with `P` on the
 highlighted card (listed in the `?` sheet). One sheet, several views:
 
 - **List.** "4 packages" with Update all and Add package…, then one row per package: name (bold, elides only when
@@ -182,7 +182,7 @@ build's lock on `.build/` says so in its detail and continues by itself.
 `ios_package_list`, `ios_package_add`, `ios_package_update`, `ios_package_resolve` and `ios_package_remove`
 (see [../mcp.md](../mcp.md)). Add, update and resolve are jobs: they return `state: "running"` and a `job_id`;
 calling the same tool with `job_id` (and `wait_seconds`, at most 25) returns the steps, progress and finally
-the result, and `ios_build_cancel(build_id=job_id)` cancels. When a package has several products the agent
+the result, and `ios_job_cancel(job_id)` cancels (`ios_job_status(job_id)` works too). When a package has several products the agent
 asks the user which one and calls `ios_package_add` again with `product=`; that only links it. Remove is a dry
 run until `confirm=true`. Diffs are cut to the result budget, the whole diff saved to `full_output_path`
 (the newest 10 in `~/.cache/ios-studio/packages/diffs/`). Hints in results name the MCP tool to call next.
