@@ -322,7 +322,7 @@ Item {
       root._disconnectedAt = 0
       // cheap first: the device's info, then the app list (served from the daemon's cache), and the
       // provisioning profiles a little later (only the Profiles tab and its warning badge need them)
-      refreshInfo(true, function() {
+      refreshInfo(false, function() {
         if (root.appsStatus !== "ready") refreshApps()
         if (root.profilesStatus !== "ready") profilesLater.restart()
       })
