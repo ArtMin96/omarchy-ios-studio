@@ -2,7 +2,7 @@
 machine (the editor's Swift support; Neovim's config), and optionally writes one project's missing files
 (.bsp/xtool.json, and .vscode/ when VS Code is the preferred editor). Projects otherwise get those files by
 themselves after a successful build and on create/convert; ios_project_info's `editor` field shows a
-project's state. See helper/editor_setup.py.
+project's state. See helper/iosstudio/features/editor_setup/.
 """
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes
+from ..core.registry import tool
 from ..models import Out
-from ..state import get_state, resolve_project
-from . import ann, tool
-from .build import MaxBytes
+from ..state import get_state
 
 EDITORS = ("vscode", "zed", "neovim")
 DETAIL_CUT = 400
@@ -91,29 +92,19 @@ class EditorSetupResult(B.Budgeted, Out):
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Set up editor", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, "Set up editor", kind="write", idempotent=True)
     async def ios_editor_setup(
         ctx: Context,
         editor: Annotated[EditorId, Field(description="vscode, zed, neovim, or auto: every installed one")] = "auto",
-        project_path: Annotated[str | None, Field(description="Also write this project's missing files now "
-                                                              "(.bsp/xtool.json; .vscode/ for VS Code) instead of "
-                                                              "waiting for its next build")] = None,
-        confirm: Annotated[bool, Field(description="false = dry run listing every change. true only after the "
-                                                   "user agreed")] = False,
+        project_path: Annotated[str | None, Field(description="Also write this project's .bsp/xtool.json "
+                                                              "(and .vscode/) now")] = None,
+        confirm: Annotated[bool, Field(description="false = dry run; true only after the user agreed")] = False,
         max_bytes: MaxBytes = None,
     ) -> EditorSetupResult:
-        """Set up an editor for Swift completion and errors (SourceKit-LSP through xtool's build server), once
-        per machine. A dry run unless confirm=true: it lists each file it would write or merge.
-
-        - neovim: changes the user's Neovim config (LazyVim's lang.swift extra in lazyvim.json, backed up
-          first, or a new lua/plugins/ios-studio-swift.lua). Non-LazyVim configs are left alone (notes say why).
-        - zed, vscode: their Swift extension is a step the user does (notes); nothing in the project is needed
-          for Zed. sourcekit-lsp's path goes into the editor's user settings only when it isn't on PATH.
-        - The editor is remembered in iOS Studio's settings. With VS Code, projects get .vscode/settings.json
-          and extensions.json (merged, never overwritten) on their next build.
-        Projects get .bsp/xtool.json by themselves after a successful build and on create/convert; pass
-        project_path to write a project's missing files now. ios_project_info's `editor` shows a project's
-        state. Existing files are never overwritten; values the user set differently are kept and listed."""
+        """Set up VS Code, Zed or Neovim for Swift completion (SourceKit-LSP via xtool's build server), once per
+        machine. A dry run listing each file it would write or merge until confirm=true after the user agrees.
+        Installing the editor's Swift extension is the user's step (see notes). Existing files and the
+        user's own values are kept."""
         state = get_state(ctx)
         machine = await helper.call("editor", "status")
         installed = {e.get("id"): e for e in (machine.get("editors") or []) if isinstance(e, dict)}

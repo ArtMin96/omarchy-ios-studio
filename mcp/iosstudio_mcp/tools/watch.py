@@ -1,10 +1,10 @@
 """Watch mode (compile on save): ios_watch_start / ios_watch_stop / ios_watch_status.
 
-The watcher is one helper process per user (`watch serve`, see helper/watch.py and
+The watcher is one helper process per user (`watch serve`, see helper/iosstudio/features/watch/ and
 docs/features/watch-mode.md), shared with the app: whoever starts it, both see its status and either can stop
 it. A watcher this server starts (or joins) lists this server's pid as an owner, so it stops by itself once
 this server exits and the app isn't using it either. Each compile is a normal `build compile` (build history,
-ios_build_diagnostics(build_id='w-N'), ios_build_log(log_file=...)). Status results stay small: counts and
+ios_build_diagnostics(job_id='w-N'), ios_build_log(log_file=...)). Status results stay small: counts and
 the first ≤ 5 errors.
 """
 from __future__ import annotations
@@ -15,14 +15,19 @@ from typing import Annotated, Any
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core import deadline
+from ..core.job_status import job_result, settle, shared_job
+from ..core.jobs import Job
+from ..core.params import ProjectPath
+from ..core.registry import MAX_WAIT, tool
 from ..models import Out, iso
-from ..state import get_state, resolve_project
-from . import MAX_WAIT, READ, ann, tool
-from .projects import ProjectPath
+from ..state import get_state
 
 FIRST_ERRORS = 5
+START_TIMEOUT = 40      # `watch run`: stopping another project's watcher (≤ 15 s) + starting this one (≤ 8 s)
 MESSAGE_CUT = 200
 
 
@@ -33,7 +38,7 @@ class WatchError(Out):
 
 
 class WatchBuild(Out):
-    build_id: str = Field(description="w-N: pass to ios_build_diagnostics(build_id=...) for the full list")
+    job_id: str = Field(description="w-N: pass to ios_build_diagnostics(job_id=...) for the full list")
     result: str = Field(description="ok or failed")
     duration_seconds: float | None = None
     finished_at: str | None = None
@@ -47,14 +52,14 @@ class WatchBuild(Out):
 class WatchRun(Out):
     state: str = Field(description="checking, building, installing, launching, launched, failed or skipped")
     message: str
-    build_id: str | None = None
+    job_id: str | None = Field(None, description="The run's own build (w-N)")
     bundle_id: str | None = None
 
 
 class WatchStatus(B.Budgeted, Out):
     watching: bool = Field(description="True while the watcher runs")
     state: str = Field(description="watching (idle), changed (waiting for the debounce), compiling, ok, failed, "
-                                   "stopped, or off (no watcher)")
+                                   "stopped, off (no watcher), or starting (call ios_watch_start again)")
     message: str | None = None
     project: str | None = None
     project_path: str | None = None
@@ -64,7 +69,7 @@ class WatchStatus(B.Budgeted, Out):
     debounce_ms: int | None = None
     changed_files: list[str] = Field(default_factory=list, description="Files of the pending or running build")
     changed_count: int = 0
-    current_build_id: str | None = Field(None, description="The build compiling right now")
+    current_job_id: str | None = Field(None, description="The build compiling right now (w-N)")
     progress: float | None = Field(None, description="0..1 of the running build")
     last_build: WatchBuild | None = Field(None, description="The latest finished build (ok or failed)")
     first_errors: list[WatchError] = Field(default_factory=list, description="≤ 5 errors of last_build")
@@ -104,7 +109,7 @@ def to_status(d: dict, project_path: str | None = None) -> WatchStatus:
     last = d.get("lastBuild") if isinstance(d.get("lastBuild"), dict) else None
     lb = None
     if last:
-        lb = WatchBuild(build_id=str(last.get("id")), result=str(last.get("result")),
+        lb = WatchBuild(job_id=str(last.get("id")), result=str(last.get("result")),
                         duration_seconds=last.get("duration"), finished_at=iso(last.get("time")),
                         errors=int(last.get("errors") or 0), warnings=int(last.get("warnings") or 0),
                         error_code=last.get("errorCode"),
@@ -119,11 +124,11 @@ def to_status(d: dict, project_path: str | None = None) -> WatchStatus:
         project=d.get("project"), project_path=helper.tilde(root), mode=d.get("mode"), mode_reason=d.get("modeReason"),
         auto_run=bool(d.get("autoRun")), debounce_ms=d.get("debounceMs"),
         changed_files=[B.clip(f, 200) for f in (d.get("changed") or [])[:5]], changed_count=int(d.get("changedCount") or 0),
-        current_build_id=d.get("buildId") if state == "compiling" else None,
+        current_job_id=d.get("buildId") if state == "compiling" else None,
         progress=round(float(prog["fraction"]), 3) if prog and isinstance(prog.get("fraction"), (int, float)) else None,
         last_build=lb, first_errors=_errors(last, root) if last else [],
         run=WatchRun(state=str(run.get("state")), message=B.clip(run.get("message") or "", 300),
-                     build_id=run.get("buildId"), bundle_id=run.get("bundleId")) if run else None,
+                     job_id=run.get("buildId"), bundle_id=run.get("bundleId")) if run else None,
         builds=int(d.get("builds") or 0), superseded=int(d.get("superseded") or 0),
         stop_reason=d.get("stopReason") if state == "stopped" else None, attached=bool(d.get("attached")),
         replaced=helper.tilde((d.get("replaced") or {}).get("path")) if isinstance(d.get("replaced"), dict) else None,
@@ -144,7 +149,7 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
         else:
             out.append(f"Not watching. ios_watch_start(project_path='{p}') compiles on every save.")
         if st.last_build and st.last_build.errors:
-            out.append(f"The last watch build had errors: ios_build_diagnostics(build_id='{st.last_build.build_id}').")
+            out.append(f"The last watch build had errors: ios_build_diagnostics(job_id='{st.last_build.job_id}').")
         return out
     if st.state in ("changed", "compiling"):
         out.append("A build is pending or running: ios_watch_status(wait_seconds=20) returns when it finishes.")
@@ -152,16 +157,16 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
     if lb and lb.result == "failed" and st.state == "failed":
         if lb.errors:
             more = f" (first {len(st.first_errors)} shown)" if lb.errors > len(st.first_errors) else ""
-            out.append(f"{lb.errors} error(s){more}. Full list with hints: ios_build_diagnostics(build_id="
-                       f"'{lb.build_id}'). Fix and save the files: the watcher compiles again by itself; then "
+            out.append(f"{lb.errors} error(s){more}. Full list with hints: ios_build_diagnostics(job_id="
+                       f"'{lb.job_id}'). Fix and save the files: the watcher compiles again by itself; then "
                        "ios_watch_status(wait_seconds=20).")
         else:
             nxt = helper.next_step_for({"code": lb.error_code}) if lb.error_code else None
-            out.append(f"The build failed without a compiler error: ios_build_diagnostics(build_id='{lb.build_id}')"
+            out.append(f"The build failed without a compiler error: ios_build_diagnostics(job_id='{lb.job_id}')"
                        + (f". {nxt}" if nxt else "."))
     elif lb and st.state == "ok":
-        out.append("Compiled cleanly" + (f" with {lb.warnings} warning(s) (ios_build_diagnostics(build_id='"
-                                         f"{lb.build_id}', severity='warning'))" if lb.warnings else "") + ".")
+        out.append("Compiled cleanly" + (f" with {lb.warnings} warning(s) (ios_build_diagnostics(job_id='"
+                                         f"{lb.job_id}', severity='warning'))" if lb.warnings else "") + ".")
         if not st.auto_run:
             out.append(f"To try it on the iPhone: ios_run(project_path='{p}').")
     if st.run and st.run.state in ("skipped", "failed"):
@@ -172,32 +177,23 @@ def _next_steps(st: WatchStatus, path: str | None) -> list[str]:
     return out
 
 
-DebounceMs = Annotated[int | None, Field(ge=100, le=10_000, description="Wait this long after the last save "
-                                                                        "before compiling (rapid saves make one "
-                                                                        "build); omit to keep the running "
-                                                                        "watcher's value (600 for a new one)")]
+DebounceMs = Annotated[int | None, Field(ge=100, le=10_000, description="Delay after the last save (default "
+                                                                        "600)")]
 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Start watch mode", read_only=False, idempotent=True))
+    @tool(mcp, "Start watch mode", kind="write", idempotent=True)
     async def ios_watch_start(
         ctx: Context,
         project_path: ProjectPath,
-        auto_run: Annotated[bool | None, Field(description="After each clean compile, also Run it (build, "
-                                                           "install, launch) when an iPhone is connected and an "
-                                                           "Apple ID is signed in; otherwise the status says why "
-                                                           "it was skipped. Omit to keep the running watcher's "
-                                                           "setting (off for a new one)")] = None,
+        auto_run: Annotated[bool | None, Field(description="Also run each clean compile on the iPhone")] = None,
         debounce_ms: DebounceMs = None,
     ) -> WatchStatus:
-        """Compile on save: watch the project's Sources/, Package.swift and xtool.yml and run a compile-only build
-        (no Apple ID or iPhone needed) a moment after files change. Saves during a build cancel it and start one
-        more; there is never more than one build at a time and one watched project per user (starting another
-        project moves the watcher there, reported in `replaced`). The app shares the same watcher. It starts
-        with one build of the current state. Then edit files and call ios_watch_status(wait_seconds=20) to get
-        the result: state, counts and the first errors (file:line:col). Stops by itself when this MCP session
-        ends and the app isn't using it."""
+        """Compile on save: a compile-only build (no Apple ID or iPhone) shortly after the project's files
+        change; a save during a build restarts it. One watched project per user, shared with the app (another
+        project moves it: `replaced`). After edits, ios_watch_status(wait_seconds=20) gives the result. If
+        state='starting', call again."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         flags: dict[str, Any] = {"project": p["path"], "detach": True, "owner": os.getpid()}
@@ -205,18 +201,28 @@ def register(mcp: MCPServer) -> None:
             flags["auto_run"] = "true" if auto_run else "false"
         if debounce_ms is not None:
             flags["debounce_ms"] = debounce_ms
-        data = await helper.call("watch", "run", flags, timeout=40)
+        async def start(job: Job) -> Any:
+            job.report(None, "starting the watcher")
+            return await helper.call("watch", "run", flags, timeout=START_TIMEOUT)
+        job = shared_job(state, "watch-start", p["path"], start, title=f"Start watch mode for {p.get('name') or p['path']}")
+        await settle(state, ctx, job)
+        if not job.finished:     # stopping another project's watcher first can take ~15 s
+            return WatchStatus(watching=False, state="starting", project=p.get("name"),
+                               project_path=helper.tilde(p["path"]), message="Starting the watcher…",
+                               next_steps=[f"Call ios_watch_start(project_path='{helper.tilde(p['path'])}') again "
+                                           "in a few seconds: it joins the start that is running."])
+        data = job_result(job)
         state.extras["watch.path"] = p["path"]
         return to_status(data or {}, p["path"]).with_budget(None)
 
-    @tool(mcp, annotations=ann("Stop watch mode", read_only=False, idempotent=True))
+    @tool(mcp, "Stop watch mode", kind="write", idempotent=True)
     async def ios_watch_stop(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Only stop if this project is the one watched; "
-                                                              "omit to stop whatever is watched")] = None,
+        project_path: Annotated[str | None, Field(description="Only if this project is watched (omit: "
+                                                              "any)")] = None,
     ) -> WatchStatus:
-        """Stop watch mode, also when the app started it, and cancel a compile that is running (it shows as
-        cancelled in the build history). The last status stays readable with ios_watch_status for a while."""
+        """Stop watch mode (also when the app started it) and cancel a running compile. The last status stays
+        readable with ios_watch_status."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}
         path = None
@@ -232,27 +238,24 @@ def register(mcp: MCPServer) -> None:
                              "project_path stops it."]
         return st
 
-    @tool(mcp, annotations=READ("Watch mode status"))
+    @tool(mcp, "Watch mode status", kind="read")
     async def ios_watch_status(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Report on this project (says so when another one "
-                                                              "is watched)")] = None,
-        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Long-poll: return when the next build "
-                                                                         "finishes (or the watcher stops), at "
-                                                                         "most after this many seconds")] = 0,
+        project_path: Annotated[str | None, Field(description="Report on this project")] = None,
+        wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait for the next build to "
+                                                                         "finish")] = 0,
     ) -> WatchStatus:
-        """The watcher's state (watching, changed, compiling, ok, failed, stopped, off), the latest finished
-        build (w-N id, result, duration, error and warning counts) and its first ≤ 5 errors as
-        'file:line:col' + message. wait_seconds blocks until a build that finishes after this call (use it right
-        after saving a file); timed_out says it was still busy. The full list: ios_build_diagnostics(build_id=
-        last_build.build_id)."""
+        """The watcher's state, the latest build (w-N, result, counts) and its first ≤ 5 errors (file:line:col).
+        wait_seconds waits for a build that finishes after this call (use it right after saving). Full list:
+        ios_build_diagnostics(job_id=last_build.job_id)."""
         state = get_state(ctx)
         flags: dict[str, Any] = {}
         path = None
         if project_path:
             path = (await resolve_project(state, project_path))["path"]
             flags["project"] = path
-        if wait_seconds:
-            flags["wait_seconds"] = wait_seconds
-        data = await helper.call("watch", "status", flags, timeout=wait_seconds + 20)
+        wait = int(max(0.0, deadline.wait_time(wait_seconds + 3) - 3))   # 3 s for the helper to start and answer
+        if wait:
+            flags["wait_seconds"] = wait
+        data = await helper.call("watch", "status", flags, timeout=wait + 20)
         return to_status(data or {}, path).with_budget(None)

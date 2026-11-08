@@ -21,14 +21,14 @@ where the crash happened. iOS Studio resolves those frames to the function, file
 
 Every build overwrites `.build`, so a crash from yesterday's build can't be resolved against today's.
 After each successful build that can end up on the phone (Run, Renew and signed builds; not
-compile-only checks), `helper/projects.py` calls `crash_symbols.remember_build()`, which:
+compile-only checks), `helper/iosstudio/features/projects/build.py` calls `crash_symbols.remember_build()`, which:
 
 1. finds the executable the build produced (`.build/<config>/<Product>-App`, the file xtool signs),
 2. reads its Mach-O `LC_UUID` (iOS writes the same UUID into every crash report's `usedImages`),
 3. copies it to `~/.cache/ios-studio/symbols/<uuid>/` and runs `dsymutil` on it. Swift on Linux leaves
    the debug info in the `.o` files, so the dSYM has to be made now, while they exist.
 
-Reading a report (`crash.pull`), `helper/crash_symbols.py`:
+Reading a report (`crash.pull`), `helper/iosstudio/features/crash_symbols.py`:
 
 1. picks the images inside the app bundle (`…/Bundle/Application/…/MyApp.app/…`); system libraries
    stay as the report has them,
@@ -71,11 +71,11 @@ to clear it; nothing else depends on it.
   folder, resolve. Rebuilding the same code with the same settings usually gives the same UUID.
 - System frames are not resolved; the device names most of them already.
 - Release builds keep function names only.
-- Check by hand: `python3 helper/crash_symbols.py symbolicate <report.ips>` and
-  `python3 helper/crash_symbols.py remember <project> [product] [config]`.
+- Check by hand: `python3 helper/run.py iosstudio.features.crash_symbols symbolicate <report.ips>` and
+  `python3 helper/run.py iosstudio.features.crash_symbols remember <project> [product] [config]`.
 
 ## Tests
 
-`tests/test_crash_symbolication.py` (stdlib) and `tests/test_mcp_crash_symbolication.py` (MCP venv). The
+`tests/helper/test_crash_symbolication.py` (stdlib) and `tests/mcp/test_mcp_crash_symbolication.py` (MCP venv). The
 fixture `tests/fixtures/crash-symbolication/Crashy.dwarf` is the dSYM of `Crashy.swift` built for
 arm64-apple-ios (`build.sh` rebuilds it); synthetic `.ips` reports point at its UUID and known offsets.

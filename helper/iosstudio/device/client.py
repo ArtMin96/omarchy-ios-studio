@@ -1,0 +1,580 @@
+"""Python client for the shared iOS Studio device daemon (stdlib asyncio only).
+
+The device daemon (`bin/iosstudio-deviced`) is a per-user broker that owns the one tunnel to the
+iPhone. The GUI and any number of other clients (e.g. the MCP server) talk to it over a Unix socket
+with the JSON-lines protocol in docs/deviced-protocol.md. This module is that client. It is stdlib
+only and needs nothing from the repo but protocol.py next to it (the wire format), so it can be
+imported as `iosstudio.device.client` (helper/ on sys.path) or loaded by file path (the MCP
+server does; protocol.py is then loaded by path too).
+
+API
+---
+
+    from iosstudio.device.client import DeviceClient, DeviceError, socket_path
+
+    async with DeviceClient(name="mcp") as dev:           # connects; spawns the daemon if needed
+        info = await dev.request("device.info", {}, timeout=40)   # -> reply data (dict / list)
+        apps = (await dev.request("apps.list", {"icons": False}))["apps"]
+
+        # events: async iterator (each call gets its own queue) ...
+        async with dev.events(["syslog", "syslogState"]) as stream:
+            await dev.request("syslog.start", {"filters": {"processes": ["MyApp"], "minLevel": "info"}})
+            async for name, data in stream:                # (event name, event data)
+                ...
+        await dev.request("syslog.stop")                   # stops only *this* client's syslog
+
+        # ... or a callback (sync or async); returns a function that removes it
+        off = dev.on_event(lambda name, data: print(name), ["connection", "devices"])
+        off()
+
+class DeviceClient(name="client", events=None, *, demo=None, spawn=True, reconnect=True,
+                   connect_timeout=30.0, deviced=None, socket=None)
+    name             shown in `daemon.clients` and the daemon log.
+    events           event names this client wants pushed (None = all, [] = none). Sent with `hello`;
+                     change later with `await dev.subscribe([...])`. Replies always arrive.
+                     Per-client events (`syslog`, `syslogState` for this client's stream) are always
+                     sent to the client that asked for them, whatever the subscription.
+    demo             None = follow $IOSSTUDIO_DEMO; True/str = demo daemon (fake iPhone, no phone
+                     needed; str = scenario "ready"|"expiring"|"fresh"); False = real phone.
+    spawn            start `bin/iosstudio-deviced --serve` (detached, own session) when no daemon
+                     is listening, then wait for its socket.
+    reconnect        after the daemon goes away, reconnect in the background (spawning a new one)
+                     and re-send `hello`. In-flight requests fail with DeviceError("disconnected").
+                     Daemon-side state of this client (syslog subscription, mirror reference) is
+                     lost on reconnect; listen for the synthetic "reconnected" event to redo it.
+    deviced / socket override the launcher path / socket path (tests).
+
+  await connect()          connect (idempotent). Raises DeviceError("daemon-unavailable") on failure.
+  await close()            disconnect. The daemon keeps running for other clients; it exits by itself
+                           after its idle grace period (IOSSTUDIO_DEVICED_IDLE, default 120 s).
+  await request(cmd, args=None, timeout=60.0) -> data
+                           one request. Raises DeviceError(code, message, fix, detail) for an error
+                           reply, code "timeout" after `timeout` s, "disconnected" if the daemon went
+                           away mid-request. Connects (and spawns) on demand. Sent once more, after
+                           reconnecting (spawning a fresh daemon if needed), when the daemon was
+                           shutting down (STOPPING: it never ran) or the connection dropped before the
+                           reply and the command is in SAFE_TO_RESEND or was never written.
+  await subscribe(events)  replace this client's event subscription (None = all).
+  events(names=None, maxsize=1000) -> async context manager + async iterator of (name, data);
+                           oldest items are dropped when the consumer is slower than `maxsize`.
+  on_event(callback, names=None) -> unsubscribe()
+                           callback(name, data); may be a coroutine function.
+  connected: bool          hello: dict | None (the daemon's `hello` reply: version, pid, clientId, demo, ...)
+  ready: dict | None       the daemon's last `ready` event data (pymobiledevice3 version, error if the
+                           iPhone tools are missing).
+
+Synthetic events (generated locally, delivered to iterators/callbacks that want them):
+  "disconnected" {reason}         the connection to the daemon dropped
+  "reconnected"  {hello}          connected again (daemon restarted); redo syslog.start etc.
+
+class DeviceError (protocol.DeviceError; a core.output.HelperError inside the iosstudio package):
+  .code .message .fix (dict | None) .detail (str | None); .to_json() -> {"code", "message", "fix"?, "detail"?}. Codes: see docs/deviced-protocol.md, plus
+  "timeout", "disconnected", "daemon-unavailable", "socket-path-too-long", and STOPPING
+  ("daemon-stopping", only if the retry hit a stopping daemon again).
+
+socket_path(demo=None) -> pathlib.Path    <base>/ios-studio[-demo]/deviced.sock, where <base> is
+                                           $IOSSTUDIO_RUNTIME_DIR if set, else $XDG_RUNTIME_DIR
+deviced_path() -> pathlib.Path             <repo>/bin/iosstudio-deviced (next to this file)
+
+Global state (shared by every client): the active device (`device.select`), the simulated location
+(`location.set/clear`), pairing (`pair.*`) and the mirror frame rate. See docs/deviced-protocol.md.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import inspect
+import itertools
+import json
+import os
+import stat
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable, Iterable
+
+
+def _load_protocol():
+    """protocol.py next to this file: the package import inside iosstudio, else loaded by path (the MCP
+    server loads this file by path, outside the package)."""
+    if __package__:
+        from . import protocol
+        return protocol
+    import importlib.util
+    import sys
+    name = "iosstudio_device_protocol"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("protocol.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[name]
+
+
+proto = _load_protocol()
+DeviceError = proto.DeviceError
+
+__all__ = ["DeviceClient", "DeviceError", "socket_path", "deviced_path", "runtime_dir", "STOPPING", "SAFE_TO_RESEND"]
+
+PROTOCOL_VERSION = "1"
+
+# Error code of a daemon that is shutting down: it refused the request without running it, so the
+# client may always send it again (to the next daemon).
+STOPPING = "daemon-stopping"
+
+# Commands that only read: resending one that may already have reached the daemon (the connection
+# dropped after it was written, before its reply) does no harm. Anything else (installs, launches,
+# deletes, starts/stops, settings) is resent only when it provably never left this client.
+SAFE_TO_RESEND = frozenset({
+    "hello", "subscribe", "daemon.ping", "daemon.clients", "daemon.features",
+    "devices.list", "device.info", "apps.list", "processes.list", "profiles.list",
+    "appdata.stores", "appdata.rows", "appdata.defaults",
+    "condition.list", "condition.status", "console.list", "console.read",
+    "container.list", "crash.list", "media.list", "media.thumb", "metrics.list", "metrics.read",
+    "metrics.series", "ddi.status", "devmode.status", "mirror.status", "pair.status", "pcap.status",
+    "record.status", "transfer.list", "screenshot", "ui.tree",
+})
+
+
+def _demo_flag(demo) -> str | None:
+    """None/False -> real phone; otherwise the demo scenario string."""
+    if demo is None:
+        v = os.environ.get("IOSSTUDIO_DEMO", "")
+        return v or None
+    if demo is False:
+        return None
+    return demo if isinstance(demo, str) and demo else "ready"
+
+
+def xdg_runtime_dir() -> str | None:
+    """$XDG_RUNTIME_DIR, else /run/user/<uid> when it exists, is ours and is writable (clients started with
+    a trimmed environment, e.g. the MCP SDK's stdio_client, lose XDG_RUNTIME_DIR but must still find the
+    app's daemon and watcher there), else None."""
+    env = os.environ.get("XDG_RUNTIME_DIR")
+    if env:
+        return env
+    run = f"/run/user/{os.getuid()}"
+    try:
+        st = os.stat(run)
+    except OSError:
+        return None
+    if stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and os.access(run, os.W_OK | os.X_OK):
+        return run
+    return None
+
+
+def default_runtime_base() -> Path:
+    """The base without the IOSSTUDIO_RUNTIME_DIR override: $XDG_RUNTIME_DIR (or /run/user/<uid>, see
+    xdg_runtime_dir), else /tmp/ios-studio-<uid>."""
+    return Path(xdg_runtime_dir() or f"/tmp/ios-studio-{os.getuid()}")
+
+
+def runtime_base() -> Path:
+    """$IOSSTUDIO_RUNTIME_DIR if set (a private daemon per worktree or test run), else
+    default_runtime_base(). The one rule for where the daemon's socket, lock and log live; shared by
+    the device daemon, its clients (app bridge, MCP) and watch mode. The GUI gets the resulting paths
+    from the daemon (`hello` reply and `ready` event: runtimeDir, log) instead of working them out."""
+    override = os.environ.get("IOSSTUDIO_RUNTIME_DIR")
+    return Path(override) if override else default_runtime_base()
+
+
+def runtime_dir(demo=None) -> Path:
+    return runtime_base() / ("ios-studio-demo" if _demo_flag(demo) else "ios-studio")
+
+
+def socket_path(demo=None) -> Path:
+    return runtime_dir(demo) / "deviced.sock"
+
+
+SOCKET_PATH_MAX = 107   # AF_UNIX sun_path is 108 bytes on Linux, one of them the closing NUL
+
+
+def socket_path_error(path) -> DeviceError | None:
+    """A runtime folder so deep that the socket path doesn't fit AF_UNIX (a long IOSSTUDIO_RUNTIME_DIR
+    in a dev setup): a clear error instead of a daemon that never comes up."""
+    n = len(os.fsencode(str(path)))
+    if n <= SOCKET_PATH_MAX:
+        return None
+    return DeviceError("socket-path-too-long",
+                       f"The iPhone service can't start: its socket path is {n} bytes long and the limit is "
+                       f"{SOCKET_PATH_MAX}. Set IOSSTUDIO_RUNTIME_DIR (or XDG_RUNTIME_DIR) to a shorter folder.",
+                       None, str(path))
+
+
+def deviced_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "bin" / "iosstudio-deviced"   # helper/iosstudio/device/ -> the checkout
+
+
+_END = object()   # queued by _Sub.end() to wake an iterator waiting on a closed stream
+
+
+class _Sub:
+    def __init__(self, names: Iterable[str] | None, cb: Callable | None = None, maxsize: int = 1000):
+        self.names = set(names) if names is not None else None
+        self.cb = cb
+        self.q: asyncio.Queue | None = None if cb else asyncio.Queue(maxsize)
+        self.ended = False
+
+    def wants(self, name: str) -> bool:
+        return self.names is None or name in self.names
+
+    def end(self):
+        """No more items: a waiting (or later) __anext__ stops instead of blocking forever."""
+        if not self.ended:
+            self.ended = True
+            self.put(_END)
+
+    def put(self, item):
+        if self.q is None or (self.ended and item is not _END):
+            return
+        while True:
+            try:
+                self.q.put_nowait(item)
+                return
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self.q.get_nowait()
+
+
+class _EventStream:
+    def __init__(self, client: "DeviceClient", sub: _Sub):
+        self._c, self._sub = client, sub
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self.close()
+
+    def close(self):
+        with contextlib.suppress(ValueError):
+            self._c._subs.remove(self._sub)
+        self._sub.end()
+
+    def __aiter__(self) -> AsyncIterator[tuple[str, Any]]:
+        return self
+
+    async def __anext__(self) -> tuple[str, Any]:
+        if self._sub.ended:
+            raise StopAsyncIteration
+        item = await self._sub.q.get()
+        if item is _END:
+            raise StopAsyncIteration
+        return item
+
+
+class DeviceClient:
+    def __init__(self, name: str = "client", events: Iterable[str] | None = None, *, demo=None,
+                 spawn: bool = True, reconnect: bool = True, connect_timeout: float = 30.0,
+                 deviced: str | os.PathLike | None = None, socket: str | os.PathLike | None = None):
+        self.name = name
+        self._events = list(events) if events is not None else None
+        self._demo = _demo_flag(demo)
+        self.spawn = spawn
+        self.reconnect = reconnect
+        self.connect_timeout = connect_timeout
+        self.deviced = Path(deviced) if deviced else deviced_path()
+        self.socket = Path(socket) if socket else socket_path(self._demo or False)
+        self.hello: dict | None = None
+        self.ready: dict | None = None
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._read_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._pending: dict[int, asyncio.Future] = {}
+        self._ids = itertools.count(1)
+        self._subs: list[_Sub] = []
+        self._lock = asyncio.Lock()
+        self._closed = False
+        self._was_connected = False
+        self._spawned: list[subprocess.Popen] = []   # reaped when the daemon goes away
+
+    # ------------------------------------------------------------ lifecycle
+    @property
+    def connected(self) -> bool:
+        return self._writer is not None and not self._writer.is_closing()
+
+    async def __aenter__(self) -> "DeviceClient":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
+
+    async def connect(self) -> None:
+        self._closed = False
+        async with self._lock:
+            if self.connected:
+                return
+            for attempt in range(3):
+                try:
+                    return await self._open()
+                except DeviceError as e:
+                    # A daemon that was going away as we attached (it refused `hello` or dropped the
+                    # connection): it removed its socket first, so the next try starts a new one.
+                    if attempt == 2 or e.code not in (STOPPING, "disconnected"):
+                        raise
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+        w = self._writer
+        self._writer = None
+        if w is not None:
+            with contextlib.suppress(Exception):
+                w.close()
+                await asyncio.wait_for(w.wait_closed(), 2)
+        if self._read_task:
+            self._read_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._read_task
+        self._fail_pending(DeviceError("disconnected", "The client was closed."))
+        for sub in [x for x in self._subs if x.q is not None]:   # end every events() iterator
+            self._subs.remove(sub)
+            sub.end()
+
+    async def _try_connect(self) -> bool:
+        try:
+            r, w = await asyncio.open_unix_connection(str(self.socket), limit=proto.MAX_LINE)
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            return False
+        self._reader, self._writer = r, w
+        return True
+
+    def _spawn(self) -> subprocess.Popen:
+        env = dict(os.environ)
+        if self._demo:
+            env["IOSSTUDIO_DEMO"] = self._demo
+        else:
+            env.pop("IOSSTUDIO_DEMO", None)
+        return subprocess.Popen([str(self.deviced), "--serve"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True, env=env)
+
+    @staticmethod
+    def _spawn_failure(proc: subprocess.Popen) -> DeviceError | None:
+        """The launcher exited before a socket appeared: report its `ready` error (e.g. needs-setup)."""
+        out = b""
+        with contextlib.suppress(Exception):
+            out = proc.stdout.read() or b""
+        for msg in proto.read_lines(out.splitlines()):
+            data = msg.get("data")
+            e = data.get("error") if isinstance(data, dict) else None
+            if e:
+                return DeviceError.from_json(e)
+        if proc.returncode:
+            return DeviceError("daemon-unavailable", "The iPhone service couldn't be started.", None,
+                               f"exit code {proc.returncode}")
+        return None   # exit 0: another daemon won the race; keep waiting for its socket
+
+    async def _open(self) -> None:
+        bad = socket_path_error(self.socket)
+        if bad is not None:
+            raise bad
+        ok = await self._try_connect()
+        if not ok and self.spawn:
+            try:
+                proc = self._spawn()
+                self._spawned.append(proc)
+            except OSError as exc:
+                raise DeviceError("daemon-unavailable", "The iPhone service couldn't be started.",
+                                  None, repr(exc)) from None
+            deadline = time.monotonic() + self.connect_timeout
+            delay = 0.05
+            try:
+                while not ok and time.monotonic() < deadline:
+                    await asyncio.sleep(delay)
+                    delay = min(0.5, delay * 1.5)
+                    ok = await self._try_connect()
+                    if not ok and proc.poll() is not None:
+                        failure = self._spawn_failure(proc)
+                        if failure is not None:
+                            raise failure
+            finally:
+                with contextlib.suppress(Exception):
+                    proc.stdout.close()
+        if not ok:
+            raise DeviceError("daemon-unavailable", "The iPhone service isn't running.", None, str(self.socket))
+        self._read_task = asyncio.create_task(self._read_loop())
+        try:
+            self.hello = await self._request("hello", {"name": self.name, "events": self._events,
+                                                       "version": PROTOCOL_VERSION}, 15)
+        except DeviceError:
+            # Never connected: no "disconnected" event and no background reconnect for this one.
+            task, self._read_task = self._read_task, None
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            w, self._writer = self._writer, None
+            if w:
+                w.close()
+            raise
+        if self._was_connected:
+            self._dispatch("reconnected", {"hello": self.hello})
+        self._was_connected = True
+
+    # ------------------------------------------------------------ requests
+    async def request(self, cmd: str, args: dict | None = None, timeout: float = 60.0) -> Any:
+        args = args or {}
+        for attempt in (0, 1):
+            if not self.connected:
+                if self._closed:
+                    raise DeviceError("disconnected", "The client was closed.")
+                await self.connect()
+            sent: list[bool] = [False]
+            try:
+                return await self._request(cmd, args, timeout, sent)
+            except DeviceError as e:
+                if attempt or self._closed or not self._may_resend(cmd, e, sent[0]):
+                    raise
+                await self._leave_dying_daemon()
+
+    async def _leave_dying_daemon(self, wait: float = 5.0) -> None:
+        """Before a retry: the daemon on this connection is going away (STOPPING: it closes the
+        connection right after its last replies). Let it, so replies still on the way arrive, then drop
+        the connection ourselves if that takes too long. A no-op once the connection is gone."""
+        task = self._read_task
+        if task is None or task.done():
+            return
+        done, _ = await asyncio.wait({task}, timeout=wait)
+        if done:
+            return
+        if self._writer is not None:
+            self._writer.close()   # the read loop sees the end and runs _on_lost
+        done, _ = await asyncio.wait({task}, timeout=2)
+        if not done:
+            task.cancel()
+            self._on_lost("the iPhone service is shutting down")
+
+    @staticmethod
+    def _may_resend(cmd: str, e: DeviceError, sent: bool) -> bool:
+        """Retry once? Never for a command that may have run, unless it only reads."""
+        if e.code == STOPPING:
+            return True   # refused by a daemon that is shutting down: it never ran
+        if e.code != "disconnected":
+            return False
+        return not sent or cmd in SAFE_TO_RESEND
+
+    async def _request(self, cmd: str, args: dict, timeout: float, sent: list[bool] | None = None) -> Any:
+        rid = next(self._ids)
+        fut = asyncio.get_running_loop().create_future()
+        self._pending[rid] = fut
+        try:
+            w = self._writer
+            if w is None:
+                raise DeviceError("disconnected", "Not connected to the iPhone service.")
+            if sent is not None:
+                sent[0] = True   # from here on some bytes may have reached the daemon
+            await proto.write_line_async(w, proto.request(rid, cmd, args))
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            raise DeviceError("timeout", f"The iPhone didn't answer {cmd} within {timeout:g} s. "
+                              "Make sure it's awake and try again.") from None
+        except (ConnectionError, OSError) as exc:
+            raise DeviceError("disconnected", "Lost the connection to the iPhone service.", None, repr(exc)) from None
+        finally:
+            self._pending.pop(rid, None)
+
+    async def subscribe(self, events: Iterable[str] | None) -> dict:
+        self._events = list(events) if events is not None else None
+        return await self.request("subscribe", {"events": self._events})
+
+    # ------------------------------------------------------------ events
+    def events(self, names: Iterable[str] | None = None, maxsize: int = 1000) -> _EventStream:
+        sub = _Sub(names, None, maxsize)
+        self._subs.append(sub)
+        return _EventStream(self, sub)
+
+    def on_event(self, callback: Callable[[str, Any], Any], names: Iterable[str] | None = None) -> Callable[[], None]:
+        sub = _Sub(names, callback)
+        self._subs.append(sub)
+
+        def off():
+            with contextlib.suppress(ValueError):
+                self._subs.remove(sub)
+        return off
+
+    def _dispatch(self, name: str, data: Any) -> None:
+        if name == "ready":
+            self.ready = data
+        for sub in list(self._subs):
+            if not sub.wants(name):
+                continue
+            if sub.cb is None:
+                sub.put((name, data))
+                continue
+            try:
+                r = sub.cb(name, data)
+                if inspect.isawaitable(r):
+                    asyncio.ensure_future(r)
+            except Exception:  # noqa: BLE001 - a bad callback must not kill the reader
+                pass
+
+    # ------------------------------------------------------------ reader
+    async def _read_loop(self) -> None:
+        reader = self._reader
+        reason = "the iPhone service closed the connection"
+        try:
+            async for msg in proto.read_lines_async(reader):
+                if proto.is_event(msg):
+                    self._dispatch(str(msg["event"]), msg.get("data"))
+                    continue
+                fut = self._pending.get(msg.get("id"))
+                if fut is None or fut.done():
+                    continue
+                if msg.get("ok"):
+                    fut.set_result(msg.get("data"))
+                else:
+                    fut.set_exception(DeviceError.from_json(msg.get("error")))
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionError, OSError, proto.LineTooLong) as exc:
+            reason = repr(exc)
+        self._on_lost(reason)
+
+    def _fail_pending(self, e: DeviceError) -> None:
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_exception(e)
+
+    def _on_lost(self, reason: str) -> None:
+        self._spawned = [p for p in self._spawned if p.poll() is None]
+        w, self._writer = self._writer, None
+        if w is not None:
+            with contextlib.suppress(Exception):
+                w.close()
+        self._fail_pending(DeviceError("disconnected", "The iPhone service restarted. Try again.", None, reason))
+        if self._closed:
+            return
+        self._dispatch("disconnected", {"reason": reason})
+        if self.reconnect and (self._reconnect_task is None or self._reconnect_task.done()):
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        delay = 0.5
+        while not self._closed and not self.connected:
+            await asyncio.sleep(delay)
+            try:
+                await self.connect()
+            except DeviceError:
+                delay = min(10.0, delay * 2)
+
+
+async def _main(argv: list[str]) -> int:
+    """`python3 client.py <cmd> ['<json args>']`: one request, for debugging."""
+    if not argv:
+        print(__doc__)
+        return 2
+    async with DeviceClient(name="cli", events=[]) as dev:
+        try:
+            data = await dev.request(argv[0], json.loads(argv[1]) if len(argv) > 1 else {})
+            print(json.dumps({"ok": True, "data": data}, indent=2, default=str))
+            return 0
+        except DeviceError as e:
+            print(json.dumps({"ok": False, "error": e.to_json()}, indent=2))
+            return 1
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(asyncio.run(_main(sys.argv[1:])))

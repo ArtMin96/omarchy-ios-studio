@@ -4,7 +4,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import "services"
-import "Model.js" as Model
+import "core"
+import "lib/Model.js" as Model
 
 // Root state object. shell.qml creates exactly one (`app`) and hands it to
 // every page as `required property var app`. Services live here so their
@@ -20,10 +21,22 @@ Item {
   // Demo mode (`ios-studio --demo`): made-up data from the helper and daemon, and its own
   // settings/state so your real ones are neither shown nor changed.
   readonly property string demo: Quickshell.env("IOSSTUDIO_DEMO") || ""
-  readonly property string demoDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ios-studio-demo"
-  readonly property string configDir: demo !== "" ? demoDir + "/config" : home + "/.config/ios-studio"
-  readonly property string stateDir: demo !== "" ? demoDir + "/state" : home + "/.local/state/ios-studio"
-  readonly property string cacheDir: demo !== "" ? demoDir + "/cache" : home + "/.cache/ios-studio"
+  readonly property string demoDir: xdgRuntimeDir + "/ios-studio-demo"     // demo_art.demo_dir() in the helper
+  // The runtime folder, the helper's rule (helper/iosstudio/device/client.py runtime_base): $IOSSTUDIO_RUNTIME_DIR, else
+  // $XDG_RUNTIME_DIR, else /run/user/<uid>. The daemon's own paths (socket folder, log, watch.json) come
+  // from its `ready` event: use device.runtimeDir / device.logPath, which fall back to this until then.
+  readonly property string xdgRuntimeDir: Quickshell.env("XDG_RUNTIME_DIR") || (_uid !== "" ? "/run/user/" + _uid : "/tmp")
+  readonly property string runtimeDir: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || xdgRuntimeDir) + (demo !== "" ? "/ios-studio-demo" : "/ios-studio")
+  readonly property string _uid: { var m = /^Uid:\s+(\d+)/m.exec(procStatus.text()); return m ? m[1] : "" }
+  FileView { id: procStatus; path: "/proc/self/status"; blockLoading: true; printErrors: false }
+  // The XDG base folders, the helper's rule (helper/iosstudio/core/appdirs.py): the variable, or the default
+  // when it is unset or empty. The helper, daemon and app must agree, e.g. on the daemon's device.json.
+  readonly property string xdgConfigHome: Model.xdgHome(Quickshell.env("XDG_CONFIG_HOME"), home, ".config")
+  readonly property string xdgStateHome: Model.xdgHome(Quickshell.env("XDG_STATE_HOME"), home, ".local/state")
+  readonly property string xdgCacheHome: Model.xdgHome(Quickshell.env("XDG_CACHE_HOME"), home, ".cache")
+  readonly property string configDir: demo !== "" ? demoDir + "/config" : xdgConfigHome + "/ios-studio"
+  readonly property string stateDir: demo !== "" ? demoDir + "/state" : xdgStateHome + "/ios-studio"
+  readonly property string cacheDir: demo !== "" ? demoDir + "/cache" : xdgCacheHome + "/ios-studio"
   readonly property string version: "0.1.0"
 
   // ------------------------------------------------------------ navigation
@@ -77,6 +90,35 @@ Item {
   function toast(text, level, opts) {
     if (root.toastHost) root.toastHost.show(text, level || "info", opts)
     else console.log("toast:", level || "info", text)
+  }
+
+  // A failed call's error ({code, message, …} or a string) as an error toast, optionally prefixed:
+  //   app.cli.call(argv, "", ok, app.toastError)    app.toastError(err, "Couldn't save")
+  function toastError(err, prefix) {
+    var msg = Model.errorMessage(err)
+    toast(prefix ? prefix + ": " + msg : msg, "error")
+  }
+
+  // Copy text to the clipboard and say so: copyText(bundleId) → "Copied com.example.app",
+  // copyText(path, "the path") → "Copied the path".
+  function copyText(text, label) {
+    var t = String(text === undefined || text === null ? "" : text)
+    Util.execArgv(["wl-copy", "--", t])
+    toast("Copied " + (label || (t.length > 60 ? t.substring(0, 57) + "…" : t)))
+  }
+
+  // Open a file or folder with its default app (xdg-open). showInFolder(file) opens the folder it's in.
+  // For a file:// URL (Image.source) use Util.fileUrl(path) from qs.Commons; is a program on PATH: the
+  // CommandCheck singleton (components/CommandCheck.qml).
+  function openPath(path) {
+    if (!path) return false
+    Util.execArgv(["xdg-open", String(path)])
+    return true
+  }
+  function showInFolder(file) {
+    var p = String(file || "")
+    var i = p.lastIndexOf("/")
+    return openPath(i > 0 ? p.substring(0, i) : p)
   }
 
   // confirm({ title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel })

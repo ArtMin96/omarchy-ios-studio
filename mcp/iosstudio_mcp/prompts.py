@@ -17,9 +17,9 @@ def register(mcp: MCPServer) -> None:
         return f"""Make the iOS project "{project}" compile cleanly.
 
 1. ios_project_info(project_path="{project}") to find the project folder and its Sources/ directory.
-2. ios_build_start(project_path="{project}", action="compile"), then poll ios_build_status(build_id, wait_seconds=20) until it finishes.
-3. If it failed: ios_build_diagnostics(build_id), errors first. Each entry has a category. For compiler errors, read each file around its file:line, fix the root cause (not just the symptom), and keep fixes minimal and idiomatic SwiftUI/Swift. Linker, package, signing, device, toolchain and config entries come with a one-line hint (often naming the tool that fixes it) and details such as the undefined symbols: follow the hint.
-   Only if nothing was recognised, read ios_build_log(build_id, level="error").
+2. ios_build_start(project_path="{project}", action="compile"), then poll ios_job_status(job_id, wait_seconds=20) until it finishes.
+3. If it failed: ios_build_diagnostics(job_id), errors first. Each entry has a category. For compiler errors, read each file around its file:line, fix the root cause (not just the symptom), and keep fixes minimal and idiomatic SwiftUI/Swift. Linker, package, signing, device, toolchain and config entries come with a one-line hint (often naming the tool that fixes it) and details such as the undefined symbols: follow the hint.
+   Only if nothing was recognised, read ios_build_log(job_id, level="error").
 4. Rebuild and repeat until state is "succeeded" with 0 errors. Then fix warnings you introduced.
 5. Summarize what was wrong and what you changed. Offer ios_run to try it on the iPhone."""
 
@@ -32,7 +32,7 @@ def register(mcp: MCPServer) -> None:
 
 1. ios_status to confirm the iPhone is connected.
 2. ios_crash_list(bundle_id="{bundle_id}") for this app's newest crash reports, then ios_crash_get(name) for the exception type, termination reason and the crashed thread's top frames (section='threads' for every thread, section='raw' for the report text, paged with start_line).
-3. Reproduce it while capturing logs: ios_app_run_and_capture(bundle_id="{bundle_id}", seconds=15) launches the app fresh, records its log and reports any new crash. For a crash that needs user interaction, ios_logs_start(bundle_id="{bundle_id}"), ask the user to trigger it, then ios_logs_read(session_id, wait_seconds=20) and ios_logs_stop.
+3. Reproduce it while capturing logs: ios_app_run_and_capture(bundle_id="{bundle_id}", seconds=15) launches the app fresh, records its log and reports any new crash (state='running' means call it again with the job_id it returned). For a crash that needs user interaction, ios_logs_start(bundle_id="{bundle_id}"), ask the user to trigger it, then ios_logs_read(session_id, wait_seconds=20) and ios_logs_stop.
    If the iPhone isn't reachable, ask the user to open iOS Studio's crash view: ios_open_app(page="crashes").
 4. Map the top frames in the app's own module to source files in the project (ios_project_list finds the folder by bundle id).
 5. Explain the cause, fix it, rebuild with ios_run, and verify with ios_app_run_and_capture that the crash is gone."""
@@ -57,7 +57,7 @@ def register(mcp: MCPServer) -> None:
         return """Get this computer ready to build and run iPhone apps with iOS Studio.
 
 1. ios_status. For each entry in `problems`, follow its `fix`:
-   - toolchain: ios_toolchain_check, then ios_toolchain_install(all=true). It asks for confirmation (state needs_input): show the user the prompt and answer with ios_build_respond. A polkit password dialog will appear on their screen; tell them.
+   - toolchain: ios_toolchain_check, then ios_toolchain_install(all=true). It asks for confirmation (state needs_input): show the user the prompt and answer with ios_job_respond. A polkit password dialog will appear on their screen; tell them.
    - Human-only steps (Apple ID sign-in, the Xcode .xip download, iPhone pairing/Trust, Developer Mode): explain what to do and call ios_open_app with the right page. Never ask for passwords or 2FA codes.
 2. Re-run ios_status until ready is true.
 3. Finish with a short summary of the setup and suggest the new_app prompt or ios_project_list."""

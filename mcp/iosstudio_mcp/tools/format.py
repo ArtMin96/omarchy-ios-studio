@@ -1,6 +1,6 @@
 """Format and lint: ios_format shows (dry run) or applies swift-format's changes to a project's Swift files as a
 bounded unified diff; ios_format_lint lists swift-format's (and SwiftLint's, when it runs) style findings.
-The work happens in helper/format.py (`projects format` / `projects format-lint`)."""
+The work happens in helper/iosstudio/features/format.py (`projects format` / `projects format-lint`)."""
 from __future__ import annotations
 
 import json
@@ -11,13 +11,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out, iso
-from ..state import get_state, resolve_project
-from . import READ, ann, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 FILES_CAP = 50              # files_changed entries in a result
 ERRORS_CAP = 20
@@ -25,10 +25,8 @@ HELPER_MAX_DIAGS = 500      # asked of the helper; max_items applies on this sid
 MESSAGE_CUT = 300
 TIMEOUT = 28                # the helper stops itself at 20 s
 
-Files = Annotated[list[str] | None, Field(max_length=200, description="Only these files (relative to the project or "
-                                                                       "absolute, inside it); default: every Swift "
-                                                                       "file in Package.swift, Sources/, Tests/, "
-                                                                       "Plugins/")]
+Files = Annotated[list[str] | None, Field(max_length=200, description="Only these files (in the project); default: "
+                                                                       "all its Swift files")]
 
 
 class FileError(Out):
@@ -136,21 +134,17 @@ def _lint_note(k: int, total: int) -> str:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Format Swift code", read_only=False, destructive=False, idempotent=True))
+    @tool(mcp, "Format Swift code", kind="write", idempotent=True)
     async def ios_format(
         ctx: Context,
         project_path: ProjectPath,
         files: Files = None,
-        apply: Annotated[bool, Field(description="False (default): dry run, nothing is written. True: write the "
-                                                 "formatted files (only those that change)")] = False,
+        apply: Annotated[bool, Field(description="false = dry run; true writes the files that change")] = False,
         max_bytes: MaxBytes = None,
     ) -> FormatResult:
-        """Format a project's Swift code with swift-format (comes with the Swift toolchain), honoring the
-        project's .swift-format. Call it first without apply: it returns which files would change and a
-        unified diff (cut to the budget; the whole diff is then saved to full_output_path). Show or summarize
-        the diff to the user, then call again with apply=true to write the files. Apply writes atomically,
-        only files whose content changes, never files outside the project; .build/ and hidden folders are
-        skipped. Files that don't parse are listed in `errors` and left alone. Needs no iPhone or Apple ID."""
+        """Format a project's Swift code with swift-format (honors .swift-format). Without apply: the files
+        that would change and a bounded diff (whole diff in full_output_path); show the user, then
+        apply=true writes only changed files. Files that don't parse are in `errors`, left alone."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         root = str(p.get("path") or "")
@@ -196,21 +190,18 @@ def register(mcp: MCPServer) -> None:
             full_output_path=data.get("full_output_path"), note=" ".join(notes) or None)
         return model.with_budget(max_bytes)
 
-    @tool(mcp, annotations=READ("Lint Swift code"))
+    @tool(mcp, "Lint Swift code", kind="read")
     async def ios_format_lint(
         ctx: Context,
         project_path: ProjectPath,
         files: Files = None,
-        max_items: Annotated[int, Field(ge=1, le=200, description="Max findings to return")] = 50,
-        cached: Annotated[bool, Field(description="Return the stored result of the last whole-project lint "
-                                                  "instead of running the linters")] = False,
+        max_items: Annotated[int, Field(ge=1, le=200, description="Max findings")] = 50,
+        cached: Annotated[bool, Field(description="The last whole-project lint's stored result")] = False,
         max_bytes: MaxBytes = None,
     ) -> LintResult:
-        """Lint a project's Swift code: swift-format's lint (honoring .swift-format) and, when it's installed,
-        SwiftLint (honoring .swiftlint.yml). Each finding has severity, file:line:col (relative to the project),
-        rule, source and message; whitespace findings (Indentation, Spacing, …) have a hint because
-        ios_format(apply=true) fixes them. Style findings never fail a build. Fast (seconds), read-only, needs
-        no iPhone or Apple ID. The app shows the same findings in the project's Problems list."""
+        """Lint a project's Swift code with swift-format (and SwiftLint when installed): severity,
+        file:line:col, rule and message per finding; whitespace ones are fixed by ios_format(apply=true).
+        Style findings never fail a build. Fast, read-only."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         root = str(p.get("path") or "")

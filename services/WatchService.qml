@@ -2,11 +2,10 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
-// Watch mode, compile on save (issue #7; helper/watch.py, docs/features/watch-mode.md).
+// Watch mode, compile on save (issue #7; helper/iosstudio/features/watch/, docs/features/watch-mode.md).
 // One watcher per user: starting one stops the other, and agents (MCP ios_watch_start/stop) can
 // start or stop it too. Every change of the watcher is a snapshot in <runtime dir>/watch.json:
 //   {seq, pid, state: watching|changed|compiling|ok|failed|stopped, reason, message, project (name), path,
@@ -44,8 +43,8 @@ Item {
   property real now: Date.now()
   property var lastError: null
 
-  readonly property string runtimeDir: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") || "/tmp")
-                                       + "/" + (app.demo !== "" ? "ios-studio-demo" : "ios-studio")
+  // watch.json lives in the daemon's runtime folder (helper/iosstudio/features/watch/runtime.py: client.runtime_dir()).
+  readonly property string runtimeDir: app.device.runtimeDir
 
   readonly property string autoRunBlocker: {
     var p = app.projects
@@ -101,7 +100,7 @@ Item {
     }, function(e) {
       root.busy = ""
       root._userStop = false
-      app.toast(Model.errorMessage(e), "error")
+      app.toastError(e)
     }, { timeout: 20000 })
   }
 
@@ -118,7 +117,7 @@ Item {
     app.cli.call(argv, "", function(d) {
       root._onSnapshot(d, false)
       app.toast(on ? "Runs " + w.name + " on your iPhone after each clean compile" : "Watching " + w.name + " without running it", "ok")
-    }, function(e) { app.toast(Model.errorMessage(e), "error") }, { timeout: 20000 })
+    }, function(e) { app.toastError(e) }, { timeout: 20000 })
   }
 
   function _nameOf(path) { var pr = app.projects ? app.projects.projectByPath(path) : null; return pr ? pr.name : String(path).split("/").pop() }
@@ -136,7 +135,7 @@ Item {
       if (!ok && error && error.code !== "cancelled") {
         root.busy = ""
         root.lastError = error
-        app.toast("Couldn't watch for changes: " + Model.errorMessage(error), "error")
+        app.toastError(error, "Couldn't watch for changes")
       }
       if (ok && data && data.state) root._onSnapshot(data, true)
     }
@@ -180,7 +179,7 @@ Item {
       var c = root.current
       if (d && d.watching === false && c && !stream.running)
         root._onSnapshot(Object.assign({}, d, { state: "stopped", path: c.path, pid: c.pid, seq: (c.seq || 0) + 1 }), false)
-    }, function(e) {}, { timeout: 10000 })
+    }, null, { timeout: 10000 })
   }
 
   property string _shownBuild: ""       // lastBuild.id already sent to the build panel

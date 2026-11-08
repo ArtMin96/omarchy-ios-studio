@@ -3,14 +3,17 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/device"
+import "../lib/Model.js" as Model
 
 PageFrame {
   id: page
   required property var app
   readonly property var svc: app.device
-  // A device to show: known, and either connected or at least paired somehow.
+  // A device to show: known, and either connected or at least paired somehow. On a cold open
+  // svc.current is the iPhone seen last until the daemon's discovery has finished (DeviceService
+  // `discovered`), so the pairing steps only show once it has looked and found none.
   readonly property bool showDevice: !!svc.current && svc.connState !== "not-paired" && svc.status !== "needs-setup"
   property string tab: "apps"
   property int cursor: -1
@@ -46,7 +49,7 @@ PageFrame {
   }
 
   actions: [
-    IconButton { glyph: Model.Glyph.link; tooltip: "Pair another iPhone"; visible: page.showDevice; onClicked: pairSheet.begin(page.usbPresent() ? "usb" : "wifi") },
+    IconButton { glyph: Model.Glyph.link; tooltip: "Pair another iPhone"; visible: page.showDevice; onClicked: page.beginPair(page.usbPresent() ? "usb" : "wifi") },
     IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; onClicked: page.refresh() }
   ]
 
@@ -81,14 +84,14 @@ PageFrame {
   function activated(params) {
     var p = params || {}
     if (p.tab) page.tab = p.tab
-    if (p.action === "pair") Qt.callLater(function() { pairSheet.begin(p.method || (page.usbPresent() ? "usb" : "wifi")) })
-    else if (p.action === "devmode" || p.action === "developer-mode") Qt.callLater(function() { devModeSheet.open() })
+    if (p.action === "pair") Qt.callLater(function() { page.beginPair(p.method || (page.usbPresent() ? "usb" : "wifi")) })
+    else if (p.action === "devmode" || p.action === "developer-mode") Qt.callLater(page.openDevMode)
     else if (p.action === "reconnect") svc.reconnect()
     else if (p.action === "ddi") svc.mountDdi()
     else if (p.action === "screenshot") { page.tab = "screen"; svc.screenshot() }
-    else if (p.action === "compare") { page.tab = "screen"; screenView.pane = "compare" }
+    else if (p.action === "compare") { page.tab = "screen"; screenTab.withItem(function(v) { v.pane = "compare" }) }
     else if (p.action === "mirror") { page.tab = "screen"; if (svc.connected && !svc.mirroring) svc.startMirror() }
-    else if (p.tab === "files" && ["media", "camera"].indexOf(p.action) >= 0) filesView.show(p.action)
+    else if (p.tab === "files" && ["media", "camera"].indexOf(p.action) >= 0) filesTab.withItem(function(v) { v.show(p.action) })
     // an app's details: {tab: "apps", app: bundleId, section: "data"|"files"}; the old Files › App files and
     // App data links ("device:files:apps", "device:files:data", with an optional bundleId) land there too
     else if (p.tab === "files" && (p.action === "apps" || p.action === "data")) {
@@ -111,7 +114,8 @@ PageFrame {
   function goBack() { if (page.appDetail !== "") page.closeApp() }
   function focusSearch() {
     if (!page.showDevice) return
-    if (page.tab === "screen" && screenView.pane === "elements") { screenView.focusFilter(); return }
+    var screen = screenTab.item
+    if (page.tab === "screen" && screen && screen.pane === "elements") { screen.focusFilter(); return }
     page.tab = "apps"; page.appDetail = ""; appsView.search.focusField()
   }
 
@@ -127,7 +131,7 @@ PageFrame {
     }
     if (page.tab !== "apps") {
       if (page.tab === "screen" && event.text === "s") { svc.screenshot(); return true }
-      if (page.tab === "screen") return screenView.handleKey(a)   // Elements/Audit: j/k, Enter presses
+      if (page.tab === "screen") return !!screenTab.item && screenTab.item.handleKey(a)   // Elements/Audit: j/k, Enter presses
       return false
     }
     if (page.appDetail !== "") {
@@ -135,7 +139,7 @@ PageFrame {
       var open = svc.apps.filter(function(x) { return x.bundleId === page.appDetail })[0]
       if (!open) return false
       if (event.text === "o") { svc.launchApp(open); return true }
-      if (a === "copy") { Util.execArgv(["wl-copy", open.bundleId]); app.toast("Copied " + open.bundleId); return true }
+      if (a === "copy") { app.copyText(open.bundleId); return true }
       return false
     }
     var n = appsView.shown.length
@@ -149,7 +153,7 @@ PageFrame {
     if (a === "activate") { page.openApp(cur.bundleId); return true }
     if (event.text === "o") { svc.launchApp(cur); return true }
     if (a === "delete") { if (cur.removable) svc.uninstallApp(cur); return true }
-    if (a === "copy") { Util.execArgv(["wl-copy", cur.bundleId]); app.toast("Copied " + cur.bundleId); return true }
+    if (a === "copy") { app.copyText(cur.bundleId); return true }
     return false
   }
 
@@ -169,7 +173,7 @@ PageFrame {
     Layout.fillWidth: true
     visible: !page.showDevice
     app: page.app
-    onPairRequested: function(m) { pairSheet.begin(m) }
+    onPairRequested: function(m) { page.beginPair(m) }
   }
 
   // ---- device switcher (several iPhones)
@@ -191,7 +195,7 @@ PageFrame {
     visible: page.showDevice
     app: page.app
     onOpenScreen: page.tab = "screen"
-    onDevModeHelp: devModeSheet.open()
+    onDevModeHelp: page.openDevMode()
   }
 
   // ---- sections
@@ -206,7 +210,7 @@ PageFrame {
 
   ColumnLayout {
     Layout.fillWidth: true
-    visible: page.showDevice && !page.svc.connected && page.tab !== "info"
+    visible: page.showDevice && !page.svc.connected && page.tab !== "info" && !appsView.visible
     EmptyState {
       Layout.fillWidth: true
       compact: true
@@ -221,92 +225,210 @@ PageFrame {
   DeviceAppsView {
     id: appsView
     Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "apps" && page.appDetail === "" && (page.svc.connected || page.svc.apps.length > 0)
+    // Not connected yet, the cached list (or its skeleton while it comes, which is at once on a cold open)
+    // stands in; the hero's pill says it's connecting.
+    visible: page.showDevice && page.tab === "apps" && page.appDetail === ""
+             && (page.svc.connected || page.svc.apps.length > 0 || page.svc.appsStatus === "loading" || !page.svc.discovered)
     app: page.app
     cursor: page.cursor
     onCursorMoved: function(i) { page.cursor = i }
     onOpenApp: function(bid) { page.openApp(bid) }
   }
-  DeviceAppDetailView {
+  // Each tab below is built the first time it's opened, in the background, and then kept (its state
+  // survives switching tabs). Loaded by file, so not even its QML is compiled before that. `active`
+  // (onScreen) tells it whether it's showing: hidden tabs do no work.
+  component TabLoader: Loader {
+    id: tl
+    required property var app
+    required property string file           // in components/
+    property bool shown: false              // this tab is the current one
+    property bool onScreen: false           // and the iPhone page is the current page
+    property bool hasActive: true           // the view has an `active` property
+    property var props: ({})                // more initial properties (keep them current with a Binding)
+    property var _pending: []
+    property bool hurry: false              // finish the load synchronously (see the Timer)
     Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "apps" && page.appDetail !== "" && page.svc.connected
-    active: visible && page.app.page === "device"
-    app: page.app
-    bundleId: page.appDetail
-    section: page.appSection
-    onSectionPicked: function(s) { page.appSection = s }
-    onBack: page.closeApp()
+    visible: shown && status === Loader.Ready
+    asynchronous: !hurry
+    // `active` isn't an initial property: the Binding below sets it once the view exists, so the view
+    // sees one change to true and starts its work once.
+    function initial() { return Object.assign({ app: tl.app }, tl.props) }
+    function ensure() {
+      if (item || status === Loader.Loading) return
+      setSource(Qt.resolvedUrl("../components/device/" + file), initial())
+    }
+    // Started in the background so the tab bar answers at once; what's left after a frame or two is
+    // finished in one go (much quicker than trickling between frames). Turning `asynchronous` off
+    // mid-load would drop the initial properties, so the load starts over synchronously.
+    Timer {
+      interval: 50
+      running: tl.shown && tl.status === Loader.Loading && !tl.hurry
+      onTriggered: {
+        tl.setSource("")
+        tl.hurry = true
+        tl.setSource(Qt.resolvedUrl("../components/device/" + tl.file), tl.initial())
+      }
+    }
+    onShownChanged: if (shown) ensure()
+    Component.onCompleted: if (shown) ensure()
+    // fn(item) now, or as soon as the tab has loaded (a deep link into a tab not built yet)
+    function withItem(fn) {
+      if (item) { fn(item); return }
+      _pending = _pending.concat([fn])
+      ensure()
+    }
+    onLoaded: {
+      var p = _pending
+      _pending = []
+      for (var i = 0; i < p.length; i++) p[i](item)
+    }
+    onStatusChanged: if (status === Loader.Error) console.warn("iPhone tab failed to load:", file)
+    Binding { target: tl.item; property: "active"; value: tl.onScreen; when: tl.hasActive && !!tl.item }
   }
-  DeviceScreenView {
-    id: screenView
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "screen" && page.svc.connected
-    app: page.app
-    onDevModeHelp: devModeSheet.open()
+  readonly property bool pageShown: page.app.page === "device"
+  // Profiles load when a tab that shows them opens (DeviceService.wantProfiles: a no-op once they're
+  // loaded or loading; older services don't have it).
+  function wantProfiles() { if (typeof page.svc.wantProfiles === "function") page.svc.wantProfiles() }
+
+  // A tab that takes a moment to build shows a spinner, after a short delay so a quick one doesn't flash.
+  readonly property var tabLoaders: ({ apps: appDetailTab, screen: screenTab, files: filesTab, location: locationTab, network: networkTab,
+                                       performance: performanceTab, debug: debugTab, profiles: profilesTab, info: infoTab })
+  readonly property bool tabLoading: {
+    var l = page.tabLoaders[page.tab]
+    return !!l && l.shown && l.status === Loader.Loading
   }
-  DeviceFilesView {
-    id: filesView
+  property bool tabSlow: false
+  onTabLoadingChanged: tabSlow = false
+  Timer { interval: 150; running: page.tabLoading; onTriggered: page.tabSlow = true }
+  Item {
     Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "files" && page.svc.connected
-    active: visible && page.app.page === "device"
-    app: page.app
-  }
-  DeviceLocationView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "location" && page.svc.connected
-    app: page.app
-  }
-  DeviceNetworkView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "network" && page.svc.connected
-    app: page.app
-  }
-  DevicePerformanceView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "performance" && page.svc.connected
-    app: page.app
-  }
-  DeviceDebugView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "debug" && page.svc.connected
-    app: page.app
-  }
-  DeviceProfilesView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "profiles" && (page.svc.connected || page.svc.profiles.length > 0)
-    app: page.app
-  }
-  DeviceInfoView {
-    Layout.fillWidth: true
-    visible: page.showDevice && page.tab === "info"
-    app: page.app
+    implicitHeight: Style.space(160)
+    visible: page.tabLoading && page.tabSlow
+    Spinner { anchors.centerIn: parent; running: parent.visible; size: Style.font.iconLarge }
   }
 
-  // ---- sheets
-  DevicePairSheet { id: pairSheet; app: page.app }
+  TabLoader {
+    id: appDetailTab
+    app: page.app
+    file: "DeviceAppDetailView.qml"
+    shown: page.showDevice && page.tab === "apps" && page.appDetail !== "" && page.svc.connected
+    onScreen: shown && page.pageShown
+    props: ({ bundleId: page.appDetail, section: page.appSection })
+    Binding { target: appDetailTab.item; property: "bundleId"; value: page.appDetail; when: !!appDetailTab.item }
+    Binding { target: appDetailTab.item; property: "section"; value: page.appSection; when: !!appDetailTab.item }
+    Connections {
+      target: appDetailTab.item
+      function onSectionPicked(s) { page.appSection = s }
+      function onBack() { page.closeApp() }
+    }
+  }
+  TabLoader {
+    id: screenTab
+    app: page.app
+    file: "DeviceScreenView.qml"
+    shown: page.showDevice && page.tab === "screen" && page.svc.connected
+    onScreen: shown && page.pageShown
+    Connections {
+      target: screenTab.item
+      function onDevModeHelp() { page.openDevMode() }
+    }
+  }
+  TabLoader {
+    id: filesTab
+    app: page.app
+    file: "DeviceFilesView.qml"
+    shown: page.showDevice && page.tab === "files" && page.svc.connected
+    onScreen: shown && page.pageShown
+  }
+  TabLoader {
+    id: locationTab
+    app: page.app
+    file: "DeviceLocationView.qml"
+    hasActive: false
+    shown: page.showDevice && page.tab === "location" && page.svc.connected
+  }
+  TabLoader {
+    id: networkTab
+    app: page.app
+    file: "DeviceNetworkView.qml"
+    shown: page.showDevice && page.tab === "network" && page.svc.connected
+    onScreen: shown && page.pageShown
+    onOnScreenChanged: if (onScreen) page.wantProfiles()
+  }
+  TabLoader {
+    id: performanceTab
+    app: page.app
+    file: "DevicePerformanceView.qml"
+    shown: page.showDevice && page.tab === "performance" && page.svc.connected
+    onScreen: shown && page.pageShown
+  }
+  TabLoader {
+    id: debugTab
+    app: page.app
+    file: "DeviceDebugView.qml"
+    shown: page.showDevice && page.tab === "debug" && page.svc.connected
+    onScreen: shown && page.pageShown
+  }
+  TabLoader {
+    id: profilesTab
+    app: page.app
+    file: "DeviceProfilesView.qml"
+    hasActive: false
+    shown: page.showDevice && page.tab === "profiles" && (page.svc.connected || page.svc.profiles.length > 0)
+    onScreen: shown && page.pageShown
+    onOnScreenChanged: if (onScreen) page.wantProfiles()
+  }
+  TabLoader {
+    id: infoTab
+    app: page.app
+    file: "DeviceInfoView.qml"
+    hasActive: false
+    shown: page.showDevice && page.tab === "info"
+  }
 
-  Sheet {
-    id: devModeSheet
-    title: "Turn on Developer Mode"
-    subtitle: "Needed once, so your own apps can run"
-    glyph: Model.Glyph.developer
-    preferredWidth: Style.space(520)
-    DeviceSteps {
-      Layout.fillWidth: true
-      steps: [
-        { text: "On the iPhone, open Settings › Privacy & Security." },
-        { text: "Scroll to the bottom and tap Developer Mode, then switch it on." },
-        { text: "Tap Restart. After the restart, unlock the iPhone and tap Turn On." }
-      ]
+  // ---- sheets, built the first time they open
+  function beginPair(method) {
+    pairLoader.ensure()
+    if (pairLoader.item) pairLoader.item.begin(method)
+  }
+  function openDevMode() {
+    devModeLoader.active = true
+    devModeLoader.item.open()
+  }
+  Loader {
+    id: pairLoader
+    visible: false
+    function ensure() { if (!item) setSource(Qt.resolvedUrl("../components/device/DevicePairSheet.qml"), { app: page.app }) }
+  }
+  Loader {
+    id: devModeLoader
+    visible: false
+    active: false
+    sourceComponent: Component {
+      Sheet {
+        id: devModeSheet
+        title: "Turn on Developer Mode"
+        subtitle: "Needed once, so your own apps can run"
+        glyph: Model.Glyph.developer
+        preferredWidth: Style.space(520)
+        DeviceSteps {
+          Layout.fillWidth: true
+          steps: [
+            { text: "On the iPhone, open Settings › Privacy & Security." },
+            { text: "Scroll to the bottom and tap Developer Mode, then switch it on." },
+            { text: "Tap Restart. After the restart, unlock the iPhone and tap Turn On." }
+          ]
+        }
+        AppText {
+          Layout.fillWidth: true; wrapMode: Text.Wrap; size: "small"; tone: "faint"
+          text: "Don't see Developer Mode? Plug the iPhone in and press “Show the switch”, or run one of your apps once from Projects."
+        }
+        footer: [
+          ActionButton { text: "Show the switch"; glyph: Model.Glyph.eye; disabled: !page.usbPresent(); tooltip: page.usbPresent() ? "" : "Needs the cable"; onClicked: page.svc.revealDevMode() },
+          ActionButton { text: "Done"; kind: "primary"; onClicked: { devModeSheet.close(); page.svc.refreshInfo(true) } }
+        ]
+      }
     }
-    AppText {
-      Layout.fillWidth: true; wrapMode: Text.WordWrap; size: "small"; tone: "faint"
-      text: "Don't see Developer Mode? Plug the iPhone in and press “Show the switch”, or run one of your apps once from Projects."
-    }
-    footer: [
-      ActionButton { text: "Show the switch"; glyph: Model.Glyph.eye; disabled: !page.usbPresent(); tooltip: page.usbPresent() ? "" : "Needs the cable"; onClicked: page.svc.revealDevMode() },
-      ActionButton { text: "Done"; kind: "primary"; onClicked: { devModeSheet.close(); page.svc.refreshInfo(true) } }
-    ]
   }
 
   Connections {

@@ -2,12 +2,13 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Owns the device daemon (bin/iosstudio-deviced, protocol: docs/deviced-protocol.md).
 //   app.device.request("apps.list", {}, function(ok, dataOrError) { … })
+//   app.device.fetch("apps.list", {}, function(data) { … }, function(err) { … })   // Cli.call's shape
+//   Resource { fetch: app.device.fetcher("profiles.list") }                        // see Resource.qml
 //   Connections { target: app.device; function onDaemonEvent(name, data) { … } }   // syslog, crash…
 Item {
   id: root
@@ -30,16 +31,50 @@ Item {
   readonly property bool connected: connState === "connected" || connState === "locked"
   readonly property bool hasDevice: devices.length > 0
 
-  // apps
-  property var apps: []
-  property string appsStatus: "unknown"    // unknown | loading | ready | error
-  property var appsError: null
+  // Cold open: until the daemon's first discovery pass has answered (`discovered`), the iPhone seen last
+  // stands in for `current` (marked `known: true`), so the page shows it with "Connecting…" and its cached
+  // app list instead of the pairing steps. From the daemon's state file (docs/deviced-protocol.md, "State
+  // file") at start, afterwards the last `current` (a daemon restart). Only a pass that found no iPhone
+  // brings up the pairing steps.
+  property bool discovered: false
+  property var _known: null
+  FileView { id: lastDeviceFile; path: root.app.stateDir + "/device.json"; blockLoading: true; printErrors: false }
+  function _knownFromState() { return Model.knownDevice(lastDeviceFile.text()) }
+
+  // apps. `apps` changes only when the list itself does (apps.list reply, `apps` event, launch/stop/remove);
+  // icons and sizes arrive later in batches and land in their own maps so a batch doesn't rebuild every
+  // view bound to `apps`. Their values are also written into the app objects in place (no change signal),
+  // so code reading `a.icon` / `a.size` sees them on its next evaluation.
+  // The list is appsResource (a Resource); apps / appsStatus ("unknown" | "loading" | "ready" | "error") /
+  // appsError are read-only views of it. refreshApps() / wantAppSizes() load it.
+  property Resource appsResource: Resource {
+    initial: []
+    fetch: root._fetchApps
+  }
+  readonly property var apps: appsResource.data
+  readonly property string appsStatus: appsResource.status === "idle" ? "unknown" : appsResource.status
+  readonly property var appsError: appsResource.error
+  property var appIcons: ({})              // bundleId -> icon path (appIcons / appIcon events)
+  property var appSizes: ({})              // bundleId -> bytes (appSizes, only after wantAppSizes())
+  property bool appsStale: false           // the reply came from the daemon's cache; it refreshes in the background
+  property var appsFetchedAt: null         // when the daemon read the list from the iPhone (as the daemon sends it; null = unknown)
+  property double _sizesAskedAt: 0         // wantAppSizes(): once per device per sizesTtl
+  readonly property int sizesTtl: 600000
+  property string _appsKey: ""             // the list's content without icon/size, to skip no-op updates
   property var busyApps: ({})              // bundleId -> "launch" | "kill" | "uninstall"
 
   // profiles
-  property var profiles: []
-  property string profilesStatus: "unknown"
-  property var profilesError: null
+  // The provisioning profiles on the phone, loaded on demand (wantProfiles) or a little after connecting.
+  // profiles / profilesStatus ("unknown" | "loading" | "ready" | "error") / profilesError are read-only
+  // views of it, kept for existing callers; new code can bind a StateView to profilesResource directly.
+  property Resource profilesResource: Resource {
+    active: root.connected
+    initial: []
+    fetch: root.fetcher("profiles.list")
+  }
+  readonly property var profiles: profilesResource.data || []
+  readonly property string profilesStatus: profilesResource.status === "idle" ? "unknown" : profilesResource.status
+  readonly property var profilesError: profilesResource.error
 
   // screen
   property bool mirroring: false
@@ -51,7 +86,7 @@ Item {
   property bool shooting: false
   property var mirrorError: null
   readonly property string screenSource: framePath !== "" ? frameUrl
-                                       : (lastShot !== "" ? "file://" + lastShot : "")
+                                       : (lastShot !== "" ? Util.fileUrl(lastShot) : "")
   // mirror modes (deviced mirror.start {mode}): "auto" tries the smooth stream (iOS 27+), else screenshots
   property string mirrorMode: app.setting("mirrorMode", "auto")   // what the user picked: auto | screenshot
   property string mirrorActive: ""         // what runs now: stream | screenshot ("" = not running)
@@ -107,6 +142,19 @@ Item {
     return id
   }
 
+  // request() with the (done(data), fail(error)) shape Cli.call and Resource use.
+  function fetch(cmd, args, done, fail, timeoutMs) {
+    return request(cmd, args, function(ok, d) {
+      if (ok) { if (done) done(d) } else if (fail) fail(d)
+    }, timeoutMs)
+  }
+
+  // A Resource fetch function: Resource { fetch: app.device.fetcher("profiles.list") }.
+  // args may be a function, read at each load.
+  function fetcher(cmd, args, timeoutMs) {
+    return function(done, fail) { root.fetch(cmd, typeof args === "function" ? args() : args, done, fail, timeoutMs) }
+  }
+
   function _settle(id, ok, payload) {
     var entry = root._pending[id]
     if (!entry) return
@@ -153,6 +201,12 @@ Item {
     }
     onExited: function(code) {
       root.daemonReady = false
+      root.discovered = false                   // the next daemon looks again; keep showing this iPhone meanwhile
+      if (root.current) {
+        root._known = Object.assign({}, root.current, { known: true })
+        root.connection = { state: "connecting", message: "Connecting…", local: true }
+        root._lastState = ""
+      }
       root._failAll({ code: "unreachable", message: "The iPhone service restarted. Try again." })
       root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
       root.condition = null                     // the daemon's exit switched it off
@@ -169,9 +223,12 @@ Item {
     }
   }
 
-  // Unix runtime dir as bin/iosstudio-deviced picks it (IOSSTUDIO_RUNTIME_DIR, else XDG_RUNTIME_DIR).
-  readonly property string logPath: (Quickshell.env("IOSSTUDIO_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") || "/tmp")
-                                    + (root.app.demo !== "" ? "/ios-studio-demo" : "/ios-studio") + "/deviced.log"
+  // The daemon's runtime folder and log, as its `ready` event reports them; until then (or when it dies
+  // before it's ready) the app's copy of the rule (AppState.runtimeDir).
+  property string _reportedRuntimeDir: ""
+  property string _reportedLog: ""
+  readonly property string runtimeDir: _reportedRuntimeDir || root.app.runtimeDir
+  readonly property string logPath: _reportedLog || runtimeDir + "/deviced.log"
   readonly property int maxFailedStarts: 4
   property int _failedStarts: 0
   property bool _readySinceStart: false
@@ -198,6 +255,14 @@ Item {
   function start() {
     root.status = "loading"
     root.error = null
+    root.discovered = false
+    if (!root.current) {
+      root._known = root._known || _knownFromState()
+      if (root._known) {
+        _updateCurrent()
+        root.connection = { state: "connecting", message: "Connecting…", local: true }
+      }
+    }
     root._failedStarts = 0
     root._readySinceStart = false
     daemon.autoRestart = true
@@ -213,6 +278,8 @@ Item {
   function _onEvent(name, data) {
     switch (name) {
     case "ready":
+      if (data && data.runtimeDir) root._reportedRuntimeDir = data.runtimeDir
+      if (data && data.log) root._reportedLog = data.log
       if (data && data.error) { _needsSetup(data.error.detail || data.error.message); break }
       root.daemonReady = true
       root._readySinceStart = true
@@ -220,6 +287,9 @@ Item {
       root.pmd3Version = data && data.pymobiledevice3 ? data.pymobiledevice3 : ""
       root.status = "ready"
       root.error = null
+      _discover()
+      // the app list is served from the daemon's cache right away (stale) even before the tunnel is up
+      if (root.current && root.appsStatus !== "ready" && root.appsStatus !== "loading") refreshApps()
       break
     case "devices":
       root.devices = data || []
@@ -237,7 +307,7 @@ Item {
       }
       break
     case "frame":
-      if (root.mirroring && data) { root.frameSeq = data.seq; root.frameUrl = "file://" + data.path + "?" + data.seq; root.framePath = data.path }
+      if (root.mirroring && data) { root.frameSeq = data.seq; root.frameUrl = Util.fileUrl(data.path) + "?" + data.seq; root.framePath = data.path }
       break
     case "mirror":
       root.mirroring = !!(data && data.running)
@@ -255,21 +325,23 @@ Item {
         var was = root.recording ? root.recording.state : ""
         root.recording = data
         if (data.state === "done" && was !== "done" && !data.placeholder) root.app.notify("Screen recording saved", (data.seconds || 0).toFixed(0) + " s video", Model.Glyph.camera)
-        if (data.state === "failed" && was !== "failed" && data.error) root.app.toast(Model.errorMessage(data.error), "error")
+        if (data.state === "failed" && was !== "failed" && data.error) root.app.toastError(data.error)
       }
       break
-    case "appIcon":
-      _patchApp(data.bundleId, { icon: data.path })
+    case "apps":                                // the cached list changed after a background refresh
+      if (data && data.apps && _isCurrent(data.udid)) { root.appsResource.set(_setApps(data.apps)); root.appsStale = false }
+      break
+    case "appsRunning":                         // apps launched/stopped elsewhere (MCP, CLI): {udid, running: {bundleId: pid|null}}
+      if (data && data.running && _isCurrent(data.udid)) _patchRunning(data.running)
+      break
+    case "appIcons":                            // batched: {udid, icons: {bundleId: path}}
+      if (data && data.icons && _isCurrent(data.udid)) _queueIcons(data.icons)
+      break
+    case "appIcon":                             // older daemons: one event per icon (coalesced below)
+      if (data && data.bundleId && data.path && _isCurrent(data.udid)) { var one = {}; one[data.bundleId] = data.path; _queueIcons(one) }
       break
     case "appSizes":
-      if (data && data.sizes) {
-        var list = root.apps.slice()
-        for (var i = 0; i < list.length; i++) {
-          var s = data.sizes[list[i].bundleId]
-          if (s !== undefined) list[i] = Object.assign({}, list[i], { size: s })
-        }
-        root.apps = list
-      }
+      if (data && data.sizes && _isCurrent(data.udid)) _mergeSizes(data.sizes)
       break
     case "condition":
       _onCondition(data || {})
@@ -311,9 +383,12 @@ Item {
       if (root._disconnectedAt > 0 && Date.now() - root._disconnectedAt > 20000)
         root.app.notify(name + " connected", "Over " + via, Model.Glyph.phone)
       root._disconnectedAt = 0
-      refreshInfo(true)
-      if (root.appsStatus !== "ready") refreshApps()
-      if (root.profilesStatus !== "ready") refreshProfiles()
+      // cheap first: the device's info, then the app list (served from the daemon's cache), and the
+      // provisioning profiles a little later (only the Profiles tab and its warning badge need them)
+      refreshInfo(false, function() {
+        if (root.appsStatus !== "ready" && root.appsStatus !== "loading") refreshApps()   // usually asked for at `ready`
+        if (root.profilesResource.status !== "ready") profilesLater.restart()
+      })
     } else if (c.state !== "connected" && c.state !== "locked" && (prev === "connected" || prev === "locked")) {
       root._disconnectedAt = Date.now()
       root.mirroring = false; root.mirrorActive = ""; root.measuredFps = 0
@@ -323,12 +398,31 @@ Item {
     }
   }
 
+  // devices.list waits for the daemon's first discovery pass (deviced-protocol.md, "Rules"), so its
+  // reply says discovery is done: from then on an empty `current` means there's no iPhone to show.
+  function _discover() {
+    request("devices.list", {}, function(ok, d) {
+      // the daemon went away before answering: the next one's `ready` asks again
+      if (!ok && d && (d.code === "unreachable" || d.code === "not-ready")) return
+      if (ok && Array.isArray(d)) root.devices = d
+      root.discovered = true
+      _updateCurrent()
+      if (!root.current && root.connection.local)
+        root.connection = { state: "idle", message: "No iPhone selected" }
+    })
+  }
+
   function _updateCurrent() {
     var cur = null
     for (var i = 0; i < root.devices.length; i++) if (root.devices[i].active) cur = root.devices[i]
+    if (!cur && !root.discovered && root._known) {
+      cur = Model.mergeKnownDevice(root._known, root.devices)   // the daemon's cached copy may be newer
+    }
     if (cur && root.current && root.current.udid !== cur.udid) {
       // switched device: forget the old one's lists
-      root.info = ({}); root.apps = []; root.appsStatus = "unknown"; root.profiles = []; root.profilesStatus = "unknown"
+      root.info = ({}); root.appsResource.reset(); root._appsArgs = ({}); root._appsGen++; root.profilesResource.reset()
+      root.appIcons = ({}); root.appSizes = ({}); root._appsKey = ""; root._sizesAskedAt = 0; root.appsStale = false
+      root._iconQueue = ({})
       root.lastShot = ""; root.framePath = ""; root.location = null
     }
     root.current = cur ? Object.assign({}, cur, root.info && root.info.udid === cur.udid ? root.info : {}, {
@@ -343,10 +437,76 @@ Item {
       if (list[i].bundleId === bundleId) {
         var copy = list.slice()
         copy[i] = Object.assign({}, list[i], patch)
-        root.apps = copy
+        root.appsResource.set(_setApps(copy))
         return
       }
     }
+  }
+
+  // Running flags from an appsRunning event: one new list, with only the apps whose state changed
+  // copied (the rest are the same objects, icons and sizes included); nothing changes when none did.
+  function _patchRunning(running) {
+    var copy = Model.patchRunning(root.apps, running)
+    if (copy) root.appsResource.set(_setApps(copy))
+  }
+
+  function _isCurrent(udid) { return !udid || !root.current || udid === root.current.udid }
+
+  // A new list: keep the icons/sizes we know, take any the daemon put inline. Returns the list for
+  // appsResource: the current one (the same object, so nothing rebinds) unless something besides
+  // icon/size changed.
+  function _setApps(items) {
+    // plain JS objects (replies arrive as variant lists), so _writeInto can fill them in place
+    var list = []
+    for (var n = 0; n < items.length; n++) list.push(Object.assign({}, items[n]))
+    var icons = null, sizes = null
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], bid = a.bundleId
+      if (a.icon && root.appIcons[bid] !== a.icon) { if (!icons) icons = {}; icons[bid] = a.icon }
+      if (a.size && root.appSizes[bid] !== a.size) { if (!sizes) sizes = {}; sizes[bid] = a.size }
+    }
+    if (icons) root.appIcons = Object.assign({}, root.appIcons, icons)
+    if (sizes) root.appSizes = Object.assign({}, root.appSizes, sizes)
+    var key = JSON.stringify(list, function(k, v) { return k === "icon" || k === "size" ? undefined : v })
+    if (key === root._appsKey) return root.apps
+    for (var j = 0; j < list.length; j++) {
+      var b = list[j]
+      if (!b.icon && root.appIcons[b.bundleId]) b.icon = root.appIcons[b.bundleId]
+      if (!b.size && root.appSizes[b.bundleId]) b.size = root.appSizes[b.bundleId]
+    }
+    root._appsKey = key
+    return list
+  }
+
+  function _writeInto(field, map) {
+    var list = root.apps
+    for (var i = 0; i < list.length; i++) { var v = map[list[i].bundleId]; if (v !== undefined) list[i][field] = v }
+  }
+
+  // Icons arrive in batches (or one by one from older daemons): merge them into appIcons at most
+  // once per frame-ish tick, so N icons cost one map change, not N list rebuilds.
+  property var _iconQueue: ({})
+  function _queueIcons(icons) {
+    var q = root._iconQueue
+    for (var k in icons) q[k] = icons[k]
+    iconFlush.restart()
+  }
+  Timer {
+    id: iconFlush
+    interval: 50
+    onTriggered: {
+      var q = root._iconQueue, known = root.appIcons
+      root._iconQueue = ({})
+      for (var k in q) if (known[k] === q[k]) delete q[k]
+      if (Object.keys(q).length === 0) return
+      root.appIcons = Object.assign({}, root.appIcons, q)
+      root._writeInto("icon", q)
+    }
+  }
+
+  function _mergeSizes(sizes) {
+    root.appSizes = Object.assign({}, root.appSizes, sizes)
+    _writeInto("size", sizes)
   }
 
   function _setBusy(bundleId, what) {
@@ -395,55 +555,88 @@ Item {
     if (root.status === "needs-setup") { start(); return }
     if (!daemon.running) { start(); return }
     request("device.reconnect", {}, null)
-    if (root.connected) { refreshInfo(true); refreshApps(); refreshProfiles() }
+    if (root.connected) { refreshInfo(true); refreshApps(true); refreshProfiles() }
   }
 
   function reconnect() { request("device.reconnect", {}, null) }
 
   function select(udid) {
     request("device.select", { udid: udid }, function(ok, d) {
-      if (!ok) root.app.toast(Model.errorMessage(d), "error")
+      if (!ok) root.app.toastError(d)
       else root.app.setSetting("defaultDevice", udid)
     })
   }
 
-  function refreshInfo(fresh) {
+  // then(ok): called after the reply (connect uses it to ask for the app list next)
+  function refreshInfo(fresh, then) {
     request("device.info", { fresh: !!fresh }, function(ok, d) {
       if (ok) {
         root.info = d; root.location = d.location || null
         if (d.condition !== undefined) root.condition = d.condition ? Object.assign({ active: true }, d.condition) : null
         _updateCurrent()
       }
+      if (then) then(ok)
     })
   }
 
-  function refreshApps() {
-    if (root.appsStatus !== "ready") root.appsStatus = "loading"
-    request("apps.list", { icons: true }, function(ok, d) {
-      if (ok) {
-        // keep sizes we already know until the new appSizes event lands
-        var old = {}
-        for (var i = 0; i < root.apps.length; i++) old[root.apps[i].bundleId] = root.apps[i].size
-        for (var j = 0; j < d.length; j++) if (d[j].size === null && old[d[j].bundleId]) d[j].size = old[d[j].bundleId]
-        root.apps = d; root.appsStatus = "ready"; root.appsError = null
-      } else { root.appsError = d; if (root.appsStatus !== "ready") root.appsStatus = "error" }
+  // force: re-read the list from the iPhone instead of the daemon's cache (the Reload buttons).
+  // Sizes are slow on a real iPhone: they're only asked for through wantAppSizes().
+  function refreshApps(force) {
+    _listApps({ icons: true, force: !!force })
+  }
+
+  // Something shows or sorts by app sizes: ask once per device per sizesTtl (they come as an appSizes event).
+  function wantAppSizes() {
+    if (!root.connected || Date.now() - root._sizesAskedAt < root.sizesTtl) return
+    root._sizesAskedAt = Date.now()
+    _listApps({ icons: true, sizes: true })
+  }
+
+  // One apps.list at a time (appsResource). Calls are merged into the args of the next request; a call
+  // while one runs gets one more request after it (Resource.load(true) queues it).
+  property var _appsArgs: ({})
+  property int _appsGen: 0                 // bumped on a device switch: an older reply is dropped
+  function _listApps(args) {
+    var next = root._appsArgs
+    for (var k in args) next[k] = next[k] || args[k]
+    root._appsArgs = next
+    root.appsResource.load(true)
+  }
+  function _fetchApps(done, fail) {
+    var args = root._appsArgs, gen = root._appsGen
+    root._appsArgs = ({})
+    root.fetch("apps.list", args, function(d) {
+      if (gen !== root._appsGen) return        // the other iPhone's list (appsResource dropped it too)
+      // {apps, stale, fetchedAt}; older daemons answer with the bare list
+      var wrapped = !!d && d.apps !== undefined
+      root.appsStale = wrapped && !!d.stale
+      root.appsFetchedAt = wrapped && d.fetchedAt !== undefined ? d.fetchedAt : null
+      done(root._setApps(wrapped ? d.apps : (d || [])))
+    }, function(e) {
+      if (args.sizes) root._sizesAskedAt = 0
+      fail(e)
     })
   }
 
-  function refreshProfiles() {
-    if (root.profilesStatus !== "ready") root.profilesStatus = "loading"
-    request("profiles.list", {}, function(ok, d) {
-      if (ok) { root.profiles = d; root.profilesStatus = "ready"; root.profilesError = null }
-      else { root.profilesError = d; if (root.profilesStatus !== "ready") root.profilesStatus = "error" }
-    })
+  // Profiles aren't needed to show the page: fetched a moment after the app list on connect.
+  Timer {
+    id: profilesLater
+    interval: 3000
+    onTriggered: if (root.profilesResource.status !== "ready") root.profilesResource.load()
   }
+  // The Profiles tab (or anything else that shows them) can call this to have them right away.
+  function wantProfiles() {
+    if (root.connected && root.profilesResource.status !== "ready") { profilesLater.stop(); root.profilesResource.load() }
+  }
+
+  function refreshProfiles() { root.profilesResource.load(true) }
 
   function launchApp(a) {
     _setBusy(a.bundleId, "launch")
     request("app.launch", { bundleId: a.bundleId }, function(ok, d) {
       _setBusy(a.bundleId, "")
       if (ok) { root.app.toast("Opened " + a.name, "ok"); _patchApp(a.bundleId, { running: true, pid: d.pid }) }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -452,7 +645,7 @@ Item {
     request("app.kill", { bundleId: a.bundleId }, function(ok, d) {
       _setBusy(a.bundleId, "")
       if (ok) { root.app.toast(d.killed.length ? "Stopped " + a.name : a.name + " wasn't running", "ok"); _patchApp(a.bundleId, { running: false, pid: null }) }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -466,9 +659,9 @@ Item {
         request("app.uninstall", { bundleId: a.bundleId }, function(ok, d) {
           _setBusy(a.bundleId, "")
           if (ok) {
-            root.apps = root.apps.filter(function(x) { return x.bundleId !== a.bundleId })
+            root.appsResource.set(_setApps(root.apps.filter(function(x) { return x.bundleId !== a.bundleId })))
             root.app.toast("Removed " + a.name, "ok")
-          } else root.app.toast(Model.errorMessage(d), "error")
+          } else root.app.toastError(d)
         })
       }
     })
@@ -479,7 +672,7 @@ Item {
     request("screenshot", {}, function(ok, d) {
       root.shooting = false
       if (ok) root.lastShot = d.path
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
       if (callback) callback(ok, d)
     })
   }
@@ -497,7 +690,7 @@ Item {
     root.mirrorError = null
     request("mirror.start", _mirrorArgs(fps), function(ok, d) {
       if (ok) { root.mirroring = true; if (d.mode && d.mode !== "starting") root.mirrorActive = d.mode }
-      else { root.mirrorError = d; root.app.toast(Model.errorMessage(d), "error") }
+      else { root.mirrorError = d; root.app.toastError(d) }
     })
   }
 
@@ -527,7 +720,7 @@ Item {
     if (!root.mirroring) args.mode = root.mirrorMode
     request("record.start", args, function(ok, d) {
       if (ok) root.recording = d
-      else { root.recording = { state: "failed", error: d }; root.app.toast(Model.errorMessage(d), "error") }
+      else { root.recording = { state: "failed", error: d }; root.app.toastError(d) }
     }, 60000)
   }
 
@@ -578,7 +771,7 @@ Item {
     request("location.set", { lat: lat, lon: lon }, function(ok, d) {
       root.locating = false
       if (ok) { root.location = Object.assign({ label: label || "" }, d); root.app.toast("Your iPhone now thinks it's " + (label ? "in " + label : "at " + lat.toFixed(4) + ", " + lon.toFixed(4)), "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -587,7 +780,7 @@ Item {
     request("location.clear", {}, function(ok, d) {
       root.locating = false
       if (ok) { root.location = null; root.app.toast("Real location restored", "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 
@@ -597,7 +790,7 @@ Item {
     request("ddi.mount", {}, function(ok, d) {
       root.mountingDdi = false
       if (ok) { root.info = Object.assign({}, root.info, { ddiMounted: true }); root.app.toast("Developer tools are ready on your iPhone", "ok") }
-      else root.app.toast(Model.errorMessage(d), "error")
+      else root.app.toastError(d)
     })
   }
 

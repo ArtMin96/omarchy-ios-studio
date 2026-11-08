@@ -20,24 +20,26 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
+from ..backends.device import dcall
+from ..core import budget as B
+from ..core.job_status import follow_job, job_result, still_running
+from ..core.jobs import Job
+from ..core.params import MaxBytes, OptJobId, Udid, WaitSeconds
+from ..core.registry import MAX_WAIT, fit_page, page_of, tool
 from ..models import Out
 from ..state import AppState, get_state
-from . import READ_REMOTE, ann, fit_page, page_of, tool
-from .device import Udid, dcall
 
 TREE_MAX = 400           # the daemon's cap on elements per walk
 TEXT_CUT = 120           # characters kept of a label, value, hint or identifier
 CHANGES_CAP = 25         # labels per list in a press's change summary
 CACHE_SECONDS = 120      # a cursor pages through a walk at most this old
+AUDIT_TIMEOUT = 60       # ui.audit in its job: session + front app + types (8 s) + the audit itself (18 s)
 
 # Roles and traits that make an element something to press or edit (matched case-insensitively, by substring).
 INTERACTIVE = ("button", "link", "field", "textview", "switch", "toggle", "slider", "adjustable", "stepper",
                "picker", "segment", "tab", "menu", "cell", "checkbox", "keyboardkey", "searchfield", "incrementable")
 
-BundleOpt = Annotated[str | None, Field(description="Bundle id of the app that must be in front (e.g. "
-                                                    "'com.example.myapp'); the call fails with wrong-app if "
-                                                    "another app is showing")]
+BundleOpt = Annotated[str | None, Field(description="App that must be in front (else the call fails: wrong-app)")]
 
 
 # ------------------------------------------------------------------ models
@@ -107,10 +109,13 @@ class A11yIssue(Out):
 
 
 class A11yAudit(B.Budgeted, Out):
-    counts: dict[str, int] = Field(description="Issues per type, most frequent first")
-    total: int = Field(description="All issues found")
-    count: int = Field(description="Issues listed below")
-    issues: list[A11yIssue] = Field(description="Grouped by type, in the order of `counts`")
+    state: Literal["running", "done"] = Field("done", description="running: the audit is still going; call "
+                                              "ios_a11y_audit(job_id=...) again")
+    job_id: str | None = Field(None, description="The audit's job: pass back as job_id to wait for it")
+    counts: dict[str, int] = Field(default_factory=dict, description="Issues per type, most frequent first")
+    total: int = Field(0, description="All issues found")
+    count: int = Field(0, description="Issues listed below")
+    issues: list[A11yIssue] = Field(default_factory=list, description="Grouped by type, in the order of `counts`")
     supported: list[str] = Field(default_factory=list, description="Audit types this iPhone ran")
     unsupported: list[str] = Field(default_factory=list, description="Types this iOS version can't run "
                                                                      "(informational, not a failure)")
@@ -220,7 +225,7 @@ async def _walk(state: AppState, udid: str | None, bundle_id: str | None, max_el
     args: dict = {"max": max_elements}
     if bundle_id:
         args["bundleId"] = bundle_id
-    data = await dcall(state, "ui.tree", args, udid=udid, timeout=45) or {}
+    data = await dcall(state, "ui.tree", args, udid=udid, timeout=MAX_WAIT) or {}   # the daemon stops a walk at 20 s
     if not isinstance(data, dict):
         data = {}
     c["tree"] = {"key": key, "at": time.monotonic(), "data": data}
@@ -231,34 +236,22 @@ async def _walk(state: AppState, udid: str | None, bundle_id: str | None, max_el
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("Read the screen's UI tree"))
+    @tool(mcp, "Read the screen's UI tree", kind="read_remote")
     async def ios_ui_tree(
         ctx: Context,
         udid: Udid = None,
         bundle_id: BundleOpt = None,
-        filter: Annotated[str | None, Field(description="Keep elements whose label, value, identifier or role "
-                                                        "contains this text (case-insensitive)")] = None,
-        roles: Annotated[list[str] | None, Field(description="Keep only these roles/traits, e.g. ['button', "
-                                                             "'staticText'] (case-insensitive)")] = None,
-        interactive_only: Annotated[bool, Field(description="Keep only things to press or edit: buttons, links, "
-                                                            "text fields, switches, sliders, tabs, cells…")] = False,
-        cursor: Annotated[int | None, Field(ge=0, description="next_cursor of the previous call: next page of the "
-                                                              "same walk (no new walk)")] = None,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap of the "
-                                                                                     "result (default ~12 KB)")] = None,
-        max_elements: Annotated[int, Field(ge=1, le=TREE_MAX, description="Stop the walk after this many "
-                                                                          "elements")] = 150,
+        filter: Annotated[str | None, Field(description="Text in label, value, identifier or role")] = None,
+        roles: Annotated[list[str] | None, Field(description="Only these roles/traits, e.g. ['button']")] = None,
+        interactive_only: Annotated[bool, Field(description="Only things to press or edit")] = False,
+        cursor: Annotated[int | None, Field(ge=0, description="next_cursor: next page of the same walk")] = None,
+        max_bytes: MaxBytes = None,
+        max_elements: Annotated[int, Field(ge=1, le=TREE_MAX, description="Stop the walk after this many")] = 150,
     ) -> UiTree:
-        """Read what is on the iPhone's screen as structured data: every accessibility element in VoiceOver
-        reading order with its id, role, label, value, hint, identifier, traits and frame ([x, y, w, h] in
-        points). Element positions may be unavailable on recent iOS (frame is then left out; ios_a11y_audit
-        issues still have frames). bundle_id/pid in the result say which app was read. Use it to check that a change works without a human: build and launch the app (ios_run or
-        ios_app_launch), call ios_ui_tree, press something with ios_ui_press(element_id=...), then call
-        ios_ui_tree again (or ios_screenshot) to see the result. Pass bundle_id to make sure your app is the
-        one in front. Ids stay valid until the screen changes. The walk takes about 5 s; complete=false
-        means it stopped early and the screen has more elements. Results are paged (~12 KB): pass next_cursor
-        as cursor to read on from the same walk; call without cursor to read the screen again. Read-only.
-        Typing text, swipes and other gestures aren't supported."""
+        """The iPhone's screen as data: accessibility elements in reading order with id, role, label, value,
+        identifier, traits and frame (points; may be missing on recent iOS). Use it to check a change: ios_run,
+        ios_ui_tree, ios_ui_press(element_id), ios_ui_tree again. Ids last until the screen changes. ~5 s walk;
+        paged with cursor (no cursor = read again). No typing or swipes."""
         state = get_state(ctx)
         offset = int(cursor or 0)
         data, cached = await _walk(state, udid, bundle_id, max_elements, reuse=cursor is not None)
@@ -319,28 +312,20 @@ def register(mcp: MCPServer) -> None:
         model.truncated = model.next_cursor is not None or not complete
         return model
 
-    @tool(mcp, annotations=ann("Press a UI element", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Press a UI element", kind="write", open_world=True)
     async def ios_ui_press(
         ctx: Context,
         element_id: Annotated[str | None, Field(description="Element id from ios_ui_tree, e.g. 'e12'")] = None,
-        label: Annotated[str | None, Field(description="Press the element with this label (or identifier, e.g. "
-                                                        "'incrementButton') instead of an id")] = None,
-        match: Annotated[Literal["exact", "contains"], Field(description="exact: the whole label, or the "
-                                                                         "accessibilityIdentifier; contains: a part "
-                                                                         "of the label")] = "exact",
+        label: Annotated[str | None, Field(description="Instead of an id: label or accessibility identifier")] = None,
+        match: Annotated[Literal["exact", "contains"], Field(description="exact: whole label or identifier; "
+                                                                         "contains: part of the label")] = "exact",
         bundle_id: BundleOpt = None,
         udid: Udid = None,
     ) -> UiPressResult:
-        """Press (activate) one element on the iPhone's screen, by element_id from ios_ui_tree or by label,
-        then report what changed: labels that appeared or went away and values that changed. This taps the
-        REAL phone, in whatever app is in front: pass bundle_id so it fails (wrong-app) instead of pressing
-        something in another app. Give exactly one of element_id or label. An id goes stale when the screen
-        changes (call ios_ui_tree again); a label that matches several elements fails with their ids.
-        match='exact' also matches the accessibilityIdentifier. Pressing by element_id from a fresh ios_ui_tree is
-        faster (about 8 s) than by label (about 12 s, it reads the screen first). In changed_values, `label` may
-        be the element's identifier when the label itself changed (countLabel: 'Count: 0' -> 'Count: 1'). Check
-        the result with ios_ui_tree or ios_screenshot. Typing text, swipes and other gestures aren't supported."""
+        """Press one element on the REAL iPhone (element_id from ios_ui_tree, or label; exactly one) and report
+        what changed (labels that came or went, changed values). Pass bundle_id so it fails instead of
+        pressing in another app. By id ~8 s, by label ~12 s; an ambiguous label fails with the ids. No typing
+        or swipes."""
         if bool(element_id and element_id.strip()) == bool(label and label.strip()):
             raise ToolError("Give exactly one of element_id (from ios_ui_tree) or label.")
         state = get_state(ctx)
@@ -349,7 +334,7 @@ def register(mcp: MCPServer) -> None:
         if bundle_id:
             args["bundleId"] = bundle_id
         try:
-            data = await dcall(state, "ui.press", args, udid=udid, timeout=40) or {}
+            data = await dcall(state, "ui.press", args, udid=udid, timeout=MAX_WAIT) or {}   # the daemon caps it at ~19 s
         finally:
             _forget(state)              # pressed or not, the screen may have moved: no paging an old walk
         ch = data.get("changes") or {}
@@ -380,29 +365,37 @@ def register(mcp: MCPServer) -> None:
                 if after.get("complete") is False else None) if x) or None,
             next_steps=steps)
 
-    @tool(mcp, annotations=READ_REMOTE("Accessibility audit"))
+    @tool(mcp, "Accessibility audit", kind="read_remote")
     async def ios_a11y_audit(
         ctx: Context,
         udid: Udid = None,
         bundle_id: BundleOpt = None,
         types: Annotated[list[str] | None, Field(description="Only these issue types, e.g. ['contrast', "
-                                                             "'dynamic-type', 'clipped-text', 'hit-region', "
-                                                             "'missing-label']; default: all")] = None,
+                                                             "'dynamic-type']; default: all")] = None,
         max_issues: Annotated[int, Field(ge=1, le=200, description="Issues listed (counts cover all)")] = 50,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = MAX_WAIT,
     ) -> A11yAudit:
-        """Run Apple's accessibility audit on the screen showing now: low contrast, Dynamic Type problems,
-        clipped text, hit areas that are too small, missing labels and more. Returns counts per type, a capped
-        list of issues with the element's label and frame, and the types this iOS version can't check
-        (reported as unsupported, not as an error). The app must be in front: launch it with
-        ios_app_launch(bundle_id) and pass bundle_id here. Only audits the current screen; navigate with
-        ios_ui_press to audit others. Read-only."""
+        """Apple's accessibility audit of the current screen (contrast, Dynamic Type, clipped text, small hit
+        areas, missing labels…): counts per type and issues with label and frame. The app must be in front
+        (pass bundle_id). 5-25 s, a job: state='running' + job_id, call again with job_id."""
         state = get_state(ctx)
-        args: dict = {}
-        if bundle_id:
-            args["bundleId"] = bundle_id
-        if types:
-            args["types"] = [t.strip() for t in types if t and t.strip()]
-        data = await dcall(state, "ui.audit", args, udid=udid, timeout=60) or {}
+        if not job_id:
+            args: dict = {}
+            if bundle_id:
+                args["bundleId"] = bundle_id
+            if types:
+                args["types"] = [t.strip() for t in types if t and t.strip()]
+
+            async def run(job: Job) -> dict:
+                job.report(None, "auditing the screen")
+                return await dcall(state, "ui.audit", args, udid=udid, timeout=AUDIT_TIMEOUT) or {}
+            job_id = state.jobs.run(run, "a11y-audit", title=f"Accessibility audit of {bundle_id or 'the app in front'}",
+                                    tool="ios_a11y_audit").id
+        job = await follow_job(state, ctx, job_id, "a11y-audit", wait_seconds)
+        if not job.finished:
+            return A11yAudit(state="running", job_id=job.id, next_steps=[still_running(job)])
+        data = job_result(job)
         raw = [i for i in data.get("issues") or [] if isinstance(i, dict)]
         counts, ordered = group_issues(raw)
         shown = [issue(i) for i in ordered[:max_issues]]
@@ -420,7 +413,7 @@ def register(mcp: MCPServer) -> None:
                    "check fewer kinds at a time.") if timed_out else None
         cut = (f"Showing {len(shown)} of {len(raw)} issues; counts cover all of them. Pass types=[...] to list one "
                "kind, or raise max_issues.") if len(shown) < len(raw) else None
-        model = A11yAudit(counts=counts, total=len(raw), count=len(shown), issues=shown,
+        model = A11yAudit(job_id=job.id, counts=counts, total=len(raw), count=len(shown), issues=shown,
                           supported=[str(t) for t in data.get("supported") or []], unsupported=unsupported,
                           elapsed_ms=data.get("elapsedMs"), timed_out=timed_out or None,
                           bundle_id=data.get("bundleId") or bundle_id, pid=data.get("pid"), omitted=len(raw) - len(shown),

@@ -7,8 +7,12 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "Model.js" as Model
+import "components/common"
+import "core"
+// Pages load by URL (Loader below); importing their folder makes Quickshell scan them, and through
+// their imports the components/ folders, so those resolve at runtime.
+import "pages"
+import "lib/Model.js" as Model
 
 ShellRoot {
   id: shell
@@ -105,6 +109,34 @@ ShellRoot {
           Layout.fillHeight: true
           clip: true
 
+          // A page is built the first time it's opened. It starts in the background, so the click shows
+          // at once (the sidebar moves) while the page you came from stays on screen; after 50 ms
+          // the rest is finished in one go, which is several times quicker than letting the background
+          // load trickle along between frames. If it still isn't there 150 ms in, a spinner replaces
+          // the old page. The very first page loads at once, so the window never opens empty.
+          property string shownPage: ""
+          readonly property bool waiting: !app.pageItems[app.page]
+          function currentLoader() {
+            for (var i = 0; i < pageLoaders.count; i++) {
+              var l = pageLoaders.itemAt(i)
+              if (l && l.current) return l
+            }
+            return null
+          }
+          Timer {
+            interval: 50
+            running: pageArea.waiting
+            onTriggered: {
+              var l = pageArea.currentLoader()
+              if (l && l.status === Loader.Loading) l.loadNow()
+            }
+          }
+          Timer {
+            interval: 150
+            running: pageArea.waiting && pageArea.shownPage !== ""
+            onTriggered: pageArea.shownPage = ""
+          }
+
           Repeater {
             id: pageLoaders
             model: Model.PAGES
@@ -113,26 +145,39 @@ ShellRoot {
               required property var modelData
               readonly property bool wanted: !!app.visited[modelData.key]
               readonly property bool current: app.page === modelData.key
+              readonly property bool shown: pageArea.shownPage === modelData.key
+              property bool hurry: false
               anchors.fill: parent
-              visible: current
-              opacity: current ? 1 : 0
+              visible: shown
+              opacity: shown ? 1 : 0
+              asynchronous: !hurry && Object.keys(app.pageItems).length > 0
               Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
-              function ensure() {
-                if (wanted && !item && status !== Loader.Loading)
-                  setSource(Qt.resolvedUrl("pages/" + modelData.file), { app: app })
-              }
-              // After a failed load: load the file again. The engine caches the broken component
+              // After a failed load the file is loaded again. The engine caches the broken component
               // by URL, so each retry asks for a new one (?retry=N).
               property int attempts: 0
+              function url() { return Qt.resolvedUrl("pages/" + modelData.file) + (attempts ? "?retry=" + attempts : "") }
+              function ensure() {
+                if (wanted && !item && status !== Loader.Loading) setSource(url(), { app: app })
+              }
               function reload() {
                 attempts++
                 setSource("")
-                setSource(Qt.resolvedUrl("pages/" + modelData.file) + "?retry=" + attempts, { app: app })
+                setSource(url(), { app: app })
+              }
+              // Finish a background load now. Turning `asynchronous` off mid-load would complete it
+              // without the initial properties, so the load starts over synchronously instead (the
+              // compiled page is cached, little is lost).
+              function loadNow() {
+                setSource("")
+                hurry = true
+                setSource(url(), { app: app })
               }
               onWantedChanged: ensure()
               Component.onCompleted: ensure()
               onLoaded: {
+                hurry = false
+                if (current) pageArea.shownPage = modelData.key
                 var m = Object.assign({}, app.pageItems); m[modelData.key] = item; app.pageItems = m
                 if (current && typeof item.activated === "function") item.activated(app.pageParams)
               }
@@ -140,32 +185,39 @@ ShellRoot {
             }
           }
 
+          LoadingState {
+            anchors.fill: parent
+            visible: pageArea.waiting && pageArea.shownPage === "" && loadCheck.failedPage !== app.page
+            text: { var p = Model.pageByKey(app.page); return p ? "Opening " + p.label + "…" : "" }
+          }
+
           // A page that failed to load (a slice mid-rewrite) shouldn't be a blank void.
           ErrorState {
             anchors.fill: parent
             visible: {
               var it = app.pageItems[app.page]
-              return !it && app.visited[app.page] === true && loadCheck.failed
+              return !it && app.visited[app.page] === true && loadCheck.failedPage === app.page
             }
             app: app
             title: "This page couldn't load"
             message: "Part of iOS Studio failed to start. Check `qs log` for details."
             onRetry: {
-              for (var i = 0; i < pageLoaders.count; i++) {
-                var l = pageLoaders.itemAt(i)
-                if (l && l.current) l.reload()
-              }
-              loadCheck.failed = false
-              loadCheck.restart()
+              var l = pageArea.currentLoader()
+              if (l) l.reload()
+              loadCheck.failedPage = ""
             }
-            // Runs only while the current page is still loading; 1.5 s without it means it failed.
+            // Runs only while the current page is missing; 1.5 s without it, and not still loading in
+            // the background, means it failed.
             Timer {
               id: loadCheck
-              property bool failed: false
+              property string failedPage: ""
               interval: 1500
-              running: app.visited[app.page] === true && !app.pageItems[app.page]
-              onRunningChanged: if (running) failed = false
-              onTriggered: failed = !app.pageItems[app.page]
+              repeat: true
+              running: app.visited[app.page] === true && !app.pageItems[app.page] && failedPage !== app.page
+              onTriggered: {
+                var l = pageArea.currentLoader()
+                if (!app.pageItems[app.page] && !(l && l.status === Loader.Loading)) failedPage = app.page
+              }
             }
           }
         }
@@ -174,6 +226,7 @@ ShellRoot {
       Connections {
         target: app
         function onNavigated(page, params) {
+          if (app.pageItems[page]) pageArea.shownPage = page
           var item = app.pageItems[page]
           if (item && typeof item.activated === "function") item.activated(params)
         }

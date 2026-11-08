@@ -2,9 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.components
-import ".."
-import "../Model.js" as Model
+import "../core"
+import "../lib/Model.js" as Model
 
 // Projects and builds (projects slice). Owns the one build stream, so a build keeps running
 // while the user moves between pages; the Projects page only renders this state.
@@ -23,24 +22,24 @@ import "../Model.js" as Model
 //   reveal(p) · setAutoRenew(p, on) · convert(path)
 //   checks: { path: {state: "loading"|"ready"|"error", result, error, at} } · checkFor(p)
 //   check(p) (now) · checkSoon(p) (queued, skipped when fresh) · checkAll()   (`projects check`)
-//   run presets (`projects presets`, helper/run_presets.py): selectedPreset(p) · presetsOf(p)
+//   run presets (`projects presets`, helper/iosstudio/features/run_presets.py): selectedPreset(p) · presetsOf(p)
 //     loadPresets(p, onDone, onFail) · savePreset(p, preset, renameFrom, onDone, onFail)
 //     deletePreset(p, name, onDone, onFail) (asks first) · selectPreset(p, name|"", onDone, onFail)
 //     Run passes the selected one (--preset); build.preset is its name, for the run step and toast.
-//   editor setup (`editor status|setup`, helper/editor_setup.py), machine-wide: editorInfo, editorInfoError,
-//     editorInfoLoading, loadEditors(onDone, onFail), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
+//   editor setup (`editor status|setup`, helper/iosstudio/features/editor_setup/), machine-wide: editorInfo, editorInfoError,
+//     editorInfoLoading (editorInfoResource), loadEditors(), editorSetup("vscode"|"zed"|"neovim", confirm, onDone, onFail)
 //     (dry run unless confirm). Per project: editors: { path: {state, result: {bsp, ready, hint}, error, at} }
 //     editorFor(p) · editorStatus(p, …) (now) · editorStatusSoon(p) (queued, skipped when fresh)
 //   watch mode (app.watch, WatchService): showWatchBuild({path, name, ok, errors, warnings, duration, logFile,
 //     buildId, diagnostics, errorMessage, errorCode}) shows a finished compile-on-save build in the build panel (build.watch = true) and
 //     its Problems; skipped while a manual build runs (that one owns the panel). Emits watchBuildShown(ok).
-//   format and lint (`format`, `format-lint`, helper/format.py): formatPreview(p, onDone, onFail) (dry run: a bounded
+//   format and lint (`format`, `format-lint`, helper/iosstudio/features/format.py): formatPreview(p, onDone, onFail) (dry run: a bounded
 //     unified diff) · formatApply(p, onDone, onFail) (writes the files, toasts, lints again when that project has a
 //     lint result) · lints: { path: {state, result, error, at} } · lintFor(p) · lint(p, onDone, onFail) (now) ·
 //     lintLastSoon(p) (the saved result, `format-lint --last`, once per path) · lintFocus: a project whose style
 //     warnings the build panel shows instead of the last build ("" = the build's own project); showLint(p) sets it.
 //     Style warnings never count as build problems (errorCount/warningCount leave them out).
-//   Swift packages (`packages`, helper/packages.py): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
+//   Swift packages (`packages`, helper/iosstudio/features/packages/): packagesList(p, onDone, onFail) · packagesRemove(p, id, confirm,
 //     onDone, onFail) (dry run unless confirm) · packagesAddProduct(p, id, products, target, onDone, onFail) ·
 //     packagesChanged(p) (re-checks the card and the editor status after Package.swift changed). add, update and
 //     resolve stream; ProjectPackagesSheet runs them.
@@ -49,22 +48,54 @@ Item {
   id: root
   required property var app
 
-  property string status: "unknown"
+  // `projects list` (its projects, convertible packages, folders). status: "unknown" | "loading" | "ready" |
+  // "needs-setup" (no xtool) | "error" (failed with no list). A failed reload keeps the list; `error` says why.
+  property Resource listResource: Resource {
+    initial: ({})
+    // Preset answers newer than this list win over it (see _presetState), so note when it was asked.
+    fetch: function(done, fail) {
+      var asked = Date.now()
+      root.app.cli.call(["projects", "list"], "", function(d) { root._dropPresetStateBefore(asked); done(d) }, fail, { timeout: 30000 })
+    }
+    onSucceeded: root._listSettled()
+    onFailed: root._listSettled()
+  }
+  readonly property string status: {
+    var st = listResource.status
+    if (st === "idle") return "unknown"
+    if (st === "ready") return listResource.data.xtool === false ? "needs-setup" : "ready"
+    return st
+  }
+  readonly property var error: listResource.error
+  readonly property bool loadedOnce: listResource.loaded
   property var summary: ({ title: "Projects", detail: "Looking for your apps…", level: "info", badge: "" })
-  property var error: null
 
-  property var items: []
-  property var convertible: []
-  property var missing: []
-  property var templates: []
-  property string bundlePrefix: "com.example"
-  property string defaultDir: ""        // where "New app" creates projects (~/Developer unless Settings says otherwise)
-  property var roots: []                // folders scanned for projects (Settings, or the detected defaults)
-  property var defaultRoots: []         // detected defaults: ~/Developer, ~/Projects, ~/Code, … that exist
-  property var history: []
-  property var autorenew: null
+  readonly property var items: listResource.data.projects || []
+  readonly property var convertible: listResource.data.convertible || []
+  readonly property var missing: listResource.data.missing || []
+  readonly property var roots: listResource.data.roots || []                 // folders scanned for projects (Settings, or the detected defaults)
+  readonly property var defaultRoots: listResource.data.defaultRoots || []   // detected defaults: ~/Developer, ~/Projects, ~/Code, … that exist
+  // where "New app" creates projects (~/Developer unless Settings says otherwise)
+  readonly property string defaultDir: listResource.data.defaultDir || templatesResource.data.defaultDir || ""
   readonly property var recent: items.slice(0, 4)
-  property bool loadedOnce: false
+
+  // `projects templates`: the New app sheet's templates (asked once, until it answers).
+  property Resource templatesResource: Resource {
+    initial: ({})
+    fetch: root.app.cli.fetcher(["projects", "templates"])
+  }
+  readonly property var templates: templatesResource.data.templates || []
+  readonly property string bundlePrefix: templatesResource.data.bundlePrefix || "com.example"
+
+  property Resource historyResource: Resource {
+    initial: ({})
+    fetch: root.app.cli.fetcher(["build", "history", "--limit", "40"])
+    onSucceeded: root._updateSummary()
+  }
+  readonly property var history: historyResource.data.builds || []
+
+  property Resource autorenewResource: Resource { fetch: root.app.cli.fetcher(["projects", "autorenew", "--status"]) }
+  readonly property var autorenew: autorenewResource.data
 
   // ------------------------------------------------------------ build state
   property var build: ({ active: false })
@@ -101,44 +132,19 @@ Item {
   signal diagnosticAdded(var d)
   signal watchBuildShown(bool ok)
 
+  // A refresh while a list load runs gets one more load after it (Resource.load(true) queues it).
   function refresh() {
-    if (!root.loadedOnce) root.status = "loading"
-    var asked = Date.now()
-    app.cli.call(["projects", "list"], "", function(data) {
-      root._dropPresetStateBefore(asked)
-      root.items = data.projects || []
-      root.convertible = data.convertible || []
-      root.missing = data.missing || []
-      root.roots = data.roots || []
-      root.defaultRoots = data.defaultRoots || []
-      if (data.defaultDir) root.defaultDir = data.defaultDir
-      root.loadedOnce = true
-      root.error = null
-      root.status = data.xtool === false ? "needs-setup" : "ready"
-      root._updateSummary()
-    }, function(err) {
-      root.error = err
-      root.status = "error"
-      root._updateSummary()
-    }, { timeout: 30000 })
+    listResource.load(true)
     loadHistory()
     loadAutoRenew()
-    if (root.templates.length === 0) {
-      app.cli.call(["projects", "templates"], "", function(d) {
-        root.templates = d.templates || []
-        root.bundlePrefix = d.bundlePrefix || "com.example"
-        root.defaultDir = d.defaultDir || ""
-      }, function(e) {})
-    }
+    if (!templatesResource.loaded) templatesResource.load()
   }
+  function _listSettled() { root._updateSummary() }
 
-  function loadHistory() {
-    app.cli.call(["build", "history", "--limit", "40"], "", function(d) { root.history = d.builds || []; root._updateSummary() }, function(e) {})
-  }
+  function loadHistory() { historyResource.load(true) }
+  function loadAutoRenew() { autorenewResource.load(true) }
 
-  function loadAutoRenew() {
-    app.cli.call(["projects", "autorenew", "--status"], "", function(d) { root.autorenew = d }, function(e) {})
-  }
+  function _path(p) { return p && p.path ? p.path : (p || "") }
 
   function projectByPath(path) {
     for (var i = 0; i < root.items.length; i++) if (root.items[i].path === path) return root.items[i]
@@ -405,7 +411,7 @@ Item {
         return
       }
       _setStep("install", "done")
-      app.cli.call(["projects", "record-install", "--path", data.path, "--udid", data.udid, "--ipa", data.ipa, "--via", "wifi"], "", function(r) {}, function(e) {})
+      app.cli.call(["projects", "record-install", "--path", data.path, "--udid", data.udid, "--ipa", data.ipa, "--via", "wifi"], "", null, null)
       data.installed = true
       if (data.launch && data.launch.bundleId) _launch(data)
       else _finish(true, data, null)
@@ -430,7 +436,8 @@ Item {
       return
     }
     var want = data.launch.bundleId
-    app.device.request("apps.list", { udid: data.udid, icons: false, sizes: false }, function(ok, apps) {
+    app.device.request("apps.list", { udid: data.udid, icons: false, sizes: false }, function(ok, reply) {
+      var apps = reply && reply.apps ? reply.apps : reply
       var bid = want
       if (ok && apps && apps.length) {
         for (var i = 0; i < apps.length; i++) {
@@ -532,21 +539,20 @@ Item {
     if (opts.dir) argv.push("--dir", opts.dir)
     if (opts.bundleId) argv.push("--bundle-id", opts.bundleId)
     app.cli.call(argv, "", function(d) { refresh(); app.toast(d.name + " is ready", "ok"); if (onDone) onDone(d) },
-                 function(e) { if (onFail) onFail(e) }, { timeout: 90000 })
+                 onFail, { timeout: 90000 })
   }
 
   function addFolder(path, onDone, onFail) {
-    app.cli.call(["projects", "add", "--path", path], "", function(d) { refresh(); app.toast("Added " + d.name, "ok"); if (onDone) onDone(d) },
-                 function(e) { if (onFail) onFail(e) })
+    app.cli.call(["projects", "add", "--path", path], "", function(d) { refresh(); app.toast("Added " + d.name, "ok"); if (onDone) onDone(d) }, onFail)
   }
 
   function convert(path, onDone, onFail) {
     app.cli.call(["projects", "convert", "--path", path], "", function(d) { refresh(); app.toast(d.name + " can now be built as an app", "ok"); if (onDone) onDone(d) },
-                 function(e) { if (onFail) onFail(e); else app.toast(Model.errorMessage(e), "error") })
+                 function(e) { if (onFail) onFail(e); else app.toastError(e) })
   }
 
   function pickFolder(start, onDone) {
-    app.cli.call(["projects", "pick-folder"].concat(start ? ["--start", start] : []), "", function(d) { if (onDone) onDone(d) },
+    app.cli.call(["projects", "pick-folder"].concat(start ? ["--start", start] : []), "", onDone,
                  function(e) { app.toast(Model.errorMessage(e), "warn") }, { timeout: 600000 })
   }
 
@@ -559,7 +565,7 @@ Item {
       glyph: Model.Glyph.trash,
       onConfirm: function() {
         app.cli.call(["projects", "remove", "--path", p.path], "", function() { refresh(); app.toast("Removed " + p.name + " from the list", "ok") },
-                     function(e) { app.toast(Model.errorMessage(e), "error") })
+                     function(e) { app.toastError(e) })
       }
     })
   }
@@ -569,11 +575,11 @@ Item {
     if (file) argv.push("--file", file)
     if (line) argv.push("--line", String(line))
     if (col) argv.push("--col", String(col))
-    app.cli.call(argv, "", function(d) { app.toast(d && d.editor ? "Opening in " + d.editor : "Opening in your editor", "ok") }, function(e) { app.toast(Model.errorMessage(e), "error") })
+    app.cli.call(argv, "", function(d) { app.toast(d && d.editor ? "Opening in " + d.editor : "Opening in your editor", "ok") }, function(e) { app.toastError(e) })
   }
 
   function reveal(p) {
-    app.cli.call(["projects", "reveal", "--path", p.path], "", function() {}, function(e) { app.toast(Model.errorMessage(e), "error") })
+    app.cli.call(["projects", "reveal", "--path", p.path], "", function() {}, function(e) { app.toastError(e) })
   }
 
   function setAutoRenew(p, on) {
@@ -584,16 +590,15 @@ Item {
       var timerOn = root.autorenew && root.autorenew.enabled
       if (on && !timerOn) app.toast("Auto-renew marked. Turn on automatic renewal in Settings so it runs daily.", "info")
       else app.toast(on ? "Auto-renew on for " + p.name : "Auto-renew off for " + p.name, "ok")
-    }, function(e) { app.toast(Model.errorMessage(e), "error") })
+    }, function(e) { app.toastError(e) })
   }
 
-  // Build settings (prebuild command, env, open-file limit, allow generated): see helper/build_settings.py.
+  // Build settings (prebuild command, env, open-file limit, allow generated): see helper/iosstudio/features/build_settings.py.
   // A project whose xtool.yml is generated builds only once its settings allow it.
   function blocked(p) { return !!(p && p.generated && !(p.buildSettings && p.buildSettings.allowGenerated)) }
   // loadBuildSettings -> { settings, suggested: { settings, reasons } | null, openFilesError }
   function loadBuildSettings(p, onDone, onFail) {
-    app.cli.call(["projects", "build-settings", "--path", p.path], "", function(d) { if (onDone) onDone(d) },
-                 function(e) { if (onFail) onFail(e) })
+    app.cli.call(["projects", "build-settings", "--path", p.path], "", onDone, onFail)
   }
 
   // patch: { prebuild, env (whole map, replaces), openFiles, allowGenerated }
@@ -604,10 +609,10 @@ Item {
       refresh()
       app.toast(d.changes && d.changes.length ? "Build settings saved for " + p.name : "Nothing changed", d.changes && d.changes.length ? "ok" : "info")
       if (onDone) onDone(d)
-    }, function(e) { if (onFail) onFail(e) })
+    }, onFail)
   }
 
-  // ------------------------------------------------------------ run presets (helper/run_presets.py)
+  // ------------------------------------------------------------ run presets (helper/iosstudio/features/run_presets.py)
   // Saved launch arguments, environment and language per project. `projects list` items carry
   // runPresets (each with `resolved`) and runPreset (the selected name or null); the selection is
   // stored by the helper, so it survives restarts.
@@ -615,7 +620,7 @@ Item {
   // lands, so the picker updates at once without re-reading every project (and re-creating the cards).
   property var _presetState: ({})       // path -> { presets, selected, at }
   function _presetEntry(p) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     return path ? (root._presetState[path] || null) : null
   }
   function presetsOf(p) {
@@ -647,7 +652,7 @@ Item {
     app.cli.call(["projects", "presets", "--path", p.path].concat(extra || []), "", function(d) {
       root._setPresetState(p.path, d.presets, d.selected)
       if (onDone) onDone(d)
-    }, function(e) { if (onFail) onFail(e) })
+    }, onFail)
   }
   // onDone({ path, presets: [preset + resolved], selected })
   function loadPresets(p, onDone, onFail) { _presetsCall(p, [], onDone, onFail) }
@@ -673,7 +678,7 @@ Item {
         root._presetsCall(p, ["--delete", name], function(d) {
           app.toast("Deleted the run preset “" + (d.deleted || name) + "”", "ok")
           if (onDone) onDone(d)
-        }, function(e) { app.toast(Model.errorMessage(e), "error"); if (onFail) onFail(e) })
+        }, function(e) { app.toastError(e); if (onFail) onFail(e) })
       }
     })
   }
@@ -685,81 +690,34 @@ Item {
       var all = Object.assign({}, root._presetState)
       if (had) all[p.path] = had; else delete all[p.path]
       root._presetState = all
-      app.toast(Model.errorMessage(e), "error")
+      app.toastError(e)
       if (onFail) onFail(e)
     })
   }
 
-  // ------------------------------------------------------------ project check (helper/project_check.py)
+  // Checks, editor status and lint results are kept per project path in a PathResults (PathResults.qml).
+  // ------------------------------------------------------------ project check (helper/iosstudio/features/project_check.py)
   // Config mistakes xtool won't flag until late (misspelled xtool.yml keys, missing usage
   // descriptions, icon, entitlements, bundle id, version). Warnings only, under a second, never
-  // changes files. Results per project path; reassigned (not mutated) so bindings update.
-  property var checks: ({})
-  property var _checkQueue: []
-  property bool _checkBusy: false
-  readonly property int _checkFreshMs: 60000
-  function checkFor(p) {
-    var path = p && p.path ? p.path : p
-    return path ? (root.checks[path] || null) : null
-  }
-  function _setCheck(path, fields) {
-    var all = Object.assign({}, root.checks)
-    all[path] = Object.assign({}, all[path] || {}, fields)
-    root.checks = all
-  }
+  // changes files.
+  PathResults { id: checkResults; cli: root.app.cli; argv: path => ["projects", "check", "--path", path] }
+  readonly property alias checks: checkResults.byPath
+  function checkFor(p) { return checkResults.get(p) }
   // Runs now (a click on "Check again", or after a build). onDone(result) / onFail(err) optional.
-  function check(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
-    if (!path) return
-    root._setCheck(path, { state: "loading", error: null })
-    app.cli.call(["projects", "check", "--path", path], "", function(d) {
-      root._setCheck(path, { state: "ready", result: d, error: null, at: Date.now() })
-      if (onDone) onDone(d)
-    }, function(e) {
-      root._setCheck(path, { state: "error", error: e, at: Date.now() })
-      if (onFail) onFail(e)
-    }, { timeout: 20000 })
-  }
+  function check(p, onDone, onFail) { checkResults.run(p, onDone, onFail) }
   // Queued, one at a time, skipped when checked in the last minute (page open, cursor moves).
-  function checkSoon(p) {
-    var path = p && p.path ? p.path : p
-    if (!path) return
-    var c = root.checks[path]
-    if (c && (c.state === "loading" || (c.at && Date.now() - c.at < root._checkFreshMs))) return
-    if (root._checkQueue.indexOf(path) >= 0) return
-    root._checkQueue = root._checkQueue.concat([path])
-    root._nextCheck()
-  }
+  function checkSoon(p) { checkResults.soon(p) }
   function checkAll() { for (var i = 0; i < root.items.length; i++) checkSoon(root.items[i]) }
-  function _nextCheck() {
-    if (root._checkBusy || root._checkQueue.length === 0) return
-    var path = root._checkQueue[0]
-    root._checkQueue = root._checkQueue.slice(1)
-    root._checkBusy = true
-    var next = function() { root._checkBusy = false; Qt.callLater(root._nextCheck) }
-    check({ path: path }, next, next)
-  }
 
-  // ------------------------------------------------------------ editor setup (helper/editor_setup.py)
+  // ------------------------------------------------------------ editor setup (helper/iosstudio/features/editor_setup/)
   // Machine-wide: which editors (VS Code, Zed, Neovim) are installed and set up for Swift through
   // SourceKit-LSP (Settings › Code editor). Per project: whether completion works there yet (the build
-  // server file), shown as a quiet hint on the card. Per-project answers are kept by path, like `checks`.
-  property var editorInfo: null         // `editor status` answer (machine-wide)
-  property var editorInfoError: null
-  property bool editorInfoLoading: false
-  function loadEditors(onDone, onFail) {
-    root.editorInfoLoading = true
-    app.cli.call(["editor", "status"], "", function(d) {
-      root.editorInfo = d
-      root.editorInfoError = null
-      root.editorInfoLoading = false
-      if (onDone) onDone(d)
-    }, function(e) {
-      root.editorInfoError = e
-      root.editorInfoLoading = false
-      if (onFail) onFail(e)
-    }, { timeout: 20000 })
-  }
+  // server file), shown as a quiet hint on the card.
+  property Resource editorInfoResource: Resource { fetch: root.app.cli.fetcher(["editor", "status"], "", { timeout: 20000 }) }
+  readonly property var editorInfo: editorInfoResource.data          // `editor status` answer (machine-wide)
+  readonly property var editorInfoError: editorInfoResource.error
+  readonly property bool editorInfoLoading: editorInfoResource.busy
+  function loadEditors() { editorInfoResource.load(true) }
   // Dry run unless confirm; onDone({ editor, dryRun, actions: [{kind, path, scope, detail}], applied, state, next, notes }).
   // A confirmed setup reloads the machine-wide status afterwards.
   function editorSetup(editorId, confirm, onDone, onFail) {
@@ -768,69 +726,33 @@ Item {
     app.cli.call(argv, "", function(d) {
       if (confirm) root.loadEditors()
       if (onDone) onDone(d)
-    }, function(e) { if (onFail) onFail(e) }, { timeout: confirm ? 300000 : 30000 })
+    }, onFail, { timeout: confirm ? 300000 : 30000 })
   }
 
-  property var editors: ({})            // path -> { state: "loading"|"ready"|"error", result: {bsp, ready, hint}, error, at }
-  property var _editorQueue: []
-  property bool _editorBusy: false
-  function editorFor(p) {
-    var path = p && p.path ? p.path : p
-    return path ? (root.editors[path] || null) : null
-  }
-  function _setEditor(path, fields) {
-    var all = Object.assign({}, root.editors)
-    all[path] = Object.assign({}, all[path] || {}, fields)
-    root.editors = all
-  }
-  function editorStatus(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
-    if (!path) return
-    root._setEditor(path, { state: "loading", error: null })
-    app.cli.call(["editor", "status", "--project", path], "", function(d) {
-      root._setEditor(path, { state: "ready", result: d, error: null, at: Date.now() })
-      if (onDone) onDone(d)
-    }, function(e) {
-      root._setEditor(path, { state: "error", error: e, at: Date.now() })
-      if (onFail) onFail(e)
-    }, { timeout: 20000 })
-  }
+  PathResults { id: editorResults; cli: root.app.cli; argv: path => ["editor", "status", "--project", path] }
+  readonly property alias editors: editorResults.byPath     // result: {bsp, ready, hint}
+  function editorFor(p) { return editorResults.get(p) }
+  function editorStatus(p, onDone, onFail) { editorResults.run(p, onDone, onFail) }
   // Queued, one at a time, skipped when asked in the last minute.
-  function editorStatusSoon(p) {
-    var path = p && p.path ? p.path : p
-    if (!path) return
-    var c = root.editors[path]
-    if (c && (c.state === "loading" || (c.at && Date.now() - c.at < root._checkFreshMs))) return
-    if (root._editorQueue.indexOf(path) >= 0) return
-    root._editorQueue = root._editorQueue.concat([path])
-    root._nextEditor()
-  }
-  function _nextEditor() {
-    if (root._editorBusy || root._editorQueue.length === 0) return
-    var path = root._editorQueue[0]
-    root._editorQueue = root._editorQueue.slice(1)
-    root._editorBusy = true
-    var next = function() { root._editorBusy = false; Qt.callLater(root._nextEditor) }
-    editorStatus({ path: path }, next, next)
-  }
+  function editorStatusSoon(p) { editorResults.soon(p) }
 
-  // ------------------------------------------------------------ format and lint (helper/format.py)
+  // ------------------------------------------------------------ format and lint (helper/iosstudio/features/format.py)
   // swift-format (and SwiftLint when it's installed) on a project's Swift files. Formatting is a dry run
   // first (a bounded unified diff), then --apply. Lint results are style warnings ({category: "style",
   // file (absolute), line, col, rule, source}) kept per project path, like `checks`; the helper also saves
   // the latest one per project, so `--last` brings it back after a restart without running anything.
-  property var lints: ({})              // path -> { state: "loading"|"ready"|"error", result, error, at }
+  PathResults {
+    id: lintResults
+    cli: root.app.cli
+    argv: path => ["format-lint", "--project", path]
+    timeout: 120000
+    rejects: d => d && d.ok === false ? root._formatError(d, "Couldn't check the code style.") : null
+    timeOf: d => root._lintTime(d)
+  }
+  readonly property alias lints: lintResults.byPath
   property string lintFocus: ""         // project the build panel shows style warnings for, instead of the build
   property var _lintAsked: ({})         // paths whose saved result was asked for (`--last`)
-  function lintFor(p) {
-    var path = p && p.path ? p.path : p
-    return path ? (root.lints[path] || null) : null
-  }
-  function _setLint(path, fields) {
-    var all = Object.assign({}, root.lints)
-    all[path] = Object.assign({}, all[path] || {}, fields)
-    root.lints = all
-  }
+  function lintFor(p) { return lintResults.get(p) }
   // The helper answers {ok: false, error, hint} when swift-format is missing; make that an error object.
   function _formatError(d, fallback) {
     var e = d && d.error && typeof d.error === "object" ? Object.assign({}, d.error) : { code: (d && d.code) || "format-failed", message: (d && d.error) || fallback }
@@ -843,51 +765,34 @@ Item {
     return isFinite(ms) ? ms : Date.now()
   }
   // Runs now. Keeps the previous result while it runs, so the list doesn't blink.
-  function lint(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
-    if (!path) return
-    root._setLint(path, { state: "loading", error: null })
-    app.cli.call(["format-lint", "--project", path], "", function(d) {
-      if (d && d.ok === false) {
-        var e = root._formatError(d, "Couldn't check the code style.")
-        root._setLint(path, { state: "error", error: e, at: Date.now() })
-        if (onFail) onFail(e)
-        return
-      }
-      root._setLint(path, { state: "ready", result: d, error: null, at: root._lintTime(d) })
-      if (onDone) onDone(d)
-    }, function(e) {
-      root._setLint(path, { state: "error", error: e, at: Date.now() })
-      if (onFail) onFail(e)
-    }, { timeout: 120000 })
-  }
+  function lint(p, onDone, onFail) { lintResults.run(p, onDone, onFail) }
   // The saved result of the last lint (no new run), once per project and app session.
   function lintLastSoon(p) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     if (!path || root.lints[path] || root._lintAsked[path]) return
     var asked = Object.assign({}, root._lintAsked); asked[path] = true; root._lintAsked = asked
     app.cli.call(["format-lint", "--project", path, "--last"], "", function(d) {
       if (!d || d.ok === false || !d.diagnostics || d.at === null || d.at === undefined || root.lints[path]) return
-      root._setLint(path, { state: "ready", result: d, error: null, at: root._lintTime(d) })
-    }, function(e) {}, { timeout: 20000 })
+      lintResults.put(path, { state: "ready", result: d, error: null, at: root._lintTime(d) })
+    }, null, { timeout: 20000 })
   }
   // Lint from a card: the build panel shows this project's style warnings (with its build's problems when
   // the panel already shows that project's build).
   function showLint(p) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     if (!path) return
     root.lintFocus = root.build.kind && root.build.path === path ? "" : path
     lint(p)
   }
   function formatPreview(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     app.cli.call(["format", "--project", path], "", function(d) {
       if (d && d.ok === false) { if (onFail) onFail(root._formatError(d, "swift-format couldn't run.")); return }
       if (onDone) onDone(d)
-    }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
+    }, onFail, { timeout: 120000 })
   }
   function formatApply(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     app.cli.call(["format", "--project", path, "--apply"], "", function(d) {
       if (d && d.ok === false) { if (onFail) onFail(root._formatError(d, "swift-format couldn't write the files.")); return }
       var n = d && d.files_changed_total !== undefined ? d.files_changed_total : (d && d.files_changed ? d.files_changed.length : 0)
@@ -896,29 +801,29 @@ Item {
       // Style warnings on screen would be stale now: check again, quietly.
       if (root.lints[path]) root.lint(p)
       if (onDone) onDone(d)
-    }, function(e) { if (onFail) onFail(e) }, { timeout: 120000 })
+    }, onFail, { timeout: 120000 })
   }
 
-  // ------------------------------------------------------------ Swift packages (`packages`, helper/packages.py)
+  // ------------------------------------------------------------ Swift packages (`packages`, helper/iosstudio/features/packages/)
   // One-shot calls; the long ones (add, update, resolve) stream and live in ProjectPackagesSheet.
   function packagesList(p, onDone, onFail) {
-    var path = p && p.path ? p.path : p
-    app.cli.call(["packages", "list", "--project", path], "", function(d) { if (onDone) onDone(d) },
-                 function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+    var path = _path(p)
+    app.cli.call(["packages", "list", "--project", path], "", onDone,
+                 onFail, { timeout: 60000 })
   }
   // Dry run (a diff and whether the edited manifest still parses) unless confirm.
   function packagesRemove(p, pkg, confirm, onDone, onFail) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     var argv = ["packages", "remove", "--project", path, "--package", pkg]
     if (confirm) argv.push("--confirm")
-    app.cli.call(argv, "", function(d) { if (onDone) onDone(d) }, function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+    app.cli.call(argv, "", onDone, onFail, { timeout: 60000 })
   }
   // products: a name or a list of names, linked in one edit.
   function packagesAddProduct(p, pkg, products, target, onDone, onFail) {
-    var path = p && p.path ? p.path : p
+    var path = _path(p)
     var argv = ["packages", "add-product", "--project", path, "--package", pkg, "--products", JSON.stringify([].concat(products))]
     if (target) argv.push("--target", target)
-    app.cli.call(argv, "", function(d) { if (onDone) onDone(d) }, function(e) { if (onFail) onFail(e) }, { timeout: 60000 })
+    app.cli.call(argv, "", onDone, onFail, { timeout: 60000 })
   }
   // After Package.swift changed: the card's settings check and the editor status, quietly.
   function packagesChanged(p) {
@@ -928,7 +833,7 @@ Item {
   }
 
   function openBuildLog(file) {
-    app.cli.call(["projects", "open", "--path", app.stateDir, "--file", file], "", function() {}, function(e) { app.toast(Model.errorMessage(e), "error") })
+    app.cli.call(["projects", "open", "--path", app.stateDir, "--file", file], "", function() {}, function(e) { app.toastError(e) })
   }
 
   // Settings › auto-renew toggles the systemd --user timer. Only reacts to a change the user
@@ -936,9 +841,9 @@ Item {
   property var _lastAutoRenew: undefined
   function _applyAutoRenew(on) {
     app.cli.call(["projects", "autorenew", on ? "--enable" : "--disable"], "", function(d) {
-      root.autorenew = d
+      root.autorenewResource.set(d)
       app.toast(on ? "Automatic renewal is on. iOS Studio checks every day at 10:00." : "Automatic renewal is off.", "ok")
-    }, function(e) { app.toast(Model.errorMessage(e), "error") })
+    }, function(e) { app.toastError(e) })
   }
   Connections {
     target: app

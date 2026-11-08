@@ -48,7 +48,7 @@ Every new bundle ID registers an App ID with Apple. Free accounts get 10 new one
 
 ### "Signing failed" on a new iPhone
 
-A phone has to be registered with your account before apps can be signed for it. Connect it with a cable and press Run once. That registers it.
+A phone has to be registered with your account before apps can be signed for it. Connect it with a cable and press Run once. That registers it. xtool can't register a phone over Wi-Fi, so a phone that was only ever connected wirelessly fails with Apple's "There are no current iOS devices on this team" (HTTP 409); the build shows it as a signing problem with this fix.
 
 ### "Your iPhone doesn't trust this developer yet"
 
@@ -193,7 +193,7 @@ Run and Re-sign & reinstall install the app on your iPhone, so they need a conne
 
 ### Watch mode says "checking files every second"
 
-Watch mode uses inotify, one watch per folder under `Sources/`. When the system's limit is used up (other watchers such as editors, Syncthing or `node_modules` trees count too), it falls back to comparing file times once a second: it still works, a little later and with a little more disk activity. To raise the limit:
+Watch mode uses inotify, one watch per folder under `Sources/`. When the system's limit is used up (other watchers such as editors, Syncthing or `node_modules` trees count too), it falls back to comparing file times once a second: it still works, a little later and with a little more disk activity. Polling looks at no more than 20,000 files, so files beyond that in a very large `Sources/` tree aren't noticed. To raise the limit:
 
 ```bash
 cat /proc/sys/fs/inotify/max_user_watches          # often 8192 or 65536
@@ -209,7 +209,7 @@ Only `Sources/`, `Package.swift`, `xtool.yml` and `.plist`/`.entitlements` files
 
 ### Watch mode stopped by itself
 
-It stops when nothing uses it any more: the app (or the AI agent's session) that started it has closed. It also stops when another project is watched (one at a time), when the project folder goes away, and if the watcher process was killed. The message on the project card, or `stop_reason` in `ios_watch_status`, says which. Its log is `$XDG_RUNTIME_DIR/ios-studio/watch.log`.
+It stops when nothing uses it any more: the app (or the AI agent's session) that started it has closed. It also stops when another project is watched (one at a time), when the project folder goes away, and if the watcher process was killed. The message on the project card, or `stop_reason` in `ios_watch_status`, says which. Its log is `$XDG_RUNTIME_DIR/ios-studio/watch.log`. Once it grows past 1 MB it is cut back to its last 64 KB when a watcher starts.
 
 ### No completion or errors in my editor
 

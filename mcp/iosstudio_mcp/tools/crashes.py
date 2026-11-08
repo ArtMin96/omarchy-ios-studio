@@ -1,207 +1,46 @@
 """Crash reports from the iPhone (.ips): list, parsed summary, full text, and a resource template."""
 from __future__ import annotations
 
-import json
+import asyncio
+import os
 from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
-from mcp.types import ResourceLink
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
-from ..models import CrashBrief, CrashDetail, CrashFrame, CrashList
-from ..state import AppState, get_state
-from . import READ_REMOTE, page_of, tool
-from .device import Udid, apps, dcall, match_app
+from ..backends.crashes import Section, crash_detail
+from ..backends.device import apps, dcall, match_app
+from ..core import budget as B
+from ..core import deadline
+from ..core.params import MaxBytes, Udid
+from ..core.registry import MAX_WAIT, page_of, tool
+from ..models import CrashBrief, CrashDetail, CrashList
+from ..state import get_state
 
 RESOURCE_CAP = 100_000
-FRAMES = 15
 
 
-def _not_found(name: str) -> str:
-    return f"No crash report '{name}'. Call ios_crash_list for valid names."
-
-
-async def _lookup_name(state: AppState, name: str, udid: str | None) -> str:
-    """Accept the device path from ios_crash_list, or just the file name."""
-    if name.startswith("/"):
-        return name
-    items = await dcall(state, "crash.list", {"flush": False}, udid=udid, timeout=30) or []
-    hit = next((c for c in items if c.get("file") == name or str(c.get("name", "")).endswith("/" + name)), None)
-    if hit is None:
-        known = ", ".join(str(c.get("file") or c.get("name")) for c in items[:5])
-        raise ToolError(_not_found(name) + (f" Newest: {known}." if known else " The iPhone has none."))
-    return str(hit["name"])
-
-
-Section = Literal["summary", "threads", "images", "raw"]
-
-
-def _frame(f: dict, images: list) -> str:
-    idx = f.get("imageIndex")
-    img = "?"
-    if isinstance(idx, int) and 0 <= idx < len(images):
-        img = images[idx].get("name") or Path(str(images[idx].get("path") or "?")).name
-    sym = f.get("symbol")
-    if sym:
-        off = f.get("symbolLocation")
-        return f"{img} {sym}" + (f" + {off}" if off else "")
-    return f"{img} + 0x{int(f.get('imageOffset') or 0):x}"
-
-
-def _resolved(n: int, f: dict, images: list, info: dict | None) -> str:
-    """A frame line, with the function and file:line from crash symbolication when it resolved."""
-    if not info or not (info.get("function") or info.get("file")):
-        return f"{n} {_frame(f, images)}"
-    where = ""
-    if info.get("file"):
-        where = f" ({info['file']}:{info.get('line')}" + (f":{info['column']}" if info.get("column") else "") + ")"
-    return f"{n} {info.get('image') or ''} {info.get('function') or ''}".rstrip() + where
-
-
-def load_symbols(path: str) -> dict:
-    """Crash symbolication's saved result for a pulled report (<report>.symbols.json, written by the device
-    daemon's crash.pull): {"<thread>:<frame>": {function, file, line, ...}}."""
-    try:
-        data = json.loads(Path(path + ".symbols.json").read_text())
-    except (OSError, ValueError):
-        return {}
-    frames = data.get("frames") if isinstance(data, dict) else None
-    return frames if isinstance(frames, dict) else {}
-
-
-def render_section(raw: str, section: str, frames_per_thread: int = 25, symbols: dict | None = None) -> list[str]:
-    """Readable lines for one part of a .ips report: every thread's frames (app frames with file:line when
-    `symbols` resolved them), or the binary images. Falls back to the raw lines when the body isn't the
-    iOS 15+ JSON format."""
-    _, _, body = raw.partition("\n")
-    try:
-        b = json.loads(body)
-    except json.JSONDecodeError:
-        b = None
-    if not isinstance(b, dict):
-        return raw.splitlines()
-    images = b.get("usedImages") or []
-    out: list[str] = []
-    if section == "threads":
-        threads = b.get("threads") or []
-        if not threads and b.get("frames"):        # simplified reports: one frame list
-            return [str(f) for f in b["frames"]]
-        for i, t in enumerate(threads):
-            name = " ".join(x for x in (t.get("name"), t.get("queue")) if x)
-            out.append(f"Thread {i}{' CRASHED' if t.get('triggered') else ''}{(': ' + name) if name else ''}")
-            frames = t.get("frames") or []
-            out += [f"  {_resolved(n, f, images, (symbols or {}).get(f'{i}:{n}'))}"
-                    for n, f in enumerate(frames[:frames_per_thread])]
-            if len(frames) > frames_per_thread:
-                out.append(f"  … {len(frames) - frames_per_thread} more frames")
-    elif section == "images":
-        for im in images:
-            base = im.get("base")
-            out.append(f"{im.get('name') or Path(str(im.get('path') or '?')).name} "
-                       f"{hex(base) if isinstance(base, int) else base or ''} {im.get('arch') or ''} "
-                       f"{im.get('uuid') or ''} {im.get('path') or ''}".rstrip())
-    return out
-
-
-async def crash_detail(state: AppState, name: str, udid: str | None = None, section: str = "summary",
-                       start_line: int = 0, max_lines: int = 400, max_bytes: int | None = None) -> CrashDetail:
-    name = await _lookup_name(state, name, udid)
-    res = await dcall(state, "crash.pull", {"name": name}, udid=udid, timeout=60, not_found=_not_found(name)) or {}
-    s = res.get("summary") or {}
-    path = str(res.get("path") or "")
-    file = Path(path).name if path else None
-    size = None
-    raw = ""
-    if path:
-        try:
-            raw = Path(path).read_text(errors="replace")
-            size = len(raw.encode())
-        except OSError:
-            raw = ""
-    nxt = []
-    frames = [B.clip(f, 300) for f in (s.get("frames") or [])][:FRAMES]
-    proc = s.get("process")
-    sym = s.get("symbolication") if isinstance(s.get("symbolication"), dict) else {}
-    app_frames = [CrashFrame(index=n, function=B.clip(i.get("function"), 300) if i.get("function") else None,
-                             file=i.get("file"), line=i.get("line"), column=i.get("column"))
-                  for n, i in enumerate(sym.get("frames") or []) if isinstance(i, dict)][:FRAMES]
-    status = sym.get("status") if sym.get("status") in ("full", "partial", "none", "not-needed") else None
-    sym_note = " ".join(x for x in (sym.get("message"), sym.get("hint")) if x) or None
-    top = next((f for f in app_frames if f.file), None)
-    if top:
-        nxt.append(f"The crash is in {top.function or 'your code'} at {top.file}:{top.line} (frame {top.index}"
-                   + (f", project {helper.tilde(sym['project'])}" if sym.get("project") else "") + "); open that line.")
-    elif frames and proc:
-        own = [f for f in frames if f" {proc} " in f" {f} "]
-        if own:
-            nxt.append(f"Frames in {proc} point at your code (e.g. '{own[0]}'); find those functions in the project's "
-                       "Sources/ folder.")
-    if s.get("exceptionType") is None and s.get("terminationReason"):
-        nxt.append("No exception: this is a resource/jetsam/hang report; the termination reason explains it.")
-    if section == "summary":
-        nxt.append("section='threads' lists every thread's frames, 'images' the binary images, 'raw' the .ips "
-                   "text (paged with start_line).")
-    links = []
-    if file:
-        links.append(ResourceLink(type="resource_link", uri=f"iosstudio://crashes/{file}", name=file,
-                                  mime_type="text/plain", size=size, description=f"Raw crash report ({size} bytes)"))
-    out = CrashDetail(name=name, path=helper.tilde(path) or "", resource_uri=f"iosstudio://crashes/{file}" if file else None,
-                      process=proc, bundle_id=s.get("bundleId"), app_version=s.get("appVersion"),
-                      os_version=s.get("osVersion"), date=s.get("date"), exception_type=s.get("exceptionType"),
-                      signal=s.get("signal"),
-                      termination_reason=B.clip(s.get("terminationReason"), 600) if s.get("terminationReason") else None,
-                      crashed_thread=s.get("crashedThread"), frames=frames, size=size, section=section,
-                      symbolicated=status, symbolication_note=B.clip(sym_note, 600) if sym_note else None,
-                      project_path=helper.tilde(sym["project"]) if sym.get("project") else None,
-                      app_frames=app_frames, next_steps=nxt, full_output_path=helper.tilde(path) or None).with_budget(max_bytes, links)
-    if section != "summary" and raw:
-        lines = raw.splitlines() if section == "raw" else render_section(raw, section, symbols=load_symbols(path))
-        window = [B.clip(ln, 1000) for ln in lines[start_line:start_line + max_lines]]
-
-        def page_note(end: int) -> str | None:
-            if end >= len(lines) and start_line == 0:
-                return None
-            return (f"Showing {section} lines {start_line}–{end - 1} of {len(lines)}"
-                    + (f"; call again with start_line={end} for more" if end < len(lines) else "")
-                    + f". The whole report is {helper.tilde(path)}.")
-
-        # Size the window by what the other fields (frames, reason, the note itself) leave of the budget, so
-        # the result never needs cutting: a cut would leave end_line past lines the caller never saw.
-        out.frames = []                     # the summary's; a section page is about its own lines
-        out.app_frames = []
-        if out.termination_reason:
-            out.termination_reason = B.clip(out.termination_reason, 200)
-        out.start_line, out.end_line, out.total_lines = start_line, len(lines), len(lines)
-        out.note, out.truncated = page_note(start_line), True
-        others = B.result_size(B.dump(out), CrashDetail.BULK)
-        avail = max(500, int((B.ceiling(out) - others - 200) * 0.47))
-        page = B.take(window, len(window), avail, from_end=False)
-        end = start_line + len(page.items)
-        out.text, out.end_line = "\n".join(page.items), end
-        out.note = page_note(end)
-        out.truncated = out.note is not None
-    return out
-
-
-def cap_text(text: str, tool_hint: str, cap: int = RESOURCE_CAP) -> str:
-    """Resources are capped at 100 KB, with a pointer to the tool that pages through the rest."""
-    if len(text.encode()) <= cap:
-        return text
-    head = text.encode()[:cap].decode(errors="ignore")
-    head = head[:head.rfind("\n") + 1] or head
-    return head + f"\n…[cut at {cap // 1000} KB of {len(text.encode()) // 1000} KB; read the rest with {tool_hint}]\n"
+def capped(p: Path, tool_hint: str) -> str:
+    """The first RESOURCE_CAP bytes of a file as text (blocking: call it in a thread)."""
+    with open(p, "rb") as f:
+        head = f.read(RESOURCE_CAP + 1)
+        size = os.fstat(f.fileno()).st_size
+    if size <= RESOURCE_CAP:
+        return head.decode(errors="replace")
+    text = head[:RESOURCE_CAP].decode(errors="ignore")
+    text = text[:text.rfind("\n") + 1] or text
+    return text + f"\n…[cut at {RESOURCE_CAP // 1000} KB of {size // 1000} KB; read the rest with {tool_hint}]\n"
 
 
 def _crash_dirs() -> list[Path]:
-    dirs = [Path.home() / ".cache/ios-studio/crashes"]
+    dirs = [helper.appdirs.cache_dir() / "crashes"]   # where the device daemon keeps pulled reports
     if helper.demo_mode():
         try:
             import importlib.util
-            spec = importlib.util.spec_from_file_location("iosstudio_demo_art", helper.REPO / "helper" / "demo_art.py")
+            spec = importlib.util.spec_from_file_location("iosstudio_demo_art", helper.REPO / "helper" / "iosstudio" / "demo" / "demo_art.py")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             dirs.insert(0, Path(mod.demo_dir()) / "crashes")
@@ -212,18 +51,15 @@ def _crash_dirs() -> list[Path]:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ_REMOTE("List crash reports"))
+    @tool(mcp, "List crash reports", kind="read_remote")
     async def ios_crash_list(
         ctx: Context,
-        process: Annotated[str | None, Field(description="Only reports of this process (the app's executable "
-                                                         "name, e.g. 'MyApp')")] = None,
-        bundle_id: Annotated[str | None, Field(description="Only this app's reports (resolved to its process "
-                                                           "name)")] = None,
+        process: Annotated[str | None, Field(description="Only this process (executable name, e.g. 'MyApp')")] = None,
+        bundle_id: Annotated[str | None, Field(description="Only this app's reports")] = None,
         kind: Annotated[Literal["any", "crash", "fault", "resource", "jetsam", "hang", "other"],
-                        Field(description="crash = the process died (exception/signal); fault = a non-fatal "
-                                          "user-space fault report; jetsam = killed for memory; resource = too much "
-                                          "CPU/disk/wakeups; hang = froze")] = "any",
-        limit: Annotated[int, Field(ge=1, le=200, description="Max reports to return, newest first")] = 20,
+                        Field(description="crash: died; fault: non-fatal; jetsam: killed for memory; resource: too "
+                                          "much CPU/disk; hang: froze")] = "any",
+        limit: Annotated[int, Field(ge=1, le=200, description="Max reports, newest first")] = 20,
         udid: Udid = None,
     ) -> CrashList:
         """Crash and diagnostic reports on the iPhone, newest first: name (pass it to ios_crash_get),
@@ -238,7 +74,7 @@ def register(mcp: MCPServer) -> None:
         args: dict = {"flush": True}
         if process:
             args["process"] = process
-        items = await dcall(state, "crash.list", args, udid=udid, timeout=45) or []
+        items = await dcall(state, "crash.list", args, udid=udid, timeout=MAX_WAIT) or []
         if process:
             items = [c for c in items if c.get("process") == process]
         if kind != "any":
@@ -259,29 +95,22 @@ def register(mcp: MCPServer) -> None:
         return CrashList(total=len(items), count=len(out), has_more=len(items) > len(out), crashes=out, next_steps=nxt,
                          truncated=note is not None, omitted=len(items) - len(out), note=note)
 
-    @tool(mcp, annotations=READ_REMOTE("Crash report"))
+    @tool(mcp, "Crash report", kind="read_remote")
     async def ios_crash_get(
         ctx: Context,
-        name: Annotated[str, Field(description="name from ios_crash_list (e.g. '/MyApp-2026-11-01-142233.ips'); "
-                                               "the bare file name also works")],
-        section: Annotated[Section, Field(description="summary: parsed facts and crashed-thread frames. threads: "
-                                                     "every thread's frames. images: binary images. raw: the "
+        name: Annotated[str, Field(description="name from ios_crash_list (bare file name works too)")],
+        section: Annotated[Section, Field(description="summary (facts + crashed thread), threads, images or raw "
                                                      ".ips text")] = "summary",
-        start_line: Annotated[int, Field(ge=0, description="With a section other than summary: first line "
-                                                           "(page with the result's end_line)")] = 0,
-        max_lines: Annotated[int, Field(ge=1, le=5000, description="Lines of the section to return")] = 400,
+        start_line: Annotated[int, Field(ge=0, description="Not summary: first line (page with end_line)")] = 0,
+        max_lines: Annotated[int, Field(ge=1, le=5000, description="Lines of the section")] = 400,
         full_text: Annotated[bool, Field(description="Same as section='raw'")] = False,
-        max_bytes: Annotated[int | None, Field(ge=1000, le=B.MAX_BYTES, description="Raise the size cap for text + "
-                                                                                  "structuredContent together (default 12000 bytes)")] = None,
+        max_bytes: MaxBytes = None,
         udid: Udid = None,
     ) -> CrashDetail:
-        """One crash report, parsed: process, bundle id, app and iOS version, exception type, signal,
-        termination reason (e.g. the Swift fatal error message), and the top 15 frames of the crashed
-        thread, plus the local .ips path (and a resource link). The app's own frames are resolved against
-        the build that crashed (kept on every build): app_frames has function, file (relative to
-        project_path) and line, and symbolicated says full/partial/none with symbolication_note saying why
-        and what to do (usually: rebuild that exact version). Unresolved frames read '<image> + 0xOFFSET'. For more, pick a section (threads, images, raw); its lines come as plain text after the
-        JSON, paged with start_line, under 12 KB unless max_bytes raises it."""
+        """One crash report, parsed: exception, signal, termination reason, the crashed thread's top frames
+        and the local .ips path. app_frames resolve your code to file:line from the build that crashed;
+        symbolicated (full/partial/none) and symbolication_note say why not. Other sections come as text
+        paged with start_line."""
         state = get_state(ctx)
         return await crash_detail(state, name, udid, "raw" if full_text and section == "summary" else section,
                                   start_line, max_lines, max_bytes)
@@ -294,20 +123,25 @@ def register(mcp: MCPServer) -> None:
         if "/" in file or not file.endswith(".ips"):
             raise ResourceError("Expected a .ips file name from ios_crash_list.")
 
-        def capped(p: Path) -> str:
-            return cap_text(p.read_text(errors="replace"), f"ios_crash_get(name='{file}', section='raw', "
-                                                          "start_line=...)")
-        for d in _crash_dirs():
-            for p in d.glob(f"*/{file}") if d.is_dir() else []:
-                return capped(p)
-            if (d / file).is_file():
-                return capped(d / file)
+        hint = f"ios_crash_get(name='{file}', section='raw', start_line=...)"
+
+        def local_copy() -> str | None:      # blocking file access: runs in a thread
+            for d in _crash_dirs():
+                for p in d.glob(f"*/{file}") if d.is_dir() else []:
+                    return capped(p, hint)
+                if (d / file).is_file():
+                    return capped(d / file, hint)
+            return None
+        text = await asyncio.to_thread(local_copy)
+        if text is not None:
+            return text
         state = get_state(ctx)
         try:
-            det = await crash_detail(state, file)
+            with deadline.call_budget():     # a resource read answers in time too; a long pull keeps going
+                det = await crash_detail(state, file)
         except ToolError as exc:
             raise ResourceError(B.clip_error(str(exc)))
         try:
-            return capped(Path(helper.expand(det.path)))
+            return await asyncio.to_thread(capped, Path(helper.expand(det.path)), hint)
         except OSError:
             raise ResourceError(f"Couldn't read {det.path}.")

@@ -1,0 +1,13 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 28 / 29]
+[Using on-disk description]
+[2 / 3] CrashLab-App-product
+[3 / 3] CrashLab-App-product
+Build complete! (9.13 secs)
+Planning...
+
+[Provisioning]   0%
+[Provisioning]  33%
+[Provisioning]  66%
+Error: Unexpected response, expected status code: created, response: conflict(DeveloperAPI.Operations.ProfilesCreateInstance.Output.Conflict(body: DeveloperAPI.Operations.ProfilesCreateInstance.Output.Conflict.Body.json(DeveloperAPI.Components.Schemas.ErrorResponse(errors: Optional([DeveloperAPI.Components.Schemas.ErrorResponse.ErrorsPayloadPayload(id: Optional("becbe213-44ff-4417-991f-9e170877d657"), status: "409", code: "ENTITY_ERROR", title: "There is a problem with the request entity", detail: "There are no current IOS devices on this team matching the provided device IDs.", source: nil, links: nil, meta: nil)])))))

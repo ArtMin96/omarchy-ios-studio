@@ -1,6 +1,6 @@
 """Run presets: named launch arguments, environment, language/region and a UI-test-mode flag saved per project
-(stored by the helper in projects.json; see helper/projects.py `projects presets`). ios_project_presets lists,
-saves, deletes (dry run unless confirm=true) and selects them; ios_run, ios_app_launch and
+(stored by the helper in projects.json; see helper/iosstudio/features/projects/ `projects presets`). ios_project_presets lists
+them (read-only); ios_project_preset_set saves, deletes (dry run unless confirm=true) and selects them; ios_run, ios_app_launch and
 ios_app_run_and_capture take `preset=<name>` and launch with its resolved arguments (resolve_preset below).
 """
 from __future__ import annotations
@@ -12,30 +12,25 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from .. import budget as B
 from .. import helper
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.params import MaxBytes, ProjectPath
+from ..core.registry import fit_page, tool
 from ..models import Out
-from ..state import AppState, get_state, resolve_project
-from . import ann, fit_page, tool
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 VALUE_CUT = 300     # one argument or env value in a result
 MAX_ITEMS = 64      # args / env entries shown per preset
 
-PresetName = Annotated[str | None, Field(description="A run preset saved for the app's project (see "
-                                                     "ios_project_presets), e.g. 'German'. Its launch arguments come "
-                                                     "first, then `args`; `env` overrides its environment")]
-
 
 class PresetIn(BaseModel):
-    """A preset as an agent passes it to ios_project_presets(action='save')."""
-    name: str = Field(min_length=1, max_length=40, description="Preset name, e.g. 'German' (unique per project, "
-                                                               "ignoring case)")
-    args: list[str] = Field(default_factory=list, description="Launch arguments, e.g. ['-ShowDebugMenu', 'YES']")
-    env: dict[str, str] = Field(default_factory=dict, description="Environment variables, e.g. {'API_ENV': 'staging'}")
-    language: str | None = Field(None, description="App language code, e.g. 'de' (adds -AppleLanguages (de))")
-    region: str | None = Field(None, description="Locale, e.g. 'de_DE' (adds -AppleLocale de_DE)")
+    """A preset as an agent passes it to ios_project_preset_set(action='save')."""
+    name: str = Field(min_length=1, max_length=40, description="Unique per project, e.g. 'German'")
+    args: list[str] = Field(default_factory=list, description="Launch arguments")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    language: str | None = Field(None, description="e.g. 'de' (adds -AppleLanguages (de))")
+    region: str | None = Field(None, description="e.g. 'de_DE' (adds -AppleLocale de_DE)")
     ui_test_mode: bool = Field(False, description="Add the UI-test-mode launch argument")
 
     def to_helper(self) -> dict:
@@ -106,168 +101,125 @@ def _names(data: dict) -> list[str]:
     return [str(p.get("name")) for p in (data.get("presets") or []) if isinstance(p, dict) and p.get("name")]
 
 
-def plain_bundle(bid: str | None) -> str:
-    """com.example.app from XTL-<TEAM>.com.example.app (free teams' installed form)."""
-    b = str(bid or "").strip()
-    return b.split(".", 1)[1] if b.startswith("XTL-") and "." in b else b
-
-
-async def project_for_bundle(state: AppState, bundle_id: str) -> dict:
-    """The listed project whose bundle id is `bundle_id` (plain or XTL- form), or a ToolError asking for
-    project_path."""
-    want = plain_bundle(bundle_id)
-    items = (await state.projects()).get("projects") or []
-    hits = [p for p in items if want and plain_bundle(p.get("bundleId")) == want] or \
-        [p for p in items if want and str(p.get("name") or "").lower() == want.lower()]   # a display name
-    if len(hits) == 1:
-        return hits[0]
-    if len(hits) > 1:
-        paths = ", ".join(helper.tilde(p.get("path")) or "" for p in hits[:5])
-        raise ToolError(f"Several projects build {want} ({paths}). Pass project_path to say whose presets to use.")
-    raise ToolError(f"No listed project builds {want}, so its presets can't be found. Pass project_path "
-                    "(ios_project_list shows projects).")
-
-
-async def resolve_preset(state: AppState, preset: str, *, project_path: str | None = None,
-                         bundle_id: str | None = None) -> dict:
-    """{"name", "args", "env"} of a project's preset. The project is project_path, else the listed project
-    that builds bundle_id. An unknown name raises the helper's unknown-preset error (it lists the names)."""
-    if project_path:
-        p = await resolve_project(state, project_path)
-    elif bundle_id:
-        p = await project_for_bundle(state, bundle_id)
-    else:
-        raise ToolError("preset needs the app's project: pass project_path or bundle_id.")
-    data = await helper.call("projects", "presets", {"path": p["path"], "resolve": preset})
-    data = data if isinstance(data, dict) else {}
-    return {"name": str(data.get("name") or preset), "args": [str(x) for x in data.get("args") or []],
-            "env": {str(k): str(v) for k, v in (data.get("env") or {}).items()}, "project": p}
-
-
-def merge_launch(resolved: dict | None, args: list[str] | None, env: dict[str, str] | None
-                 ) -> tuple[list[str] | None, dict[str, str] | None]:
-    """The preset's args then the explicit ones; the explicit env overrides the preset's."""
-    if not resolved:
-        return args, env
-    a = list(resolved.get("args") or []) + list(args or [])
-    e = {**(resolved.get("env") or {}), **(env or {})}
-    return a or None, e or None
-
-
 def _more_note(k: int, total: int) -> str:
     return f"Showing {k} of {total} presets; pass name=<preset> for one of them, or raise max_bytes."
 
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=ann("Run presets", read_only=False, destructive=True, idempotent=False))
+    @tool(mcp, "Run presets", kind="read")
     async def ios_project_presets(
         ctx: Context,
         project_path: ProjectPath,
-        action: Annotated[Literal["list", "save", "delete", "select"], Field(
-            description="list (default): the presets and what each launches with. save: add or replace `preset`. "
-                        "delete: remove `name` (dry run unless confirm=true). select: make `name` the preset iOS "
-                        "Studio's Run button uses ('' clears it)")] = "list",
-        preset: Annotated[PresetIn | None, Field(description="save: the preset, e.g. {'name': 'German', 'language': "
-                                                             "'de', 'region': 'de_DE'}")] = None,
-        name: Annotated[str | None, Field(description="list: only this preset. delete/select: the preset's name")] = None,
-        rename_from: Annotated[str | None, Field(description="save: the preset's old name when renaming it")] = None,
-        confirm: Annotated[bool, Field(description="delete: false = dry run. true only after the user agreed")] = False,
+        name: Annotated[str | None, Field(description="Only this preset")] = None,
         max_bytes: MaxBytes = None,
     ) -> PresetsResult:
-        """Run presets of a project: saved launch arguments, environment variables, language/region and a
-        UI-test-mode flag, like Xcode scheme options. Pass a preset's name as `preset` to ios_run,
-        ios_app_launch or ios_app_run_and_capture to launch with it.
+        """A project's run presets (saved launch args, env, language/region, UI-test flag; like Xcode scheme
+        options), each with `resolved` args/env and the selected one marked. Pass a name as `preset` to
+        ios_run, ios_app_launch or ios_app_run_and_capture. Change them with ios_project_preset_set."""
+        return await _presets(ctx, project_path, "list", None, name, None, False, max_bytes)
 
-        - list: every preset with `resolved` (the exact args and env a launch gets) and which is selected.
-        - save: adds `preset`, or replaces the one with the same name (the result says replaced=true).
-          Rename with rename_from=<old name>. Example, the app in German:
-          ios_project_presets(project_path='WeatherGlance', action='save',
-              preset={'name': 'German', 'language': 'de', 'region': 'de_DE'})
-          then ios_run(project_path='WeatherGlance', preset='German').
-          language adds `-AppleLanguages (de)`, region adds `-AppleLocale de_DE`.
-        - delete: a dry run that changes nothing unless confirm=true; ask the user first.
-        - select: the preset iOS Studio's Run button uses (name='' clears it). Agents pass preset= instead.
-        Presets are stored in iOS Studio's settings, not in the project folder."""
-        state = get_state(ctx)
-        if isinstance(preset, dict):    # called directly rather than through the MCP argument validation
-            preset = PresetIn.model_validate(preset)
-        p = await resolve_project(state, project_path)
-        path = str(p["path"])
-        pname = str(p.get("name") or path)
-        flags: dict = {"path": path}
-        nxt: list[str] = []
-        replaced, would, done = False, [], False
-        if action == "save":
-            if preset is None:
-                raise ToolError("action='save' needs preset, e.g. {'name': 'German', 'language': 'de', "
-                                "'region': 'de_DE'}.")
-            before = await helper.call("projects", "presets", {"path": path})
-            existing = _names(before if isinstance(before, dict) else {})
-            if rename_from and not any(same_name(rename_from, n) for n in existing):
-                raise ToolError(f"No preset named '{rename_from}' to rename. Presets of {pname}: "
-                                f"{', '.join(existing) or 'none'}.")
-            replaced = any(same_name(preset.name, n) for n in existing) and not same_name(preset.name, rename_from)
-            flags["save"] = json.dumps(preset.to_helper(), ensure_ascii=False)
-            flags["rename_from"] = rename_from or None
-            data = await helper.call("projects", "presets", flags)
-            done = True
-            if replaced:
-                msg = f"Replaced the existing preset '{preset.name}' of {pname} with this one."
-            elif rename_from and rename_from != preset.name:   # also a change of case
-                msg = f"Renamed preset '{rename_from}' of {pname} to '{preset.name}' and saved it."
-            else:
-                msg = f"Saved preset '{preset.name}' of {pname}."
-            nxt.append(f"Launch with it: ios_run(project_path='{path}', preset='{preset.name}'), or "
-                       f"ios_app_run_and_capture(project_path='{path}', preset='{preset.name}') for an installed app.")
-        elif action == "delete":
-            if not name:
-                raise ToolError("action='delete' needs name (ios_project_presets(project_path) lists them).")
-            flags["delete"] = name
-            flags["dry_run"] = not confirm or None
-            data = await helper.call("projects", "presets", flags)
-            if confirm:
-                done, msg = True, f"Deleted preset '{name}' of {pname}."
-            else:
-                would = [f"Delete the run preset '{name}' of {pname}"]
-                if same_name(data.get("selected") if isinstance(data, dict) else None, name):
-                    would.append("It is the selected preset, so the Run button would use none")
-                msg = (f"Dry run: this would delete the run preset '{name}'. Nothing was changed. Ask the user to "
-                       "confirm, then call again with confirm=true.")
-                nxt.append("Ask the user whether to proceed; only then repeat the call with confirm=true.")
-        elif action == "select":
-            if name is None:
-                raise ToolError("action='select' needs name (or name='' to clear the selection).")
-            flags["select"] = name
-            data = await helper.call("projects", "presets", flags)
-            done = True
-            msg = f"Selected preset '{name}' for {pname}'s Run button." if name else \
-                f"Cleared the selected preset of {pname}."
+    @tool(mcp, "Save, delete or select a run preset", kind="destructive")
+    async def ios_project_preset_set(
+        ctx: Context,
+        project_path: ProjectPath,
+        action: Annotated[Literal["save", "delete", "select"], Field(
+            description="save `preset`, delete `name`, or select `name` for the app's Run button ('' clears)")],
+        preset: Annotated[PresetIn | None, Field(description="save: e.g. {'name': 'German', 'language': 'de'}")] = None,
+        name: Annotated[str | None, Field(description="delete/select: the preset's name")] = None,
+        rename_from: Annotated[str | None, Field(description="save: old name when renaming")] = None,
+        confirm: Annotated[bool, Field(description="delete: false = dry run; true only after the user agreed")] = False,
+        max_bytes: MaxBytes = None,
+    ) -> PresetsResult:
+        """Change a project's run presets. save adds or replaces `preset` by name (rename_from to rename), then
+        launch with ios_run(preset=name); delete is a dry run until confirm=true (ask the user first); select
+        sets the app's Run button preset (agents pass preset= instead). Stored in iOS Studio's settings, not the
+        project."""
+        return await _presets(ctx, project_path, action, preset, name, rename_from, confirm, max_bytes)
+
+
+async def _presets(ctx: Context, project_path: str, action: str, preset: PresetIn | dict | None, name: str | None,
+                   rename_from: str | None, confirm: bool, max_bytes: int | None) -> PresetsResult:
+    """list / save / delete / select, for ios_project_presets and ios_project_preset_set."""
+    state = get_state(ctx)
+    if isinstance(preset, dict):    # called directly rather than through the MCP argument validation
+        preset = PresetIn.model_validate(preset)
+    p = await resolve_project(state, project_path)
+    path = str(p["path"])
+    pname = str(p.get("name") or path)
+    flags: dict = {"path": path}
+    nxt: list[str] = []
+    replaced, would, done = False, [], False
+    if action == "save":
+        if preset is None:
+            raise ToolError("action='save' needs preset, e.g. {'name': 'German', 'language': 'de', "
+                            "'region': 'de_DE'}.")
+        before = await helper.call("projects", "presets", {"path": path})
+        existing = _names(before if isinstance(before, dict) else {})
+        if rename_from and not any(same_name(rename_from, n) for n in existing):
+            raise ToolError(f"No preset named '{rename_from}' to rename. Presets of {pname}: "
+                            f"{', '.join(existing) or 'none'}.")
+        replaced = any(same_name(preset.name, n) for n in existing) and not same_name(preset.name, rename_from)
+        flags["save"] = json.dumps(preset.to_helper(), ensure_ascii=False)
+        flags["rename_from"] = rename_from or None
+        data = await helper.call("projects", "presets", flags)
+        done = True
+        if replaced:
+            msg = f"Replaced the existing preset '{preset.name}' of {pname} with this one."
+        elif rename_from and rename_from != preset.name:   # also a change of case
+            msg = f"Renamed preset '{rename_from}' of {pname} to '{preset.name}' and saved it."
         else:
-            data = await helper.call("projects", "presets", flags)
-            msg = f"Run presets of {pname}."
-        data = data if isinstance(data, dict) else {}
-        if data.get("demo") is True and action in ("save", "delete", "select") and done:
-            msg += " Demo mode: nothing is written to disk."
-        selected = data.get("selected") or None
-        raw = [d for d in (data.get("presets") or []) if isinstance(d, dict)]
-        total = len(raw)
-        if action == "list" and name:
-            raw = [d for d in raw if same_name(d.get("name"), name)]
-            if not raw:
-                raise ToolError(f"No preset named '{name}'. Presets of {pname}: "
-                                f"{', '.join(_names(data)) or 'none'}.")
-        elif action == "save" and preset is not None:   # show the saved one first
-            raw.sort(key=lambda d: not same_name(d.get("name"), preset.name))
-        items = [PresetInfo.from_helper(d, selected) for d in raw]
-        if action == "list" and not total:
-            nxt.append(f"No presets yet. Save one with ios_project_presets(project_path='{path}', action='save', "
-                       "preset={'name': 'German', 'language': 'de', 'region': 'de_DE'}).")
-        elif action == "list":
-            nxt.append(f"Launch with one: ios_run(project_path='{path}', preset='<name>'), or "
-                       "ios_app_launch / ios_app_run_and_capture with preset='<name>'.")
-        model = PresetsResult(done=done, action=action, message=msg, project=pname, path=str(data.get("path") or path),
-                              selected=selected, total=total, count=len(items), presets=items,
-                              replaced=replaced if action == "save" else None,
-                              would=would, next_steps=nxt).with_budget(max_bytes)
-        return fit_page(model, "presets", 0, lambda k, end: _more_note(k, len(items)))
+            msg = f"Saved preset '{preset.name}' of {pname}."
+        nxt.append(f"Launch with it: ios_run(project_path='{path}', preset='{preset.name}'), or "
+                   f"ios_app_run_and_capture(project_path='{path}', preset='{preset.name}') for an installed app.")
+    elif action == "delete":
+        if not name:
+            raise ToolError("action='delete' needs name (ios_project_presets(project_path) lists them).")
+        flags["delete"] = name
+        flags["dry_run"] = not confirm or None
+        data = await helper.call("projects", "presets", flags)
+        if confirm:
+            done, msg = True, f"Deleted preset '{name}' of {pname}."
+        else:
+            would = [f"Delete the run preset '{name}' of {pname}"]
+            if same_name(data.get("selected") if isinstance(data, dict) else None, name):
+                would.append("It is the selected preset, so the Run button would use none")
+            msg = (f"Dry run: this would delete the run preset '{name}'. Nothing was changed. Ask the user to "
+                   "confirm, then call again with confirm=true.")
+            nxt.append("Ask the user whether to proceed; only then repeat the call with confirm=true.")
+    elif action == "select":
+        if name is None:
+            raise ToolError("action='select' needs name (or name='' to clear the selection).")
+        flags["select"] = name
+        data = await helper.call("projects", "presets", flags)
+        done = True
+        msg = f"Selected preset '{name}' for {pname}'s Run button." if name else \
+            f"Cleared the selected preset of {pname}."
+    else:
+        data = await helper.call("projects", "presets", flags)
+        msg = f"Run presets of {pname}."
+    data = data if isinstance(data, dict) else {}
+    if data.get("demo") is True and action in ("save", "delete", "select") and done:
+        msg += " Demo mode: nothing is written to disk."
+    selected = data.get("selected") or None
+    raw = [d for d in (data.get("presets") or []) if isinstance(d, dict)]
+    total = len(raw)
+    if action == "list" and name:
+        raw = [d for d in raw if same_name(d.get("name"), name)]
+        if not raw:
+            raise ToolError(f"No preset named '{name}'. Presets of {pname}: "
+                            f"{', '.join(_names(data)) or 'none'}.")
+    elif action == "save" and preset is not None:   # show the saved one first
+        raw.sort(key=lambda d: not same_name(d.get("name"), preset.name))
+    items = [PresetInfo.from_helper(d, selected) for d in raw]
+    if action == "list" and not total:
+        nxt.append(f"No presets yet. Save one with ios_project_preset_set(project_path='{path}', action='save', "
+                   "preset={'name': 'German', 'language': 'de', 'region': 'de_DE'}).")
+    elif action == "list":
+        nxt.append(f"Launch with one: ios_run(project_path='{path}', preset='<name>'), or "
+                   "ios_app_launch / ios_app_run_and_capture with preset='<name>'.")
+    model = PresetsResult(done=done, action=action, message=msg, project=pname, path=str(data.get("path") or path),
+                          selected=selected, total=total, count=len(items), presets=items,
+                          replaced=replaced if action == "save" else None,
+                          would=would, next_steps=nxt).with_budget(max_bytes)
+    return fit_page(model, "presets", 0, lambda k, end: _more_note(k, len(items)))

@@ -3,8 +3,8 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Home: one glance at readiness, the next best action, the iPhone, the Apple ID
 // signing countdown, recent apps (one-click Run), builds and new crashes.
@@ -186,8 +186,8 @@ PageFrame {
           Layout.fillWidth: true
           Layout.alignment: Qt.AlignVCenter
           spacing: Style.spacing.sm
-          AppText { Layout.fillWidth: true; text: page.next.title; size: "heading"; strong: true; wrapMode: Text.WordWrap }
-          AppText { Layout.fillWidth: true; text: page.next.text; tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2 }
+          AppText { Layout.fillWidth: true; text: page.next.title; size: "heading"; strong: true; wrapMode: Text.Wrap }
+          AppText { Layout.fillWidth: true; text: page.next.text; tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2 }
           ActionButton {
             Layout.topMargin: Style.spacing.md
             visible: !page.wide && !!page.next.cta
@@ -252,7 +252,7 @@ PageFrame {
     Layout.fillWidth: true
     Layout.topMargin: -Style.spacing.md
     spacing: Style.spacing.md
-    ActionButton { text: "New app"; glyph: Model.Glyph.plus; disabled: page.fresh; tooltip: page.fresh ? "Finish Setup first" : "Create an app from a template"; onClicked: page.app.nav("projects", { action: "new" }) }
+    ActionButton { text: "New app"; glyph: Model.Glyph.plus; tooltip: "Create an app from a template"; onClicked: page.app.nav("projects", { action: "new" }) }
     ActionButton { text: "Open Setup"; glyph: Model.Glyph.rocket; onClicked: page.app.nav("setup") }
     ActionButton { text: "Mirror screen"; glyph: Model.Glyph.camera; disabled: !page.dev.connected; tooltip: page.dev.connected ? "See your iPhone's screen" : "Connect your iPhone first"; onClicked: page.app.nav("device", { tab: "screen", action: "mirror" }) }
     ActionButton { text: "Connect AI agents"; glyph: Model.Glyph.robot; kind: "ghost"; tooltip: "Let tools like Claude Code build and run your apps"; onClicked: page.app.nav("settings", { section: "agents" }) }
@@ -466,7 +466,7 @@ PageFrame {
         Layout.fillWidth: true
         visible: page.acct.signedIn && !idCard.e
         text: page.acct.detailsLoading ? "Checking your signing…" : "No apps signed yet. Signing starts the first time you run an app."
-        tone: "dim"; size: "small"; wrapMode: Text.WordWrap
+        tone: "dim"; size: "small"; wrapMode: Text.Wrap
       }
       Item { Layout.fillHeight: true }
     }
@@ -520,7 +520,7 @@ PageFrame {
               id: rowIcon
               anchors.fill: parent
               visible: status === Image.Ready
-              source: prow.modelData.icon ? "file://" + prow.modelData.icon : ""
+              source: Util.fileUrl(prow.modelData.icon)
               sourceSize.width: Style.space(64); sourceSize.height: Style.space(64)
               fillMode: Image.PreserveAspectCrop
               asynchronous: true

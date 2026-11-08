@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/account"
+import "../components/common"
+import "../lib/Model.js" as Model
 
 // Apple ID: who you're signed in as, signing health, and what Apple has on file
 // (certificates, profiles, App IDs, devices). Account slice.
@@ -71,16 +72,14 @@ PageFrame {
   function copyRow(r) {
     if (!r) return
     var v = "", what = ""
-    if (r.kind === "profile") { v = r.item.displayBundleId || r.item.name; what = "Bundle ID" }
-    else if (r.kind === "certificate") { v = r.item.serial; what = "Serial number" }
-    else if (r.kind === "identifier") { v = r.item.displayBundleId || r.item.bundleId; what = "Bundle ID" }
-    else if (r.kind === "device") { v = r.item.udid; what = "UDID" }
+    if (r.kind === "profile") { v = r.item.displayBundleId || r.item.name; what = "the bundle ID" }
+    else if (r.kind === "certificate") { v = r.item.serial; what = "the serial number" }
+    else if (r.kind === "identifier") { v = r.item.displayBundleId || r.item.bundleId; what = "the bundle ID" }
+    else if (r.kind === "device") { v = r.item.udid; what = "the UDID" }
     copy(v, what)
   }
   function copy(v, what) {
-    if (!v) return
-    Util.execArgv(["wl-copy", "--", String(v)])
-    page.app.toast((what || "Value") + " copied", "ok")
+    if (v) page.app.copyText(v, what)
   }
 
   function handleKey(event) {
@@ -146,11 +145,11 @@ PageFrame {
       ColumnLayout {
         Layout.fillWidth: true
         spacing: Style.spacing.lg
-        AppText { Layout.fillWidth: true; text: "Sign in with your Apple ID"; size: "title"; strong: true; wrapMode: Text.WordWrap }
+        AppText { Layout.fillWidth: true; text: "Sign in with your Apple ID"; size: "title"; strong: true; wrapMode: Text.Wrap }
         AppText {
           Layout.fillWidth: true
           text: "iPhones only run apps signed by Apple. iOS Studio uses your Apple ID to get that signature, the same way Xcode does on a Mac. Your everyday Apple ID is fine: you don't need to pay for a developer account."
-          tone: "dim"; wrapMode: Text.WordWrap; lineHeight: 1.2
+          tone: "dim"; wrapMode: Text.Wrap; lineHeight: 1.2
         }
         GridLayout {
           Layout.fillWidth: true
@@ -159,11 +158,11 @@ PageFrame {
           columnSpacing: Style.spacing.lg
           rowSpacing: Style.spacing.md
           Icon { glyph: Model.Glyph.timer; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "With a free account, apps stay signed for 7 days. Renewing takes one click."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "With a free account, apps stay signed for 7 days. Renewing takes one click."; wrapMode: Text.Wrap }
           Icon { glyph: Model.Glyph.phone; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "Up to 3 of your own apps on each iPhone at a time."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "Up to 3 of your own apps on each iPhone at a time."; wrapMode: Text.Wrap }
           Icon { glyph: Model.Glyph.shieldCheck; color: Theme.dim; size: Style.font.bodySmall }
-          AppText { Layout.fillWidth: true; text: "Your password goes straight to Apple, and you'll confirm with a code on your iPhone."; wrapMode: Text.WordWrap }
+          AppText { Layout.fillWidth: true; text: "Your password goes straight to Apple, and you'll confirm with a code on your iPhone."; wrapMode: Text.Wrap }
         }
         RowLayout {
           Layout.topMargin: Style.spacing.md
@@ -286,7 +285,11 @@ PageFrame {
 
         ColumnLayout {
           id: hCol
-          anchors.fill: parent
+          // packed at the top: when the identity card beside it is taller, the spare room goes below
+          // Renew instead of opening a gap above it
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
           anchors.margins: Style.spacing.panelPadding
           spacing: Style.spacing.md
 
@@ -339,10 +342,10 @@ PageFrame {
             Layout.fillWidth: true
             visible: !healthCard.loading
             text: healthCard.h ? healthCard.h.detail : (page.svc.detailsError ? "Couldn't check signing right now." : "")
-            tone: "dim"; wrapMode: Text.WordWrap; size: "small"
+            tone: "dim"; wrapMode: Text.Wrap; size: "small"
           }
-          Item { Layout.fillHeight: true }
           ActionButton {
+            Layout.topMargin: Style.spacing.sm
             visible: !healthCard.loading && !!healthCard.e
             text: "Renew now"; glyph: Model.Glyph.sync
             kind: healthCard.lv === "warn" || healthCard.lv === "error" ? "primary" : "secondary"
@@ -365,7 +368,7 @@ PageFrame {
       Layout.fillWidth: true
       visible: page.svc.keyMode
       text: "You're signed in with an App Store Connect API key. iOS Studio can build and upload with it, but certificates, profiles and devices are only listed for Apple ID sign-ins."
-      tone: "dim"; wrapMode: Text.WordWrap
+      tone: "dim"; wrapMode: Text.Wrap
     }
 
     // ---------------------------------------------------- free-account limits
@@ -411,7 +414,7 @@ PageFrame {
               }
             }
             ProgressTrack { Layout.fillWidth: true; visible: modelData.used >= 0; value: parent.frac; level: parent.lv }
-            AppText { Layout.fillWidth: true; text: modelData.note; size: "small"; tone: "faint"; wrapMode: Text.WordWrap }
+            AppText { Layout.fillWidth: true; text: modelData.note; size: "small"; tone: "faint"; wrapMode: Text.Wrap }
           }
         }
       }
@@ -470,7 +473,7 @@ PageFrame {
           Layout.topMargin: Style.spacing.sm
           visible: !!sec.section && sec.section.ok && sec.list.length === 0
           text: modelData.empty
-          tone: "faint"; wrapMode: Text.WordWrap
+          tone: "faint"; wrapMode: Text.Wrap
         }
 
         Repeater {
@@ -536,7 +539,7 @@ PageFrame {
       AppText {
         Layout.fillWidth: true
         text: "Signing out removes your Apple ID from this computer. Apps already on your iPhone keep working until their signing runs out, and your certificate stays with Apple."
-        tone: "dim"; wrapMode: Text.WordWrap; size: "small"
+        tone: "dim"; wrapMode: Text.Wrap; size: "small"
       }
       ActionButton {
         text: "Sign out"; glyph: Model.Glyph.linkOff; kind: "danger"

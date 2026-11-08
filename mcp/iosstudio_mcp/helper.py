@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,9 @@ REPO = Path(os.environ.get("IOSSTUDIO_REPO") or Path(__file__).resolve().parents
 HELPER = REPO / "bin" / "iosstudio-helper"
 APP_LAUNCHER = REPO / "bin" / "ios-studio"
 HOME = Path.home()
+if str(REPO / "helper") not in sys.path:      # the helper's stdlib-only `iosstudio.core` (one set of path rules)
+    sys.path.append(str(REPO / "helper"))
+from iosstudio.core import appdirs  # noqa: E402  (tools use helper.appdirs)
 
 
 def demo_mode() -> bool:
@@ -64,16 +68,16 @@ NEXT_BY_CODE: dict[str, str] = {
                         "open-file limit (it needs a new login session).",
     "invalid-setting": "Fix the value and call ios_project_build_settings again.",
     "unknown-preset": "Use one of the preset names listed in the message (ios_project_presets(project_path) shows "
-                      "them with their args), or save it first with ios_project_presets(action='save').",
+                      "them with their args), or save it first with ios_project_preset_set(action='save').",
     "invalid-preset": "Fix the preset (a name, args as a list of strings, env with string values, language like 'de', "
-                      "region like 'de_DE') and call ios_project_presets(action='save') again.",
+                      "region like 'de_DE') and call ios_project_preset_set(action='save') again.",
     "no-build": "Call ios_run (or ios_build_start action='ipa') to produce a signed build first.",
     "build-failed": "Call ios_build_diagnostics and ios_build_log(grep='error') for the failing lines.",
     "compile-errors": "Call ios_build_diagnostics for file:line errors, fix them, then rebuild.",
     "needs-certificate": "The signing certificate must be replaced; this needs the human's decision. "
-                         "Retry the build and answer its prompt with ios_build_respond only after asking them.",
+                         "Retry the build and answer its prompt with ios_job_respond only after asking them.",
     "signing-failed": "Call ios_signing_status and ios_build_log(grep='error') to see why signing failed.",
-    "busy": "Another build of this project is running. Check ios_build_status, or wait and retry.",
+    "busy": "Another build of this project is running. Check ios_job_status, or wait and retry.",
     "pacman-locked": "A package manager is running. Wait for it to finish, then retry.",
     "network": "Check the internet connection, then retry.",
     "timeout": "Retry; if it keeps happening, check ios_status.",
@@ -193,9 +197,17 @@ def kill_group(pid: int, sig: int = signal.SIGKILL) -> None:
 
 # ------------------------------------------------------------------ one-shot
 
+def _clamp(timeout: float, what: str) -> float:
+    """The call's time budget (core/deadline.py; imported here to keep this module's imports to the stdlib/mcp)."""
+    from .core import deadline
+    return deadline.clamp(timeout, what)
+
+
 async def call(group: str, action: str, flags: dict[str, Any] | None = None, *,
                timeout: float = 25, stdin: str | None = None) -> Any:
-    """Run one helper command and return its `data`. Raises HelperFailure / ToolError."""
+    """Run one helper command and return its `data`. Raises HelperFailure / ToolError. Inside a tool call the
+    timeout is cut to what is left of the call's budget (core/deadline.py)."""
+    timeout = _clamp(timeout, f"'{group} {action}'")
     argv = build_argv(group, action, flags)
     log.debug("helper: %s", argv[1:])
     proc = await asyncio.create_subprocess_exec(
@@ -207,8 +219,8 @@ async def call(group: str, action: str, flags: dict[str, Any] | None = None, *,
     except asyncio.TimeoutError:
         kill_group(proc.pid)
         await proc.wait()
-        raise ToolError(f"iOS Studio's helper took longer than {int(timeout)} s for '{group} {action}'. "
-                        "Retry, or check ios_status.")
+        raise ToolError(f"iOS Studio's helper took longer than {timeout:.0f} s for '{group} {action}' [timeout]. "
+                        "Next: retry, or check ios_status.")
     except BaseException:  # cancelled by the client: never leave the child behind
         kill_group(proc.pid)
         raise
@@ -240,6 +252,7 @@ def parse_result(text: str) -> dict | None:
 async def call_stream_collect(group: str, action: str, flags: dict[str, Any] | None = None, *,
                               timeout: float = 25) -> tuple[Any, list[dict]]:
     """Run a short *streaming* command to completion (e.g. a --dry-run). Returns (done data, events)."""
+    timeout = _clamp(timeout, f"'{group} {action}'")
     argv = build_argv(group, action, flags)
     proc = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
@@ -284,16 +297,16 @@ _device_client_mod = None
 
 
 def device_client_module():
-    """helper/device_client.py (the stdlib asyncio client for the shared device daemon), loaded under a
+    """helper/iosstudio/device/client.py (the stdlib asyncio client for the shared device daemon), loaded under a
     private module name so helper/'s other modules never shadow anything on sys.path."""
     global _device_client_mod
     if _device_client_mod is None:
         import importlib.util
         import sys
-        path = REPO / "helper" / "device_client.py"
+        path = REPO / "helper" / "iosstudio" / "device" / "client.py"
         spec = importlib.util.spec_from_file_location("iosstudio_device_client", path)
         if spec is None or spec.loader is None:
-            raise ToolError("The device client (helper/device_client.py) is missing from this install.")
+            raise ToolError("The device client (helper/iosstudio/device/client.py) is missing from this install.")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
@@ -304,11 +317,8 @@ def device_client_module():
 # ------------------------------------------------------------------ paths
 
 def tilde(path: str | None) -> str | None:
-    """~-relative display form (keeps outputs short and free of the user's home path)."""
-    if not path:
-        return path
-    h = str(HOME)
-    return "~" + path[len(h):] if path == h or path.startswith(h + "/") else path
+    """~-relative display form (keeps outputs short and free of the user's home path); None stays None."""
+    return appdirs.tilde(path) if path else path
 
 
 def expand(path: str) -> Path:

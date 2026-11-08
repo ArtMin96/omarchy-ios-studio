@@ -1,7 +1,7 @@
 """Swift package dependencies: ios_package_list, ios_package_add, ios_package_update, ios_package_resolve and
-ios_package_remove. The work happens in helper/packages.py (`packages <action>`); add, update and resolve fetch
+ios_package_remove. The work happens in helper/iosstudio/features/packages/ (`packages <action>`); add, update and resolve fetch
 from the network and run as jobs (state='running' + job_id; call the same tool again with job_id; cancel with
-ios_build_cancel(build_id=job_id), which puts Package.swift and Package.resolved back)."""
+ios_job_cancel(job_id), which puts Package.swift and Package.resolved back)."""
 from __future__ import annotations
 
 import re
@@ -11,14 +11,15 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .. import budget as B
 from .. import helper
-from ..jobs import Job
+from ..backends.projects import resolve_project
+from ..core import budget as B
+from ..core.job_status import wait_with_progress
+from ..core.jobs import Job
+from ..core.params import MaxBytes, OptJobId, ProjectPath, WaitSeconds
+from ..core.registry import fit_page, tool
 from ..models import ErrorInfo, Out
-from ..state import get_state, resolve_project
-from . import MAX_WAIT, READ, ann, fit_page, tool, wait_with_progress
-from .build import MaxBytes
-from .projects import ProjectPath
+from ..state import get_state
 
 PRODUCTS_CAP = 30
 CHANGES_CAP = 50
@@ -30,8 +31,7 @@ REMOVE_TIMEOUT = 150
 DRY_RUN_TIMEOUT = 90
 CHECK_BUILD = "ios_build_start(project_path, action='compile') checks that the app still builds."
 
-JobId = Annotated[str | None, Field(description="Keep waiting for a job started earlier (from job_id)")]
-Wait = Annotated[float, Field(ge=0, le=MAX_WAIT, description="How long to wait for the job before returning")]
+OptPath = Annotated[str | None, Field(description="Project folder or name (not with job_id)")]
 
 
 # ------------------------------------------------------------------ models
@@ -152,7 +152,7 @@ class PackageResult(B.Budgeted, Out):
 # ------------------------------------------------------------------ helpers
 
 def identity_of(location: str) -> str:
-    """SwiftPM's identity of a URL or path (helper/package_manifest.py identity_of)."""
+    """SwiftPM's identity of a URL or path (helper/iosstudio/features/packages/manifest.py identity_of)."""
     s = str(location or "").strip().rstrip("/")
     if s.endswith(".git"):
         s = s[:-4]
@@ -217,7 +217,7 @@ def _busy(state, path: str) -> None:
     job = state.jobs.running_for(path)
     if job:
         raise ToolError(f"{job.title} ({job.id}) is still running for this project. Wait for it with "
-                        f"ios_build_status(build_id='{job.id}') or stop it with ios_build_cancel, then retry.")
+                        f"ios_job_status(job_id='{job.id}') or stop it with ios_job_cancel, then retry.")
 
 
 def _job_view(job: Job, action: str, tool_name: str, p: dict) -> PackageResult:
@@ -232,7 +232,7 @@ def _job_view(job: Job, action: str, tool_name: str, p: dict) -> PackageResult:
             progress=round(job.progress, 3) if job.progress is not None else None,
             progress_detail=B.clip(job.progress_detail, 200) if job.progress_detail else None,
             next_steps=[f"Call {tool_name}(job_id='{job.id}', wait_seconds=20) again; "
-                        f"ios_build_cancel(build_id='{job.id}') stops it and puts Package.swift back."])
+                        f"ios_job_cancel(job_id='{job.id}') stops it and puts Package.swift back."])
     if job.state != "succeeded":
         err = dict(job.error or {"code": "failed", "message": "Failed."})
         r = _err_result(action, p, err, **common)
@@ -287,18 +287,16 @@ def _success(action: str, p: dict, data: dict, **common: Any) -> PackageResult:
 
 def register(mcp: MCPServer) -> None:
 
-    @tool(mcp, annotations=READ("List Swift packages"))
+    @tool(mcp, "List Swift packages", kind="read")
     async def ios_package_list(
         ctx: Context,
         project_path: ProjectPath,
-        max_items: Annotated[int, Field(ge=1, le=200, description="Max packages to return")] = 50,
+        max_items: Annotated[int, Field(ge=1, le=200)] = 50,
         max_bytes: MaxBytes = None,
     ) -> PackageList:
-        """A project's Swift package dependencies from Package.swift and Package.resolved: each package's
-        identity, URL (or local path), version rule ('from 1.2.0'), resolved version or branch@commit, and which
-        targets use which of its products. Also the project's targets (app=true marks the app's own target) and
-        `unresolved`, packages declared but not yet fetched. Read-only; the first call on a project takes a few
-        seconds (SwiftPM compiles the manifest), later ones are cached until Package.swift changes."""
+        """A project's Swift package dependencies: identity, URL, version rule, resolved version and the targets
+        using each product; also the project's targets and `unresolved` (declared, not fetched) packages.
+        Read-only; the first call takes a few seconds."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         data = await helper.call("packages", "list", _flags(p), timeout=LIST_TIMEOUT)
@@ -324,35 +322,25 @@ def register(mcp: MCPServer) -> None:
         return fit_page(model, "packages", 0, lambda k, end: f"Showing {k} of {total} packages; raise max_bytes "
                                                              "for more.")
 
-    @tool(mcp, annotations=ann("Add a Swift package", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Add a Swift package", kind="write", open_world=True)
     async def ios_package_add(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
-        = None,
-        url: Annotated[str | None, Field(description="Git URL of the package (https://… or git@host:owner/repo), "
-                                                     "or a local folder path")] = None,
+        project_path: OptPath = None,
+        url: Annotated[str | None, Field(description="Git URL or local folder of the package")] = None,
         rule: Annotated[Literal["from", "upToNextMinor", "exact", "branch", "revision"],
-                        Field(description="from = up to the next major version (the usual choice)")] = "from",
-        version: Annotated[str | None, Field(description="1.2.0 for from/upToNextMinor/exact (default: the newest "
-                                                         "release), the branch name, or the commit hash")] = None,
-        target: Annotated[str | None, Field(description="Target to link the product to (default: the app's)")]
+                        Field(description="from: up to the next major (usual)")] = "from",
+        version: Annotated[str | None, Field(description="1.2.0 (default: newest release), branch or commit")] = None,
+        target: Annotated[str | None, Field(description="Target to link (default: the app's)")] = None,
+        product: Annotated[str | list[str] | None, Field(description="Product(s) to link if there are several")]
         = None,
-        product: Annotated[str | list[str] | None, Field(description="Product(s) to link; needed when the "
-                                                                     "package has several")] = None,
-        dry_run: Annotated[bool, Field(description="Only show the Package.swift change; nothing is fetched or "
-                                                   "written")] = False,
-        job_id: JobId = None,
-        wait_seconds: Wait = 20,
+        dry_run: Annotated[bool, Field(description="Only show the Package.swift change")] = False,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         max_bytes: MaxBytes = None,
     ) -> PackageResult:
-        """Add a Swift package dependency by URL and link its product to the app's target: edits Package.swift
-        (swift package add-dependency), fetches the package, reads its library products and links one
-        (add-target-dependency). If the package has several products and `product` isn't given, it stops with
-        needs_product=true and the list: ask the user, then call again with the same url and product='Name' (an
-        already-added package only gets the product linked). Runs as a job: state 'running' means call again with
-        job_id. Any failure (bad URL, no matching version, network) puts Package.swift and Package.resolved back.
-        Packages with binary targets or macOS-only plugins may not build for iOS: check with a compile build."""
+        """Add a Swift package by URL and link its product to the app's target. Several products and no `product`:
+        needs_product=true with the list; ask the user, then call again with product='Name'. A job: state
+        'running' means call again with job_id. A failure puts Package.swift back. Then check with a compile."""
         state = get_state(ctx)
         if job_id:
             job = state.jobs.get(job_id)
@@ -412,37 +400,29 @@ def register(mcp: MCPServer) -> None:
             return _err_result("add-product", p, exc.error).with_budget(max_bytes)
         return _success("add-product", p, data).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Update Swift packages", read_only=False, destructive=False, idempotent=False,
-                               open_world=True))
+    @tool(mcp, "Update Swift packages", kind="write", open_world=True)
     async def ios_package_update(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
-        = None,
-        package: Annotated[str | None, Field(description="Only this package (identity from ios_package_list); "
-                                                         "default: all")] = None,
-        job_id: JobId = None,
-        wait_seconds: Wait = 20,
+        project_path: OptPath = None,
+        package: Annotated[str | None, Field(description="Only this package (default: all)")] = None,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         max_bytes: MaxBytes = None,
     ) -> PackageResult:
-        """Update packages to the newest versions their rules allow (swift package update) and report `changes`
-        (identity, from_version, to_version) from Package.resolved before and after. Package.swift isn't changed.
-        Runs as a job: state 'running' means call again with job_id; ios_build_cancel(build_id=job_id) stops it
-        and puts Package.resolved back."""
+        """Update packages to the newest versions their rules allow and report version `changes`. Package.swift
+        isn't changed. A job: state 'running' means call again with job_id; ios_job_cancel undoes it."""
         return await _resolve_like(ctx, "update", project_path, package, job_id, wait_seconds, max_bytes)
 
-    @tool(mcp, annotations=ann("Resolve Swift packages", read_only=False, destructive=False, idempotent=True,
-                               open_world=True))
+    @tool(mcp, "Resolve Swift packages", kind="write", idempotent=True, open_world=True)
     async def ios_package_resolve(
         ctx: Context,
-        project_path: Annotated[str | None, Field(description="Project folder or name (not needed with job_id)")]
-        = None,
-        job_id: JobId = None,
-        wait_seconds: Wait = 20,
+        project_path: OptPath = None,
+        job_id: OptJobId = None,
+        wait_seconds: WaitSeconds = 20,
         max_bytes: MaxBytes = None,
     ) -> PackageResult:
-        """Fetch the packages Package.swift declares at the versions in Package.resolved (swift package
-        resolve), e.g. for the `unresolved` ones ios_package_list reports or after editing Package.swift by hand.
-        Reports pins that changed. Runs as a job like ios_package_update."""
+        """Fetch the packages at the versions in Package.resolved (e.g. `unresolved` ones, or after editing
+        Package.swift by hand) and report changed pins. A job like ios_package_update."""
         return await _resolve_like(ctx, "resolve", project_path, None, job_id, wait_seconds, max_bytes)
 
     async def _resolve_like(ctx: Context, action: str, project_path: str | None, package: str | None,
@@ -464,22 +444,17 @@ def register(mcp: MCPServer) -> None:
         await wait_with_progress(state, job, wait_seconds, ctx)
         return _job_view(job, action, name, p).with_budget(max_bytes)
 
-    @tool(mcp, annotations=ann("Remove a Swift package", read_only=False, destructive=True, idempotent=False))
+    @tool(mcp, "Remove a Swift package", kind="destructive")
     async def ios_package_remove(
         ctx: Context,
         project_path: ProjectPath,
         package: Annotated[str, Field(description="Identity, name or URL from ios_package_list")],
-        confirm: Annotated[bool, Field(description="false (default): dry run with the diff. true: write it, only "
-                                                   "after the user agreed")] = False,
+        confirm: Annotated[bool, Field(description="false: dry run with the diff; true after the user agreed")] = False,
         max_bytes: MaxBytes = None,
     ) -> PackageResult:
-        """Remove a package from Package.swift: its .package entry and every target dependency on its products
-        (SwiftPM has no command for this, so the file is edited as Swift text). Without confirm it's a dry run:
-        the diff, the target dependencies that go, and valid=true when the edited manifest still checks out
-        (swift package dump-package). Show the diff to the user; with confirm=true the file is written
-        atomically, checked again (put back if it fails) and the package's pins leave Package.resolved. A
-        manifest this can't edit safely (entries built from variables or .append) fails with edit-invalid and
-        nothing is changed."""
+        """Remove a package and its products' target dependencies from Package.swift. A dry run with the diff
+        unless confirm=true (show the user the diff first). A manifest it can't edit safely fails with
+        edit-invalid and nothing changes."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
         _busy(state, p["path"])

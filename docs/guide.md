@@ -282,7 +282,7 @@ When an app behaves oddly, look at what it has saved. On the iPhone page, open A
 - Stores lists the app's SwiftData, Core Data and SQLite files and their tables with row counts. Click a table to see its rows, 50 at a time. Hover a cut-off cell to read all of it. Core Data's own bookkeeping tables (`Z_METADATA`, `Z_PRIMARYKEY`, …) are hidden until you turn on Show internal tables under the list. Stores are only read, never changed.
 - Reset puts the app back to its first launch. Wipe data deletes everything in its container and keeps the app installed (it then installs the same build over the app, so iOS forgets the old settings). Clean reinstall removes the app with its data and installs your last build of it again. Both first show exactly what would be removed, and nothing goes until you press the red button.
 
-AI agents can do the same with `ios_app_defaults`, `ios_app_store` and `ios_app_reset` (see [mcp.md](mcp.md)). Details: [features/app-data.md](features/app-data.md).
+AI agents can do the same with `ios_app_defaults`, `ios_app_defaults_set`, `ios_app_store` and `ios_app_reset` (see [mcp.md](mcp.md)). Details: [features/app-data.md](features/app-data.md).
 
 ### Debug my app on the iPhone
 

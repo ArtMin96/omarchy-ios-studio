@@ -3,8 +3,9 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import qs.components
-import "../Model.js" as Model
+import "../components/common"
+import "../components/projects"
+import "../lib/Model.js" as Model
 
 // Projects (projects slice): your xtool apps, Run on iPhone, .ipa builds, 7-day renewal,
 // new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:
@@ -212,7 +213,7 @@ Item {
         anchors.leftMargin: parent.contentLeftInset; anchors.rightMargin: parent.contentRightInset
         spacing: Style.spacing.xl
         Icon { glyph: Model.Glyph.phone; color: Commons.Color.accent; size: Style.font.iconLarge }
-        AppText { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: "Connect your iPhone to run apps on it. You can still build .ipa files without it." }
+        AppText { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Connect your iPhone to run apps on it. You can still build .ipa files without it." }
         ActionButton { text: "Open iPhone"; compact: true; onClicked: page.app.nav("device") }
       }
     }
@@ -236,7 +237,7 @@ Item {
           Layout.fillWidth: true
           spacing: Style.spacing.xxs
           AppText {
-            Layout.fillWidth: true; strong: true; wrapMode: Text.WordWrap
+            Layout.fillWidth: true; strong: true; wrapMode: Text.Wrap
             text: {
               var p = page.expiring[0]
               if (!p) return ""
@@ -245,7 +246,7 @@ Item {
               return p.name + " " + when + (page.expiring.length > 1 ? " (and " + Model.plural(page.expiring.length - 1, "more app") + ")" : "")
             }
           }
-          AppText { Layout.fillWidth: true; tone: "dim"; size: "small"; wrapMode: Text.WordWrap; text: "Free Apple IDs sign apps for 7 days. Re-signing reinstalls it on your iPhone; its data stays." }
+          AppText { Layout.fillWidth: true; tone: "dim"; size: "small"; wrapMode: Text.Wrap; text: "Free Apple IDs sign apps for 7 days. Re-signing reinstalls it on your iPhone; its data stays." }
         }
         ActionButton {
           text: "Re-sign now"; glyph: Model.Glyph.sync; compact: true

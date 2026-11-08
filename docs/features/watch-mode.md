@@ -86,7 +86,7 @@ A snapshot (`watch` event, `watch.json`, `watch status` data):
 
 - `state`: `watching` (idle), `changed` (waiting for the debounce, or for another build of the project), `compiling`, `ok`, `failed`, `stopped`; `watch status` says `off` when there's no recent watcher.
 - `reason`: what this snapshot is about: `started`, `changed`, `build-started`, `build-log`, `progress` (about once a second while compiling, with `progress: {fraction, detail}`), `superseding`, `superseded`, `busy`, `build-finished`, `run`, `owners`, `settings`, `stopped`.
-- `lastBuild`: the latest finished build (ok or failed; cancelled ones only count in `superseded`). `diagnostics` holds the first 5, errors first, then warnings; the whole list is in the build history (`ios_build_diagnostics(build_id='w-2')`).
+- `lastBuild`: the latest finished build (ok or failed; cancelled ones only count in `superseded`). `diagnostics` holds the first 5, errors first, then warnings; the whole list is in the build history (`ios_build_diagnostics(job_id='w-2')`).
 - `run` (auto-run): `{state: checking|building|installing|launching|launched|failed|skipped, message, buildId, forBuild, bundleId?, errorCode?}`. `buildId` is the run's own build (its own `w-N` in the history); `forBuild` is the clean compile it follows (`lastBuild.id` at the time), so the two can be shown together.
 - `mode`: `inotify`, or `poll` with `modeReason` (the inotify watch limit is reached, or inotify isn't available). See [troubleshooting](../troubleshooting.md#watch-mode-says-checking-files-every-second).
 - When stopped: `stoppedAt` and `stopReason`: `stopped` (asked), `replaced` (another project), `no-owner` (the app and agent that used it are gone), `project-gone`, `watcher-died`.
@@ -101,6 +101,10 @@ A snapshot (`watch` event, `watch.json`, `watch status` data):
 
 With `IOSSTUDIO_DEMO` set, `watch serve` watches nothing and builds nothing. It plays a loop: watching, a file changed, compiling, failed with one error (`cannot find 'habbits' in scope` at `Sources/<Project>/ContentView.swift:42:17`), changed, compiling, ok (with auto-run, "launched"), and again. Start, status and stop work as usual, in the demo runtime folder.
 
+## Code
+
+`helper/iosstudio/features/watch/`: `commands.py` (the `watch` group), `lifecycle.py` (start or join, stop, status, follow, `watch serve`), `watcher.py` (the watcher loop, its debounce/supersede scheduler and the demo watcher), `builds.py` (the `build compile|run` children and auto-run), `fswatch.py` (inotify, polling and what counts as a change), `runtime.py` (the runtime files, owners and process helpers). Stopping the watcher waits for every auto-run thread it started, so nothing writes to the runtime folder after it has stopped.
+
 ## Tests
 
-`tests/test_watch.py` and `tests/test_mcp_watch.py`, see [development.md](../development.md#running-from-source).
+`tests/helper/test_watch.py`, `tests/cli/test_watch_cli.py` and `tests/mcp/test_mcp_watch.py`, see [development.md](../development.md#tests).
