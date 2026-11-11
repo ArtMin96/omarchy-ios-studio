@@ -10,11 +10,18 @@ and project AGENTS.md naming only real tools is checked by test_agent_instructio
 from __future__ import annotations
 
 import os
+import shutil
+import struct
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import app_icon as M
 from iosstudio_mcp.tools import project_check as PC
+from support.mcp_fakes import FakeMCP
 from support.mcp_harness import FakeHelper, ToolCase, size_of
 
 PROJ = "/home/u/Developer/Glance"
@@ -161,6 +168,73 @@ class ProjectCheckNamesTheTool(ToolCase):
             {"severity": "note", "check": "icon", "message": "The app has no icon.", "file": PROJ + "/xtool.yml"}]})
         sc = await self.data(PC, "ios_project_check", project_path="Glance")
         self.assertIn("ios_project_icon", " ".join(sc["next_steps"]))
+
+
+class RealHelperRoundTrip(unittest.IsolatedAsyncioTestCase):
+    """ios_project_icon through the real helper subprocess (no fake): demo mode, then a real project in a temp
+    folder (skipped when the machine has neither Pillow nor ImageMagick for the helper)."""
+
+    FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "app-icon"
+
+    async def asyncSetUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        env = {f"XDG_{k}_HOME": str(self.tmp / k.lower()) for k in ("STATE", "CONFIG", "CACHE", "DATA")}
+        env |= {"IOSSTUDIO_RUNTIME_DIR": str(self.tmp / "run"), "IOSSTUDIO_MCP_ALLOW_PATHS": str(self.tmp)}
+        patch = mock.patch.dict(os.environ, env)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.mcp = FakeMCP()
+        M.register(self.mcp)
+        self.ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=AppState()))
+        self.image = self.tmp / "logo.png"
+        shutil.copy(self.FIXTURES / "logo-transparent.png", self.image)
+
+    def project(self, path: Path):
+        async def fake_resolve(state, project):
+            return {"name": path.name, "path": str(path)}
+        return mock.patch.object(M, "resolve_project", fake_resolve)
+
+    async def call(self, proj: Path, **kw) -> dict:
+        with self.project(proj):
+            res = await self.mcp.tools["ios_project_icon"](self.ctx, project_path=str(proj),
+                                                           image_path=str(self.image), **kw)
+        return res.structured_content
+
+    async def test_demo(self):
+        proj = Path.home() / "Developer/WeatherGlance"
+        with mock.patch.dict(os.environ, {"IOSSTUDIO_DEMO": "1"}):
+            sc = await self.call(proj, confirm=True)
+        self.assertTrue(sc["demo"])
+        self.assertFalse(sc["done"])
+        self.assertEqual(sc["target"], "Resources/AppIcon.png")
+
+    async def test_real_project(self):
+        proj = self.tmp / "Glance"
+        (proj / "Sources" / "Glance").mkdir(parents=True)
+        (proj / "Package.swift").write_text("// swift-tools-version: 6.0\n")
+        yml = "# keep me\nversion: 1\nbundleID: com.example.Glance  # id\n"
+        (proj / "xtool.yml").write_text(yml)
+
+        try:
+            dry = await self.call(proj)
+        except Exception as exc:  # noqa: BLE001 - no Pillow/ImageMagick on this machine
+            if "no-image-tool" in str(exc) or "ImageMagick" in str(exc):
+                self.skipTest("no Pillow or ImageMagick for the helper")
+            raise
+        self.assertFalse(dry["done"])
+        self.assertFalse((proj / "Resources").exists())
+        self.assertEqual((proj / "xtool.yml").read_text(), yml)
+        self.assertTrue(Path(dry["preview_path"]).is_file())
+
+        done = await self.call(proj, confirm=True)
+        self.assertTrue(done["done"])
+        self.assertFalse(done.get("check"))
+        icon = (proj / "Resources" / "AppIcon.png").read_bytes()
+        self.assertEqual(icon[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", icon[16:24]), (1024, 1024))
+        self.assertEqual((icon[24], icon[25]), (8, 2))       # 8-bit RGB, no alpha
+        self.assertEqual((proj / "xtool.yml").read_text(), yml + "iconPath: Resources/AppIcon.png\n")
 
 
 class Registration(unittest.TestCase):
