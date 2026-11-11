@@ -12,7 +12,7 @@ Nothing is overwritten. When a file already exists, only missing keys are added 
 ## Zed
 
 1. Install Zed's Swift extension: Extensions (ctrl-shift-x), search for Swift, Install. iOS Studio checks for it (`~/.local/share/zed/extensions/installed/swift`) but can't install it for you.
-2. Settings › Code editor › Zed › Set up. This only remembers Zed as your editor; Zed needs no other file.
+2. Settings › Code editor › Zed › Set up. This remembers Zed as your editor and, when the toolchain isn't on PATH, adds its paths to your Zed user settings (below); Zed needs no project file.
 3. Open the project folder itself in Zed (`zeditor ~/Developer/MyApp`), not a folder above it: SourceKit-LSP looks for `.bsp/` in the folder Zed opened.
 
 Zed needs no `.zed/settings.json`. The Swift extension starts the `sourcekit-lsp` it finds on PATH, and SourceKit-LSP finds `.bsp/xtool.json` by itself. Only when `sourcekit-lsp` isn't on PATH (a Swift toolchain unpacked somewhere else) does setup add its path to your Zed user settings, `~/.config/zed/settings.json`, after a backup:
@@ -26,6 +26,8 @@ Zed needs no `.zed/settings.json`. The Swift extension starts the `sourcekit-lsp
   }
 }
 ```
+
+For [Debug in editor](editor-debugging.md), Zed's Swift extension finds `lldb-dap` only through swiftly, xcrun or PATH, and the Swift toolchain keeps it next to `swift` and `lldb` instead. So when `lldb-dap` isn't on PATH, setup also adds `"dap": {"Swift": {"binary": "<toolchain>/usr/bin/lldb-dap"}}` to the same user settings, and Zed shows as needing setup until it's there. A `dap.Swift.binary` you set yourself is kept.
 
 The first time you open a folder, Zed asks whether to trust it ("Unrecognized Project"). Until you click **Trust and Continue**, the window is in Restricted Mode: no language servers, so no completion or errors.
 

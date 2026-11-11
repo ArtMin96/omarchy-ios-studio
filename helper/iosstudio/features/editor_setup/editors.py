@@ -19,6 +19,7 @@ from .env import (
     SETTING_KEY,
     Env,
     flatpak_installed,
+    lldb_dap_for_settings,
     load_settings,
     preferred,
     sourcekit,
@@ -35,6 +36,8 @@ NVIM_PLUGIN_REL = "lua/plugins/ios-studio-swift.lua"
 DOCS = "docs/features/editor-setup.md"
 NVIM_PLUGIN_DETAIL = "Turns on Swift completion (sourcekit-lsp) for every project. Delete the file to undo."
 SOURCEKIT_PATH_DETAIL = "Tells the editor where sourcekit-lsp is (it isn't on PATH)."
+LLDB_DAP_PATH_DETAIL = "Tells Zed where lldb-dap is, for Debug in editor (it isn't on PATH)."
+BOTH_PATHS_DETAIL = "Tells Zed where sourcekit-lsp and lldb-dap (Debug in editor) are (they aren't on PATH)."
 
 NVIM_SCAN_FILES = 300        # lua files read when looking for a sourcekit setup
 NVIM_SCAN_BYTES = 256 * 1024
@@ -77,7 +80,8 @@ def vscode_user_settings(env: Env) -> Path:
 
 # Project settings: portable (no machine paths), so .vscode/ can be committed.
 VSCODE_PROJECT_SETTINGS = {
-    # Host executables don't exist for an iPhone app; a debug launch.json is a separate step (lldb-dap)
+    # Host executables don't exist for an iPhone app; a debug launch.json comes from
+    # `debug editor-config` (features/editor_debug.py)
     "swift.autoGenerateLaunchConfigurations": False,
     # .build holds tens of thousands of files that change on every build
     "files.watcherExclude": {"**/.build/**": True},
@@ -118,6 +122,7 @@ def vscode_machine_actions(env: Env) -> list[dict]:
 # ================================================================ Zed
 # Zed needs no project file: its Swift extension starts the sourcekit-lsp it finds on PATH (else
 # lsp.sourcekit-lsp.binary.path), and sourcekit-lsp finds .bsp/xtool.json in the opened folder itself.
+# For Debug in editor it finds lldb-dap only through swiftly, xcrun or PATH (else dap.Swift.binary).
 
 def zed_installed(env: Env) -> str | None:
     for b in ("zeditor", "zed", "zedit", "zed-editor"):
@@ -136,11 +141,17 @@ def zed_extension(env: Env) -> str | None:
 
 
 def zed_machine_actions(env: Env) -> list[dict]:
-    sk = sourcekit_for_settings(env)
-    if not sk:
+    """The toolchain paths Zed's user settings need: only those that aren't on PATH."""
+    sk, dap = sourcekit_for_settings(env), lldb_dap_for_settings(env)
+    want: dict[str, Any] = {}
+    if sk:
+        want["lsp"] = {"sourcekit-lsp": {"binary": {"path": sk}}}
+    if dap:
+        want["dap"] = {"Swift": {"binary": dap}}
+    if not want:
         return []
-    return user_json_actions(env.config / "zed/settings.json", {"lsp": {"sourcekit-lsp": {"binary": {"path": sk}}}},
-                             SOURCEKIT_PATH_DETAIL)
+    what = BOTH_PATHS_DETAIL if sk and dap else SOURCEKIT_PATH_DETAIL if sk else LLDB_DAP_PATH_DETAIL
+    return user_json_actions(env.config / "zed/settings.json", want, what)
 
 
 # ================================================================ Neovim

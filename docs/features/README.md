@@ -11,6 +11,7 @@ see [guide.md](../guide.md).
 | [app-icon.md](app-icon.md) | The app icon from any image: a 1024×1024 PNG without transparency, `iconPath` in `xtool.yml` |
 | [app-data.md](app-data.md) | An app's UserDefaults and SwiftData / Core Data stores, editing a default, wipe and clean reinstall |
 | [crash-symbolication.md](crash-symbolication.md) | File and line numbers for your app's frames in crash reports |
+| [editor-debugging.md](editor-debugging.md) | Debug in editor: breakpoints in VS Code and Zed through lldb-dap |
 | [editor-setup.md](editor-setup.md) | Swift completion in Zed, Neovim and VS Code |
 | [format-lint.md](format-lint.md) | Format with swift-format, style findings from swift-format and SwiftLint |
 | [packages.md](packages.md) | Swift package dependencies: list, add by URL, update, resolve, remove |

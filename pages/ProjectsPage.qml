@@ -94,6 +94,7 @@ Item {
     if (event.text === "F" && cur) { formatSheet.openFor(cur); return true }
     if (event.text === "L" && cur) { page.lintProject(cur); return true }
     if (event.text === "P" && cur) { packagesSheet.openFor(cur); return true }
+    if (event.text === "D" && cur) { app.editorDebug.toggle(cur); return true }
     return false
   }
 

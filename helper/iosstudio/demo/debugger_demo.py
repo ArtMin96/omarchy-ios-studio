@@ -386,8 +386,98 @@ def sources(flags: dict) -> int:
                       "localBuild": f"{path}/xtool/{name}.app/{name}"})
 
 
+# ================================================================ debug in editor (no files written)
+
+def _editor_target(flags: dict) -> tuple[str, str, str]:
+    """(bundle id, app name, project path) for --project or --bundle-id."""
+    raw = flags.get("project")
+    if raw and raw is not True:
+        name = os.path.basename(str(raw).rstrip("/")) or "WeatherGlance"
+        return f"com.example.{name.lower()}", name, str(raw)
+    bid = str(flags.get("bundle_id") or "XTL-A1B2C3D4E5.com.example.weatherglance")
+    name, path = _proj(bid)
+    return bid, name, path
+
+
+def _editor_plan(name: str, path: str, editor: str | None) -> tuple[list[dict], list[str]]:
+    ids = [editor] if editor in ("vscode", "zed") else ([] if editor == "neovim" else ["vscode"])
+    notes = ["Neovim: add the nvim-dap snippet from the Debug in editor guide (docs/features/editor-debugging.md); "
+             "iOS Studio doesn't change your Neovim config."] if editor == "neovim" else []
+    cfg = f"Attach to {name} on iPhone (iOS Studio)"
+    out = []
+    for e in ids:
+        rel = ".vscode/launch.json" if e == "vscode" else ".zed/debug.json"
+        out.append({"id": e, "name": "VS Code" if e == "vscode" else "Zed", "path": f"{path}/{rel}", "state": "missing",
+                    "action": {"kind": "merge", "path": f"{path}/{rel}", "scope": "project",
+                               "detail": f"Adds “{cfg}”; every other configuration stays as it is."}})
+    return out, notes
+
+
+def editor_config(flags: dict) -> int:
+    bid, name, path = _editor_target(flags)
+    plain = bid.split(".", 1)[-1] if bid.startswith("XTL-") else bid
+    editors, notes = _editor_plan(name, path, flags.get("editor") or None)
+    return output.ok({"project": path, "bundleId": bid, "appName": name, "configName": f"Attach to {name} on iPhone (iOS Studio)",
+                      "editors": editors, "dryRun": bool(flags.get("dry_run")), "applied": False,
+                      "scriptPath": f"{HOME}/.local/state/ios-studio/editor-debug/{plain}.lldb",
+                      "notes": notes + ["Demo mode: nothing was written."]})
+
+
+def editor_status(flags: dict) -> int:
+    return output.ok({"bridges": [], "checkedAt": time.time()})
+
+
+def editor(flags: dict) -> int:
+    bid, name, path = _editor_target(flags)
+    plain = bid.split(".", 1)[-1] if bid.startswith("XTL-") else bid
+    installed = bid if bid.startswith("XTL-") else f"XTL-A1B2C3D4E5.{bid}"
+    output.event("debug", mode="editor", bundleId=bid)
+    steps = [("lldb", "Checking the debugger", "lldb version 21.0.0 (demo)")]
+    if not flags.get("no_config"):
+        steps.append(("config", "Writing the editor's debug configuration", "VS Code"))
+    for sid, title, detail in steps:
+        output.step(sid, title, "running")
+        time.sleep(subproc.demo_delay(0.25))
+        output.step(sid, title, "done", detail=detail)
+    output.step("forward", "Starting the debugger on your iPhone", "running")
+    launch = str(flags.get("launch") or "auto")
+    st, e = _daemon("debug.start", {"bundleId": installed, "launch": launch})
+    if e:
+        output.step("forward", "Starting the debugger on your iPhone", "failed", error=e)
+        output.event("done", ok=False, error=e)
+        return 1
+    st = st or {"port": 52917, "host": "127.0.0.1", "pid": 400, "launched": False, "symbolsReady": True}
+    time.sleep(subproc.demo_delay(0.4))
+    output.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
+    cfg = f"Attach to {name} on iPhone (iOS Studio)"
+    if st.get("launched"):
+        output.event("notice", id="waiting", level="info",
+                     message=f"{name} is started and waits for the debugger: start “{cfg}” in your editor now.")
+    output.event("ready", bundleId=installed, appName=name, port=st.get("port"), host=st.get("host") or "127.0.0.1",
+                 pid=st.get("pid"), launched=bool(st.get("launched")),
+                 scriptPath=f"{HOME}/.local/state/ios-studio/editor-debug/{plain}.lldb",
+                 editors=[] if flags.get("no_config") else ["vscode"], configName=cfg,
+                 symbolsReady=bool(st.get("symbolsReady")), localBuild=f"{path}/xtool/{name}.app/{name}")
+    attach_at = time.time() + subproc.demo_delay(3.0)
+    attached = False
+    inp = Stdin()
+    while True:
+        if not attached and time.time() >= attach_at:
+            attached = True
+            output.event("editor", state="attached", connections=1)
+        if any(m.get("cmd") in ("detach", "stop") or m.get("cancel") for m in inp.poll(0.15)):
+            break
+    stopped, _ = _daemon("debug.stop", {"bundleId": installed, "kill": bool(st.get("launched")) and not attached,
+                                        "pid": st.get("pid")})
+    return output.done(True, {"ended": "cancelled", "bundleId": installed, "appName": name, "pid": st.get("pid"),
+                              "launched": bool(st.get("launched")), "attached": attached,
+                              "killed": (stopped or {}).get("killed"),
+                              "scriptPath": f"{HOME}/.local/state/ios-studio/editor-debug/{plain}.lldb"})
+
+
 def run(action: str, flags: dict) -> int:
-    fn = {"check": check, "sources": sources, "backtrace": backtrace, "session": session}.get(action)
+    fn = {"check": check, "sources": sources, "backtrace": backtrace, "session": session, "editor-config": editor_config,
+          "editor": editor, "editor-status": editor_status}.get(action)
     if fn is None:
         return output.fail("usage", f"Unknown command 'debug {action}'.")
     return fn(flags)

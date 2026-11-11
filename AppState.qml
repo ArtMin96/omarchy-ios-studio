@@ -221,6 +221,7 @@ Item {
   property ProjectService projects: ProjectService { app: root }
   property LogService logs: LogService { app: root }
   property WatchService watch: WatchService { app: root }     // compile on save (one project machine-wide)
+  property EditorDebugService editorDebug: EditorDebugService { app: root }   // VS Code / Zed debugger bridges (one per project)
 
   // First run / something essential missing → open Setup once, unless the
   // user (or a deep link) already went somewhere.

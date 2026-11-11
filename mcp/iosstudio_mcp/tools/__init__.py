@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 log = logging.getLogger("iosstudio.tools")
 
 # Order matters only for on_startup hooks. A module missing from this install is skipped.
-MODULES = ["status", "projects", "build_settings", "project_check", "run_presets", "build", "jobs", "account", "toolchain", "app", "device", "logs", "crashes", "screen", "network", "metrics", "files", "debug", "console", "ui_inspect", "screenshots", "editor_setup", "watch", "format", "packages", "app_data", "app_icon"]
+MODULES = ["status", "projects", "build_settings", "project_check", "run_presets", "build", "jobs", "account", "toolchain", "app", "device", "logs", "crashes", "screen", "network", "metrics", "files", "debug", "editor_debug", "console", "ui_inspect", "screenshots", "editor_setup", "watch", "format", "packages", "app_data", "app_icon"]
 
 
 def load() -> list[ModuleType]:

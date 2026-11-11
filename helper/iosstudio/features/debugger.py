@@ -6,6 +6,12 @@
   debug session --bundle-id B [--breakpoints '<json list>'] [--launch attach|suspended|auto]
                 [--commands '<json list>'] [--stop-at-attach]
                                      stream: an interactive session; commands arrive on stdin
+  debug editor-config --project P [--editor vscode|zed|neovim] [--dry-run]
+                                     the editor's attach configuration (.vscode/launch.json, .zed/debug.json)
+  debug editor --project P | --bundle-id B [--launch auto|attach|suspended] [--udid U] [--editor E] [--no-config]
+                                     stream: hold the forward for the editor's lldb-dap until cancelled
+  debug editor-status [--bundle-id B]  the "Debug in editor" bridges running now
+  (editor_debug.py, editor_debug_bridge.py; docs/features/editor-debugging.md)
 
 How it works: the device daemon forwards the phone's debugserver to a loopback port over its own
 tunnel (`debug.start`), and helper/iosstudio/features/lldb_driver.py runs the toolchain's lldb against that port
@@ -511,4 +517,20 @@ def demo(action: str, flags: dict) -> int:
     return debugger_demo.run(action, flags)
 
 
-GROUPS = {"debug": {"check": cmd_check, "sources": cmd_sources, "backtrace": cmd_backtrace, "session": cmd_session}}
+def cmd_editor_config(flags: dict) -> int:
+    from iosstudio.features import editor_debug_bridge
+    return editor_debug_bridge.cmd_editor_config(flags)
+
+
+def cmd_editor(flags: dict) -> int:
+    from iosstudio.features import editor_debug_bridge
+    return editor_debug_bridge.cmd_editor(flags)
+
+
+def cmd_editor_status(flags: dict) -> int:
+    from iosstudio.features import editor_debug_bridge
+    return editor_debug_bridge.cmd_editor_status(flags)
+
+
+GROUPS = {"debug": {"check": cmd_check, "sources": cmd_sources, "backtrace": cmd_backtrace, "session": cmd_session,
+                    "editor-config": cmd_editor_config, "editor": cmd_editor, "editor-status": cmd_editor_status}}
