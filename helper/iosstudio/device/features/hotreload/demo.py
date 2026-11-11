@@ -33,7 +33,7 @@ def register(reg):
         await asyncio.sleep(demo_delay(0.25))
         await asyncio.sleep(demo_delay(0.05))
         generation[bid] = generation.get(bid, 0) + 1
-        ack = {"seq": seq, "ok": True, "ms": 3.1, "swapped": 3, "kept": 9, "vtable": 0, "error": None,
+        ack = {"seq": seq, "ok": True, "ms": 3.1, "swapped": 3, "kept": 9, "vtable": 0, "reverted": 0, "error": None,
                "generation": generation[bid]}
         return {"seq": seq, "bytes": size, "pushMs": 250, "acked": True, "ack": ack, "ackMs": 50}
 

@@ -1225,7 +1225,7 @@ its answer. Your own development builds only (house_arrest VendContainer, on the
 | `hotreload.runtime` | `{bundleId, udid?}` | `{present, runtime?: {version, pid, started}}` from `runtime.json`, which the runtime writes at each launch (`started` in Unix seconds tells which launch) |
 
 ```json
-{"seq": 7, "ok": true, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "error": null, "generation": 7}
+{"seq": 7, "ok": true, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "reverted": 0, "error": null, "generation": 7}
 ```
 
 - `push` writes `patch-<seq>.dylib.part`, renames it to `patch-<seq>.dylib` (the runtime only loads whole

@@ -23,7 +23,7 @@ ACK_MAX = 64 << 10            # bytes of an ack (or runtime.json) read at most
 PATCH_MAX = 256 << 20         # biggest patch pushed
 SEQ_MAX = 10 ** 9
 OURS = re.compile(r"^(patch-\d+\.dylib(\.part)?|ack-\d+\.json(\.tmp)?)$")   # what hotreload.clean removes
-ACK_INTS = ("swapped", "kept", "vtable", "generation")
+ACK_INTS = ("swapped", "kept", "vtable", "reverted", "generation")
 
 NOT_DEV = ("Hot reload works with your own apps only (built and installed from iOS Studio). "
            "This one is from the App Store.")
@@ -88,7 +88,7 @@ def _num(v, kind):
 def parse_ack(data: bytes, seq: int) -> dict:
     """The runtime's ack-<seq>.json as {seq, ok, ms, swapped, kept, vtable, error, generation}. An ack that can't
     be read (too big, not JSON) is a failed one with a plain error, never an exception."""
-    bad = {"seq": seq, "ok": False, "ms": None, "swapped": 0, "kept": 0, "vtable": 0, "generation": None,
+    bad = {"seq": seq, "ok": False, "ms": None, "swapped": 0, "kept": 0, "vtable": 0, "reverted": 0, "generation": None,
            "error": "The app's answer to this patch couldn't be read."}
     if len(data) > ACK_MAX:
         return bad
