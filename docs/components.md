@@ -22,7 +22,7 @@ Quickshell picks up new files in a `components/` folder automatically (no qmldir
 |---|---|
 | `components/common/` | widgets used by more than one area: everything documented below, plus `LogView`, `BuildDiagnosticRow`, `DiffView`, `StateView`, `PageViewport` |
 | `components/device/` | the iPhone page: `DeviceHero`, the tab views (`Device*View`), app data, `Debug*`, `PerfChart`, `Screenshot*` |
-| `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `EditorDebugBar`, `StyleWarningsSection`, its sheets |
+| `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `EditorDebugBar`, `HotReloadBar`, `HotReloadStubNote`, `StyleWarningsSection`, its sheets |
 | `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
 | `components/account/` | the Apple ID page: `AccountSignInSheet`, `AccountRevokeWarning` |
 | `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow`, `IconTile` |
@@ -82,7 +82,7 @@ PageFrame {
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
-| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService) |
+| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug`, `app.hotReload` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService; `app.hotReload`: hot reload, see HotReloadService) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths. `configDir`/`stateDir`/`cacheDir` follow `$XDG_CONFIG_HOME`/`$XDG_STATE_HOME`/`$XDG_CACHE_HOME` like the helper (`core/appdirs.py`; unset or empty = the default), so the app reads the daemon's `device.json` and the helper's `builds.json` where they were written; `app.xdgConfigHome`/`xdgStateHome`/`xdgCacheHome` are the base folders |
@@ -706,6 +706,45 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   runs shows too (`owned: false`; asked again every 15 s only while one shows and the window is focused; Stop sends
   its helper SIGTERM). An ended bridge leaves the card after 20 s; an error stays until dismissed or retried. Its
   own streams get `{"cancel": true}` when the app quits. See [features/editor-debugging.md](features/editor-debugging.md).
+- **Hot reload on the project card**: ProjectCard's prop `hrSvc` (defaults to `svc.app.hotReload`), read-only
+  `hrSetting`, `hrEntry`, `hrOn`, `hrSwitching`, `hrBlocker` and `hrTip`. The right cluster has a "Hot reload" switch
+  before More (flash glyph, label, ToggleSwitch; the whole group is one click target with the tooltip, and `H` on
+  the page toggles the highlighted card). On a card between 640 and 900 px the label hides, so the project name
+  keeps its room. The switch flips at once and shows busy while `enable`/`disable` runs. HotReloadBar follows
+  EditorDebugBar under the details, also on a collapsed card; HotReloadStubNote shows while it's off in mode stub.
+- **HotReloadBar**: a project's hot reload session, a slim strip like EditorDebugBar (raised surface; green-tinted
+  for a moment after a reload, red on a failed reload or a failed start). Props: `app`, `project`, `svc`
+  (`app.hotReload`), `startBlocker` (why Start can't run, shown as the disabled Start's tooltip). Reads
+  `svc.label(project)` (`Model.hotReloadLabel`). One row: the flash glyph, a StatusPill with the state ("Building
+  35%", "Installing", "Opening", "Watching", "Reloading", "Reloaded", "Paused", "Reload failed", "Stopped", "Not
+  running"; its slot is at least as wide as "Reloading", so the text stays put on each save), the line ("Reloaded
+  ContentView.swift · 1.6 s · 12:04:31 · 5 s ago", ticking every second only while the window is focused) and a
+  detail line, then the buttons: the error's fix (primary; hot reload's own fix actions run in the service),
+  Pause/Resume (disabled with the reason until the session watches), Stop, or Start when nothing runs, and a close
+  button on a stopped or failed-to-start bar. Under it: the build's ProgressTrack, a failed reload's blockers (≤ 3,
+  `file:line` opens the editor at the line, "and N more"), the first compiler error, and the session's notice (one
+  small line with its fix). Below 540 px (780 px when a fix shows) the buttons go under the text and the blockers.
+- **HotReloadStubNote**: one faint line when hot reload is off but views still `import HotReload` (mode stub): the
+  files (from `disable`'s `importedBy`, when this window turned it off) and Clean up (signal `cleanUp()`; the card
+  calls `setEnabled(project, false)` again, which removes the block once no file imports it).
+- **HotReloadService** (`app.hotReload`, `services/HotReloadService.qml`): one `hotreload run --project P [--udid U]
+  [--preset NAME]` Stream per project and its latest snapshot. `entries` (path → entry), `settings` (path →
+  `{enabled, mode}` from `hotreload status`), `setting(p)`, `isOn(p)`, `forProject(p)`, `label(p, nowMs)`,
+  `isLive(p)`, `liveCount`, `startBlocker(p)` (no bundle ID, generated xtool.yml not allowed, no iPhone, this
+  project building), `importedBy(p)`. Actions: `setEnabled(p, on)` / `toggle(p)` (on: `enable`, then `start` when
+  nothing blocks it; off: our stream gets `{"cancel": true}`, then `disable`, which also stops a session someone
+  else runs), `start`, `stop`, `restart` (stop, then start once it ended), `pause` / `resume` (`{"cmd": "pause" |
+  "resume"}` on our stream's stdin, else `hotreload pause|resume`), `runFix(p, fix)` (actions `hot-reload-start`,
+  `-stop`, `-restart`, `-enable`; other fixes navigate), `dismiss(p)`, `refresh()`. An entry is `{path, name, owned,
+  action: "" | enabling | disabling | starting | stopping | pausing | resuming, error, errorAction, session, at}`;
+  the state machine is `Model.hotReloadEvent` (tested in `tests/qml/tst_hot_reload.qml`). `hotreload status` is a
+  Resource (ttl 10 s): asked at start-up, when the window gets focus, when the Projects page opens and after a stop;
+  sessions another process runs show with `owned: false` and are asked again every 4 s only while one runs and the
+  window is focused. A switch flipped here wins over the status until the status agrees. A failed reload or a
+  session that ends with an error sends a desktop notification while the window isn't focused. Its own streams get
+  `{"cancel": true}` when the app quits (the session also stops when its parent goes). The Projects page handles the
+  same fix actions as deep links (`{action: "hot-reload-restart", path}`). See
+  [features/hot-reload.md](features/hot-reload.md).
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the

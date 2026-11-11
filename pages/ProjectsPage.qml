@@ -12,7 +12,9 @@ import "../lib/Model.js" as Model
 // in each card's Run menu, `w` for the highlighted one), format and lint (More › Format project… / Lint
 // project, `F` / `L` for the highlighted one: ProjectFormatSheet, style warnings in the drawer's
 // Problems), Swift packages (More › Packages…, `P`: ProjectPackagesSheet), the app icon (More › Set icon…:
-// ProjectIconSheet; deep link {action: "icon", path}) and the build drawer.
+// ProjectIconSheet; deep link {action: "icon", path}), hot reload (each card's switch, `H` for the highlighted one;
+// app.hotReload; deep links {action: "hot-reload-start" | "hot-reload-stop" | "hot-reload-restart" |
+// "hot-reload-enable", path}) and the build drawer.
 Item {
   id: page
   required property var app
@@ -37,6 +39,7 @@ Item {
     var p = params || {}
     if (svc.status === "unknown") svc.refresh()
     else svc.checkAll()            // project settings checks (skipped for ones checked in the last minute)
+    app.hotReload.refresh()
     if (p.action === "new") Qt.callLater(function() { newSheet.open() })
     else if (p.action === "renew") {
       var target = p.path ? svc.projectByPath(p.path) : (page.expiring[0] || null)
@@ -56,6 +59,12 @@ Item {
     else if (p.action === "build-settings") {
       var bp = p.path ? svc.projectByPath(p.path) : (svc.build.path ? svc.projectByPath(svc.build.path) : null)
       if (bp) Qt.callLater(function() { buildSettingsSheet.openFor(bp) })
+    }
+    else if (String(p.action || "").indexOf("hot-reload-") === 0) {
+      // A hot reload fix from elsewhere (a toast, the MCP server): its project, else the one session that shows.
+      let hp = p.path ? svc.projectByPath(p.path) : null
+      if (!hp) { const ks = Object.keys(app.hotReload.entries); if (ks.length === 1) hp = svc.projectByPath(ks[0]) }
+      if (hp) app.hotReload.runFix(hp, { action: p.action })
     }
     else if (p.action === "remove" && p.path) {
       var gone = svc.projectByPath(p.path) || { path: p.path, name: p.path.split("/").pop(), displayPath: p.path.replace(app.home, "~") }
@@ -95,6 +104,7 @@ Item {
     if (event.text === "L" && cur) { page.lintProject(cur); return true }
     if (event.text === "P" && cur) { packagesSheet.openFor(cur); return true }
     if (event.text === "D" && cur) { app.editorDebug.toggle(cur); return true }
+    if (event.text === "H" && cur) { app.hotReload.toggle(cur); return true }
     return false
   }
 
