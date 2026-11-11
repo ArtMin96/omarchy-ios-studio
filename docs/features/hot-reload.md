@@ -9,7 +9,7 @@ It's off by default and turned on per project. Only Swift code under `Sources/` 
 ## Turning it on and off
 
 <!-- TODO(verify): the switch's name, place and confirm dialog once the UI branch lands -->
-Each project card has a Hot reload switch. Turning it on sets the project up (below) and starts a session: iOS Studio builds the app, installs it, opens it and then watches your files. Turning it off stops a running session first, then takes hot reload out of the project again. Agents do the same with `ios_hot_reload_set` <!-- TODO(verify): MCP tool name --> (see [mcp.md](../mcp.md)).
+Each project card has a Hot reload switch. Turning it on sets the project up (below) and starts a session: iOS Studio builds the app, installs it, opens it and then watches your files. Turning it off stops a running session first, then takes hot reload out of the project again. Agents do the same with the tools in [Agent tools](#agent-tools).
 
 Turning it on changes two things in the project:
 
@@ -253,6 +253,17 @@ The session's build is in the build history with `trigger: "hot-reload"` and a `
 
 The device commands it uses (`hotreload.push`, `hotreload.clean`, `hotreload.runtime`) are in [deviced-protocol.md](../deviced-protocol.md#hot-reload-hotreload-used-by-the-hotreload-helper-groups-session).
 
+## Agent tools
+
+AI agents get four tools (details in [mcp.md](../mcp.md)):
+
+- `ios_hot_reload_set(project_path, enabled, dry_run=false)` turns hot reload on or off for a project and returns `mode` and the `Package.swift` diff; `dry_run=true` only shows it. Turning it off stops a running session first.
+- `ios_hot_reload_start(project_path, udid?, preset?, restart=false, job_id?)` runs a session as a job: build, install, launch, then watching. It returns once the session is watching, or a `job_id` to call again while it builds. If the app window already runs a session for the project, it reports that one instead of starting a second; `restart=true` stops it and builds again, which is the Run again of the app.
+- `ios_hot_reload_status(project_path?, after_seq?, wait_seconds=0, history=5)` returns the state, the last reload with its step timings, or the last error with its blockers and compiler errors. Each result has `last_seq`: after saving a file, pass it as `after_seq` with `wait_seconds=20` (at most 25) and the call returns when the next reload has finished. Without `project_path` it lists the sessions and the projects with hot reload on.
+- `ios_hot_reload_control(project_path, action)` pauses, resumes or stops a session, also one the app window started.
+
+A session an agent started stops when its job is cancelled or the agent's MCP server exits. Results never carry images.
+
 ## Limits
 
 <!-- TODO(verify): the app-side loading (the runtime starting, dlopen of a signed patch from Caches, the swap, the redraw) is not confirmed on a real iPhone yet; update after the CrashLab test -->
@@ -275,17 +286,19 @@ With `IOSSTUDIO_DEMO` set, `enable` and `disable` answer with the real block's d
 - `helper/iosstudio/features/hotreload/`: `commands.py` (the `hotreload` group), `project_setup.py` (the `Package.swift` block and the runtime copy), `session.py` (a session: start, scheduler, reloads), `state.py` (the runtime files, status, stop, pause and resume), `buildinfo.py` (the baseline from xtool's build records and its cache), `patch.py` (check, compile, link, sign), `checks.py` (what a reload can't change), `macho.py` (a small Mach-O reader), `signing.py` (rcodesign with xtool's identity).
 - `helper/iosstudio/device/features/hotreload/`: `hotreload.push`, `clean` and `runtime` in `real.py` and `demo.py`, shared parsing in `core.py`.
 - `helper/iosstudio/demo/hot_reload.py`: demo answers and the scripted session.
-<!-- TODO(verify): the UI and MCP files once their branches land -->
-- UI: `services/HotReloadService.qml` and `components/projects/HotReload*.qml`. MCP: `mcp/iosstudio_mcp/tools/hot_reload.py`.
+- `mcp/iosstudio_mcp/tools/hot_reload.py`: the four agent tools; a session is a job that keeps the newest snapshot.
+<!-- TODO(verify): the UI files once the UI branch lands -->
+- UI: `services/HotReloadService.qml` and `components/projects/HotReload*.qml`.
 
 ## Tests
 
-<!-- TODO(verify): the UI and MCP tests once their branches land -->
+<!-- TODO(verify): the UI tests (tests/qml) once the UI branch lands -->
 - `tests/helper/test_hot_reload_setup.py` and `tests/cli/test_hot_reload_setup_cli.py`: the block added and removed byte for byte, `off` and `stub`, the runtime copy, dry runs, a manifest that wouldn't work.
 - `tests/helper/test_hot_reload_buildinfo.py`, `test_hot_reload_patch.py`, `test_hot_reload_checks.py`, `test_hot_reload_macho.py` and `test_hot_reload_signing.py`: the pipeline against a fake xtool build and fake swiftc, ld64.lld and rcodesign, on small real object files in `tests/fixtures/hot-reload/`. Signing uses throwaway keys made with openssl and checks that no key reaches the disk.
 - `tests/helper/test_hot_reload_session.py` and `tests/cli/test_hot_reload_session_cli.py`: the scheduler, error mapping, pause and resume, the runtime files, and a real-mode session with a fake xtool and a fake device daemon.
 - `tests/helper/test_dev_hotreload.py`: the device feature with a fake house_arrest at the pymobiledevice3 boundary, and its demo twin.
 - `tests/cli/test_hot_reload_runtime.py`: the runtime package's layout and the same API in full and stub; with the iOS SDK installed, both build for iOS.
+- `tests/mcp/test_mcp_hot_reload.py`: the agent tools against a fake helper (with a fake `hotreload run` stream), and with the real helper's demo session: start, waiting for the next reload, pause, resume, stop.
 - `tests/helper/test_hot_reload_e2e.py` (slow): the whole pipeline with the real toolchain on a copy of `~/Projects/CrashLab`; skipped without it, xtool, the SDK, openssl or rcodesign.
 
 See [development.md](../development.md#tests) for how to run them and the test hooks.
