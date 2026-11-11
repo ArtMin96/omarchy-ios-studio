@@ -94,19 +94,30 @@ def sourcekit(env: Env) -> str | None:
     return env.which("sourcekit-lsp")
 
 
-def sourcekit_next_to_swift(env: Env) -> str | None:
-    """sourcekit-lsp next to the real swift binary (a toolchain that isn't on PATH as a whole)."""
+def _next_to_swift(env: Env, name: str) -> str | None:
+    """A toolchain program next to the real swift binary (a toolchain that isn't on PATH as a whole)."""
     sw = env.which("swift")
     if not sw:
         return None
-    cand = Path(os.path.realpath(sw)).parent / "sourcekit-lsp"
+    cand = Path(os.path.realpath(sw)).parent / name
     return str(cand) if cand.is_file() and os.access(cand, os.X_OK) else None
+
+
+def sourcekit_next_to_swift(env: Env) -> str | None:
+    """sourcekit-lsp next to the real swift binary."""
+    return _next_to_swift(env, "sourcekit-lsp")
 
 
 def sourcekit_for_settings(env: Env) -> str | None:
     """A sourcekit-lsp path to write into editor settings: only when it isn't on PATH (on PATH, every editor
     finds it, and a machine path in a shared settings file breaks it for others)."""
     return None if sourcekit(env) else sourcekit_next_to_swift(env)
+
+
+def lldb_dap_for_settings(env: Env) -> str | None:
+    """The toolchain's lldb-dap (next to swift and lldb) when it isn't on PATH, for "Debug in editor": Zed's
+    Swift extension finds lldb-dap only through swiftly, xcrun or PATH."""
+    return None if env.which("lldb-dap") else _next_to_swift(env, "lldb-dap")
 
 
 # ================================================================ settings: the preferred editor
