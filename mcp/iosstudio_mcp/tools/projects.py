@@ -58,6 +58,23 @@ def _detail_next(p: dict) -> list[str]:
     return out
 
 
+AgentFiles = Annotated[bool | None, Field(
+    description="Add AGENTS.md and CLAUDE.md for coding agents when missing; default follows Settings › AI agents")]
+
+
+def _agent_flag(agent_files: bool | None) -> str | None:
+    return None if agent_files is None else ("on" if agent_files else "off")
+
+
+def _changed(message: str, data: dict) -> ProjectChange:
+    """A finished create/convert, naming the agent instruction files the helper wrote (it never overwrites)."""
+    files = [str(f) for f in (data.get("agentFiles") or [])][:5]
+    if files:
+        message += f" Added {', '.join(files)} for coding agents."
+    return ProjectChange(done=True, message=message, agent_files=files, project=ProjectDetail.from_helper(data),
+                         next_steps=_detail_next(data))
+
+
 DEMO_NEXT = ["Demo mode keeps its three made-up projects. Continue with one of them, e.g. "
              "ios_build_start(project_path='HabitTracker', action='compile') (it has 2 compiler errors) or "
              "ios_run(project_path='WeatherGlance')."]
@@ -78,8 +95,7 @@ async def _creation(state: AppState, ctx: Context, job: Job, wait_seconds: float
     if _is_demo_stub(data):
         return ProjectChange(done=False, message=f"Demo mode: {name} was not really created.",
                              next_steps=DEMO_NEXT)
-    return ProjectChange(done=True, message=f"Created {data.get('name')} at {data.get('path')}.",
-                         project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
+    return _changed(f"Created {data.get('name')} at {data.get('path')}.", data)
 
 
 def register(mcp: MCPServer) -> None:
@@ -147,11 +163,12 @@ def register(mcp: MCPServer) -> None:
         directory: Annotated[str | None, Field(description="Parent folder (default: ~/Developer)")] = None,
         bundle_id: Annotated[str | None, Field(description="Default: <prefix>.<name>")] = None,
         git: Annotated[bool, Field(description="git init with a first commit")] = True,
+        agent_files: AgentFiles = None,
         wait_seconds: WaitSeconds = 20,
         job_id: OptJobId = None,
     ) -> ProjectChange:
         """Create a SwiftUI iPhone app from a template (<directory>/<name>/ with Package.swift, xtool.yml,
-        Sources/<name>/) and register it; fails if the folder exists. Next: edit sources, ios_build_start. If
+        Sources/<name>/, AGENTS.md) and register it; fails if the folder exists. Next: edit sources, ios_build_start. If
         still running after wait_seconds: done=false + job_id, call again with job_id."""
         state = get_state(ctx)
         if job_id:
@@ -167,7 +184,8 @@ def register(mcp: MCPServer) -> None:
             ids = []
         if ids and template not in ids:
             raise ToolError(f"Unknown template '{template}'. Valid ids: {', '.join(ids)} (see ios_project_templates).")
-        flags = {"name": name, "template": template, "bundle_id": bundle_id, "git": None if git else "0"}
+        flags = {"name": name, "template": template, "bundle_id": bundle_id, "git": None if git else "0",
+                 "agent_files": _agent_flag(agent_files)}
         if directory:
             d = helper.expand(directory)
             if not helper.inside_home(d):
@@ -204,21 +222,23 @@ def register(mcp: MCPServer) -> None:
         ctx: Context,
         project_path: Annotated[str, Field(description="Package with one library product and a SwiftUI @main App")],
         bundle_id: Annotated[str | None, Field(description="Default: <prefix>.<library>")] = None,
+        agent_files: AgentFiles = None,
     ) -> ProjectChange:
-        """Turn a SwiftUI Swift package into an app: writes only an xtool.yml (bundle id + product) and
-        registers it. Candidates: ios_project_list `convertible`."""
+        """Turn a SwiftUI Swift package into an app: writes an xtool.yml (bundle id + product), plus AGENTS.md
+        and CLAUDE.md when missing (never overwrites), and registers it. Candidates: ios_project_list
+        `convertible`."""
         p = existing_dir(project_path, "package folder")
         if not (p / "Package.swift").is_file() and not helper.demo_mode():
             raise ToolError("That folder has no Package.swift. Use ios_project_create for a new app.")
         if bundle_id and not BUNDLE_RE.match(bundle_id):
             raise ToolError("bundle_id must look like com.yourname.AppName.")
-        data = await helper.call("projects", "convert", {"path": str(p), "bundle_id": bundle_id})
+        data = await helper.call("projects", "convert", {"path": str(p), "bundle_id": bundle_id,
+                                                         "agent_files": _agent_flag(agent_files)})
         get_state(ctx).invalidate_projects()
         if _is_demo_stub(data):
             return ProjectChange(done=False, message="Demo mode: nothing was converted.",
                                  next_steps=DEMO_NEXT)
-        return ProjectChange(done=True, message=f"{data.get('name')} is now an app ({data.get('bundleId')}).",
-                             project=ProjectDetail.from_helper(data), next_steps=_detail_next(data))
+        return _changed(f"{data.get('name')} is now an app ({data.get('bundleId')}).", data)
 
     @tool(mcp, "Project settings", kind="write", idempotent=True)
     async def ios_project_set(

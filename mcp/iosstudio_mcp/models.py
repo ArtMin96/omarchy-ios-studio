@@ -193,6 +193,7 @@ class ProjectChange(Out):
     message: str
     job_id: str | None = Field(None, description="Still creating: call ios_project_create(job_id=...) to wait")
     project: ProjectDetail | None = None
+    agent_files: list[str] = Field(default_factory=list, description="Agent instruction files written (AGENTS.md, CLAUDE.md)")
     next_steps: list[str] = Field(default_factory=list)
 
 
