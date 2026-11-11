@@ -476,7 +476,7 @@ def test_not_installed(home, fake_tc, capsys, tmp_path):
     with FakeDeviced(Path(os.environ["IOSSTUDIO_RUNTIME_DIR"]), {"apps.list": {"apps": [{"bundleId": "com.x"}]}}):
         assert bridge.cmd_editor({"project": str(p), "no_config": True}) == 1
     ev = stream(capsys)
-    assert ev[-1]["error"]["code"] == "not-installed" and ev[-1]["error"]["fix"]["page"] == "projects"
+    assert ev[-1]["error"]["code"] == "not-installed" and not ev[-1]["error"].get("fix")
     assert not (p / ".vscode").exists()                                 # --no-config
 
 

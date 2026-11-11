@@ -121,8 +121,8 @@ async def _run(flags: dict, launch: str, bid: str, installed: bool, plain: str, 
                 apps = (await dev.request("apps.list", {"udid": udid, "icons": False}, timeout=60) or {}).get("apps") or []
                 target = match_installed(apps, bid) or ""
                 if not target:
-                    raise HelperError("not-installed", f"{app} isn't installed on your iPhone. Run it from iOS Studio "
-                                      "first.", PROJECTS_FIX)
+                    raise HelperError("not-installed", f"{app} isn't installed on your iPhone. Press Run on its card "
+                                      "first, then Debug in editor.")
             st = await dev.request("debug.start", {"bundleId": target, "launch": launch, "udid": udid}, timeout=90)
         except (DeviceError, HelperError) as exc:
             output.step("forward", title, "failed", error=exc.to_json())

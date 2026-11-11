@@ -193,7 +193,7 @@ Press `?` in the app to see these.
 | `c` | Copy the highlighted value |
 | `?` | Show or hide the shortcut sheet |
 
-Projects also has `n` (new app), `a` (add a project), `b` (build panel), `B` (Check build), `w` (watch the highlighted project for changes, or stop), `F` (format the highlighted project), `L` (lint it) and `P` (its Swift packages); the shortcut sheet lists these under Projects. On the Device log and the Console, `Space` pauses. On iPhone › Apps, `Enter` opens the highlighted app's details, `o` opens the app on the iPhone, `x` removes it and `c` copies its bundle ID; in the details `Backspace` or `Esc` goes back to the list. On iPhone › Screen › Elements, `Enter` presses the highlighted element on your iPhone, and on Audit it shows the issue's element; `s` takes a screenshot.
+Projects also has `n` (new app), `a` (add a project), `b` (build panel), `B` (Check build), `w` (watch the highlighted project for changes, or stop), `F` (format the highlighted project), `L` (lint it) `P` (its Swift packages) and `D` (Debug in editor, start or stop); the shortcut sheet lists these under Projects. On the Device log and the Console, `Space` pauses. On iPhone › Apps, `Enter` opens the highlighted app's details, `o` opens the app on the iPhone, `x` removes it and `c` copies its bundle ID; in the details `Backspace` or `Esc` goes back to the list. On iPhone › Screen › Elements, `Enter` presses the highlighted element on your iPhone, and on Audit it shows the issue's element; `s` takes a screenshot.
 
 ## Common tasks
 

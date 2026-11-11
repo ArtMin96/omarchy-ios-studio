@@ -58,7 +58,7 @@ BorderSurface {
   readonly property string debugTip: debugLive ? "Debugging in the editor already runs for this app. Stop it on the card."
     : debugBlocker !== "" ? debugBlocker
     : "Attach VS Code's or Zed's debugger to the app on your iPhone: breakpoints, stepping and variables "
-      + "in your editor. Then press F5 in the editor."
+      + "in your editor. Then press F5 in the editor. (D)"
   readonly property var lintEntry: svc ? svc.lintFor(project) : null
   readonly property string lintTip: {
     var base = "Check the code style with swift-format (and SwiftLint when it's installed). Results show in Problems. (L)"
