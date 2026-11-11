@@ -124,6 +124,7 @@ ColumnLayout {
       Layout.fillWidth: true
       diag: modelData
       projectPath: root.project.path || ""
+      app: root.svc ? root.svc.app : null
       showChip: false
       onClicked: if (root.svc) root.svc.openInEditor(root.project, modelData.file, modelData.line, modelData.col)
     }

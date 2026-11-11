@@ -521,6 +521,7 @@ PageFrame {
               anchors.fill: parent
               visible: status === Image.Ready
               source: Util.fileUrl(prow.modelData.icon)
+              cache: false      // Set icon… rewrites the same path
               sourceSize.width: Style.space(64); sourceSize.height: Style.space(64)
               fillMode: Image.PreserveAspectCrop
               asynchronous: true

@@ -234,6 +234,7 @@ Item {
             width: ListView.view.width
             diag: modelData
             projectPath: root.selected ? root.selected.path : ""
+            app: root.app
             onClicked: {
               var p = root.svc.projectFor(root.selected) || { path: root.selected.path, name: root.selected.name }
               if (root.app.projects) root.app.projects.openInEditor(p, modelData.file, modelData.line, modelData.col)
