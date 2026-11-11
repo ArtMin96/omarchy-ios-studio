@@ -6,13 +6,14 @@ mistakes first:
 
   xtool-keys          unknown or misspelled xtool.yml keys (closest valid key suggested), files it points to
   usage-descriptions  NS*UsageDescription missing from Info.plist while the sources use that feature
-  icon                iconPath: exists, is a PNG, 1024×1024, no alpha
+  icon                iconPath: exists, is a PNG, 1024×1024, no alpha (findings link to the Set icon… sheet)
   entitlements        entitlements a free Apple ID can't get (xtool drops them when signing)
   bundle-id           the bundle id is reverse-DNS with allowed characters
   version             CFBundleShortVersionString / CFBundleVersion format (when Info.plist sets them)
 
 An issue has the shape of a build diagnostic (helper/iosstudio/features/diagnostics.py) with category 'config':
-{severity: warning|note, category, check, message, file (relative to the project) | None, line | None, hint}.
+{severity: warning|note, category, check, message, file (relative to the project) | None, line | None, hint}
+(+ fix, a UI deep link, on icon findings).
 Warnings only: nothing here ever blocks a build.
 
     result = check(Path("/path/to/App"), deadline=time.monotonic() + 0.8)
@@ -132,13 +133,13 @@ HINTS = {
     "usage-noplist": "Add an Info.plist with {key} (one sentence saying why the app needs {what}) and point "
                      "infoPath in xtool.yml at it; without it iOS ends the app the first time it asks.",
     "usage-empty": "Write one sentence saying why the app needs {what}; iOS shows it in the permission prompt.",
-    "icon-missing": "Point iconPath in xtool.yml at a 1024×1024 PNG, or add the file.",
-    "icon-format": "Export the icon as a PNG: xtool only takes .png files.",
-    "icon-size": "Resize the icon to exactly 1024×1024 pixels.",
-    "icon-alpha": "Save the icon without transparency (flatten it onto a solid background): iOS fills "
-                  "transparent parts with black.",
-    "icon-none": "Add a 1024×1024 PNG without transparency and set iconPath in xtool.yml; until then the "
-                 "iPhone shows a blank icon.",
+    "icon-missing": "Choose Set icon… to make the icon from any picture, or point iconPath in xtool.yml at a "
+                    "1024×1024 PNG.",
+    "icon-format": "xtool only takes .png files: choose Set icon… to make a PNG icon from this picture.",
+    "icon-size": "The icon must be exactly 1024×1024 pixels: choose Set icon… to resize it.",
+    "icon-alpha": "iOS fills transparent parts with black: choose Set icon… to flatten the icon onto a solid "
+                  "background.",
+    "icon-none": "Choose Set icon… to make one from any picture; until then the iPhone shows a blank icon.",
     "entitlement": "A free Apple ID can't get this, so xtool leaves it out when signing and the feature won't "
                    "work on the iPhone. Remove it from the entitlements file, or sign with a paid Apple Developer "
                    "account. (Only applies to free accounts.)",
@@ -153,9 +154,17 @@ HINTS = {
 # ================================================================ helpers
 
 def _issue(check: str, message: str, hint: str, file: str | None = None, line: int | None = None,
-           severity: str = "warning") -> dict:
-    return {"severity": severity, "category": "config", "check": check, "message": message,
-            "file": file, "line": line, "hint": hint}
+           severity: str = "warning", fix: dict | None = None) -> dict:
+    out = {"severity": severity, "category": "config", "check": check, "message": message,
+           "file": file, "line": line, "hint": hint}
+    if fix:
+        out["fix"] = fix     # a deep link into the UI that fixes it (ErrorState's fix shape)
+    return out
+
+
+def icon_fix(root: Path | str) -> dict:
+    """Icon findings open the project's "Set icon…" sheet (see helper/iosstudio/features/app_icon.py)."""
+    return {"label": "Set icon…", "page": "projects", "action": "icon", "path": str(root)}
 
 
 class _Budget:
@@ -452,28 +461,29 @@ def png_info(path: Path) -> dict:
 
 
 def _check_icon(root: Path, yml: XtoolYml) -> list[dict]:
+    fx = icon_fix(root)
     rel = yml.values.get("iconPath")
     line = yml.lines.get("iconPath")
     if not rel:
         return [_issue("icon", "The app has no icon (xtool.yml has no iconPath).", HINTS["icon-none"],
-                       "xtool.yml", None, severity="note")]
+                       "xtool.yml", None, severity="note", fix=fx)]
     p = _resolve(root, rel)
     if not p.is_file():
         return [_issue("icon", f"iconPath points to {rel}, which doesn't exist.", HINTS["icon-missing"],
-                       "xtool.yml", line)]
+                       "xtool.yml", line, fix=fx)]
     try:
         info = png_info(p)
     except (OSError, struct.error):
         info = {"png": False}
     shown = _rel(root, p)
     if not info["png"] or p.suffix.lower() != ".png":
-        return [_issue("icon", f"The icon {shown} isn't a PNG file.", HINTS["icon-format"], shown)]
+        return [_issue("icon", f"The icon {shown} isn't a PNG file.", HINTS["icon-format"], shown, fix=fx)]
     out = []
     if (info["width"], info["height"]) != (1024, 1024):
         out.append(_issue("icon", f"The icon is {info['width']}×{info['height']}; it should be 1024×1024.",
-                          HINTS["icon-size"], shown))
+                          HINTS["icon-size"], shown, fix=fx))
     if info["alpha"]:
-        out.append(_issue("icon", "The icon has transparency (an alpha channel).", HINTS["icon-alpha"], shown))
+        out.append(_issue("icon", "The icon has transparency (an alpha channel).", HINTS["icon-alpha"], shown, fix=fx))
     return out
 
 

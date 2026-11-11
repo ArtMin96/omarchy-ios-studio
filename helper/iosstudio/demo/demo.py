@@ -341,7 +341,8 @@ def _config_issues(name: str) -> list[dict]:
                   "NSCameraUsageDescription, so the app crashes when it asks for access.",
                   h["usage"].format(key="NSCameraUsageDescription", what="the camera"),
                   f"Sources/{name}/ScannerView.swift", 24),
-        pc._issue("icon", "The icon has transparency (an alpha channel).", h["icon-alpha"], "Resources/AppIcon.png"),
+        pc._issue("icon", "The icon has transparency (an alpha channel).", h["icon-alpha"], "Resources/AppIcon.png",
+                  fix=pc.icon_fix(f"{PROJ_ROOT}/{name}")),
         pc._issue("entitlements", "aps-environment (push notifications) needs a paid Apple Developer account.",
                   h["entitlement"], f"{name}.entitlements", 5),
     ]
@@ -551,6 +552,9 @@ def run(group: str, action: str, flags: dict) -> int:
     if key in ("projects format", "projects format-lint"):
         from iosstudio.features import format as swift_format
         return swift_format.demo(action, flags)
+    if key in ("projects icon", "projects pick-file"):   # nothing is written in demo mode
+        from iosstudio.features import app_icon
+        return app_icon.demo(action, flags)
     if key == "projects summary":
         h = sorted(_history(), key=lambda e: e["time"])
         return ok({"lastBuild": h[-1] if h else None, "recentBuilds": list(reversed(h))[:8], "expiring": []})
