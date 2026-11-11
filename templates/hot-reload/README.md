@@ -23,7 +23,7 @@ debug. `stub` is used when hot reload is off but sources still `import HotReload
     public init()
     public var wrappedValue: Int                       // the reload generation
 }
-extension View { public func hotReloadable() -> some View }   // full debug: AnyView(self); else self
+extension View { public func hotReloadable() -> AnyView }     // AnyView(self) in full and stub
 public enum HotReload {
     public static var isActive: Bool { get }           // the loader is watching (full debug build)
     public static var generation: Int { get }          // patches applied since launch
@@ -33,7 +33,7 @@ public enum HotReload {
 ```
 
 `@ObserveHotReload var reload` holds a `@StateObject` that publishes on each reload, so the view redraws even when
-`reload` is never read. `.hotReloadable()` erases `body`'s type, so a patch may return another kind of view.
+`reload` is never read. `.hotReloadable()` erases `body`'s type to `AnyView` (it must be declared `-> AnyView`: with `-> some View` the opaque type still carries the inner view type), so a patch may return another kind of view.
 `onReload` callbacks run on the main thread and stop when the token is released.
 
 Everything is gated on `IOSSTUDIO_HOT_RELOAD`, which the package defines for the debug configuration only (C and

@@ -27,8 +27,8 @@ public struct ObserveHotReload: DynamicProperty {
 }
 
 extension View {
-    /// Returns the view itself while hot reload is off.
-    public func hotReloadable() -> some View { self }
+    /// Same signature as the full package (`AnyView`), so code keeps compiling while hot reload is off.
+    public func hotReloadable() -> AnyView { AnyView(self) }
 }
 
 final class ReloadToken: Sendable {}

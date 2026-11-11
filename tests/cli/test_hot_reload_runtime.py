@@ -67,7 +67,7 @@ def test_full_and_stub_declare_the_same_public_api():
     assert full == stub
     joined = "\n".join(full)
     for needle in ("@MainActor @propertyWrapper public struct ObserveHotReload: DynamicProperty", "public init()",
-                   "public var wrappedValue: Int", "public func hotReloadable() -> some View", "public enum HotReload",
+                   "public var wrappedValue: Int", "public func hotReloadable() -> AnyView", "public enum HotReload",
                    "public static var isActive: Bool", "public static var generation: Int",
                    "@discardableResult public static func onReload(_ body: @escaping @MainActor () -> Void) "
                    "-> AnyObject"):

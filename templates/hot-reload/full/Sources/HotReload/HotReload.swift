@@ -71,15 +71,10 @@ public struct ObserveHotReload: DynamicProperty {
 }
 
 extension View {
-    /// Lets `body` return a different kind of view after a hot reload (a debug build wraps it in `AnyView`;
-    /// a release build returns the view itself).
-    public func hotReloadable() -> some View {
-        #if IOSSTUDIO_HOT_RELOAD
-        AnyView(self)
-        #else
-        self
-        #endif
-    }
+    /// Lets `body` return a different kind of view after a hot reload. It returns `AnyView` (not `some View`):
+    /// only then is `body`'s concrete type the same before and after a structure change, which the helper's
+    /// opaque-type check requires. The stub returns `AnyView` too, so the signature never changes.
+    public func hotReloadable() -> AnyView { AnyView(self) }
 }
 
 // MARK: - Internals
