@@ -209,7 +209,7 @@ class Push(Harness):
         out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 7})
         self.assertEqual(set(out), {"seq", "bytes", "pushMs", "acked", "ack", "ackMs"})
         self.assertEqual((out["seq"], out["bytes"], out["acked"]), (7, 2_500_000, True))
-        self.assertEqual(out["ack"], {"seq": 7, "ok": True, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0,
+        self.assertEqual(out["ack"], {"seq": 7, "ok": True, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "reverted": 0,
                                       "error": None, "generation": 7})
         self.assertGreaterEqual(out["ackMs"], 100)
         self.assertLess(out["ackMs"], 2000)
@@ -329,7 +329,7 @@ class CleanAndRuntime(Harness):
 class CoreParsing(unittest.TestCase):
     def test_ack_fields_are_typed(self):
         a = hr.parse_ack(b'{"seq": 4, "ok": true, "ms": 2, "swapped": "x", "kept": 3, "generation": 2}', 4)
-        self.assertEqual(a, {"seq": 4, "ok": True, "ms": 2.0, "swapped": 0, "kept": 3, "vtable": 0, "error": None,
+        self.assertEqual(a, {"seq": 4, "ok": True, "ms": 2.0, "swapped": 0, "kept": 3, "vtable": 0, "reverted": 0, "error": None,
                              "generation": 2})
         self.assertEqual(hr.parse_ack(b'{"ok": false}', 9)["error"], "The app couldn't load this patch.")
         self.assertEqual(hr.parse_ack(b'"text"', 9)["ok"], False)
