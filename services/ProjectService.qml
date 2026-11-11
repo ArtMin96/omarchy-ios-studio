@@ -43,6 +43,9 @@ import "../lib/Model.js" as Model
 //     onDone, onFail) (dry run unless confirm) · packagesAddProduct(p, id, products, target, onDone, onFail) ·
 //     packagesChanged(p) (re-checks the card and the editor status after Package.swift changed). add, update and
 //     resolve stream; ProjectPackagesSheet runs them.
+//   app icon (`projects icon`, `projects pick-file`): pickImage(onDone(path|"")) · previewIcon(p, {image, background,
+//     fit}, onDone, onFail) (dry run: a preview PNG in the cache) · setIcon(p, opts, onDone, onFail) (writes it, toasts,
+//     refreshes the list and re-checks the card). ProjectIconSheet runs them.
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -610,6 +613,37 @@ Item {
       app.toast(d.changes && d.changes.length ? "Build settings saved for " + p.name : "Nothing changed", d.changes && d.changes.length ? "ok" : "info")
       if (onDone) onDone(d)
     }, onFail)
+  }
+
+  // ------------------------------------------------------------ app icon (`projects icon`, `projects pick-file`)
+  // opts: { image, background: "#rrggbb", fit: "auto"|"fill"|"fit" }. previewIcon is the dry run: it renders
+  // a preview PNG in the cache and changes nothing. setIcon writes the PNG and iconPath, then refreshes the
+  // list and the card's settings check. Both answer the same shape (see docs/features/app-icon.md).
+  function _iconArgv(p, opts, confirm) {
+    var argv = ["projects", "icon", "--path", _path(p), "--image", opts.image]
+    if (opts.background) argv.push("--background", opts.background)
+    if (opts.fit) argv.push("--fit", opts.fit)
+    if (confirm) argv.push("--confirm")
+    return argv
+  }
+  function previewIcon(p, opts, onDone, onFail) {
+    app.cli.call(_iconArgv(p, opts, false), "", onDone, onFail, { timeout: 150000 })
+  }
+  function setIcon(p, opts, onDone, onFail) {
+    app.cli.call(_iconArgv(p, opts, true), "", function(d) {
+      if (d && d.demo) app.toast("Demo mode: the icon would be saved to " + d.target + ", nothing was written", "info")
+      else if (d && d.check && d.check.length) app.toast("Icon saved, but the project check still has a problem with it", "warn")
+      else app.toast("New icon set for " + (p.name || "the app") + ". It shows on your iPhone after the next Run.", "ok")
+      refresh()
+      check(p)
+      if (onDone) onDone(d)
+    }, onFail, { timeout: 150000 })
+  }
+  // A file dialog for images; onDone gets the path, or "" when cancelled.
+  function pickImage(onDone) {
+    app.cli.call(["projects", "pick-file", "--kind", "image", "--title", "Choose an image for the app icon"], "",
+                 function(d) { if (onDone) onDone(d && d.path ? d.path : "") },
+                 function(e) { app.toast(Model.errorMessage(e), "warn") }, { timeout: 600000 })
   }
 
   // ------------------------------------------------------------ run presets (helper/iosstudio/features/run_presets.py)
