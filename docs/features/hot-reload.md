@@ -4,12 +4,13 @@ Hot reload puts the code you save into the app that's already running on your iP
 
 Linux has no SwiftUI previews and no Simulator, so without this every UI tweak means a full Run: build, sign, install, open the app and tap back to the screen you were on. Hot reload is the closest substitute. It works like InjectionIII: the changed files are compiled into a small library, signed with your development certificate, copied into the app's folder on the phone, and a little runtime inside the app loads it and points the app's functions at the new code.
 
-It's off by default and turned on per project. Only Swift code under `Sources/` is reloaded; anything that changes how values are laid out in memory needs a normal Run (see [What can't be hot-reloaded](#what-cant-be-hot-reloaded)).
+It's off by default and turned on per project. Only Swift code under `Sources/` is reloaded; anything that changes how values are laid out in memory needs a new build, which Run again in the hot reload bar does (see [What can't be hot-reloaded](#what-cant-be-hot-reloaded)).
 
 ## Turning it on and off
 
-<!-- TODO(verify): the switch's name, place and confirm dialog once the UI branch lands -->
-Each project card has a Hot reload switch. Turning it on sets the project up (below) and starts a session: iOS Studio builds the app, installs it, opens it and then watches your files. Turning it off stops a running session first, then takes hot reload out of the project again. Agents do the same with the tools in [Agent tools](#agent-tools).
+Each project card has a Hot reload switch in its right-hand buttons, just before ⋮ More; `H` toggles it on the highlighted card. The flash glyph, the label and the switch are one click target, with a tooltip, and there's no confirm dialog. On cards 640 to 900 px wide the word "Hot reload" is hidden and the glyph and switch stay.
+
+Turning it on sets the project up (below) and starts a session at once: iOS Studio builds the app, installs it, opens it and then watches your files. The session doesn't start when the project has no bundle ID, when its `xtool.yml` is generated and Build settings don't allow that, when no iPhone is connected, or while the project is already building; hot reload is still on then, and the bar's Start button, dimmed, says why in its tooltip. Turning it off stops a running session first, then takes hot reload out of the project again. Agents do the same with the tools in [Agent tools](#agent-tools).
 
 Turning it on changes two things in the project:
 
@@ -36,7 +37,7 @@ Every change is checked first: iOS Studio runs `swift package dump-package` on a
 Turning it off depends on your code:
 
 - If no Swift file under `Sources/` has `import HotReload`, the block and `.iosstudio/hot-reload/` are removed (mode `off`).
-- If some do, the block stays without its `linkerSettings` lines, and `.iosstudio/hot-reload/` gets the stub: the same `HotReload` module and API, but every call does nothing. That's mode `stub`. Your project keeps building, with no runtime and no linker flags in the app. The reply lists the files that import it (`importedBy`), so you can remove the imports and turn it off again to get to `off`.
+- If some do, the block stays without its `linkerSettings` lines, and `.iosstudio/hot-reload/` gets the stub: the same `HotReload` module and API, but every call does nothing. That's mode `stub`. Your project keeps building, with no runtime and no linker flags in the app. The card then shows a quiet note listing the files that still import it (`importedBy`, also in `hotreload status`); once you've removed the imports, Clean up runs the turn-off again and gets you to `off`.
 
 The runtime copy carries a version (`templates/hot-reload/version.txt` in iOS Studio). When iOS Studio comes with a newer runtime, turning hot reload on, or starting a session, copies the new one over the old.
 
@@ -66,7 +67,7 @@ struct ContentView: View {
 - `@ObserveHotReload var reload` redraws the view after each reload. You don't have to read `reload` (it's the number of reloads so far).
 - `.hotReloadable()` at the end of `body` wraps the view in `AnyView`, so a reload may change what kind of view `body` returns: add a `VStack`, swap a `Text` for a `Label`, add a modifier. Without it, iOS Studio refuses changes like that (see `opaque-type` below), because the app has the old view type built in and swapping a different one in would corrupt memory.
 
-Put both in each view you're changing. Adding them is itself a change a reload can't apply (`@ObserveHotReload` is a stored property, and `.hotReloadable()` changes the view type), so press Run once after adding them.
+Put both in each view you're changing. Adding them is itself a change a reload can't apply (`@ObserveHotReload` is a stored property, and `.hotReloadable()` changes the view type), so the first save after adding them is refused: press Run again in the hot reload bar.
 
 Without them, a reload still replaces the code, but you only see it when the view redraws for another reason (you tap something, its state changes, you go back and forth), and changes to a `body`'s view structure are refused.
 
@@ -76,12 +77,13 @@ In a release build, and with the stub, all of these do nothing: `@ObserveHotRelo
 
 ## Start, stop, pause and resume
 
-<!-- TODO(verify): the controls' names and places on the card once the UI branch lands -->
-The switch is the setting. A session is the running part: it's what builds the app, watches your files and sends each change. Turning the switch on starts one. When the switch is on but no session runs (after you reopen iOS Studio, or a session stopped), Start begins one again, and Stop ends it without turning hot reload off.
+The switch is the setting. A session is the running part: it's what builds the app, watches your files and sends each change. Turning the switch on starts one.
 
-Pause keeps the session and the app running but stops sending changes. Saves are still noticed and counted ("Paused: 2 saved files wait for resume"). Resume sends them all at once in one reload. Pausing is handy when you're halfway through an edit that won't compile yet, or want to make several changes and see them together.
+While hot reload is on, a bar under the project's details (also when the card is collapsed) shows the session: a state pill (Building, Watching, Reloading, Reloaded, Paused, Reload failed, Stopped), a line saying what happened, such as "Reloaded ContentView.swift · 2.2 s · 01:57:19 · just now", and the buttons Pause or Resume and Stop or Start. Stop ends the session without turning hot reload off; the app keeps running the last reload. When the switch is on but no session runs (after you reopen iOS Studio, or a session stopped), the bar says "Hot reload is on, but not running" and Start begins one again. A button that can't be used yet stays visible, dimmed, with the reason in its tooltip.
 
-A session ends when you stop it, when you turn hot reload off, when the app is removed from the phone, when its first build fails, or when the program that started it closes (the iOS Studio window, or the agent's MCP server). One project has at most one session; different projects can each have one.
+Pause keeps the session and the app running but stops sending changes. Saves are still noticed and counted: the bar shows "2 saved files waiting" and "ContentView.swift, ForecastView.swift reload together when you resume." Resume sends them all at once in one reload. Pause and Resume become usable once the session is watching. Pausing is handy when you're halfway through an edit that won't compile yet, or want to make several changes and see them together.
+
+A session ends when you stop it, when you turn hot reload off, when the app is removed from the phone, when its first build fails, or when the program that started it closes: quitting iOS Studio ends the sessions it started ("Stopped: the app that started hot reload has closed"), and an agent's ends with its MCP server. One project has at most one session; different projects can each have one.
 
 Starting a session stops [watch mode](watch-mode.md) for that project, since watch mode's auto-run would install the app over the running one. The session says so in a notice.
 
@@ -96,7 +98,7 @@ When a session starts, it:
 5. compiles one file in the background, so the compiler's module cache is warm before your first save;
 6. waits up to 10 s for the app's runtime to say it's running, then watches `Sources/`. If the runtime never answers, the session reports `app-not-running` and keeps watching.
 
-Saves made while that first build runs end up in the baseline, so they aren't reloaded: change the file again, or press Run.
+Saves made while that first build runs end up in the baseline, so they aren't reloaded: change the file again, or press Run again.
 
 Then each save, once you stop saving for 150 ms (and at least every 2 s if saves never pause), makes one reload:
 
@@ -112,7 +114,7 @@ Then each save, once you stop saving for 150 ms (and at least every 2 s if saves
 
 Each patch holds every file that differs from the baseline, not only the last one you saved, so the newest patch alone has all your changes and nothing is lost if one fails. A save during a reload makes exactly one more reload after it. A file you put back the way it was built is taken out of the next patch, and its functions go back to the app's own code (`reverted`). When every file matches the build again, nothing is sent ("Back to the built version"); if an earlier reload had swapped something, a `back-to-build` notice says to press Run to start the app fresh. Patch numbers keep counting across sessions of a project, so a new session never reuses an old number.
 
-Saving `Package.swift`, `xtool.yml` or another file outside Swift sources doesn't reload; the session shows a notice that it needs Run.
+Saving `Package.swift`, `xtool.yml` or another file outside Swift sources doesn't reload; the session shows a notice with a Run again button.
 
 Measured on the CrashLab test app on a busy machine: check 0.04 s, compile 0.63 s, link 0.93 s and sign 0.02 s for a warm reload, so about 1.6 s on the computer. The first reload after the warm-up took about 4 s. The warm-up itself took 16 s (up to 110 s when the machine was overloaded), and recording the baseline 0.7 s. <!-- TODO(verify): push and apply times, and the whole save-to-screen time, measured on a real iPhone -->
 
@@ -120,7 +122,7 @@ The runtime logs one line per reload, for example `[HotReload] patch 3: swapped 
 
 ## What can't be hot-reloaded
 
-A reload swaps functions. It can't change how a value is laid out in memory, which slots a class's method table has, or what type a `some View` stands for, because the running app already has values and code built around the old layout. iOS Studio checks each change before sending it and refuses these with a plain message and a Run again button. Run again builds and installs the app with your changes and starts a new baseline.
+A reload swaps functions. It can't change how a value is laid out in memory, which slots a class's method table has, or what type a `some View` stands for, because the running app already has values and code built around the old layout. iOS Studio checks each change before sending it and refuses these with a plain message and a Run again button. Run again stops the session, builds and installs the app with your changes, and starts a new session from that build.
 
 What's fine: function and method bodies, computed properties (including `body`), new functions and methods, and extensions without new conformances.
 
@@ -134,18 +136,18 @@ What's refused, by `kind` in `lastError.blockers`:
 | `enum-case` | adds, removes or reorders an enum case |
 | `class-method` | adds or removes an overridable member of a non-final class (it changes the class's method table), or a protocol requirement |
 | `generic-signature` | changes a type's declaration: its generic parameters, superclass or conformances |
-| `opaque-type` | a `some View` (or other `some`) result now has a different concrete type; end `body` with `.hotReloadable()` and Run once |
+| `opaque-type` | a `some View` (or other `some`) result now has a different concrete type; end `body` with `.hotReloadable()` and Run again once |
 | `new-file` | adds a Swift file to the module |
 | `removed-file` | deletes one |
 | `unparsed` | iOS Studio couldn't read the file well enough to be sure, so it doesn't guess |
 
 The message names the first one, for example "Adds the stored property count to ContentView. This change needs a full build." The reply lists up to 10.
 
-Two more cases need Run: an app on the phone that wasn't built with hot reload on (`not-interposable`), and a change whose functions the app calls directly rather than through the pointer table. The second isn't an error: the reload goes through, and `lastReload.notSwapped` counts the functions whose change won't show.
+Two more cases need Run again: an app on the phone that wasn't built with hot reload on (`not-interposable`), and a change whose functions the app calls directly rather than through the pointer table. The second isn't an error: the reload goes through, and `lastReload.notSwapped` counts the functions whose change won't show.
 
 ## Errors
 
-A failed reload doesn't end the session: the state becomes `failed`, `lastError` says why, and the next save tries again with all your changes. Every error has a plain message and, where it helps, a button.
+A failed reload doesn't end the session: the state becomes `failed`, `lastError` says why, and the next save tries again with all your changes. Every error has a plain message and, where it helps, a button. On the card, the bar shows the message, up to 3 blockers as `file:line` (a click opens the line in your editor) with "and N more", or the compiler's first error, the fix button, and "Still watching: fix it and save again." When the window isn't focused, a failed reload also sends a desktop notification.
 
 | Code | What it means | What to do |
 |---|---|---|
@@ -268,7 +270,7 @@ A session an agent started stops when its job is cancelled or the agent's MCP se
 
 <!-- TODO(verify): the app-side loading (the runtime starting, dlopen of a signed patch from Caches, the swap, the redraw) is not confirmed on a real iPhone yet; update after the CrashLab test -->
 - At the time of writing, everything up to the patch arriving on the phone is tested, but the app side (the runtime loading a patch and swapping functions on a real iPhone) hasn't been confirmed on a device yet.
-- Only Swift code under `Sources/` in the app's own module. Code in Swift packages, resources, asset catalogs, `Info.plist` and `xtool.yml` need Run.
+- Only Swift code under `Sources/` in the app's own module. Code in Swift packages, resources, asset catalogs, `Info.plist` and `xtool.yml` need Run again.
 - Code that's already running keeps the old version until it's called again: a running `Task`, closures and callbacks stored before the reload, and protocol witness tables built elsewhere.
 - Static initializers in a patch run again when it loads, and an Objective-C class defined in a changed file is registered twice (the system logs "implemented in both").
 - `private` and `fileprivate` functions change through the functions that call them, so the change shows once a caller is in the patch too (it is, when they're in the same file).
@@ -287,17 +289,16 @@ With `IOSSTUDIO_DEMO` set, `enable` and `disable` answer with the real block's d
 - `helper/iosstudio/device/features/hotreload/`: `hotreload.push`, `clean` and `runtime` in `real.py` and `demo.py`, shared parsing in `core.py`.
 - `helper/iosstudio/demo/hot_reload.py`: demo answers and the scripted session.
 - `mcp/iosstudio_mcp/tools/hot_reload.py`: the four agent tools; a session is a job that keeps the newest snapshot.
-<!-- TODO(verify): the UI files once the UI branch lands -->
-- UI: `services/HotReloadService.qml` and `components/projects/HotReload*.qml`.
+- UI: `services/HotReloadService.qml` (`app.hotReload`: the switch, sessions, status), `components/projects/HotReloadBar.qml` (the bar under the card), `HotReloadStubNote.qml` (the stub note), the switch in `ProjectCard.qml`, and the `hotReload*` helpers in `lib/Model.js`. Their APIs are in [components.md](../components.md).
 
 ## Tests
 
-<!-- TODO(verify): the UI tests (tests/qml) once the UI branch lands -->
 - `tests/helper/test_hot_reload_setup.py` and `tests/cli/test_hot_reload_setup_cli.py`: the block added and removed byte for byte, `off` and `stub`, the runtime copy, dry runs, a manifest that wouldn't work.
 - `tests/helper/test_hot_reload_buildinfo.py`, `test_hot_reload_patch.py`, `test_hot_reload_checks.py`, `test_hot_reload_macho.py` and `test_hot_reload_signing.py`: the pipeline against a fake xtool build and fake swiftc, ld64.lld and rcodesign, on small real object files in `tests/fixtures/hot-reload/`. Signing uses throwaway keys made with openssl and checks that no key reaches the disk.
 - `tests/helper/test_hot_reload_session.py` and `tests/cli/test_hot_reload_session_cli.py`: the scheduler, error mapping, pause and resume, the runtime files, and a real-mode session with a fake xtool and a fake device daemon.
 - `tests/helper/test_dev_hotreload.py`: the device feature with a fake house_arrest at the pymobiledevice3 boundary, and its demo twin.
 - `tests/cli/test_hot_reload_runtime.py`: the runtime package's layout and the same API in full and stub; with the iOS SDK installed, both build for iOS.
+- `tests/qml/tst_hot_reload.qml`: the `Model.hotReload*` helpers (stream events into an entry, the bar's label, pill and buttons).
 - `tests/mcp/test_mcp_hot_reload.py`: the agent tools against a fake helper (with a fake `hotreload run` stream), and with the real helper's demo session: start, waiting for the next reload, pause, resume, stop.
 - `tests/helper/test_hot_reload_e2e.py` (slow): the whole pipeline with the real toolchain on a copy of `~/Projects/CrashLab`; skipped without it, xtool, the SDK, openssl or rcodesign.
 

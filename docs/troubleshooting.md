@@ -340,13 +340,12 @@ Look at the diff image: the pink pixels are what changed. Usual causes are an an
 
 Check the project card or Logs › Console first: if the reload failed, the message says why (the entries below). If it says it reloaded:
 
-- The view has no `@ObserveHotReload var reload`. The new code is in the app, but SwiftUI only shows it when the view draws again. Add the property (and `import HotReload`), press Run once, and later saves redraw it.
+- The view has no `@ObserveHotReload var reload`. The new code is in the app, but SwiftUI only shows it when the view draws again. Add the property (and `import HotReload`), press Run again in the hot reload bar, and later saves redraw it.
 - The change is in a view that isn't on screen, or in code that only runs once (an `init`, a `.task` or `.onAppear` that already ran, a `Task` or callback created before the reload). Those keep the old code until they run again: go back and forth to the screen.
-- The reload counted functions it couldn't swap (`notSwapped` in the reload's details): the app calls them directly. Press Run.
-- The file isn't in the app's own module (code in a Swift package, a resource). Hot reload only swaps Swift files under the app's `Sources/` folder; press Run.
+- The reload counted functions it couldn't swap (`notSwapped` in the reload's details): the app calls them directly. Press Run again.
+- The file isn't in the app's own module (code in a Swift package, a resource). Hot reload only swaps Swift files under the app's `Sources/` folder; press Run again.
 
 ### "… This change needs a full build" (can't hot-reload)
-<!-- TODO(verify): the exact wording the UI shows for unsupported-change -->
 
 A reload swaps functions; it can't change how values are laid out in memory. Adding or removing a type, a stored property (`@State` and other property wrappers too), an enum case, a method of a non-final class, a conformance or a file is refused, and so is a `body` that returns a different kind of view without `.hotReloadable()`. The message names the change, for example "Adds the stored property count to ContentView." Press Run again: it builds and installs the app with the change, and the next saves reload from there. See [features/hot-reload.md](features/hot-reload.md#what-cant-be-hot-reloaded) for every kind.
 
