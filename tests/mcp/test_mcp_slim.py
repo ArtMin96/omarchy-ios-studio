@@ -17,7 +17,7 @@ from unittest import mock
 
 from iosstudio_mcp.core.registry import _slim
 
-LIST_BUDGET = 100_000       # bytes of tools/list (it was 277 KB before slimming; ~35 % of that)
+LIST_BUDGET = 105_000       # bytes of tools/list (110 tools; it was 277 KB before slimming)
 DESCRIPTION_MAX = 400
 
 

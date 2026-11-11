@@ -116,7 +116,8 @@ def register(mcp: MCPServer) -> None:
             nxt.append("No projects yet: ios_project_templates, then ios_project_create.")
         elif ready:
             nxt.append("Ready. Build with ios_build_start(project_path, action='compile') or build+install+launch "
-                       "with ios_run(project_path).")
+                       "with ios_run(project_path); for UI work, ios_hot_reload_start(project_path) puts each "
+                       "saved Swift change on the iPhone in seconds.")
         return StatusReport(
             ready=ready, toolchain=tc_title, toolchain_ready=tc_ready, signed_in=signed_in,
             apple_id=account.get("appleId") if isinstance(account, dict) else None,
