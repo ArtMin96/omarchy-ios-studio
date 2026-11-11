@@ -13,7 +13,7 @@ from pathlib import Path
 
 from iosstudio.core import appdirs, output, subproc
 from iosstudio.core.output import HelperError, fix
-from iosstudio.features import build_settings, run_presets
+from iosstudio.features import agent_instructions, build_settings, run_presets
 from iosstudio.features.projects import model, store
 
 TUI_EDITORS = {"nvim", "vim", "vi", "nano", "micro", "hx", "helix", "emacs"}
@@ -170,6 +170,11 @@ def cmd_set(flags: dict) -> int:
 # ================================================================ projects: the list itself
 
 def cmd_add(flags: dict) -> int:
+    return output.ok(_add(flags))
+
+
+def _add(flags: dict) -> dict:
+    """Put an xtool app on the list (and take it off the hidden list); its project_info."""
     p = model.require_path(flags)
     if not model.is_project(p):
         if (p / "Package.swift").is_file():
@@ -183,7 +188,7 @@ def cmd_add(flags: dict) -> int:
             state["added"].append(sp)
         if sp in state["hidden"]:
             state["hidden"].remove(sp)
-    return output.ok(model.project_info(p, state=state))
+    return model.project_info(p, state=state)
 
 
 def cmd_remove(flags: dict) -> int:
@@ -219,14 +224,26 @@ def cmd_templates(flags: dict) -> int:
 
 
 def cmd_new(flags: dict) -> int:
-    dest, tmpl_id, used_xtool = model.create_app(flags)
-    return output.ok({**model.project_info(dest), "template": tmpl_id, "usedXtool": used_xtool})
+    dest, tmpl_id, used_xtool, agent_files = model.create_app(flags)
+    return output.ok({**model.project_info(dest), "template": tmpl_id, "usedXtool": used_xtool,
+                      "agentFiles": agent_files})
 
 
 def cmd_convert(flags: dict) -> int:
+    """Make a Swift package an app (writes xtool.yml) and add it. A folder that already has xtool.yml is just
+    added. Either way the agent instruction files go in when wanted and missing: converting is the moment the
+    folder becomes an iOS Studio project, and an existing AGENTS.md / CLAUDE.md is never touched."""
     p = model.require_path(flags)
-    if (p / "xtool.yml").exists():
-        return cmd_add(flags)
+    if not (p / "xtool.yml").exists():
+        _write_xtool_yml(p, flags)
+    info = _add({"path": str(p)})
+    files = []
+    if agent_instructions.wanted(flags):
+        files = agent_instructions.write(p, str(info.get("name") or p.name), str(info.get("bundleId") or "(not set in xtool.yml yet)"))
+    return output.ok({**info, "agentFiles": files})
+
+
+def _write_xtool_yml(p: Path, flags: dict) -> None:
     libs = model.package_info(p / "Package.swift").get("libraries") or []
     if len(libs) != 1:
         raise HelperError("not-convertible", "To become an app, the package needs exactly one library product (the app).")
@@ -234,7 +251,6 @@ def cmd_convert(flags: dict) -> int:
     bundle = flags.get("bundle_id") if isinstance(flags.get("bundle_id"), str) else f"{prefix}.{libs[0]}"
     (p / "xtool.yml").write_text(f"version: 1\nbundleID: {bundle}\nproduct: {libs[0]}\n")
     model.write_editor_files(p)
-    return cmd_add({"path": str(p)})
 
 
 # ================================================================ projects: editor, file manager, folder picker

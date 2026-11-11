@@ -341,7 +341,17 @@ Card {
     }
   }
 
-  // ---------------------------------------------------------------- demo + safety
+  // ---------------------------------------------------------------- new projects, demo + safety
+  SettingRow {
+    title: "Add agent instructions to new apps"
+    description: "New and converted projects get AGENTS.md and CLAUDE.md, which tell coding agents to build through iOS Studio instead of Xcode. Existing files are never changed."
+    ToggleSwitch {
+      id: instructionsToggle
+      checked: root.app.settings.agentInstructions !== false
+      onToggled: root.app.setSetting("agentInstructions", !instructionsToggle.checked)
+    }
+  }
+
   SettingRow {
     title: "Connect in demo mode"
     description: "Tools you connect next see a made-up iPhone, Apple ID and projects, so you can try things out without changing anything real."

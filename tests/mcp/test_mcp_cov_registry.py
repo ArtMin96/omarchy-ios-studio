@@ -90,7 +90,7 @@ class Prompts(unittest.IsolatedAsyncioTestCase):
 
     async def test_listed_with_their_arguments(self):
         listed = {p.name: p for p in await self.mcp.list_prompts()}
-        self.assertEqual(set(listed), {"fix_build_errors", "diagnose_crash", "new_app", "get_ready"})
+        self.assertEqual(set(listed), {"fix_build_errors", "diagnose_crash", "new_app", "get_ready", "verify_change"})
         self.assertEqual([(a.name, a.required) for a in listed["fix_build_errors"].arguments], [("project", True)])
         self.assertEqual({a.name: a.required for a in listed["new_app"].arguments}, {"name": True, "template": False})
         self.assertFalse(listed["get_ready"].arguments)

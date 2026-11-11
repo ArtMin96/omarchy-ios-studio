@@ -127,7 +127,8 @@ Item {
       if (d.isPackage) {
         app.confirm({
           title: "Make this package an iPhone app?",
-          message: "This Swift package has no xtool.yml yet. iOS Studio can add one (with a bundle ID), so it builds as an app. Your code isn't changed.",
+          message: "This Swift package has no xtool.yml yet. iOS Studio can add one (with a bundle ID), so it builds as an app. Your code isn't changed."
+                   + (app.settings.agentInstructions !== false ? "\n\nAGENTS.md and CLAUDE.md are added too if the folder doesn't have them, so coding agents build through iOS Studio." : ""),
           confirmText: "Add xtool.yml",
           glyph: Model.Glyph.package,
           onConfirm: function() { svc.convert(d.path) }

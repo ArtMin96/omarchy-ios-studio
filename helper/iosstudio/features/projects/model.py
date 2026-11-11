@@ -9,7 +9,7 @@ from typing import Any
 
 from iosstudio.core import appdirs, fileio, subproc, xtool_yml
 from iosstudio.core.output import HelperError, fix
-from iosstudio.features import build_settings, run_presets
+from iosstudio.features import agent_instructions, build_settings, run_presets
 from iosstudio.features.projects import store
 
 TEMPLATES = appdirs.REPO / "templates"
@@ -288,9 +288,10 @@ let package = Package(
     (dest / ".gitignore").write_text(".DS_Store\n/.build\n/Packages\nxcuserdata/\nDerivedData/\n.swiftpm/\n/xtool\n/.bsp\n")
 
 
-def create_app(flags: dict) -> tuple[Path, str, bool]:
-    """`projects new`: a new app from a template (xtool new, else a built-in skeleton), git-initialised and
-    added to the list. Returns (folder, template id, whether xtool made the skeleton)."""
+def create_app(flags: dict) -> tuple[Path, str, bool, list[str]]:
+    """`projects new`: a new app from a template (xtool new, else a built-in skeleton), with agent instructions
+    (when wanted), git-initialised and added to the list. Returns (folder, template id, whether xtool made the
+    skeleton, the agent instruction files written)."""
     name = str(flags.get("name") or "").strip()
     if not NAME_RE.match(name):
         raise HelperError("bad-name", "App names start with a letter and use only letters, numbers and _ (no spaces).")
@@ -328,6 +329,8 @@ def create_app(flags: dict) -> tuple[Path, str, bool]:
         (src_dir / target).write_text(f.read_text().replace("{{NAME}}", name))
     yml = dest / "xtool.yml"
     yml.write_text(xtool_yml.set_key(yml.read_text() if yml.exists() else "version: 1\n", "bundleID", bundle))
+    # before the first commit, so they're in it
+    agent_files = agent_instructions.write(dest, name, bundle) if agent_instructions.wanted(flags) else []
 
     git = shutil.which("git")
     if git and not (dest / ".git").exists() and flags.get("git", True) not in ("0", "false", "no"):
@@ -343,7 +346,7 @@ def create_app(flags: dict) -> tuple[Path, str, bool]:
         # marks it as made by iOS Studio: editor files (.vscode/) are only written by themselves into these
         state["meta"].setdefault(str(dest), {})["createdFrom"] = tmpl_id
     write_editor_files(dest)
-    return dest, tmpl_id, used_xtool
+    return dest, tmpl_id, used_xtool, agent_files
 
 
 def write_editor_files(p: Path) -> None:

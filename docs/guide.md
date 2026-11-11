@@ -122,8 +122,8 @@ Packet capture needs a USB cable, because the phone only shares its traffic over
 
 Your apps. iOS Studio looks for xtool projects (a folder with `Package.swift` and `xtool.yml`) in your project folders, which you set in Settings.
 
-- New app (`n`) creates an app from a template: a simple SwiftUI app, a tabs app, or a list with a detail screen.
-- The folder button (`a`) adds a project you already have. A plain Swift package can be turned into an app; iOS Studio adds an `xtool.yml` and leaves your code alone.
+- New app (`n`) creates an app from a template: a simple SwiftUI app, a tabs app, or a list with a detail screen. It also gets `AGENTS.md` and `CLAUDE.md`, which tell coding agents to build through iOS Studio instead of Xcode (see [Connect an AI agent](#connect-an-ai-agent)).
+- The folder button (`a`) adds a project you already have. A plain Swift package can be turned into an app; iOS Studio adds an `xtool.yml` (and `AGENTS.md` and `CLAUDE.md` when they're missing) and leaves your code alone.
 - Run builds the app, signs it, installs it on your iPhone and opens it, with its output shown in Logs › Console. It needs a connected iPhone; without one, Run takes you to the iPhone page.
 - The arrow next to Run picks a run preset: launch arguments, environment variables and a language that Run opens the app with. A card with one selected says "Runs with German" after the bundle ID (see [Run with a preset](#run-with-a-preset-language-arguments-environment)).
 - The same menu turns on Watch for changes (`w`): the project compiles each time you save, and the card shows how it went ("Watching · compiled 12 s ago", "Compiling…", "Watching · 2 errors"). Click that text to open the problems. See [Compile on save](#compile-on-save-watch-mode).
@@ -167,7 +167,7 @@ Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ips
 - Default iPhone, for when more than one is connected.
 - Notifications for a finished build, a connected iPhone or signing that's about to expire. They only appear while you're in another window.
 - Re-sign apps automatically: adds a background job that checks once a day at 10:00 and renews the apps you marked with Auto-renew. See [Renew before the 7 days run out](#renew-before-the-7-days-run-out).
-- AI agents: connects coding agents such as Claude Code to iOS Studio. See [AI agents](#connect-an-ai-agent) below.
+- AI agents: connects coding agents such as Claude Code to iOS Studio, and Add agent instructions to new apps (on by default). See [AI agents](#connect-an-ai-agent) below.
 - Open with Super + Shift + I adds a shortcut to `~/.config/hypr/bindings.lua`. iOS Studio backs up the file first and undoes the change if Hyprland rejects it.
 - Window: tile like other apps, or open as a floating window.
 - Opaque window (on by default) keeps the window solid so text is easier to read. Turn it off to use Omarchy's slightly see-through windows.
@@ -491,3 +491,5 @@ Packages that ship prebuilt binaries for Apple platforms only, or that need macO
 3. Press Connect next to your tool, then start a new session in that tool.
 
 Ask the agent something like "Check that iOS development is ready" or "Build HabitTracker and fix the errors". Signing in, pairing and turning on Developer Mode stay with you: the agent opens iOS Studio on the right page and asks you to do it there. Turn on Connect in demo mode to let an agent try things on made-up data first. [mcp.md](mcp.md) has the details and manual setup.
+
+New and converted projects get an `AGENTS.md` and a `CLAUDE.md`. They tell agents there's no Mac or Simulator here and how to check a change with iOS Studio's tools, so the agent doesn't try `xcodebuild` first. Existing files are never changed. Turn off Add agent instructions to new apps in Settings › AI agents if you don't want them. See [features/agent-instructions.md](features/agent-instructions.md).

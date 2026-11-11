@@ -57,6 +57,7 @@ helper/
       screenshots.py         group `screenshots`: baselines and visual diffs
       format.py              `projects format` / `format-lint`: swift-format and SwiftLint
       build_settings.py, run_presets.py, project_check.py, diagnostics.py   used by projects/
+      agent_instructions.py  AGENTS.md / CLAUDE.md for `projects new` and `projects convert` (never overwrites)
       app_data.py            plist <-> JSON, store summaries and rows, reset plans (shared with the daemons)
       ui_inspect.py          UI inspection without a device (shared with device/features/ui/)
       crash_symbols.py       keeps each build's binary + dSYM, resolves crash frames to file:line
@@ -85,7 +86,7 @@ mcp/
   pyproject.toml         its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                   ios-studio (launcher), iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-templates/             Swift app templates used by New app
+templates/             Swift app templates used by New app; agent-instructions/ holds AGENTS.md and CLAUDE.md for new projects
 tests/                 helper/, cli/, mcp/, qml/, e2e/, support/ (shared fakes), fixtures/<area>/
 pyproject.toml         dev tools only (pytest and ruff config, the dev dependency group); not a package
 install.sh             launcher integration (and --uninstall)

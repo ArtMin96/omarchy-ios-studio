@@ -562,6 +562,9 @@ def run(group: str, action: str, flags: dict) -> int:
                    "saved": False, "dryRun": True, "suggested": None, "openFilesError": None})
     if key == "projects presets":   # answers as if saved, but nothing changes in demo mode
         return _presets_cmd(flags)
+    if key in ("projects new", "projects convert"):   # nothing is written in demo mode; the files it would add
+        from iosstudio.features import agent_instructions
+        return ok({"demo": True, "agentFiles": list(agent_instructions.FILES) if agent_instructions.wanted(flags) else []})
     if key == "projects autorenew":
         return ok({"installed": False, "unit": "ios-studio-renew.timer", "enabled": False, "next": None, "last": None, "projects": []})
     if key == "build history":

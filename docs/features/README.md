@@ -6,6 +6,7 @@ see [guide.md](../guide.md).
 
 | Page | Feature |
 |---|---|
+| [agent-instructions.md](agent-instructions.md) | `AGENTS.md` and `CLAUDE.md` in new and converted projects, the `verify_change` prompt |
 | [app-console.md](app-console.md) | What your app prints (`print()`, stdout and stderr) in Logs › Console and `ios_app_console_read` |
 | [app-data.md](app-data.md) | An app's UserDefaults and SwiftData / Core Data stores, editing a default, wipe and clean reinstall |
 | [crash-symbolication.md](crash-symbolication.md) | File and line numbers for your app's frames in crash reports |
