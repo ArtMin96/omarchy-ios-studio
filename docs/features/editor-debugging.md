@@ -2,6 +2,31 @@
 
 Press F5 in VS Code (or start the debug task in Zed) and the editor's debugger attaches to your app on the iPhone. Breakpoints set in the editor stop the app, and the editor shows the stack, variables, stepping and its debug console. iOS Studio prepares everything the editor can't do by itself on Linux: the tunnel to the phone, the phone's debugserver and the DeviceSupport symbols. The editor's own debug adapter, `lldb-dap` from the Swift toolchain, does the debugging.
 
+## In iOS Studio
+
+On the Projects page, open a project card's More (⋯) and click **Debug in editor**, next to Open in editor. The
+first time, iOS Studio adds the editor's debug configuration to the project. A strip under the card's details then
+shows how it goes, also when the card is collapsed:
+
+- **Starting the debugger…** with a spinner while iOS Studio checks the debugger, writes the configuration and
+  connects to the debugger on your iPhone.
+- **Waiting for VS Code · press F5 on “Attach to MyApp on iPhone (iOS Studio)”** once the editor can attach (for
+  Zed: start it from the debug panel; "your editor" when several are set up). If the app wasn't running, iOS Studio
+  started it paused and the strip adds that it waits for the debugger.
+- **VS Code is attached · the app pauses at breakpoints** (green) while the editor is connected.
+- **VS Code detached · press F5 … to attach again** after the editor's session ends. The bridge keeps running.
+- **Stop** ends it (and the editor's session, if one is attached). The strip then says why it ended (stopped, the
+  app exited, after 2 hours) and leaves the card after 20 seconds, or when you close it.
+- Notices from the helper (no debug symbols, no build of the app on this computer) show as quiet lines under it.
+- An error (the app isn't installed, another debugger is attached, the toolchain has no lldb-dap) shows its message
+  with its fix button and Try again.
+
+The button is disabled, with the reason in its tooltip, while there's no iPhone, the project has no bundle ID, or a
+bridge already runs for it. A bridge that's still running when iOS Studio starts (from another window or before a
+restart) shows on its card too, and its Stop works the same. Quitting iOS Studio stops the bridges it started.
+The UI is `services/EditorDebugService.qml` (`app.editorDebug`) and `components/projects/EditorDebugBar.qml`; the
+states come from `Model.editorDebugEvent` in `lib/Model.js` (`tests/qml/tst_editor_debug.qml`).
+
 ## How it works
 
 1. **The editor's debug configuration, once per project.** iOS Studio adds one configuration named "Attach to <App> on iPhone (iOS Studio)" to `.vscode/launch.json` (VS Code) or `.zed/debug.json` (Zed). Nothing else in the project is written. Every configuration and comment already in those files stays byte for byte (they're JSON with comments, edited as text). If our entry is already there and current, nothing changes. If it's outdated, only our entry is replaced. The configuration has a single attach command, which reads the app's *attach file*. It names that file relative to your home folder, so the project carries no machine path and can be committed.
