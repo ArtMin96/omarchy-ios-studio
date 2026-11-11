@@ -49,6 +49,8 @@ helper/
                              builds.py, lifecycle.py, runtime.py (lock/status files), commands.py
       packages/              group `packages`: manifest.py, manifest_edit.py, add.py, update.py, project.py, swift.py,
                              demo_mode.py, commands.py
+      hotreload/             group `hotreload` (hot reload on the iPhone): project_setup.py (the Package.swift block), session.py,
+                             state.py (runtime files), buildinfo.py (baseline), patch.py, checks.py, macho.py, signing.py, commands.py
       editor_setup/          group `editor`: editors.py (once per machine), project.py (per project), actions.py, env.py, demo.py
       agents/                group `agents` (connect the MCP server to AI tools): clients.py, writers.py, server.py, rpc.py, demo.py
       account.py             group `account` (xtool)
@@ -65,7 +67,7 @@ helper/
       crash_symbols.py       keeps each build's binary + dSYM, resolves crash frames to file:line
       config_files.py        edits other programs' config files without losing anything
       xip_version.py         the Xcode version inside a .xip, without unpacking it
-    demo/                  the helper's demo mode: demo.py (router + made-up answers), demo_art.py, debugger_demo.py
+    demo/                  the helper's demo mode: demo.py (router + made-up answers), demo_art.py, debugger_demo.py, hot_reload.py
     device/                the device daemon, its broker and client
       protocol.py            the wire format (JSON lines, errors)
       backend.py             the Backend base class: what the broker calls on a daemon
@@ -76,7 +78,7 @@ helper/
       real/                  the real daemon: daemon.py (session, tunnel, dispatch, --serve/--once), core.py (what features import)
       demo/                  the made-up iPhone: daemon.py (DemoBackend), core.py (its shared state)
       features/<name>/       real.py + demo.py (+ core.py and helpers): appdata, apps (index.py = AppIndex, lookup.py,
-                             install.py), cameratest, conditions, console, crashes, ddi, debug, files, location, metrics
+                             install.py), cameratest, conditions, console, crashes, ddi, debug, files, hotreload, location, metrics
                              (stats.py), mirror, pairing, pcap, profiles, screen, syslog, ui
 mcp/
   iosstudio_mcp/         the MCP server (see mcp.md#for-tool-authors)
@@ -88,7 +90,8 @@ mcp/
   pyproject.toml         its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                   ios-studio (launcher), iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-templates/             Swift app templates used by New app; agent-instructions/ holds AGENTS.md and CLAUDE.md for new projects
+templates/             Swift app templates used by New app; agent-instructions/ holds AGENTS.md and CLAUDE.md for new projects;
+                       hot-reload/ is the runtime package hot reload copies into a project (bump version.txt when it changes)
 tests/                 helper/, cli/, mcp/, qml/, e2e/, support/ (shared fakes), fixtures/<area>/
 pyproject.toml         dev tools only (pytest and ruff config, the dev dependency group); not a package
 install.sh             launcher integration (and --uninstall)
@@ -126,7 +129,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py; its `editor*` actions in editor_debug.py and editor_debug_bridge.py, see [features/editor-debugging.md](features/editor-debugging.md)), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/) and `packages` (features/packages/). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
+Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py; its `editor*` actions in editor_debug.py and editor_debug_bridge.py, see [features/editor-debugging.md](features/editor-debugging.md)), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/), `packages` (features/packages/) and `hotreload` (features/hotreload/, see [features/hot-reload.md](features/hot-reload.md)). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -264,6 +267,8 @@ run's folder rotates out too) and sets `IOSSTUDIO_DEMO_DELAY=0`. Shared fakes ar
 or output where the code reads it (`mock.patch.object(appdirs, "STATE_DIR", …)`). No test needs xtool, pymobiledevice3,
 an iPhone or your home folder; tests that use Swift, `swift-format` or `llvm-symbolizer` skip without them.
 
+Hot reload's tests (listed in [features/hot-reload.md](features/hot-reload.md#tests)) use these hooks: `IOSSTUDIO_HOT_RELOAD_TEMPLATES` replaces `templates/hot-reload/` (stand-in runtime packages), `IOSSTUDIO_XTOOL_DATA` replaces xtool's data folder `~/.config/xtool/data` (a throwaway signing identity made with openssl, never yours), `IOSSTUDIO_RCODESIGN` is the rcodesign to run (a fake), and `IOSSTUDIO_SWIFT` the `swift` that checks `Package.swift` (shared with the packages feature). `IOSSTUDIO_E2E_CRASHLAB` points `tests/helper/test_hot_reload_e2e.py` at an already built copy of CrashLab, which it edits in place, to skip the first build of about 4 minutes.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `main` and by hand (Actions › CI › Run workflow). A newer push to the same branch cancels the older run. It has three jobs:
@@ -324,6 +329,9 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
 | Debug in editor: each app's attach file (`<bundle id>.lldb`), its running bridge (`<bundle id>.json`) and the lldb commands they load (the newest 20 apps) | `~/.local/state/ios-studio/editor-debug/` |
+| Hot reload: each project's baseline (build commands, sources and objects as built, the app's executable) and its signed patches (the newest 10); 300 MB in all, the oldest projects go first | `~/.cache/ios-studio/hot-reload/<key>/` (key: the first 12 hex digits of the SHA-1 of the project path) |
+| Hot reload in a project: the runtime package (or its no-op stub) and a `.gitignore` of `*`; the managed block at the end of `Package.swift` | `<project>/.iosstudio/hot-reload/` |
+| Hot reload sessions: `hotreload-<key>.lock`, `hotreload-<key>.json` (snapshot and the last 20 reloads), `hotreload-<key>-control.json` (pause/resume); a stopped session's files go after 24 hours | `$XDG_RUNTIME_DIR/ios-studio/` (same base as watch mode) |
 | Watch mode (lock, status, events, owners, log; demo mode uses `ios-studio-demo/`) | `$XDG_RUNTIME_DIR/ios-studio/watch*` (`$IOSSTUDIO_RUNTIME_DIR` overrides the base; without `XDG_RUNTIME_DIR`, `/run/user/<uid>` when it's yours, else `/tmp/ios-studio-<uid>`: `device/client.py: runtime_base()`, shared with the device daemon) |
 | Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
 | Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |

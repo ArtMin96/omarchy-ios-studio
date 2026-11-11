@@ -14,6 +14,7 @@ see [guide.md](../guide.md).
 | [editor-debugging.md](editor-debugging.md) | Debug in editor: breakpoints in VS Code and Zed through lldb-dap |
 | [editor-setup.md](editor-setup.md) | Swift completion in Zed, Neovim and VS Code |
 | [format-lint.md](format-lint.md) | Format with swift-format, style findings from swift-format and SwiftLint |
+| [hot-reload.md](hot-reload.md) | Hot reload on the iPhone: saved Swift code swapped into the running app, what can't be reloaded |
 | [packages.md](packages.md) | Swift package dependencies: list, add by URL, update, resolve, remove |
 | [project-build-settings.md](project-build-settings.md) | Projects that build through their own scripts: prebuild command, environment, open-file limit |
 | [project-check.md](project-check.md) | Config mistakes found before building (`xtool.yml` keys, usage descriptions, icon, entitlements) |

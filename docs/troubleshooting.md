@@ -334,6 +334,34 @@ The error says which rule it breaks: a name longer than 40 characters or already
 
 Look at the diff image: the pink pixels are what changed. Usual causes are an animation or a spinner caught mid-move, a blinking cursor, a date or time inside the app (only the status bar is ignored), or content that loads late. Wait for the screen to settle before comparing, raise the threshold a little, or ignore a busy area (`--mask` for the helper). `size-mismatch` means the screenshot comes from another iPhone model or orientation than the baseline: save a baseline for that phone. Without Pillow a full-size compare takes a second or two; see [features/screenshot-compare.md](features/screenshot-compare.md#speed-and-pillow).
 
+## Hot reload
+
+### I saved, but the change didn't show up
+
+Check the project card or Logs › Console first: if the reload failed, the message says why (the entries below). If it says it reloaded:
+
+- The view has no `@ObserveHotReload var reload`. The new code is in the app, but SwiftUI only shows it when the view draws again. Add the property (and `import HotReload`), press Run once, and later saves redraw it.
+- The change is in a view that isn't on screen, or in code that only runs once (an `init`, a `.task` or `.onAppear` that already ran, a `Task` or callback created before the reload). Those keep the old code until they run again: go back and forth to the screen.
+- The reload counted functions it couldn't swap (`notSwapped` in the reload's details): the app calls them directly. Press Run.
+- The file isn't in the app's own module (code in a Swift package, a resource). Hot reload only swaps Swift files under the app's `Sources/` folder; press Run.
+
+### "… This change needs a full build" (can't hot-reload)
+<!-- TODO(verify): the exact wording the UI shows for unsupported-change -->
+
+A reload swaps functions; it can't change how values are laid out in memory. Adding or removing a type, a stored property (`@State` and other property wrappers too), an enum case, a method of a non-final class, a conformance or a file is refused, and so is a `body` that returns a different kind of view without `.hotReloadable()`. The message names the change, for example "Adds the stored property count to ContentView." Press Run again: it builds and installs the app with the change, and the next saves reload from there. See [features/hot-reload.md](features/hot-reload.md#what-cant-be-hot-reloaded) for every kind.
+
+### "Your app didn't take the change: it isn't running on your iPhone"
+
+The patch reached the phone, but the app didn't answer within 5 s. It's closed, iOS suspended it in the background, or the app on the phone is a build without hot reload (installed from somewhere else, or before you turned it on). Open the app on the phone and save again: each reload has all your changes, so nothing is lost. If it's open and still doesn't answer, press Run again.
+
+### "The app couldn't load the change" (load-failed)
+
+The app got the patch but iOS refused to load it. The message ends with the system's reason. Most often it's code signing: iOS only loads a patch signed by the same team as the app, so it fails when the app on the phone was signed with another Apple ID. Press Run again so the app and its patches are signed with the Apple ID you're signed in with now. If it keeps failing, check the Apple ID page for a revoked or expired certificate.
+
+### "The hot reload lines at the end of Package.swift were changed by hand"
+
+iOS Studio only edits the lines between `// >>> iOS Studio hot reload` and `// <<< iOS Studio hot reload`, and won't touch them when the end marker is gone. Put back the `// <<< iOS Studio hot reload` line after the block, or delete the lines from `// >>> iOS Studio hot reload` on, then turn hot reload on or off again.
+
 ## Setup and updates
 
 ### Swift broke after a system update

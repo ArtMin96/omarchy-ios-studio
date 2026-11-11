@@ -143,6 +143,19 @@ Data that several pages need belongs in a service in `services/`, as a `Resource
 actions go through `app.confirm(...)`. Check the view in demo mode with a zoomed screenshot (icon and text
 alignment, spacing). APIs: [docs/components.md](docs/components.md).
 
+### Change the hot reload runtime
+
+`templates/hot-reload/` is copied into users' projects and runs inside their apps, so treat it like a release:
+
+1. Bump `templates/hot-reload/version.txt`. Projects get the new copy the next time hot reload is turned on or a
+   session starts; without the bump they keep the old one.
+2. Keep `full/` and `stub/` declaring the same public API; `tests/cli/test_hot_reload_runtime.py` checks that,
+   and with the iOS SDK installed it builds both for iOS.
+3. The loader's file protocol (`runtime.json`, `patch-<n>.dylib`, `ack-<n>.json`) is shared with
+   `helper/iosstudio/device/features/hotreload/` and the session: change them together and update
+   `templates/hot-reload/README.md`.
+4. Try it on a real iPhone: neither demo mode nor the tests run the runtime inside an app.
+
 ## Pull requests
 
 - Branch from `main` and target `main`. Don't stack a feature PR on another feature branch.
