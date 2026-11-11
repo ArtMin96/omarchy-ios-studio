@@ -54,6 +54,7 @@ helper/
       account.py             group `account` (xtool)
       appconfig.py           group `app`: launcher keybinding, window rule, opacity, about
       debugger.py            group `debug` (LLDB on your own apps); lldb_driver.py runs inside lldb's Python
+      editor_debug*.py       `debug editor-config` / `editor` / `editor-status`: Debug in editor (VS Code, Zed via lldb-dap)
       screenshots.py         group `screenshots`: baselines and visual diffs
       format.py              `projects format` / `format-lint`: swift-format and SwiftLint
       app_icon.py            `projects icon` / `pick-file`: the app icon from any image (Pillow or ImageMagick)
@@ -125,7 +126,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/) and `packages` (features/packages/). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
+Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py; its `editor*` actions in editor_debug.py and editor_debug_bridge.py, see [features/editor-debugging.md](features/editor-debugging.md)), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/) and `packages` (features/packages/). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -322,6 +323,7 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
+| Debug in editor: each app's attach file (`<bundle id>.lldb`), its running bridge (`<bundle id>.json`) and the lldb commands they load (the newest 20 apps) | `~/.local/state/ios-studio/editor-debug/` |
 | Watch mode (lock, status, events, owners, log; demo mode uses `ios-studio-demo/`) | `$XDG_RUNTIME_DIR/ios-studio/watch*` (`$IOSSTUDIO_RUNTIME_DIR` overrides the base; without `XDG_RUNTIME_DIR`, `/run/user/<uid>` when it's yours, else `/tmp/ios-studio-<uid>`: `device/client.py: runtime_base()`, shared with the device daemon) |
 | Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
 | Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |
