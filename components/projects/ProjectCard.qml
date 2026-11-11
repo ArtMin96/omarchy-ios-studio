@@ -28,12 +28,16 @@ import "../../lib/Model.js" as Model
 // Swift packages (`packages`): "Packages…" under More opens ProjectPackagesSheet (managePackages()).
 // App icon (`projects icon`): "Set icon…" under More opens ProjectIconSheet (setIcon()). The icon tile reads
 // its file uncached, so a new icon at the same path shows after the list refresh.
+// Debug in editor (`debug editor`, EditorDebugService): "Debug in editor" under More starts a bridge that
+// VS Code / Zed's debugger attaches to (F5). While it runs, and briefly after it ends, EditorDebugBar shows
+// its state under the details, also when the card is collapsed; its Stop ends it.
 BorderSurface {
   id: root
 
   property var project: ({})
   property var svc: null
   property var watchSvc: null           // app.watch (WatchService)
+  property var debugSvc: svc && svc.app ? svc.app.editorDebug : null   // app.editorDebug (EditorDebugService)
   property bool hasCursor: false
   property bool expanded: false
   readonly property bool isBuilding: !!(svc && svc.building && svc.build.path === project.path)
@@ -47,6 +51,14 @@ BorderSurface {
   readonly property string runPreset: svc ? svc.selectedPreset(project) : (project.runPreset || "")
   readonly property var watchState: watchSvc ? watchSvc.forProject(project) : null
   readonly property var watchInfo: watchState && watchSvc ? watchSvc.label(watchState) : null
+  readonly property var debugEntry: debugSvc ? debugSvc.forProject(project) : null
+  readonly property bool debugLive: !!(debugEntry && debugSvc.label(debugEntry).live)
+  readonly property string debugBlocker: !project.bundleId ? "It needs a bundle ID in xtool.yml first."
+                                         : (svc && !svc.canRun ? "Connect your iPhone first." : "")
+  readonly property string debugTip: debugLive ? "Debugging in the editor already runs for this app. Stop it on the card."
+    : debugBlocker !== "" ? debugBlocker
+    : "Attach VS Code's or Zed's debugger to the app on your iPhone: breakpoints, stepping and variables "
+      + "in your editor. Then press F5 in the editor."
   readonly property var lintEntry: svc ? svc.lintFor(project) : null
   readonly property string lintTip: {
     var base = "Check the code style with swift-format (and SwiftLint when it's installed). Results show in Problems. (L)"
@@ -327,6 +339,16 @@ BorderSurface {
       trailing: root.svc && root.svc.build.eta ? "about " + Model.formatDuration(root.svc.build.eta) + " left" : ""
     }
 
+    // Debug in editor: state while a bridge runs (also when collapsed)
+    EditorDebugBar {
+      Layout.fillWidth: true
+      app: root.debugSvc ? root.debugSvc.app : null
+      entry: root.debugEntry
+      onStop: root.debugSvc.stop(root.project)
+      onDismiss: root.debugSvc.dismiss(root.project)
+      onRetry: root.debugSvc.start(root.project)
+    }
+
     AppText {
       Layout.fillWidth: true
       visible: !!root.project.note
@@ -360,6 +382,14 @@ BorderSurface {
       ActionButton { text: "Run presets"; glyph: Model.Glyph.tune; kind: "ghost"; compact: true; tooltip: "Edit the launch arguments, environment variables and language Run can use"; onClicked: root.editPresets() }
       ActionButton { text: "Build settings"; glyph: Model.Glyph.wrench; kind: "ghost"; compact: true; tooltip: "Prebuild command, environment variables, open-file limit"; onClicked: root.openBuildSettings() }
       ActionButton { text: "Open in editor"; glyph: Model.Glyph.code; kind: "ghost"; compact: true; onClicked: root.openEditor() }
+      ActionButton {
+        text: "Debug in editor"; glyph: Model.Glyph.bug; kind: "ghost"; compact: true
+        visible: root.debugSvc !== null
+        disabled: root.debugLive || root.debugBlocker !== ""
+        busy: !!(root.debugEntry && root.debugEntry.state === "starting")
+        tooltip: root.debugTip
+        onClicked: root.debugSvc.start(root.project)
+      }
       ActionButton { text: "Open folder"; glyph: Model.Glyph.folderOpen; kind: "ghost"; compact: true; onClicked: root.openFolder() }
       ActionButton { text: "Remove from list"; glyph: Model.Glyph.trash; kind: "ghost"; compact: true; onClicked: root.removeFromList() }
     }

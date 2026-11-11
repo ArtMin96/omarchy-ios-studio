@@ -22,7 +22,7 @@ Quickshell picks up new files in a `components/` folder automatically (no qmldir
 |---|---|
 | `components/common/` | widgets used by more than one area: everything documented below, plus `LogView`, `BuildDiagnosticRow`, `DiffView`, `StateView`, `PageViewport` |
 | `components/device/` | the iPhone page: `DeviceHero`, the tab views (`Device*View`), app data, `Debug*`, `PerfChart`, `Screenshot*` |
-| `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `StyleWarningsSection`, its sheets |
+| `components/projects/` | the Projects page: `ProjectCard`, `BuildPanel`, `RunSplitButton`, `WatchStateLabel`, `EditorDebugBar`, `StyleWarningsSection`, its sheets |
 | `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
 | `components/account/` | the Apple ID page: `AccountSignInSheet`, `AccountRevokeWarning` |
 | `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow`, `IconTile` |
@@ -82,7 +82,7 @@ PageFrame {
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
-| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch` | Services (`app.watch`: watch mode, see WatchService below) |
+| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths. `configDir`/`stateDir`/`cacheDir` follow `$XDG_CONFIG_HOME`/`$XDG_STATE_HOME`/`$XDG_CACHE_HOME` like the helper (`core/appdirs.py`; unset or empty = the default), so the app reads the daemon's `device.json` and the helper's `builds.json` where they were written; `app.xdgConfigHome`/`xdgStateHome`/`xdgCacheHome` are the base folders |
@@ -686,6 +686,26 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   signal `managePackages()` (the page opens ProjectPackagesSheet). `P` on the page does the same.
   App icon: More has Set icon…; signal `setIcon()` (the page opens ProjectIconSheet). The card's icon loads with
   `cache: false`, so a new icon at the same path shows after the refresh.
+  Debug in editor: prop `debugSvc` (defaults to `svc.app.editorDebug`), read-only `debugEntry`, `debugLive`,
+  `debugBlocker` (no bundle ID, no iPhone) and `debugTip`. More has Debug in editor (after Open in editor; disabled
+  with the reason in its tooltip while a bridge runs or it can't start, spinning while it starts). An
+  EditorDebugBar under the details shows the bridge's state, also on a collapsed card.
+- **EditorDebugBar**: debug in editor's state on a project card, a slim strip (raised surface; green-tinted while
+  the editor is attached, red with the error's fix button and Try again on an error). Props: `app` (for the fix's
+  `app.nav`), `entry` (`app.editorDebug.forProject(project)`); signals `stop()`, `dismiss()`, `retry()`. The glyph
+  (spinner while starting or stopping, else the bug) sits on the text's first line; the text wraps. Stop while it
+  runs, a close button after it ended. The helper's notices follow, one small line each at the text's indent. Below
+  600 px an error's buttons drop under its message.
+- **EditorDebugService** (`app.editorDebug`, `services/EditorDebugService.qml`): the `debug editor --project P`
+  bridges, at most one per project, each its own Stream. `entries` (path → entry), `forProject(p)`, `label(e)` →
+  `{level, text, detail, tip, live}`, `isLive(p)`, `start(p)`, `stop(p)` (`{"cancel": true}` on stdin; a 20 s
+  safety kill), `toggle(p)`, `dismiss(p)`, `checkRunning()`. An entry is `{path, name, state: starting | ready |
+  attached | detached | stopping | ended | error, step, owned, bundleId, port, pid, launched, configName, editors,
+  notices, error, ended, attached, killed, helperPid, at}`; the state machine is `Model.editorDebugEvent` (tested in
+  `tests/qml/tst_editor_debug.qml`). It asks `debug editor-status` once at start-up, so a bridge another process
+  runs shows too (`owned: false`; asked again every 15 s only while one shows and the window is focused; Stop sends
+  its helper SIGTERM). An ended bridge leaves the card after 20 s; an error stays until dismissed or retried. Its
+  own streams get `{"cancel": true}` when the app quits. See [features/editor-debugging.md](features/editor-debugging.md).
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
