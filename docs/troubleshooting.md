@@ -159,6 +159,10 @@ The phone only reports hangs when Hang Detection is on. On the iPhone, open Sett
 
 The debugger is lldb from the Swift toolchain, and it needs Python 3.12. Install "Debugger support" in Setup; it builds Python from source, so it takes a while. If the message says lldb itself is missing or didn't start, install or repair Swift in Setup.
 
+### F5 in VS Code or Zed says "attachCommands failed to attach to a process"
+
+Look at the editor's Debug Console. "Start 'Debug in editor' in iOS Studio first" means iOS Studio isn't holding the connection to the phone for this app: press Debug in editor on the project's card and wait until it says it's waiting for the editor, then press F5 again. In Zed, a message that lldb-dap wasn't found means its Swift extension can't find the toolchain's debugger: set Zed up again in Settings › Code editor. If you switched VS Code's Swift extension to CodeLLDB, switch it back to lldb-dap. See [features/editor-debugging.md](features/editor-debugging.md).
+
 ### Attaching the debugger takes minutes
 
 Look at the Debug symbols card on iPhone › Debug. If it says Needs an update or Incomplete, press Update symbols (or Unpack again, if it offers that). Symbols unpacked by older versions of iOS Studio don't include libdispatch, so while attaching lldb has to look up one symbol about a thousand times over the connection, and over Wi-Fi that takes a couple of minutes with the app paused. Your current symbols keep working while the update runs. A USB cable also makes attaching faster.
