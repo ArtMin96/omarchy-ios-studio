@@ -75,7 +75,7 @@ def info() -> dict:
              (f"Python {c['pymd3'][2]} · {appdirs.tilde(Path(c['pymd3'][0]).parent.parent)}" if c.get("pymd3") else by["pymobiledevice3"]["detail"]),
              st_of("pymobiledevice3"), pinned=PYMD3_VERSION, step="pymobiledevice3"),
         item("rcodesign", "rcodesign", first_version(F["rcodesign"][1]) if F["rcodesign"][0] == 0 else None,
-             "Signs App Store builds", st_of("rcodesign"), pinned=RCODESIGN_VERSION, step="rcodesign"),
+             "Signs App Store builds and hot reload patches", st_of("rcodesign"), pinned=RCODESIGN_VERSION, step="rcodesign"),
         item("ipsw", "ipsw", first_version(F["ipsw"][1]) if F["ipsw"][0] == 0 else None, "Debugger helper (optional)",
              "ok" if F["ipsw"][0] == 0 else "missing", pinned=IPSW_VERSION, step="ipsw", optional=True),
         item("apple-dev", "omarchy-apple-dev", (c.get("apple_dev_head") or "")[:7] or None,
