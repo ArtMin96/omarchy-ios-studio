@@ -8,7 +8,7 @@ import "../lib/Model.js" as Model
 // becomes a small patch the running app loads, so the change shows in a few seconds without a rebuild.
 //
 // Public surface (app.hotReload):
-//   setting(p) → { enabled, mode: on|off|stub, importedBy? } or null (not known yet)
+//   setting(p) → { enabled, mode: on|off|stub, importedBy? (from status or disable) } or null (not known yet)
 //   isOn(p) · forProject(p) → the entry (Model.hotReloadEntry) or null · label(p, nowMs) (Model.hotReloadLabel)
 //   isLive(p) · liveCount
 //   setEnabled(p, on) · toggle(p): the project switch. On: `hotreload enable`, then a session starts right away
@@ -247,8 +247,8 @@ Item {
     for (var k in l) {
       var st = projects[k]
       if (st && !!st.enabled === !!l[k].enabled && (l[k].mode === st.mode || l[k].mode === undefined)) {
-        // keep importedBy (the status doesn't list the files)
-        if (!(l[k].importedBy && l[k].importedBy.length)) { delete l[k]; changed = true }
+        // the status lists a stub project's files (importedBy) itself
+        delete l[k]; changed = true
       }
     }
     if (changed) root._local = l

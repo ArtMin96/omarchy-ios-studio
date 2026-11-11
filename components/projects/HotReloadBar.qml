@@ -71,6 +71,8 @@ Rectangle {
   readonly property bool stackButtons: width < Style.space(isError || (info && info.note && info.note.fix) ? 780 : 540)
   readonly property real glyphColumn: Math.ceil(Style.font.body * 1.4)
   readonly property real textIndent: glyphColumn + Style.spacing.lg
+  // A failed reload's places and the compiler's line sit under the message, not under the pill.
+  readonly property real detailIndent: textCol.x
 
   ColumnLayout {
     id: col
@@ -162,7 +164,7 @@ Rectangle {
         id: blk
         required property var modelData
         Layout.fillWidth: true
-        Layout.leftMargin: root.textIndent
+        Layout.leftMargin: root.detailIndent
         spacing: Style.spacing.md
         AppText {
           Layout.alignment: Qt.AlignTop
@@ -187,7 +189,7 @@ Rectangle {
     }
     AppText {
       Layout.fillWidth: true
-      Layout.leftMargin: root.textIndent
+      Layout.leftMargin: root.detailIndent
       visible: !!root.info && root.info.moreBlockers > 0
       text: root.info ? "and " + root.info.moreBlockers + " more" : ""
       size: "small"
@@ -195,7 +197,7 @@ Rectangle {
     }
     AppText {
       Layout.fillWidth: true
-      Layout.leftMargin: root.textIndent
+      Layout.leftMargin: root.detailIndent
       visible: text !== ""
       text: root.info ? root.info.diagnostic : ""
       size: "small"

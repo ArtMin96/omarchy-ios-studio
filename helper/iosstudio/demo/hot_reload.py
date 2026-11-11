@@ -12,6 +12,7 @@ Pretend-work pauses scale with IOSSTUDIO_DEMO_DELAY (the gaps between saves neve
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -20,6 +21,44 @@ from iosstudio.core.output import HelperError
 from iosstudio.features.hotreload import session as S
 
 IMPORTING = {"WeatherGlance": ["Sources/WeatherGlance/ContentView.swift", "Sources/WeatherGlance/ForecastView.swift"]}
+DEFAULT_ON = ("WeatherGlance",)
+
+
+def _switch_file() -> Path:
+    from iosstudio.features.watch.runtime import runtime_dir
+    return runtime_dir() / "hotreload-demo-switch.json"
+
+
+def demo_setting(path: str) -> dict:
+    """{enabled, mode, importedBy?} of a demo project: what enable/disable last set (in the demo runtime dir,
+    so it lasts until the session ends), else WeatherGlance on and the others off."""
+    name = path.rstrip("/").split("/")[-1]
+    try:
+        mode = json.loads(_switch_file().read_text()).get(path)
+    except (OSError, ValueError, AttributeError):
+        mode = None
+    if mode not in ("on", "off", "stub"):
+        mode = "on" if name in DEFAULT_ON else "off"
+    out = {"enabled": mode == "on", "mode": mode}
+    if mode == "stub":
+        out["importedBy"] = IMPORTING.get(name, [])
+    return out
+
+
+def _remember(path: str, mode: str) -> None:
+    f = _switch_file()
+    try:
+        data = json.loads(f.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[path] = mode
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(dict(list(data.items())[-200:])))
+    except OSError:
+        pass
 
 
 def _project(flags: dict) -> tuple[str, str]:
@@ -45,6 +84,8 @@ def enable(flags: dict) -> int:
     from iosstudio.features.hotreload import project_setup as S
     name, path = _project(flags)
     base = _manifest(name)
+    if not flags.get("dry_run"):
+        _remember(path, "on")
     return output.ok({"enabled": True, "mode": "on", "appTarget": name, "changed": True,
                       "diff": _diff(base, S.append_block(base, name)), "truncated": False,
                       "packagePath": f"{path}/Package.swift", "dryRun": bool(flags.get("dry_run")),
@@ -58,6 +99,8 @@ def disable(flags: dict) -> int:
     before = S.append_block(base, name)
     users = IMPORTING.get(name, [])
     after = S.append_block(base, name, linker=False) if users else base
+    if not flags.get("dry_run"):
+        _remember(path, "stub" if users else "off")
     return output.ok({"enabled": False, "mode": "stub" if users else "off", "importedBy": users, "changed": True,
                       "diff": _diff(before, after), "truncated": False, "packagePath": f"{path}/Package.swift",
                       "dryRun": bool(flags.get("dry_run")), "runtimeUpdated": True, "demo": True})

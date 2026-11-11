@@ -94,15 +94,20 @@ def cmd_run(flags: dict, demo: bool = False) -> int:
 
 
 def _setting(path: str, demo: bool) -> dict:
-    """{enabled, mode} of the project (mode off when it can't be read)."""
+    """{enabled, mode, importedBy?} of the project (mode off when it can't be read). In stub mode, importedBy
+    lists the files that still `import HotReload` (a bounded scan of Sources/, only for stub projects)."""
     if demo:
-        return {"enabled": True, "mode": "on"}
+        from iosstudio.demo.hot_reload import demo_setting
+        return demo_setting(path)
     from iosstudio.features.hotreload import project_setup
     try:
         st = project_setup.status(Path(path))
     except (OSError, HelperError):
         return {"enabled": False, "mode": "off"}
-    return {"enabled": st["enabled"], "mode": st["mode"]}
+    out = {"enabled": st["enabled"], "mode": st["mode"]}
+    if st["mode"] == "stub":
+        out["importedBy"] = project_setup.imported_by(Path(path))
+    return out
 
 
 MAX_PROJECTS = 200
@@ -113,8 +118,7 @@ def project_settings(demo: bool = False) -> dict[str, dict]:
     hand, minus hidden ones), at most MAX_PROJECTS. File reads only (Package.swift), no swift call."""
     if demo:
         from iosstudio.demo.demo import HOME, PROJECTS
-        return {f"{HOME}/Developer/{p['name']}": ({"enabled": True, "mode": "on"} if p["name"] == "WeatherGlance"
-                                                  else {"enabled": False, "mode": "off"}) for p in PROJECTS}
+        return {f"{HOME}/Developer/{p['name']}": _setting(f"{HOME}/Developer/{p['name']}", True) for p in PROJECTS}
     from iosstudio.features.projects import model, store
     st = store.load_state()
     found, _conv = model.scan()
