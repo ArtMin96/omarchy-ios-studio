@@ -117,6 +117,15 @@ dap.configurations.swift = {
 
 Use your app's bundle id from `xtool.yml` (without an `XTL-<TEAM>.` prefix) in the file name.
 
+## For AI agents (MCP)
+
+- `ios_debug_editor_config(project_path, editor?, confirm=false)` shows what it would add to `.vscode/launch.json` or `.zed/debug.json`; `confirm=true` writes it.
+- `ios_debug_editor_start(project_path | bundle_id, launch?, editor?, write_config?)` starts the bridge as a job and answers within 25 s with the port, the configuration's name and whether the editor is attached. Call it again with `job_id` (and `wait_seconds`) to follow it.
+- `ios_debug_editor_status(bundle_id?)` lists running bridges, also ones started from the app window.
+- `ios_debug_editor_stop(bundle_id | job_id)` ends one. `ios_job_cancel` and quitting the server do the same.
+
+The agent can't press F5 for you: it tells you which configuration to start in the editor.
+
 ## Limits
 
 - **Attaching pauses the app** until lldb-dap has read it (seconds over USB, longer over Wi-Fi without the debug symbols). Download the symbols once under iPhone › Debug › Debug symbols, so Swift values (String, Array) read right and attaching is fast.
