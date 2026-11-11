@@ -5,7 +5,7 @@
   stream (steps, notice, ready, editor, forward, then `done` after {"cancel": true} on stdin).
 - The real helper in demo mode, with a stand-in device daemon where demo clients look (tests/support/fake_deviced.py).
 - The real helper in real mode (the real bridge, state files and `editor-status`) against the stand-in daemon,
-  skipped without the Swift toolchain's lldb-dap.
+  skipped unless the helper's `debug check` says lldb is ready.
 
 Needs the MCP server's dependencies (the dev venv; skipped otherwise):
     python -m pytest tests/mcp/test_mcp_editor_debug.py
@@ -28,6 +28,7 @@ from iosstudio_mcp.state import AppState
 from iosstudio_mcp.tools import editor_debug as ED
 from iosstudio_mcp.tools import jobs as JOBS
 from support.fake_deviced import FakeDeviced
+from support.lldb_ready import debugger_ready
 from support.mcp_fakes import FakeMCP
 from support.mcp_harness import FAKE_HELPER, ToolCase, size_of
 
@@ -375,13 +376,7 @@ class Demo(unittest.IsolatedAsyncioTestCase):
                 await state.jobs.shutdown()
 
 
-def _lldb_dap() -> bool:
-    swift = shutil.which("swift")
-    return bool(swift) and Path(os.path.realpath(swift)).with_name("lldb-dap").is_file() and \
-        Path("/usr/bin/swift").exists()
-
-
-@unittest.skipUnless(_lldb_dap(), "needs the Swift toolchain's lldb-dap")
+@unittest.skipUnless(debugger_ready(), "needs the Swift toolchain's lldb with its Python (Setup › Debugger support)")
 class RealHelper(unittest.IsolatedAsyncioTestCase):
     """The real `debug editor` bridge (attach file, state file, editor-status) against a stand-in daemon."""
 

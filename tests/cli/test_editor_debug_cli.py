@@ -20,6 +20,7 @@ from iosstudio.core import jsonc
 from support import ROOT
 from support.dap_client import DapClient
 from support.fake_deviced import FakeDeviced
+from support.lldb_ready import debugger_ready
 
 HELPER = [sys.executable, str(ROOT / "helper/run.py"), "iosstudio"]
 TOOLCHAIN_BIN = Path(os.path.realpath(shutil.which("swift") or "/nonexistent")).parent
@@ -193,12 +194,7 @@ def _tools() -> dict | None:
     dap, server, cc = TOOLCHAIN_BIN / "lldb-dap", TOOLCHAIN_BIN / "lldb-server", shutil.which("cc")
     if not (dap.is_file() and server.is_file() and cc):
         return None
-    try:
-        r = subprocess.run([str(TOOLCHAIN_BIN / "lldb"), "-b", "-o", "script print(1 + 1)"], capture_output=True,
-                           text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if "2" not in r.stdout:
+    if not debugger_ready():   # the helper's own check: CI's Swift has lldb-dap but not lldb's Python
         return None
     return {"dap": str(dap), "server": str(server), "cc": cc}
 
