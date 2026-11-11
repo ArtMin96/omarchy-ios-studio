@@ -415,6 +415,7 @@ Item {
               width: diagList.width
               diag: root.svc.diagnostic(n) || ({})
               projectPath: root.b.path || ""
+              app: root.app
               hasCursor: diagList.currentIndex === index
               onHovered: function(h) { if (h) diagList.currentIndex = index }
               onClicked: root.svc.openInEditor({ path: root.b.path }, diag.file, diag.line, diag.col)

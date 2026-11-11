@@ -684,6 +684,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   (`svc.lintFor(project)`): Lint project spins while it runs, and `lintTip` adds the last count and when.
   `F` / `L` on the page do the same for the highlighted card. Packages: More has Packages… (after Lint project);
   signal `managePackages()` (the page opens ProjectPackagesSheet). `P` on the page does the same.
+  App icon: More has Set icon…; signal `setIcon()` (the page opens ProjectIconSheet). The card's icon loads with
+  `cache: false`, so a new icon at the same path shows after the refresh.
 - **RunSplitButton**: a project's `[▶ Run | ▾]` split button. Props: `project`, `svc`, `disabled` (blocks only the
   Run part; the menu stays usable), `tooltip`; read-only `presets`, `selected`, `rows`, `popupOpen`; `openMenu()`,
   `closeMenu()`, `pick(i)`; signals `run()`, `editRequested()`. The chevron opens a menu right-aligned under the
@@ -784,6 +786,10 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   calls `svc.formatApply` and closes on success; a failed apply shows a banner above the diff. The dry run is a
   Resource (`preview`; `result`/`error` read it, reset on each open, so an earlier open's answer is dropped);
   `phase` is `applying` while Apply runs, else the Resource's status.
+- **ProjectIconSheet**: "App icon" (`app`, `svc`; `openFor(project)`). Choose image… (`svc.pickImage`), Fit
+  (Auto/Fill/Fit), background swatches and a hex field, and the dry run's preview (`svc.previewIcon`) in a
+  rounded tile like the Home Screen; Set icon calls `svc.setIcon` (`--confirm`). Re-renders 350 ms after a change
+  and drops answers from older requests. Also opened by the page param `{action: "icon", path}`.
 - **ProjectPackagesSheet**: "Packages · <name>" (`app`, `svc`; `openFor(project)` opens and lists through
   `svc.packagesList`; signal `checkBuild(project)`, the page starts a compile-only build). One sheet, `view`:
   - One column system for every view: block content (fields, diffs, banners) spans the body; glyphs sit in the

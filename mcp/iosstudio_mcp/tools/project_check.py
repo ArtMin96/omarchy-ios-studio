@@ -116,6 +116,10 @@ def register(mcp: MCPServer) -> None:
             if by_check.get("xtool-keys"):
                 nxt.append("xtool ignores unknown xtool.yml keys without a word, so a misspelled key silently has "
                            "no effect.")
+            if by_check.get("icon"):
+                nxt.append("ios_project_icon(project_path, image_path) makes a valid icon (1024×1024 PNG, no "
+                           "transparency) from any image and sets iconPath: dry run first, confirm=true after the "
+                           "user agrees.")
         cut = total - len(issues)
         model = ProjectCheckResult(
             project=name, path=str(data.get("path") or root), clean=not whole, total=total, count=len(issues),

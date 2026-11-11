@@ -56,6 +56,7 @@ helper/
       debugger.py            group `debug` (LLDB on your own apps); lldb_driver.py runs inside lldb's Python
       screenshots.py         group `screenshots`: baselines and visual diffs
       format.py              `projects format` / `format-lint`: swift-format and SwiftLint
+      app_icon.py            `projects icon` / `pick-file`: the app icon from any image (Pillow or ImageMagick)
       build_settings.py, run_presets.py, project_check.py, diagnostics.py   used by projects/
       agent_instructions.py  AGENTS.md / CLAUDE.md for `projects new` and `projects convert` (never overwrites)
       app_data.py            plist <-> JSON, store summaries and rows, reset plans (shared with the daemons)

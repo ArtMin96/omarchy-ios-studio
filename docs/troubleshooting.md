@@ -310,6 +310,8 @@ The project's entitlements file asks for something a free Apple ID can't get. xt
 
 A blank icon means `xtool.yml` has no `iconPath`. A black background means the icon has transparency, which iOS fills with black. The icon must be a 1024×1024 PNG without transparency; the project card's settings warnings say which of these is wrong.
 
+To fix either, open the project card's More (⋮) › Set icon…, choose any picture and press Set icon. It saves a correct PNG and sets `iconPath` for you. Run the app again to see the new icon. See [Set the app icon](guide.md#set-the-app-icon).
+
 ### The German preset still shows English
 
 A run preset's language only changes text the app has translated. `-AppleLanguages (de)` asks for German; if the app has no German localization (no `de.lproj` folder or German entries in its string catalog), iOS falls back to the app's own language, usually English. Dates, numbers and currency still follow the preset's region. Add the translations and run again.

@@ -138,6 +138,9 @@ The result's `keysSource` says which one was used: `xtool-cache` or `builtin`.
 }
 ```
 
+Icon findings also carry a `fix`, `{"label": "Set icon…", "page": "projects", "action": "icon", "path": …}`.
+BuildDiagnosticRow shows it as a button that opens the Set icon… sheet (see [app-icon.md](app-icon.md)).
+
 An issue has the shape of a build diagnostic: `severity` (`warning` or `note`), `category` (always
 `config`), `check`, `message`, `file` (relative to the project, `../` for a local package next to it,
 or `null`), `line` (or `null`) and `hint`. In a build, `file` is made absolute like the other

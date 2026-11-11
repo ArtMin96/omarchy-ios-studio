@@ -11,7 +11,8 @@ import "../lib/Model.js" as Model
 // new-app templates, project settings checks (on each card), watch mode (compile on save, app.watch:
 // in each card's Run menu, `w` for the highlighted one), format and lint (More › Format project… / Lint
 // project, `F` / `L` for the highlighted one: ProjectFormatSheet, style warnings in the drawer's
-// Problems), Swift packages (More › Packages…, `P`: ProjectPackagesSheet) and the build drawer.
+// Problems), Swift packages (More › Packages…, `P`: ProjectPackagesSheet), the app icon (More › Set icon…:
+// ProjectIconSheet; deep link {action: "icon", path}) and the build drawer.
 Item {
   id: page
   required property var app
@@ -48,6 +49,10 @@ Item {
     else if (p.action === "retry") { if (svc.build.path) { svc.runAgain(); page.panelOpen = true } }
     else if (p.action === "reveal" && p.path) { var r = svc.projectByPath(p.path); svc.reveal(r || { path: p.path }) }
     else if (p.action === "convert" && p.path) svc.convert(p.path)
+    else if (p.action === "icon" && p.path) {
+      const ip = svc.projectByPath(p.path)
+      if (ip) Qt.callLater(function() { iconSheet.openFor(ip) })
+    }
     else if (p.action === "build-settings") {
       var bp = p.path ? svc.projectByPath(p.path) : (svc.build.path ? svc.projectByPath(svc.build.path) : null)
       if (bp) Qt.callLater(function() { buildSettingsSheet.openFor(bp) })
@@ -314,6 +319,7 @@ Item {
         onFormatProject: formatSheet.openFor(modelData)
         onLintProject: page.lintProject(modelData)
         onManagePackages: packagesSheet.openFor(modelData)
+        onSetIcon: iconSheet.openFor(modelData)
         onShowProblems: page.showWatchProblems(modelData)
       }
     }
@@ -408,6 +414,12 @@ Item {
     svc: page.svc
     // Check build after adding: a compile-only build through the usual build flow, in the build panel.
     onCheckBuild: function(p) { page.startKind(p, "compile") }
+  }
+
+  ProjectIconSheet {
+    id: iconSheet
+    app: page.app
+    svc: page.svc
   }
 
   RunPresetsSheet {

@@ -32,7 +32,8 @@ class Shape(unittest.TestCase):
     def test_issue_shape_and_warnings_only(self):
         for case in sorted(p.name for p in FIX.iterdir() if p.is_dir()):
             for i in run(case):
-                self.assertEqual(set(i), {"severity", "category", "check", "message", "file", "line", "hint"}, i)
+                extra = {"fix"} if i["check"] == "icon" else set()      # icon findings link to the Set icon… sheet
+                self.assertEqual(set(i), {"severity", "category", "check", "message", "file", "line", "hint"} | extra, i)
                 self.assertIn(i["severity"], ("warning", "note"))
                 self.assertEqual(i["category"], "config")
                 self.assertIn(i["check"], C.CHECKS)

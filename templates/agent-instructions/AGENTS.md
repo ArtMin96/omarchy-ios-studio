@@ -18,6 +18,7 @@ Build with the iOS Studio MCP server's tools and pass this folder as `project_pa
   `ios_app_console_read`.
 - Launch arguments and environment are saved presets: `ios_project_presets`.
 - `ios_watch_start` recompiles on every save.
+- Make the app icon from any image with `ios_project_icon`: it shows a preview first.
 - Add dependencies with `ios_package_add` and list them with `ios_package_list`; don't edit
   `Package.resolved` by hand.
 - Don't create an `.xcodeproj`, `.xcworkspace` or call `xcodebuild`. They don't exist here.

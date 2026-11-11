@@ -423,6 +423,11 @@ def _format():
     return swift_format
 
 
+def _app_icon():
+    from iosstudio.features import app_icon  # lazy: only `projects icon` / `pick-file` need it
+    return app_icon
+
+
 GROUPS = {
     "projects": {
         "list": cmd_list,
@@ -447,6 +452,8 @@ GROUPS = {
         "record-install": cmd_record_install,
         "summary": cmd_summary,
         "pick-folder": cmd_pick_folder,
+        "icon": lambda flags: _app_icon().cmd_icon(flags),          # iosstudio/features/app_icon.py
+        "pick-file": lambda flags: _app_icon().cmd_pick_file(flags),
     },
     "build": {
         "run": _build_command("run"),

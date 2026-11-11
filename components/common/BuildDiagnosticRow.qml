@@ -14,6 +14,8 @@ import "../../lib/Model.js" as Model
 // Style warnings (category "style", from `format-lint`: swift-format and SwiftLint) read as
 // "Style · <rule> · file:line" with a dim glyph (amber only for a rule set to error), so they never
 // look like a failed build; a click opens the file at the line, like a compiler problem.
+// A diagnostic with a `fix` ({label, page, ...}, e.g. project check's "Set icon…") gets a button that calls
+// app.nav(fix.page, fix), like ErrorState; pass `app` to show it.
 CursorSurface {
   id: root
   property var diag: ({})
@@ -22,6 +24,8 @@ CursorSurface {
   // false where a section header already names the category (StyleWarningsSection under "Style"),
   // so the location line starts with the rule instead of repeating it.
   property bool showCategory: true
+  property var app: null
+  readonly property var fix: diag.fix && diag.fix.page && diag.fix.label ? diag.fix : null
   readonly property bool preBuild: diag.category === "config" && !!diag.check
   readonly property bool style: diag.category === "style"
   readonly property string sev: diag.severity || "error"
@@ -170,6 +174,14 @@ CursorSurface {
           }
         }
       }
+    }
+    ActionButton {
+      Layout.alignment: Qt.AlignVCenter
+      visible: !!root.fix && !!root.app
+      text: root.fix ? root.fix.label : ""
+      kind: "ghost"
+      compact: true
+      onClicked: root.app.nav(root.fix.page, root.fix)
     }
     Icon { Layout.alignment: Qt.AlignVCenter; glyph: Model.Glyph.openExternal; size: Style.font.bodySmall; color: root.hot && root.hasFile ? Theme.dim : "transparent" }
   }
