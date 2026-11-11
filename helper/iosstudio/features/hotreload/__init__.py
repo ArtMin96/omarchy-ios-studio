@@ -1,6 +1,8 @@
 """Hot reload on the iPhone (#13): swap the changed functions of a running Debug build without reinstalling.
 
-  commands       the `hotreload` helper group (enable, disable; the session commands come next)
+  commands       the `hotreload` helper group (enable, disable, run, status, stop, pause, resume)
+  session        one session (`hotreload run`): build/install/launch once, then reload each save (pause/resume)
+  state          the sessions' runtime files (lock, state file with history, control file), status/stop/pause
   project_setup  the managed Package.swift block and the runtime package copied into .iosstudio/hot-reload
   buildinfo      the Baseline: what the last xtool build compiled and linked, cached under ~/.cache/ios-studio/hot-reload
   macho          a small Mach-O reader (symbols, indirect symbols, relocations, code signature)
