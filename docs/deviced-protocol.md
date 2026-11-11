@@ -1210,6 +1210,35 @@ Rules:
 - Other errors: `bad-args`, `bad-value`, `bad-type`, `bad-plist`, `too-big`, plus the AFC errors of
   `container.*` (`not-found`, `denied`, `no-space`).
 
+### Hot reload (`hotreload.*`), used by the `hotreload` helper group's session
+
+Sends a signed patch to the hot reload runtime inside a running DEBUG build (templates/hot-reload/) and reads
+its answer. Your own development builds only (house_arrest VendContainer, on the cached connection per app of
+`container.*`, retried once on a fresh one when it went stale); everything is in the app's
+`Library/Caches/HotReload/`. Implementation: `helper/iosstudio/device/features/hotreload/real.py` (demo twin
+`demo.py`, shared parsing in `core.py`).
+
+| cmd | args | reply data |
+|---|---|---|
+| `hotreload.push` | `{bundleId, src (local .dylib), seq (≥ 1), waitMs?: 5000 (0 to 15000), udid?}` | `{seq, bytes, pushMs, acked, ack?: Ack, ackMs?}`; `acked: false` (no `ack`) = no answer within `waitMs` (the app isn't running, or the build has no runtime) |
+| `hotreload.clean` | `{bundleId, udid?}` | `{removed}`: deletes `patch-*` and `ack-*` (also half-written `.part`/`.tmp`), never `runtime.json` |
+| `hotreload.runtime` | `{bundleId, udid?}` | `{present, runtime?: {version, pid, started}}` from `runtime.json`, which the runtime writes at each launch (`started` in Unix seconds tells which launch) |
+
+```json
+{"seq": 7, "ok": true, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "error": null, "generation": 7}
+```
+
+- `push` writes `patch-<seq>.dylib.part`, renames it to `patch-<seq>.dylib` (the runtime only loads whole
+  names; patches are cumulative, so it loads only the newest), then reads `ack-<seq>.json` every 50 ms until
+  it's there or `waitMs` has passed. Ack (above): `ok: false` with `error` (the `dlerror()` text) when the app
+  couldn't load the patch; an ack that can't be read (not JSON, over 64 KB) is `ok: false` too. Pushes to one
+  app run one at a time. Patches over 256 MB are `too-big`.
+- The runtime deletes every patch and ack at launch and keeps the newest 3 after each load, so nothing on the
+  phone needs pruning; `clean` runs at the start of a session.
+- Errors: `not-installed` (fix → Projects, `action: "build"`), `not-dev-app` (an App Store app), `bad-args`,
+  `not-found` (`src` is gone), `too-big`, plus the AFC errors of `container.*` (`denied`, `no-space`).
+- Demo: every development app has the runtime; a push answers after about 300 ms with `ok: true, swapped: 3`.
+
 ### Debugging (`debug.*`), used by iPhone › Debug and the `debug` helper group
 
 LLDB on the user's own (development-signed) apps. The daemon only provides the plumbing: it
