@@ -225,7 +225,17 @@ def test_editor_choice(home, tmp_path, monkeypatch):
 def test_zed_note_when_lldb_dap_is_not_on_path(home, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     out = config_of(project(tmp_path), "zed")
-    assert any('"dap": {"Swift"' in n for n in out["notes"])
+    assert any("Settings › Code editor" in n for n in out["notes"])
+
+
+def test_no_zed_note_once_zed_settings_name_lldb_dap(home, tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    cfg = tmp_path / "xdg-config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+    (cfg / "zed").mkdir(parents=True)
+    (cfg / "zed/settings.json").write_text('// mine\n{"dap": {"Swift": {"binary": "/opt/swift/usr/bin/lldb-dap"}},}\n')
+    out = config_of(project(tmp_path), "zed")
+    assert not any("lldb-dap" in n for n in out["notes"])
 
 
 # ================================================================ the attach file

@@ -237,13 +237,20 @@ def pick_editors(editor: str | None) -> tuple[list[str], list[str]]:
 
 
 def _zed_dap_note() -> str | None:
-    """Zed's Swift extension looks for lldb-dap on PATH; the toolchain keeps it next to swift."""
-    import shutil
-    if shutil.which("lldb-dap"):
+    """Zed's Swift extension finds lldb-dap only on PATH (or swiftly, xcrun); the toolchain keeps it next to
+    swift. Settings › Code editor sets `dap.Swift.binary` in Zed's settings then; no note once that's there."""
+    from iosstudio.features.editor_setup import Env
+    env = Env.from_os()
+    if env.which("lldb-dap"):
         return None
-    return ("Zed finds lldb-dap only on PATH, and the Swift toolchain keeps it next to swift. Set it once in Zed's "
-            "settings: \"dap\": {\"Swift\": {\"binary\": \"<toolchain>/usr/bin/lldb-dap\"}} (see the Debug in "
-            "editor guide).")
+    try:
+        data = jsonc.load((env.config / "zed/settings.json").read_text(errors="replace"))
+        if isinstance(data, dict) and ((data.get("dap") or {}).get("Swift") or {}).get("binary"):
+            return None
+    except (OSError, JsoncError, AttributeError):
+        pass
+    return ("Zed can't find the toolchain's debugger (lldb-dap) yet: set Zed up again in Settings › Code editor, "
+            "which points Zed's Swift extension at it.")
 
 
 def project_identity(project: Path) -> dict:
