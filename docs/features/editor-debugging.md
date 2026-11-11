@@ -78,7 +78,7 @@ You need Zed's Swift extension, the one Settings › Code editor checks for. It 
 ]
 ```
 
-The Swift extension looks for `lldb-dap` on PATH (or `swiftly` / `xcrun`), and the Swift toolchain keeps it next to `swift` instead (for example `/usr/lib/swift/usr/bin/lldb-dap`). Tell Zed where it is, once, in its user settings (`~/.config/zed/settings.json`):
+The Swift extension looks for `lldb-dap` on PATH (or `swiftly` / `xcrun`), and the Swift toolchain keeps it next to `swift` instead (for example `/usr/lib/swift/usr/bin/lldb-dap`). Setting Zed up in Settings › Code editor tells Zed where it is, in its user settings (`~/.config/zed/settings.json`), when it isn't on PATH. By hand, that's:
 
 ```json
 {
@@ -88,7 +88,7 @@ The Swift extension looks for `lldb-dap` on PATH (or `swiftly` / `xcrun`), and t
 }
 ```
 
-`debug editor-config` lists this as a note when `lldb-dap` isn't on PATH. Start the configuration from the debug panel (`debugger: start`).
+Until that's set, `debug editor-config` adds a note that sends you to Settings › Code editor. Start the configuration from the debug panel (`debugger: start`).
 
 ## Neovim (nvim-dap)
 
