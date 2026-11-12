@@ -15,8 +15,11 @@ import "../lib/Model.js" as Model
 //     (when it can: an iPhone, a bundle ID, no build of it running). Off: our session is stopped first, then
 //     `hotreload disable` (which also stops someone else's session); mode stub keeps a no-op copy for views that
 //     still `import HotReload` (importedBy lists them).
-//   start(p) · stop(p) · restart(p) · pause(p) · resume(p) · runFix(p, fix) (fix actions hot-reload-start|stop|
-//     restart|enable, else app.nav) · dismiss(p) · refresh() · startBlocker(p) ("" = it can start)
+//   cleanUp(p): mode stub, `hotreload disable` again (action "cleaning"); importedBy names the files that still
+//     import HotReload when they keep it from finishing.
+//   start(p) · stop(p) (also while it starts, before its first snapshot) · restart(p) · pause(p) · resume(p) ·
+//     runFix(p, fix) (fix actions hot-reload-start|stop|restart|enable, else app.nav) · dismiss(p) · refresh() ·
+//     startBlocker(p) ("" = it can start)
 // One `hotreload run` stream per project; its snapshots go through Model.hotReloadEvent (tested in
 // tests/qml/tst_hot_reload.qml). `hotreload status` (a Resource: at start-up, when the window gets focus, after
 // a change) gives every project's switch and the sessions running elsewhere (another window, the MCP server);
@@ -30,8 +33,12 @@ Item {
   property var settings: ({})          // project path → {enabled, mode, importedBy?}
   property int liveCount: 0
 
-  // A switch flipped here wins over `hotreload status` until the status agrees (demo mode never does).
+  // A switch flipped here wins over `hotreload status` until a status fetch that started after the change
+  // answers, whatever it says (Model.hotReloadReconcile): an agent or a hand edit may have changed it since.
   property var _local: ({})
+  property int _statusSeq: 0           // status fetches started
+  property int _replySeq: 0            // the fetch the reply being applied belongs to
+  property var _controlAt: ({})        // path → Date.now() of a pause/resume not confirmed yet
   property var _streams: ({})          // path → Stream (changed in place, not a binding)
   property var _restartAfter: ({})     // path → true: start again once this session has ended
 
@@ -74,10 +81,12 @@ Item {
     var e = root.entries[path] || Model.hotReloadEntry(path, p.name)
     _set(path, Object.assign({}, e, fields))
   }
+  // A change this window made; a status fetch asked from now on replaces it.
   function _setLocal(path, s) {
     var l = Object.assign({}, root._local)
-    l[path] = s
+    l[path] = Object.assign({}, s, { after: root._statusSeq })
     root._local = l
+    statusRes.load(true)
   }
 
   // ------------------------------------------------------------ the switch
@@ -88,7 +97,7 @@ Item {
     var path = pr.path
     if (!path) return
     var e = root.entries[path]
-    if (e && (e.action === "enabling" || e.action === "disabling")) return
+    if (e && (e.action === "enabling" || e.action === "disabling" || e.action === "cleaning")) return
     if (on) {
       _patch(path, { action: "enabling", error: null, errorAction: "" })
       app.cli.call(["hotreload", "enable", "--project", path], "", function(d) {
@@ -122,6 +131,29 @@ Item {
   // The files that still `import HotReload` after it was turned off (mode stub), when this window turned it off.
   function importedBy(p) { var s = setting(p); return s && s.importedBy ? s.importedBy : [] }
 
+  // Mode stub's Clean up: `hotreload disable` again takes the block and the no-op copy out once no file imports
+  // HotReload; while some still do, it says which.
+  function cleanUp(p) {
+    var pr = _project(p)
+    var path = pr.path
+    var e = root.entries[path]
+    if (!path || (e && e.action)) return
+    _patch(path, { action: "cleaning", error: null, errorAction: "" })
+    app.cli.call(["hotreload", "disable", "--project", path], "", function(d) {
+      var users = (d && d.importedBy) || []
+      root._set(path, null)
+      root._setLocal(path, { enabled: false, mode: d && d.mode ? d.mode : "off", importedBy: users })
+      if (d && d.mode === "stub")
+        app.toast("Hot reload's no-op copy stays: " + (users.length ? Model.hotReloadFileNames(users) : "some views")
+                  + (users.length === 1 ? " still imports" : " still import") + " HotReload. Remove "
+                  + (users.length === 1 ? "that import" : "those imports") + ", then Clean up again.", "warn")
+      else app.toast("Cleaned up: hot reload is out of " + pr.name + "'s Package.swift.", "ok")
+    }, function(err) {
+      root._set(path, null)
+      app.toastError(err, "Couldn't clean up hot reload")
+    }, { timeout: 90000 })
+  }
+
   // ------------------------------------------------------------ the session
   function start(p) {
     var pr = _project(p)
@@ -142,12 +174,14 @@ Item {
     s.start(argv)
   }
 
+  // Our own session (also while it starts, before its first snapshot) gets {"cancel": true}; someone else's
+  // gets `hotreload stop`.
   function stop(p) {
     var path = _path(p)
     var e = root.entries[path]
-    if (!e || !Model.hotReloadLive(e) || e.action === "stopping") return
-    _patch(path, { action: "stopping" })
     var s = root._streams[path]
+    if (!e || e.action === "stopping" || (!Model.hotReloadLive(e) && !s)) return
+    _patch(path, { action: "stopping" })
     if (s) {
       if (!s.write({ cancel: true })) s.stop()
       s.killLater()
@@ -184,7 +218,10 @@ Item {
     var e = root.entries[path]
     if (!e || !Model.hotReloadLive(e)) return
     _patch(path, { action: paused ? "pausing" : "resuming" })
-    controlTimeout.restart()
+    var at = Object.assign({}, root._controlAt)
+    at[path] = Date.now()
+    root._controlAt = at
+    controlTimeout.start()
     var s = root._streams[path]
     if (s && s.write({ cmd: paused ? "pause" : "resume" })) return
     app.cli.call(["hotreload", paused ? "pause" : "resume", "--project", path], "", function(d) {
@@ -198,15 +235,22 @@ Item {
     }, { timeout: 15000 })
   }
 
-  // A pause/resume the session never confirmed: let the buttons work again.
+  // A pause/resume the session never confirmed within 6 s: let that project's buttons work again.
   Timer {
     id: controlTimeout
-    interval: 6000
+    interval: 1000
+    repeat: true
     onTriggered: {
-      for (var k in root.entries) {
-        var a = root.entries[k].action
-        if (a === "pausing" || a === "resuming") root._patch(k, { action: "" })
+      var at = Object.assign({}, root._controlAt), now = Date.now(), left = false
+      for (var k in at) {
+        var e = root.entries[k]
+        var waiting = !!e && (e.action === "pausing" || e.action === "resuming")
+        if (waiting && now - at[k] < 6000) { left = true; continue }
+        if (waiting) root._patch(k, { action: "" })
+        delete at[k]
       }
+      root._controlAt = at
+      if (!left) controlTimeout.stop()
     }
   }
 
@@ -216,7 +260,7 @@ Item {
     var a = String(fix.action || "")
     if (a === "hot-reload-restart") restart(p)
     else if (a === "hot-reload-start") start(p)
-    else if (a === "hot-reload-stop") { if (isLive(p)) stop(p); else { app.cli.call(["hotreload", "stop", "--project", _path(p)], "", function() { statusRes.load(true) }, app.toastError) } }
+    else if (a === "hot-reload-stop") { if (isLive(p) || root._streams[_path(p)]) stop(p); else { app.cli.call(["hotreload", "stop", "--project", _path(p)], "", function() { statusRes.load(true) }, app.toastError) } }
     else if (a === "hot-reload-enable") setEnabled(p, true)
     else if (fix.url) Qt.openUrlExternally(fix.url)
     else if (fix.page) app.nav(fix.page, Object.assign({ path: _path(p) }, fix))
@@ -235,23 +279,21 @@ Item {
   Resource {
     id: statusRes
     ttl: 10000
-    fetch: root.app.cli.fetcher(["hotreload", "status"], "", { timeout: 20000 })
-    onSucceeded: function(d) { root._applyStatus(d || {}) }
+    // Numbered, so a reply can tell whether it read the projects after a change made here.
+    fetch: function(done, fail) {
+      var n = ++root._statusSeq
+      root.app.cli.call(["hotreload", "status"], "", function(d) { root._replySeq = n; done(d) }, fail, { timeout: 20000 })
+    }
+    onSucceeded: function(d) { root._applyStatus(d || {}, root._replySeq) }
   }
 
-  function _applyStatus(d) {
+  function _applyStatus(d, seq) {
     var projects = d.projects || {}
     root.settings = projects
-    // A local switch the status now agrees with is no longer needed.
-    var l = Object.assign({}, root._local), changed = false
-    for (var k in l) {
-      var st = projects[k]
-      if (st && !!st.enabled === !!l[k].enabled && (l[k].mode === st.mode || l[k].mode === undefined)) {
-        // the status lists a stub project's files (importedBy) itself
-        delete l[k]; changed = true
-      }
-    }
-    if (changed) root._local = l
+    // A local switch this reply read after (or agrees with) is no longer needed; the status lists a stub
+    // project's files (importedBy) itself.
+    var l = Model.hotReloadReconcile(root._local, projects, seq)
+    if (l !== root._local) root._local = l
     var seen = {}
     var list = d.sessions || []
     for (var i = 0; i < list.length; i++) {

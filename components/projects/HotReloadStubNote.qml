@@ -9,7 +9,8 @@ import "../../lib/Model.js" as Model
 // stub): they keep building against a no-op copy in .iosstudio/hot-reload. Lists the files when this window
 // turned it off, or `hotreload status` reports it in stub mode (both carry importedBy).
 // Clean up runs `hotreload disable` again: once no file imports HotReload, the block and the copy go.
-//   HotReloadStubNote { files: app.hotReload.importedBy(project); busy: …; onCleanUp: app.hotReload.setEnabled(project, false) }
+//   HotReloadStubNote { files: app.hotReload.importedBy(project); busy: entry.action === "cleaning"; onCleanUp: app.hotReload.cleanUp(project) }
+// Its glyph sits where HotReloadBar's does (the same inset and glyph column), so the two line up on a card.
 RowLayout {
   id: root
   property var files: []
@@ -18,16 +19,14 @@ RowLayout {
   signal cleanUp()
 
   spacing: Style.spacing.lg
+  Layout.leftMargin: Style.spacing.xl
+  Layout.rightMargin: Style.spacing.md
 
-  function names() {
-    var l = (root.files || []).map(function(f) { var s = String(f); return s.substring(s.lastIndexOf("/") + 1) })
-    if (l.length <= 3) return l.join(", ")
-    return l.slice(0, 3).join(", ") + " and " + (l.length - 3) + " more"
-  }
+  function names() { return Model.hotReloadFileNames(root.files) }
 
   FontMetrics { id: metrics; font: note.font }
   Item {
-    Layout.preferredWidth: Style.font.bodySmall
+    Layout.preferredWidth: Math.ceil(Style.font.body * 1.4)
     Layout.preferredHeight: metrics.height
     Layout.alignment: Qt.AlignTop
     Icon { anchors.centerIn: parent; glyph: Model.Glyph.hotReload; size: Style.font.bodySmall; color: Theme.faint }

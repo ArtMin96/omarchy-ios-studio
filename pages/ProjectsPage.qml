@@ -173,7 +173,7 @@ Item {
     subtitle: "Build your apps and run them on your iPhone."
     status: StatusPill {
       visible: page.svc.building
-      level: "busy"
+      level: page.svc.building ? "busy" : "info"      // a hidden busy pill would still spin
       text: page.svc.building ? "Building " + page.svc.build.name : ""
     }
     actions: [
