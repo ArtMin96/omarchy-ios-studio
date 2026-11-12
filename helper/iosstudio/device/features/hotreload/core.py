@@ -6,16 +6,24 @@ The app's hot reload runtime (templates/hot-reload/, compiled into DEBUG builds)
 `patch-<seq>.dylib` (written as `.part`, then renamed, so the runtime never sees half a file); the runtime loads it
 and answers with `ack-<seq>.json`. At each launch it writes `runtime.json` and deletes old patches and acks.
 
-A push only sends a file from the helper's hot-reload patch store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib,
-see helper/iosstudio/features/hotreload/buildinfo.py), never any other local file.
+A push only sends a file from a helper's hot-reload patch store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib,
+see helper/iosstudio/features/hotreload/buildinfo.py), never any other local file. The daemon doesn't work out
+the store from its own environment (it may have been started with another XDG_CACHE_HOME); it takes the path the
+helper sends when it (a) is absolute with no symlink in it (src == its realpath), (b) has exactly that shape (and
+the request's `key`, when given, as <key>) and (c) is a regular file owned by the daemon's user, in a `patches`
+folder owned by it too. The file is then opened with O_NOFOLLOW | O_CLOEXEC and the open file checked to be the
+same one (device and inode), so it can't be swapped between the check and the read.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
+from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
-from iosstudio.core import appdirs
 from iosstudio.core.output import HelperError
 
 DIR = "/Library/Caches/HotReload"
@@ -28,6 +36,9 @@ ACK_MAX = 64 << 10            # bytes of an ack (or runtime.json) read at most
 # typically 50-500 KB per file; CrashLab's whole app executable is ~5 MB. 64 MB is >10x any real patch and ~3 s of AFC.
 PATCH_MAX = 64 << 20
 PATCH_NAME = re.compile(r"^patch-\d+\.dylib$")
+KEY = re.compile(r"^[0-9a-f]{12}$")        # buildinfo.project_key()
+STORE_DIR = "hot-reload"
+NOT_OURS = "Only hot reload patches made by iOS Studio can be sent."
 SEQ_MAX = 10 ** 9
 OURS = re.compile(r"^(patch-\d+\.dylib(\.part)?|ack-\d+\.json(\.tmp)?)$")   # what hotreload.clean removes
 ACK_INTS = ("swapped", "kept", "vtable", "reverted", "generation")
@@ -50,18 +61,63 @@ def is_ours(name: str) -> bool:
     return bool(OURS.match(name))
 
 
-def patch_store() -> Path:
-    """The helper's hot-reload cache (buildinfo.cache_root()); patches live in <store>/<key>/patches/."""
-    return appdirs.cache_dir() / "hot-reload"
+def store_shaped(path: Path, key: str | None = None) -> bool:
+    """path is shaped like a patch in a store: …/hot-reload/<key>/patches/patch-<n>.dylib (that key, if given)."""
+    p = path.parts
+    return (len(p) >= 5 and p[-4] == STORE_DIR and bool(KEY.match(p[-3])) and (key is None or p[-3] == key)
+            and p[-2] == "patches" and bool(PATCH_NAME.match(p[-1])))
 
 
-def in_store(path: Path) -> bool:
-    """A resolved path that is a patch in the store: <store>/<key>/patches/patch-<n>.dylib."""
+@dataclass(frozen=True)
+class Patch:
+    """A checked patch file (push_args): open it with open_patch()."""
+    path: Path
+    dev: int
+    ino: int
+    size: int
+
+
+def _ours(st: os.stat_result) -> bool:
+    return st.st_uid == os.getuid()
+
+
+def check_patch(raw: str, key: str | None = None) -> Patch:
+    """The local patch file a push names, checked (see the module doc); not-found / bad-args / too-big."""
+    given = Path(raw.removeprefix("file://")).expanduser()
     try:
-        rel = path.relative_to(patch_store().resolve())
-    except (ValueError, OSError):
-        return False
-    return len(rel.parts) == 3 and rel.parts[1] == "patches" and bool(PATCH_NAME.match(rel.parts[2]))
+        real = Path(os.path.realpath(given, strict=True))
+    except OSError:
+        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(given)) from None
+    if not given.is_absolute() or real != Path(os.path.normpath(given)) or not store_shaped(real, key):
+        raise HelperError("bad-args", NOT_OURS, None, str(given))
+    try:
+        st, folder = os.lstat(real), os.lstat(real.parent)
+    except OSError:
+        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(given)) from None
+    if not stat.S_ISREG(st.st_mode) or not _ours(st) or not _ours(folder):
+        raise HelperError("bad-args", NOT_OURS, None, str(given))
+    if st.st_size > PATCH_MAX:
+        raise HelperError("too-big", too_big(st.st_size))
+    return Patch(real, st.st_dev, st.st_ino, st.st_size)
+
+
+def open_patch(patch: Patch) -> BinaryIO:
+    """The checked patch opened for reading (O_NOFOLLOW | O_CLOEXEC), the same file check_patch looked at, or
+    HelperError (not-found when it's gone, bad-args when another file is there now)."""
+    try:
+        fd = os.open(patch.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(patch.path)) from None
+    except OSError:          # ELOOP: a symlink took its place
+        raise HelperError("bad-args", NOT_OURS, None, str(patch.path)) from None
+    try:
+        st = os.fstat(fd)
+        if (st.st_dev, st.st_ino) != (patch.dev, patch.ino) or not stat.S_ISREG(st.st_mode) or not _ours(st):
+            raise HelperError("bad-args", NOT_OURS, None, str(patch.path))
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def bundle_id(a: dict) -> str:
@@ -80,8 +136,9 @@ def wait_ms(a: dict) -> int:
     return max(0, min(ms, WAIT_MAX_MS))
 
 
-def push_args(a: dict) -> tuple[str, int, Path, int]:
-    """(bundle id, seq, local patch file, wait ms) of a hotreload.push request; bad-args / not-found on errors."""
+def push_args(a: dict) -> tuple[str, int, Patch, int]:
+    """(bundle id, seq, checked local patch file, wait ms) of a hotreload.push request; bad-args / not-found /
+    too-big on errors."""
     bid = bundle_id(a)
     try:
         seq = int(a.get("seq"))
@@ -92,19 +149,10 @@ def push_args(a: dict) -> tuple[str, int, Path, int]:
     raw = str(a.get("src") or "")
     if not raw:
         raise HelperError("bad-args", "Which patch file? (src missing)")
-    given = Path(raw.removeprefix("file://")).expanduser()
-    try:
-        src = given.resolve(strict=True)
-    except OSError:
-        src = None
-    if src is None or not src.is_file():
-        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(given))
-    if not in_store(src):
-        raise HelperError("bad-args", "Only hot reload patches made by iOS Studio can be sent.", None, str(given))
-    size = src.stat().st_size
-    if size > PATCH_MAX:
-        raise HelperError("too-big", too_big(size))
-    return bid, seq, src, wait_ms(a)
+    key = a.get("key")
+    if key is not None and not (isinstance(key, str) and KEY.match(key)):
+        raise HelperError("bad-args", "key must be a hot reload project key.")
+    return bid, seq, check_patch(raw, key), wait_ms(a)
 
 
 def too_big(size: int) -> str:

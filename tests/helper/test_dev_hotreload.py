@@ -4,7 +4,9 @@ the real daemon with a fake house_arrest AFC at the pymobiledevice3 service boun
 push writes Library/Caches/HotReload/patch-<seq>.dylib.part, renames it, and reads ack-<seq>.json every 50 ms until
 waitMs; a fake runtime answers after a delay (or never: acked false). clean removes only patches and acks; runtime
 reads runtime.json. An app that isn't installed is `not-installed`, an App Store app `not-dev-app`. Only patches in
-the helper's store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib) are sent, streamed in AFC chunks, ≤ 64 MB.
+a helper's store (…/hot-reload/<key>/patches/patch-<n>.dylib, symlink-free, owned by the daemon's user; the store
+here is outside the daemon's own cache folder, like a helper started with another XDG_CACHE_HOME) are sent,
+opened with O_NOFOLLOW and checked to be the file that was checked, streamed in AFC chunks, ≤ 64 MB.
 
     .venv/bin/pytest -q tests/helper/test_dev_hotreload.py
     cd tests && PYTHONPATH=../helper:. ~/pymobile3-venv/bin/python -m unittest helper.test_dev_hotreload
@@ -12,7 +14,9 @@ the helper's store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib) are sent, 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
+import os
 import posixpath
 import shutil
 import tempfile
@@ -147,9 +151,15 @@ class Afc:
         return False
 
 
-def store_patch(size: int = 3000, name: str | None = None) -> Path:
-    """A patch where the helper's session leaves them: <cache>/hot-reload/<key>/patches/patch-<size>.dylib."""
-    p = hr.patch_store() / "0123456789ab" / "patches" / (name or f"patch-{size}.dylib")
+# A helper's cache that isn't the daemon's (its XDG_CACHE_HOME differs): the daemon takes the path it is sent.
+STORE_ROOT = Path(os.path.realpath(tempfile.mkdtemp(prefix="hr-store-")))
+atexit.register(shutil.rmtree, STORE_ROOT, ignore_errors=True)
+KEY = "0123456789ab"
+
+
+def store_patch(size: int = 3000, name: str | None = None, key: str = KEY) -> Path:
+    """A patch where a helper's session leaves them: <cache>/hot-reload/<key>/patches/patch-<size>.dylib."""
+    p = STORE_ROOT / "hot-reload" / key / "patches" / (name or f"patch-{size}.dylib")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(bytes(range(256)) * (size // 256) + b"x" * (size % 256))
     return p
@@ -255,6 +265,56 @@ class Push(Harness):
         self.assertEqual(self.phone.opened, [])
         out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": f"file://{inside}", "seq": 1})
         self.assertEqual(out["bytes"], 100)
+
+    async def test_a_store_outside_the_daemons_cache_folder(self):
+        from iosstudio.core import appdirs
+        src = store_patch(321)
+        self.assertFalse(str(src).startswith(str(appdirs.cache_dir())))
+        out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1, "key": KEY})
+        self.assertEqual(out["bytes"], 321)
+
+    async def test_refused_paths(self):
+        src = store_patch(100)
+        linked = self.tmp / "linked-cache"
+        linked.symlink_to(STORE_ROOT)                     # the same file, named through a symlink
+        via_link = linked / src.relative_to(STORE_ROOT)
+        self.assertTrue(via_link.is_file())
+        relative = os.path.relpath(src)
+        for args in ({"src": str(via_link)}, {"src": relative}, {"src": str(src), "key": "ffffffffffff"},
+                     {"src": str(src), "key": "../x"}, {"src": str(store_patch(100, key="not-a-key"))}):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "seq": 1, **args})
+            self.assertEqual(cm.exception.code, "bad-args", args)
+        with mock.patch.object(os, "getuid", return_value=os.getuid() + 1):   # someone else's file
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "seq": 1, "src": str(src)})
+            self.assertEqual(cm.exception.code, "bad-args")
+        self.assertEqual(self.phone.opened, [])
+
+    async def test_a_file_swapped_after_the_check_is_not_sent(self):
+        src = store_patch(100)
+        checked = hr.check_patch(str(src))
+        other = src.with_name("patch-other.tmp")
+        other.write_bytes(b"y" * 100)
+        os.replace(other, src)                            # another file under the checked name
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "bad-args")
+        checked = hr.check_patch(str(src))
+        src.unlink()
+        src.symlink_to(self.tmp / "elsewhere")             # a symlink in its place: O_NOFOLLOW
+        (self.tmp / "elsewhere").write_bytes(b"z")
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "bad-args")
+        src.unlink()
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "not-found")
+        src = store_patch(100)
+        with hr.open_patch(hr.check_patch(str(src))) as f:
+            self.assertEqual(len(f.read()), 100)
+            self.assertTrue(os.get_inheritable(f.fileno()) is False)
 
     async def test_too_big(self):
         self.assertEqual(hr.PATCH_MAX, 64 << 20)

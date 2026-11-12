@@ -95,7 +95,7 @@ When a session starts, it:
 
 1. checks that hot reload is on for the project (else `not-enabled`), that xtool and rcodesign are installed, that you're signed in to an Apple ID and that an iPhone is connected;
 2. takes a snapshot of the sources (a digest of each watched file and a copy of each Swift file under `Sources/`, up to 64 MB of copies), so it knows what the build reads;
-3. runs the same build as the Run button (with the project's selected run preset), which shows in the build history like any other build;
+3. runs the same build as the Run button (with the project's selected run preset), which shows in the build history like any other build. If the project has a prebuild command, the snapshot is taken again when the prebuild finishes and before xtool starts, so the files it generates or rewrites (Swift files, `xtool.yml`, a plist) count as built, not as saves made during the build;
 4. after the install, deletes old patches from the app's folder on the phone (the runtime also clears them at each launch) and opens the app with the console attached, so the runtime's `[HotReload]` lines show in Logs › Console;
 5. records the baseline: the exact compile command of each Swift file, the app's link command, the sources from the snapshot, the object files as built, and the app's executable;
 6. compiles one file in the background, so the compiler's module cache is warm before your first save;
@@ -148,7 +148,7 @@ What's refused, by `kind` in `lastError.blockers`:
 
 The message names the first one, for example "Adds the stored property count to ContentView. This change needs a full build." The reply lists up to 10, and `blockersTotal` counts them all.
 
-A new file is a `.swift` file created in, or moved into, the app module's folders after the build. Swift files that were already there but aren't compiled (left out with `exclude:`, or resources) are ignored, and so are hidden folders (`.build`, `.iosstudio`, `.git`, `.swiftpm`), nested packages and `Package.swift`.
+A new file is a `.swift` file in the app module's folders that isn't compiled into the app and wasn't there when the build started (the snapshot lists what was there). That includes a file you create while the first build runs, even one the build was too far along to pick up. Swift files that were already there but aren't compiled (left out with `exclude:`, or resources) are ignored, even if you edit them later, and so are hidden folders (`.build`, `.iosstudio`, `.git`, `.swiftpm`), nested packages and `Package.swift`. Where the snapshot doesn't reach (a folder file watching ignores, such as `build/`, or a project with more than 5,000 watched files), a file counts as new when it was created or moved there after the build started.
 
 Two more cases need Run again: an app on the phone that wasn't built with hot reload on (`not-interposable`), and a change whose functions the app calls directly rather than through the pointer table. The second isn't an error: the reload goes through, and `lastReload.notSwapped` counts the functions whose change won't show.
 
@@ -167,7 +167,7 @@ A failed reload doesn't end the session: the state becomes `failed`, `lastError`
 | `not-interposable` | the app was built without hot reload | Run again |
 | `app-not-running` | the app didn't answer within 5 s: it isn't open (or iOS suspended it in the background), or the installed build has no runtime | open the app on the phone and save again, or Run again |
 | `load-failed` | the app got the patch but couldn't load it; the message has the system's reason (`dlerror`), often code signing or library validation, or the runtime's own (a bigger async function, too many reloads: see [Limits](#limits)) | Run again; see [troubleshooting](../troubleshooting.md#the-app-couldnt-load-the-change-load-failed) |
-| `no-baseline` | the records of the last build are missing or unreadable | Run again |
+| `no-baseline` | the records of the last build are missing or unreadable (or the compiler's plan for the module is over 16 MB) | Run again |
 | `not-enabled` | hot reload is off for the project | turn it on |
 | `no-device` | no iPhone connected | connect it |
 | `missing-tool` | xtool or rcodesign isn't installed | Setup installs both |
@@ -211,7 +211,7 @@ In `$XDG_RUNTIME_DIR/ios-studio/` (the same base as [watch mode](watch-mode.md#f
 | `hotreload-<key>.json` | the latest snapshot and the last 20 reloads (`history`); kept after the session stops |
 | `hotreload-<key>-control.json` | pause or resume, read by the session on `SIGUSR1` |
 
-A session that died without saying so (killed, crashed) is recorded as stopped with `stopReason: "session-died"` by the next `status`. Files of sessions stopped more than 24 hours ago are deleted when a session starts, and so are lock files that no session holds and no state file goes with (older than a minute). `status`, `stop`, `pause` and `resume` never create a lock file.
+A session that died without saying so (killed, crashed) is recorded as stopped with `stopReason: "session-died"` by the next `status`. Files of sessions stopped more than 24 hours ago are deleted when a session starts, and so are lock files that no session holds and no state file goes with (older than a minute). Pruning deletes a lock file only while it holds that lock itself, so a session starting at the same moment waits for it (up to half a second) or takes the new file; it never loses its lock. `status`, `stop`, `pause` and `resume` never create a lock file.
 
 On the iPhone, in the app's `Library/Caches/HotReload/`: `runtime.json` (written by the runtime at each launch), `patch-<n>.dylib` and `ack-<n>.json` (the app's answer). The runtime deletes every patch and answer when the app launches and keeps only the newest 3 after each reload, and a session clears the folder when it starts. The folder is in the app's Caches, so iOS may also clear it, and it goes away with the app. If it's deleted while the app runs (also with all of `Library/Caches`), the runtime makes it again and writes a new `runtime.json`. Loaded patches stay in the app's memory until it quits (a few hundred KB each).
 
@@ -308,7 +308,8 @@ With `IOSSTUDIO_DEMO` set, `enable` and `disable` answer with the real block's d
 - `tests/helper/test_hot_reload_setup.py` and `tests/cli/test_hot_reload_setup_cli.py`: the block added and removed byte for byte, `off` and `stub`, the runtime copy, dry runs, a manifest that wouldn't work.
 - `tests/helper/test_hot_reload_buildinfo.py`, `test_hot_reload_patch.py`, `test_hot_reload_checks.py` (and `test_hot_reload_checks_review.py`: class vars, type aliases, static storage, regex literals), `test_hot_reload_macho.py` and `test_hot_reload_signing.py`: the pipeline against a fake xtool build and fake swiftc, ld64.lld and rcodesign, on small real object files in `tests/fixtures/hot-reload/`. Signing uses throwaway keys made with openssl and checks that no key reaches the disk.
 - `tests/helper/test_hot_reload_session.py` and `tests/cli/test_hot_reload_session_cli.py`: the scheduler, error mapping, pause and resume, the runtime files, and a real-mode session with a fake xtool and a fake device daemon.
-- `tests/helper/test_dev_hotreload.py`: the device feature with a fake house_arrest at the pymobiledevice3 boundary, and its demo twin.
+- `tests/helper/test_dev_hotreload.py`: the device feature with a fake house_arrest at the pymobiledevice3 boundary, which patch files a push takes (a store outside the daemon's cache folder, no symlinks, its own user's, not swapped after the check), and its demo twin.
+- `tests/helper/test_hot_reload_build_window.py`: what happens while the first build runs: a file created during it is new, a prebuild's output counts as built, `-###` output over its cap, pruning a lock while a session starts.
 - `tests/cli/test_hot_reload_runtime.py`: the runtime package's layout and the same API in full and stub; with the iOS SDK installed, both build for iOS, and the loader's symbol rules (`hr_rules.h`) are checked against a small app and patch built for `arm64-apple-ios` (addressors kept, async function records, a grown async context caught).
 - `tests/qml/tst_hot_reload.qml`: the `Model.hotReload*` helpers (stream events into an entry, the bar's label, pill and buttons); `tst_hot_reload_reconcile.qml`: a switch flipped here against later status replies.
 - `tests/mcp/test_mcp_hot_reload.py`: the agent tools against a fake helper (with a fake `hotreload run` stream), and with the real helper's demo session: start, waiting for the next reload, pause, resume, stop; `test_mcp_hot_reload_bounds.py`: cut blocker lists, the history budget, a failed off after the session stopped, the stop grace.

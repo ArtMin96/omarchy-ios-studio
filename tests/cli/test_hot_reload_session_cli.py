@@ -216,6 +216,8 @@ class RealCli(unittest.TestCase):
             push = d.sent("hotreload.push")[0]
             self.assertEqual((push["seq"], push["bundleId"], push["waitMs"]), (1, INSTALLED, 5000))
             self.assertTrue(push["src"].endswith("patches/patch-1.dylib"))
+            self.assertEqual(push["src"], os.path.realpath(push["src"]))
+            self.assertEqual(push["src"].split("/")[-3], push["key"])
             if OPENSSL:
                 self.assertTrue(any(c.startswith("sign ") for c in self.w.calls()))
 

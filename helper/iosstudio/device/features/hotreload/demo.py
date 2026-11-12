@@ -3,6 +3,7 @@ runtime always answers (3 functions swapped); every development app has the runt
 from __future__ import annotations
 
 import asyncio
+import os
 
 from iosstudio.core.output import HelperError, fix
 from iosstudio.core.subproc import demo_delay
@@ -29,7 +30,8 @@ def register(reg):
     async def push(ctx, a):
         bid, seq, src, _wait = hr.push_args(a)
         bid = _app({"bundleId": bid})
-        size = src.stat().st_size
+        with hr.open_patch(src) as f:              # the same checks as the real push
+            size = os.fstat(f.fileno()).st_size
         await asyncio.sleep(demo_delay(0.25))
         await asyncio.sleep(demo_delay(0.05))
         generation[bid] = generation.get(bid, 0) + 1
