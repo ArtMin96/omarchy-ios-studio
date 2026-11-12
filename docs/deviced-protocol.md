@@ -1220,7 +1220,7 @@ its answer. Your own development builds only (house_arrest VendContainer, on the
 
 | cmd | args | reply data |
 |---|---|---|
-| `hotreload.push` | `{bundleId, src (local .dylib), seq (≥ 1), waitMs?: 5000 (0 to 15000), udid?}` | `{seq, bytes, pushMs, acked, ack?: Ack, ackMs?}`; `acked: false` (no `ack`) = no answer within `waitMs` (the app isn't running, or the build has no runtime) |
+| `hotreload.push` | `{bundleId, src (a patch in the helper's store, below), seq (≥ 1), waitMs?: 5000 (0 to 15000), udid?}` | `{seq, bytes, pushMs, acked, ack?: Ack, ackMs?}`; `acked: false` (no `ack`) = no answer within `waitMs` (the app isn't running, or the build has no runtime) |
 | `hotreload.clean` | `{bundleId, udid?}` | `{removed}`: deletes `patch-*` and `ack-*` (also half-written `.part`/`.tmp`), never `runtime.json` |
 | `hotreload.runtime` | `{bundleId, udid?}` | `{present, runtime?: {version, pid, started}}` from `runtime.json`, which the runtime writes at each launch (`started` in Unix seconds tells which launch) |
 
@@ -1230,13 +1230,18 @@ its answer. Your own development builds only (house_arrest VendContainer, on the
 
 - `push` writes `patch-<seq>.dylib.part`, renames it to `patch-<seq>.dylib` (the runtime only loads whole
   names; patches are cumulative, so it loads only the newest), then reads `ack-<seq>.json` every 50 ms until
-  it's there or `waitMs` has passed. Ack (above): `ok: false` with `error` (the `dlerror()` text) when the app
-  couldn't load the patch; an ack that can't be read (not JSON, over 64 KB) is `ok: false` too. Pushes to one
-  app run one at a time. Patches over 256 MB are `too-big`.
+  it's there or `waitMs` has passed. Ack (above): `ok: false` with `error` (the `dlerror()` text, or the runtime's
+  own reason: a grown async context, too many reloads) when the app couldn't load the patch; an ack that can't be read (not JSON, over 64 KB) is `ok: false` too. Pushes to one
+  app run one at a time. The file is streamed in 1 MiB AFC chunks, never read whole. Patches over 64 MB are
+  `too-big`.
+- `src` is resolved (symlinks followed) and must be a `patch-<n>.dylib` in the `patches/` folder of a project in
+  the helper's hot reload cache (`~/.cache/ios-studio/hot-reload/`); any other file is `bad-args`, in real and
+  demo mode.
 - The runtime deletes every patch and ack at launch and keeps the newest 3 after each load, so nothing on the
   phone needs pruning; `clean` runs at the start of a session.
-- Errors: `not-installed` (fix → Projects, `action: "build"`), `not-dev-app` (an App Store app), `bad-args`,
-  `not-found` (`src` is gone), `too-big`, plus the AFC errors of `container.*` (`denied`, `no-space`).
+- Errors: `not-installed` (fix → Projects, `action: "build"`), `not-dev-app` (an App Store app), `bad-args`
+  (also a `src` outside the patch store), `not-found` (`src` is gone), `too-big`, plus the AFC errors of
+  `container.*` (`denied`, `no-space`).
 - Demo: every development app has the runtime; a push answers after about 300 ms with `ok: true, swapped: 3`.
 
 ### Debugging (`debug.*`), used by iPhone › Debug and the `debug` helper group

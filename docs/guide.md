@@ -465,14 +465,15 @@ There are no SwiftUI previews on Linux. Hot reload is the next best thing: save 
 
    The first save after adding them is refused (they change the view's layout in memory): press Run again in the bar under the card, so the app on the phone has them too.
 3. Edit and save. The bar under the card shows the reload's progress, then the result, for example "Watching · Reloaded ContentView.swift · 2.2 s · 01:57:19 · just now". Logs › Console shows a line like `[HotReload] patch 3: swapped 4 functions (12 kept) in 3.1 ms`.
-4. Pause, in the bar, stops sending changes while you're in the middle of an edit; Resume sends everything you saved meanwhile at once. Stop ends the session but leaves hot reload on. When it's on but not running (after you reopen iOS Studio, for example), the bar says "Hot reload is on, but not running" and Start begins one again.
+4. Pause, in the bar, stops sending changes while you're in the middle of an edit; Resume sends everything you saved meanwhile at once. Stop ends the session but leaves hot reload on, and also works while it's still starting. When it's on but not running (after you reopen iOS Studio, for example), the bar says "Hot reload is on, but not running" and Start begins one again.
 5. To turn it off, turn the switch off. If your code still imports `HotReload`, the lines stay with a version that does nothing, so the project keeps building, and a note on the card lists those files. Remove the imports and press Clean up in the note.
 
 Good to know:
 
 - A reload can change what functions and views do: text, colors, layout, modifiers, the code in a button's action. It can't add a type, a stored property (`@State` included), an enum case or a file. Those are refused with the reason, the file and line, and a Run again button, which builds and installs the app with your change. The session keeps watching, so a later save that can be reloaded still is.
 - Without `@ObserveHotReload`, the change only shows when the view redraws for another reason. Without `.hotReloadable()`, a change to what kind of view `body` returns (adding a `VStack`, say) is refused.
-- Saving `Package.swift`, `xtool.yml` or a resource doesn't reload; press Run again for those.
+- Saving `Package.swift`, `xtool.yml`, a resource or a Swift file in another target (a library under `Sources/`) doesn't reload; press Run again for those.
+- Files you save while the first build runs are reloaded as soon as it's done.
 - When a reload fails while you're in your editor, a desktop notification says so.
 - Quitting iOS Studio stops its hot reload sessions; the switch stays on, and Start begins one again next time.
 - Turning hot reload on stops watch mode for that project.

@@ -329,9 +329,9 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
 | Debug in editor: each app's attach file (`<bundle id>.lldb`), its running bridge (`<bundle id>.json`) and the lldb commands they load (the newest 20 apps) | `~/.local/state/ios-studio/editor-debug/` |
-| Hot reload: each project's baseline (build commands, sources and objects as built, the app's executable) and its signed patches (the newest 10); 300 MB in all, the oldest projects go first | `~/.cache/ios-studio/hot-reload/<key>/` (key: the first 12 hex digits of the SHA-1 of the project path) |
+| Hot reload: each project's baseline (build commands, sources and objects as built, the app's executable) and its signed patches (the newest 10); 300 MB in all, the oldest projects go first, never one with a running session; staging folders (`.<key>-…`) go after 6 hours | `~/.cache/ios-studio/hot-reload/<key>/` (key: the first 12 hex digits of the SHA-1 of the project path) |
 | Hot reload in a project: the runtime package (or its no-op stub) and a `.gitignore` of `*`; the managed block at the end of `Package.swift` | `<project>/.iosstudio/hot-reload/` |
-| Hot reload sessions: `hotreload-<key>.lock`, `hotreload-<key>.json` (snapshot and the last 20 reloads), `hotreload-<key>-control.json` (pause/resume); a stopped session's files go after 24 hours | `$XDG_RUNTIME_DIR/ios-studio/` (same base as watch mode) |
+| Hot reload sessions: `hotreload-<key>.lock`, `hotreload-<key>.json` (snapshot and the last 20 reloads), `hotreload-<key>-control.json` (pause/resume); a stopped session's files go after 24 hours, lock files without a holder or a state file after a minute | `$XDG_RUNTIME_DIR/ios-studio/` (same base as watch mode) |
 | Watch mode (lock, status, events, owners, log; demo mode uses `ios-studio-demo/`) | `$XDG_RUNTIME_DIR/ios-studio/watch*` (`$IOSSTUDIO_RUNTIME_DIR` overrides the base; without `XDG_RUNTIME_DIR`, `/run/user/<uid>` when it's yours, else `/tmp/ios-studio-<uid>`: `device/client.py: runtime_base()`, shared with the device daemon) |
 | Compiled Python modules of the helper, daemon and MCP server | `~/.cache/ios-studio/pycache/` |
 | Debug symbols, per iOS version | `~/.cache/ios-studio/DeviceSupport/` |
@@ -353,6 +353,9 @@ The UI and error rules are in [ARCHITECTURE.md](../ARCHITECTURE.md#key-patterns)
 - Every async surface has a loading, empty and error state. Errors show the plain `message` and a fix button.
 - Destructive actions go through `app.confirm({...})` with Cancel as the default.
 - Desktop notifications (`omarchy-notification-send`) only fire while the window isn't focused.
+- Nothing animates unseen: an `Icon` with `spinning` turns only while it's visible and the window isn't hidden, a
+  StatusPill's `level: "busy"` is bound to work that is running (never left on a hidden pill), and an endless
+  animation of your own checks `visible` too. A hidden spinner keeps the whole window redrawing.
 - Settings edits to Hyprland files only touch marker-delimited blocks, back the file up first and roll back if `hyprctl configerrors` reports a problem.
 
 ## Reference

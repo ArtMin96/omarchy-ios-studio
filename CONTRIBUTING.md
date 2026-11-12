@@ -150,7 +150,8 @@ alignment, spacing). APIs: [docs/components.md](docs/components.md).
 1. Bump `templates/hot-reload/version.txt`. Projects get the new copy the next time hot reload is turned on or a
    session starts; without the bump they keep the old one.
 2. Keep `full/` and `stub/` declaring the same public API; `tests/cli/test_hot_reload_runtime.py` checks that,
-   and with the iOS SDK installed it builds both for iOS.
+   and with the iOS SDK installed it builds both for iOS and checks the loader's symbol rules (`hr_rules.h`)
+   against a small app and patch built for `arm64-apple-ios`.
 3. The loader's file protocol (`runtime.json`, `patch-<n>.dylib`, `ack-<n>.json`) is shared with
    `helper/iosstudio/device/features/hotreload/` and the session: change them together and update
    `templates/hot-reload/README.md`.

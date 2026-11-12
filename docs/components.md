@@ -265,6 +265,9 @@ are never squeezed under the text.
 Icon { glyph: Model.Glyph.phone; size: Style.font.iconLarge; color: Theme.dim; spinning: false }
 ```
 
+`spinning` only turns the glyph while it's visible (no hidden parent) and the window isn't hidden, so a spinner on a
+page that stays loaded never keeps the window redrawing.
+
 ## ActionButton
 
 `text`, `glyph`, `kind: "primary" | "secondary" (default) | "ghost" | "danger"`, `busy` (spinner, ignores
@@ -333,7 +336,8 @@ SectionHeader { Layout.fillWidth: true; text: "Installed apps"; detail: "12"; tr
 ## StatusPill
 
 `level` (`ok|warn|error|info|busy`, aliases normalised), `text`, `glyph` (override), `showGlyph`,
-`quiet` (no fill, for dense rows). `busy` spins.
+`quiet` (no fill, for dense rows). `busy` spins; don't leave `level: "busy"` on a pill that is hidden or shows
+nothing in progress (bind it to the work, e.g. `svc.building ? "busy" : "info"`).
 ```qml
 StatusPill { level: exp.level; text: exp.text }   // exp = Model.expiryStatus(profile.expires)
 ```
@@ -723,24 +727,34 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   Pause/Resume (disabled with the reason until the session watches), Stop, or Start when nothing runs, and a close
   button on a stopped or failed-to-start bar. Under it: the build's ProgressTrack, a failed reload's blockers (≤ 3,
   `file:line` opens the editor at the line, "and N more"), the first compiler error, and the session's notice (one
-  small line with its fix). Below 540 px (780 px when a fix shows) the buttons go under the text and the blockers.
+  small line with its fix). Below 640 px, in every state, the buttons go under the text and the blockers. The top
+  row keeps a two-line minimum, so Watching, Reloading and Reloaded have one height; a failed reload puts "Still
+  watching" next to its first place. Stop shows while a session of ours is still starting (before its first
+  snapshot), with the pill "Stopping" after a click. Blockers don't rebuild on the clock's tick.
 - **HotReloadStubNote**: one faint line when hot reload is off but views still `import HotReload` (mode stub): the
-  files (from `disable`'s `importedBy`, when this window turned it off) and Clean up (signal `cleanUp()`; the card
-  calls `setEnabled(project, false)` again, which removes the block once no file imports it).
+  files (`Model.hotReloadFileNames` of `importedBy`) and Clean up (signal `cleanUp()`; the card calls
+  `app.hotReload.cleanUp(project)` and passes `busy` while its entry's action is `cleaning`). Its glyph uses the
+  bar's inset and glyph column, so the two line up.
 - **HotReloadService** (`app.hotReload`, `services/HotReloadService.qml`): one `hotreload run --project P [--udid U]
   [--preset NAME]` Stream per project and its latest snapshot. `entries` (path → entry), `settings` (path →
   `{enabled, mode}` from `hotreload status`), `setting(p)`, `isOn(p)`, `forProject(p)`, `label(p, nowMs)`,
   `isLive(p)`, `liveCount`, `startBlocker(p)` (no bundle ID, generated xtool.yml not allowed, no iPhone, this
   project building), `importedBy(p)`. Actions: `setEnabled(p, on)` / `toggle(p)` (on: `enable`, then `start` when
   nothing blocks it; off: our stream gets `{"cancel": true}`, then `disable`, which also stops a session someone
-  else runs), `start`, `stop`, `restart` (stop, then start once it ended), `pause` / `resume` (`{"cmd": "pause" |
+  else runs), `cleanUp(p)` (mode stub: `disable` again, action `cleaning`; a toast names the files that still
+  import HotReload), `start`, `stop` (also while our session starts, before its first snapshot), `restart` (stop, then start once it ended), `pause` / `resume` (`{"cmd": "pause" |
   "resume"}` on our stream's stdin, else `hotreload pause|resume`), `runFix(p, fix)` (actions `hot-reload-start`,
   `-stop`, `-restart`, `-enable`; other fixes navigate), `dismiss(p)`, `refresh()`. An entry is `{path, name, owned,
-  action: "" | enabling | disabling | starting | stopping | pausing | resuming, error, errorAction, session, at}`;
+  action: "" | enabling | disabling | cleaning | starting | stopping | pausing | resuming, error, errorAction, session,
+  at}`;
   the state machine is `Model.hotReloadEvent` (tested in `tests/qml/tst_hot_reload.qml`). `hotreload status` is a
   Resource (ttl 10 s): asked at start-up, when the window gets focus, when the Projects page opens and after a stop;
   sessions another process runs show with `owned: false` and are asked again every 4 s only while one runs and the
-  window is focused. A switch flipped here wins over the status until the status agrees. A failed reload or a
+  window is focused. A switch flipped here wins over the status only until a status fetch that started after the
+  change answers, whatever it says (fetches are numbered; `Model.hotReloadReconcile`, tested in
+  `tests/qml/tst_hot_reload_reconcile.qml`), so a change an agent or the helper made shows on the card; a local
+  change asks for a fresh status at once. A pause or resume the session doesn't confirm within 6 s frees that
+  project's buttons again. A failed reload or a
   session that ends with an error sends a desktop notification while the window isn't focused. Its own streams get
   `{"cancel": true}` when the app quits (the session also stops when its parent goes). The Projects page handles the
   same fix actions as deep links (`{action: "hot-reload-restart", path}`). See
