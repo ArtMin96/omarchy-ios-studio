@@ -5,6 +5,9 @@ The app's hot reload runtime (templates/hot-reload/, compiled into DEBUG builds)
 `Library/Caches/HotReload/` in the app's container. The helper's session pushes each signed patch there as
 `patch-<seq>.dylib` (written as `.part`, then renamed, so the runtime never sees half a file); the runtime loads it
 and answers with `ack-<seq>.json`. At each launch it writes `runtime.json` and deletes old patches and acks.
+
+A push only sends a file from the helper's hot-reload patch store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib,
+see helper/iosstudio/features/hotreload/buildinfo.py), never any other local file.
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import json
 import re
 from pathlib import Path
 
+from iosstudio.core import appdirs
 from iosstudio.core.output import HelperError
 
 DIR = "/Library/Caches/HotReload"
@@ -20,7 +24,10 @@ WAIT_DEFAULT_MS = 5000
 WAIT_MAX_MS = 15000
 POLL_S = 0.05                 # ack poll interval
 ACK_MAX = 64 << 10            # bytes of an ack (or runtime.json) read at most
-PATCH_MAX = 256 << 20         # biggest patch pushed
+# Biggest patch pushed. A patch holds only the changed files' code (no DWARF: the linker leaves it in the objects),
+# typically 50-500 KB per file; CrashLab's whole app executable is ~5 MB. 64 MB is >10x any real patch and ~3 s of AFC.
+PATCH_MAX = 64 << 20
+PATCH_NAME = re.compile(r"^patch-\d+\.dylib$")
 SEQ_MAX = 10 ** 9
 OURS = re.compile(r"^(patch-\d+\.dylib(\.part)?|ack-\d+\.json(\.tmp)?)$")   # what hotreload.clean removes
 ACK_INTS = ("swapped", "kept", "vtable", "reverted", "generation")
@@ -41,6 +48,20 @@ def ack_path(seq: int) -> str:
 def is_ours(name: str) -> bool:
     """A patch or ack file (also half-written ones); never runtime.json."""
     return bool(OURS.match(name))
+
+
+def patch_store() -> Path:
+    """The helper's hot-reload cache (buildinfo.cache_root()); patches live in <store>/<key>/patches/."""
+    return appdirs.cache_dir() / "hot-reload"
+
+
+def in_store(path: Path) -> bool:
+    """A resolved path that is a patch in the store: <store>/<key>/patches/patch-<n>.dylib."""
+    try:
+        rel = path.relative_to(patch_store().resolve())
+    except (ValueError, OSError):
+        return False
+    return len(rel.parts) == 3 and rel.parts[1] == "patches" and bool(PATCH_NAME.match(rel.parts[2]))
 
 
 def bundle_id(a: dict) -> str:
@@ -71,12 +92,23 @@ def push_args(a: dict) -> tuple[str, int, Path, int]:
     raw = str(a.get("src") or "")
     if not raw:
         raise HelperError("bad-args", "Which patch file? (src missing)")
-    src = Path(raw.removeprefix("file://")).expanduser()
-    if not src.is_file():
-        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(src))
-    if src.stat().st_size > PATCH_MAX:
-        raise HelperError("too-big", f"The patch is {src.stat().st_size >> 20} MB, too big to send.")
+    given = Path(raw.removeprefix("file://")).expanduser()
+    try:
+        src = given.resolve(strict=True)
+    except OSError:
+        src = None
+    if src is None or not src.is_file():
+        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(given))
+    if not in_store(src):
+        raise HelperError("bad-args", "Only hot reload patches made by iOS Studio can be sent.", None, str(given))
+    size = src.stat().st_size
+    if size > PATCH_MAX:
+        raise HelperError("too-big", too_big(size))
     return bid, seq, src, wait_ms(a)
+
+
+def too_big(size: int) -> str:
+    return f"The patch is {size >> 20} MB, too big to send (at most {PATCH_MAX >> 20} MB)."
 
 
 def _num(v, kind):
