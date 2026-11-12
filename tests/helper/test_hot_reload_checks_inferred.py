@@ -1,5 +1,6 @@
 """helper/iosstudio/features/hotreload/checks.py: a stored property's type is its annotation, else the type its
-initial value plainly shows; a value edit whose type can't be told that way isn't a blocker (review of PR #46)."""
+initial value plainly shows. When it can't be told, a static or global value edit isn't a blocker, and an instance
+property compares the initializer's text (review of PR #46)."""
 from __future__ import annotations
 
 import unittest
@@ -69,6 +70,11 @@ class ValueEditsAllowed(unittest.TestCase):
         src = 'struct V {\n    @State private var items = ["a"]\n    var tint = Color.red\n}\n'
         new = edit(edit(src, '["a"]', '["a", "b"]'), "Color.red", "Color(red: 1, green: 0, blue: 0)")
         self.assertEqual(kinds(src, new), [])
+        self.assertEqual(kinds("struct V {\n    var items = [\"a\"]\n}\n", 'struct V {\n    var items = ["a", "b"]\n}\n'), [])
+
+    def test_static_unknown_value(self):
+        src = "struct S {\n    static let m = makeModel()\n}\nvar g = makeModel()\n"
+        self.assertEqual(kinds(src, src.replace("makeModel()", "makeOther()")), [])
 
 
 class TypeChangesBlocked(unittest.TestCase):
@@ -88,6 +94,14 @@ class TypeChangesBlocked(unittest.TestCase):
         self.assertEqual(kinds(src, edit(src, "Foo()", "Bar()")), ["stored-property"])
         self.assertEqual(kinds(src, edit(src, "Foo()", "Foo.Bar()")), ["stored-property"])
         self.assertEqual(kinds(SAMPLES, edit(SAMPLES, '[Item(n: "a")]', '[Other(n: "a")]')), ["stored-property"])
+
+    def test_instance_unknown_value_compares_text(self):
+        src = "class M {\n    var m = makeModel()\n    var total = 3 * 4\n}\n"
+        b = checks.structural_blockers(src, edit(src, "makeModel()", "makeOther()"), "M.swift")
+        self.assertEqual([(x["kind"], x["name"]) for x in b], [("stored-property", "m")])
+        self.assertEqual(kinds(src, edit(src, "3 * 4", "3 * 5")), ["stored-property"])
+        self.assertEqual(kinds(src, edit(src, "var total = 3 * 4", "var total: Int = 12")), ["stored-property"])
+        self.assertEqual(kinds(src, edit(src, "3 * 4", "3  *  4 // same")), [])
 
     def test_removed_and_let_to_var(self):
         self.assertEqual(kinds(SAMPLES, edit(SAMPLES, "let total = 3 * 4\n", "")), ["stored-property"])

@@ -7,8 +7,9 @@ change how values are laid out in memory or which slots a class's vtable has, so
    (static ones too), generic signatures / superclasses / conformances, changed or removed type aliases, and static
    or global stored properties whose type changes or that go away (the app's storage stays in use; new ones are
    fine). A stored property's type is its annotation, else the type its initial value shows plainly (a literal,
-   an array or dictionary of them, `Type(…)`, `Type.member`); a new value whose type can't be told that way isn't
-   a blocker. Function bodies, computed properties, new functions and extensions without conformances are fine.
+   an array or dictionary of them, `Type(…)`, `Type.member`). When it can't be told that way, an instance property
+   compares the initializer's text (the patch reads fields at fixed offsets, so a missed type change would corrupt
+   memory) and a static or global one isn't a blocker (a new type is a new symbol in the patch). Function bodies, computed properties, new functions and extensions without conformances are fine.
    Conservative: anything the scanner can't read is a blocker (kind `unparsed`) rather than a guess.
 2. opaque_blockers(baseline_o, patch_o, new_source, file)   a `some View` body fixes its concrete type in an opaque
    type descriptor (`…QOMQ`); its `_symbolic` relocation targets name that type. A different type would corrupt
@@ -341,7 +342,7 @@ class Member:
     name: str
     sig: str
     line: int
-    typ: str = ""                # a stored property's type (UNKNOWN: not told by its initial value); sig ends with it
+    typ: str = ""                # a stored property's type; sig ends with it (instance ones never UNKNOWN)
 
 
 @dataclass
@@ -655,6 +656,10 @@ class _Parser:
                     elif "override" in mods and owner.kind == "class":
                         owner.vtable.append(Member(name, f"override var {name}: {_norm(type_toks)}", line))
                 elif not ext:
+                    # A field's type sets the layout the patch's code reads at fixed offsets: an initial value
+                    # whose type isn't plain counts by its text (any edit is a blocker), never as UNKNOWN.
+                    if typ == UNKNOWN:
+                        typ = "= " + _norm(init_toks)
                     sig = " ".join([*attrs, *layout, kw.text, f"{name}: {typ}"])
                     owner.stored.append(Member(name, sig, line, typ))
                     if owner.kind == "class" and "override" in mods:
@@ -828,7 +833,7 @@ def _inferred(toks: list[Tok], depth: int = 0) -> str:
 
     Literals (Int, Double, String, Bool), arrays and dictionaries of one such type, `Type(…)`, `Type.init(…)`,
     `Type { … }`, `Mod.Type(…)` and `Type.member`. Anything else (an operator, a closure, a function call, a chain)
-    is UNKNOWN: its edits can't be told apart from a type change cheaply, so they aren't blockers.
+    is UNKNOWN: its edits can't be told apart from a type change cheaply.
     """
     if not toks or depth > MAX_DEPTH:
         return UNKNOWN
@@ -909,7 +914,7 @@ def _keyed(members: list[Member]) -> dict[str, Member]:
 
 
 def _changed(old: Member | Scoped, new: Member | Scoped) -> bool:
-    """Do two declarations differ? A stored property's UNKNOWN type matches any type."""
+    """Do two declarations differ? A static or global stored property's UNKNOWN type matches any type."""
     if old.sig == new.sig:
         return False
     if old.typ and new.typ and UNKNOWN in (old.typ, new.typ):

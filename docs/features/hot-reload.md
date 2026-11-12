@@ -135,7 +135,7 @@ What's refused, by `kind` in `lastError.blockers`:
 |---|---|
 | `new-type` | adds a struct, class, enum, actor or protocol |
 | `removed-type` | removes one |
-| `stored-property` | adds, removes, reorders or changes the type of a stored property, `@State` and other property wrappers included; changes the type of, or removes, a static or global stored property (new ones are fine). The type is the annotation, else what the initial value plainly is (a literal, an array or dictionary of them, `Type(…)`, `Type.member`): `let total = 3` to `"3"` is refused, while a new value whose type can't be told that way (`3 * 4`, a closure, a function call) is sent |
+| `stored-property` | adds, removes, reorders or changes the type of a stored property, `@State` and other property wrappers included; changes the type of, or removes, a static or global stored property (new ones are fine). The type is the annotation, else what the initial value plainly is (a literal, an array or dictionary of them, `Type(…)`, `Type.member`): `let total = 3` to `"3"` is refused. When the type can't be told that way (`3 * 4`, a closure, a function call), any edit to an instance property's initial value is refused, because the running code reads fields at fixed places in memory, while a static or global one is sent |
 | `enum-case` | adds, removes or reorders an enum case |
 | `class-method` | adds or removes an overridable member of a non-final class (it changes the class's method table; `class func`, `class var` and `class subscript` included), or a protocol requirement (static requirements included) |
 | `generic-signature` | changes a type's declaration: its generic parameters, superclass or conformances |
