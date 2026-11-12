@@ -16,7 +16,8 @@ import "../../lib/Model.js" as Model
 // Resume, Stop or Start. A control that can't be used now stays visible, dimmed, with the reason in its tooltip.
 // Under it: the build's progress, a failed reload's blockers (≤ 3, file:line opens the editor) or its first
 // compiler error, and the session's notice (one quiet line, with its fix as a link-style button).
-// On a narrow bar (below 540 px, 780 px with an error's fix) the buttons drop under the text and the places.
+// On a narrow bar (below 640 px, whatever the state, so they don't jump on each reload) the buttons drop under
+// the text and the places.
 Rectangle {
   id: root
 
@@ -29,11 +30,14 @@ Rectangle {
   readonly property var entry: svc ? svc.forProject(project) : null
   readonly property var setting: svc ? svc.setting(project) : null
   readonly property var info: Model.hotReloadLabel(entry, setting, now)
+  // A failed reload's places: not tied to `now`, so the rows aren't rebuilt (hover lost) on every tick.
+  readonly property var blockers: { var l = Model.hotReloadLabel(entry, setting, 0); return l ? l.blockers : [] }
   readonly property string _lv: info ? info.level : "info"
   readonly property bool isError: _lv === "error"
   readonly property var fix: info && info.error && info.error.fix && info.error.fix.label ? info.error.fix : null
-  readonly property bool canStop: !!info && info.live && info.state !== "stopping"
-  readonly property bool showStart: !!info && !info.live && ["enabling", "disabling", "starting"].indexOf(info.state) < 0
+  // Our own session before its first snapshot: Stop cancels it.
+  readonly property bool startingHere: !!info && !info.live && info.state === "starting" && !!entry && entry.owned !== false
+  readonly property bool showStart: !!info && !info.live && ["enabling", "disabling", "starting", "stopping"].indexOf(info.state) < 0
   // A fix that only starts it again makes the Start button say the same thing twice: the fix wins.
   readonly property bool fixIsStart: !!fix && (fix.action === "hot-reload-restart" || fix.action === "hot-reload-start")
   readonly property bool showPause: !!info && info.live && info.state !== "stopping"
@@ -67,12 +71,15 @@ Rectangle {
     root.app.projects.openInEditor(root.project, String(file).charAt(0) === "/" ? file : root.project.path + "/" + file, line)
   }
 
-  // An error has its fix next to Pause and Stop: it needs more room before the buttons go under the text.
-  readonly property bool stackButtons: width < Style.space(isError || (info && info.note && info.note.fix) ? 780 : 540)
+  // One width for every state: a reload that fails (its fix joins Pause and Stop) doesn't move the buttons.
+  readonly property bool stackButtons: width < Style.space(640)
   readonly property real glyphColumn: Math.ceil(Style.font.body * 1.4)
   readonly property real textIndent: glyphColumn + Style.spacing.lg
   // A failed reload's places and the compiler's line sit under the message, not under the pill.
   readonly property real detailIndent: textCol.x
+  // A failed reload whose first place has no text of its own: "Still watching…" goes next to that place
+  // instead of its own line, so a failed reload is no taller than it needs to be.
+  readonly property bool hintInPlaces: !!info && info.state === "failed" && blockers.length > 0 && blockers[0].text === ""
 
   ColumnLayout {
     id: col
@@ -83,6 +90,9 @@ Rectangle {
 
     RowLayout {
       Layout.fillWidth: true
+      // At least two lines (the text and its detail), so Watching → Reloading → Reloaded doesn't change the
+      // bar's height on every save; a one-line state sits centred in it.
+      Layout.minimumHeight: lineMetrics.height + Style.spacing.xxs + detailMetrics.height
       spacing: Style.spacing.lg
 
       // The glyph and the pill sit on the first line of the text (centred with it when it's one line).
@@ -130,10 +140,12 @@ Rectangle {
           tone: root.info && root.info.state === "stopped" && !root.isError ? "dim" : "primary"
           wrapMode: Text.Wrap
         }
+        FontMetrics { id: detailMetrics; font: detailText.font }
         AppText {
+          id: detailText
           Layout.fillWidth: true
           visible: text !== ""
-          text: root.info ? root.info.detail : ""
+          text: root.info && !root.hintInPlaces ? root.info.detail : ""
           size: "small"
           tone: "dim"
           wrapMode: Text.Wrap
@@ -159,10 +171,11 @@ Rectangle {
 
     // A failed reload: what blocks it (file:line opens it in the editor), or the compiler's first error
     Repeater {
-      model: root.info ? root.info.blockers : []
+      model: root.blockers
       delegate: RowLayout {
         id: blk
         required property var modelData
+        required property int index
         Layout.fillWidth: true
         Layout.leftMargin: root.detailIndent
         spacing: Style.spacing.md
@@ -180,7 +193,8 @@ Rectangle {
           Layout.fillWidth: true
           Layout.preferredWidth: 0
           visible: text !== ""
-          text: blk.modelData.text
+          text: blk.modelData.text !== "" ? blk.modelData.text
+                : blk.index === 0 && root.hintInPlaces && root.info ? root.info.detail : ""
           size: "small"
           tone: "dim"
           wrapMode: Text.Wrap
@@ -281,7 +295,7 @@ Rectangle {
         onClicked: root.info.canResume ? root.svc.resume(root.project) : root.svc.pause(root.project)
       }
       ActionButton {
-        visible: root.showPause || (root.info && root.info.state === "stopping")
+        visible: root.showPause || root.startingHere || (root.info && root.info.state === "stopping")
         text: "Stop"
         glyph: Model.Glyph.stop
         kind: "ghost"

@@ -410,7 +410,8 @@ BorderSurface {
       Layout.fillWidth: true
       visible: !root.hrOn && !root.hrSwitching && !!root.hrSetting && root.hrSetting.mode === "stub"
       files: root.hrSvc ? root.hrSvc.importedBy(root.project) : []
-      onCleanUp: root.hrSvc.setEnabled(root.project, false)
+      busy: !!root.hrEntry && root.hrEntry.action === "cleaning"
+      onCleanUp: root.hrSvc.cleanUp(root.project)
     }
 
     AppText {
