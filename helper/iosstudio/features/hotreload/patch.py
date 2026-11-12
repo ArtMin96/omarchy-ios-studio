@@ -16,13 +16,20 @@ patch alone holds every change. Steps, each timed in ms in PatchResult.steps:
 
 The dylib lands in <cache>/<key>/patches/ (newest 10 kept). Errors are PatchError (a HelperError) with the
 `lastError` fields of the session snapshot: code (unsupported-change, new-file, compile-failed, link-failed,
-not-interposable, sign-failed, not-signed-in, no-baseline), message, fix, file, line, blockers (≤10),
-diagnostics (≤5, errors first). `cancel()` returning True stops at the next step or while a tool runs (killed;
-subproc.Cancelled raised); the work folder is removed either way.
+not-interposable, sign-failed, not-signed-in, no-baseline), message, fix, file, line, blockers (≤10) with
+blockersTotal, diagnostics (≤5, errors first) with diagnosticsTotal. `cancel()` returning True stops at the next
+step or while a tool runs (killed; subproc.Cancelled raised); the work folder is removed either way.
+
+Every tool runs in the build's working directory (work_dir()), in its own process group with a reaper and
+PR_SET_PDEATHSIG, so a compile or link never outlives a killed session. A changed file whose baseline object is
+missing is refused (its opaque types can't be checked). New files are Swift files under the module's folders that
+aren't in the build and were created or moved there after it (older ones are excluded on purpose: `exclude:`,
+resources); hidden folders, nested packages and Package.swift manifests are never sources.
 """
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -63,7 +70,9 @@ class PatchError(HelperError):
         super().__init__(code, message, fix_, detail)
         self.file = file
         self.line = line
+        self.blockers_total = len(blockers or [])
         self.blockers = (blockers or [])[:checks.MAX_BLOCKERS]
+        self.diagnostics_total = len(diagnostics_ or [])
         self.diagnostics = (diagnostics_ or [])[:MAX_DIAGNOSTICS]
 
     def to_json(self) -> dict:
@@ -74,15 +83,17 @@ class PatchError(HelperError):
             out["line"] = self.line
         if self.blockers:
             out["blockers"] = self.blockers
+            out["blockersTotal"] = self.blockers_total
         if self.diagnostics:
             out["diagnostics"] = self.diagnostics
+            out["diagnosticsTotal"] = self.diagnostics_total
         return out
 
 
 @dataclass
 class SourceChanges:
     changed: list[str] = field(default_factory=list)    # project-relative, in the baseline and different now
-    added: list[str] = field(default_factory=list)      # new Swift files in the module's folders
+    added: list[str] = field(default_factory=list)      # Swift files in the module's folders made after the build
     removed: list[str] = field(default_factory=list)    # baseline files that are gone
 
     @property
@@ -135,21 +146,72 @@ def source_changes(baseline: Baseline) -> SourceChanges:
             then = None
         if now != then:
             out.changed.append(rel)
-    seen = 0
-    for root in module_roots(baseline):
-        for path in sorted(root.rglob("*.swift")) if root.is_dir() else []:
-            seen += 1
-            if seen > MAX_SOURCES:
-                break
-            rel = str(path.relative_to(proj))
-            if rel not in known and not any(p.startswith(".") for p in Path(rel).parts):
-                out.added.append(rel)
+    added: set[str] = set()
+    for path in _module_swift_files(baseline):
+        rel = str(path.relative_to(proj))
+        if rel in known or rel in added:
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        # A file that was there at build time but wasn't compiled is excluded on purpose (`exclude:`, a resource).
+        # ctime too: a file moved in keeps its mtime but gets a new ctime.
+        if max(st.st_mtime, st.st_ctime) > baseline.built_at:
+            added.add(rel)
+    out.added = sorted(added)
     return out
+
+
+MANIFEST = re.compile(r"^Package(@swift-[\d.]+)?\.swift$")
+
+
+def _module_swift_files(baseline: Baseline) -> list[Path]:
+    """The Swift files under the module's folders (≤ MAX_SOURCES): never in hidden folders (.build, .iosstudio,
+    .git, .swiftpm), nested packages (a folder with its own Package.swift) or Package.swift manifests."""
+    proj = Path(baseline.project)
+    found: list[Path] = []
+    for root in module_roots(baseline):
+        if not root.is_dir():
+            continue
+        for dirpath, dirs, names in os.walk(root):
+            here = Path(dirpath)
+            if here not in (proj, root) and "Package.swift" in names:
+                dirs[:] = []
+                continue
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            for n in sorted(names):
+                if n.endswith(".swift") and not n.startswith(".") and not MANIFEST.match(n):
+                    found.append(here / n)
+                    if len(found) >= MAX_SOURCES:
+                        return found
+    return found
 
 
 # ---------------------------------------------------------------- running tools
 
-def _runner(cancel: Callable[[], bool] | None) -> RunFn:
+def work_dir(baseline: Baseline) -> str | None:
+    """The working directory the build ran its compiles in (relative paths in the captured commands are relative
+    to it): the baseline's, else the one in a frontend command (`-Xcc -working-directory -Xcc D`,
+    `-file-compilation-dir D`), else the project folder."""
+    wd = getattr(baseline, "working_dir", None)
+    if wd and Path(wd).is_dir():
+        return str(wd)
+    for argv in baseline.frontend.values():
+        for i, a in enumerate(argv[:-1]):
+            if a == "-working-directory":
+                cand = argv[i + 2] if argv[i + 1] == "-Xcc" and i + 2 < len(argv) else argv[i + 1]
+            elif a == "-file-compilation-dir":
+                cand = argv[i + 1]
+            else:
+                continue
+            if Path(cand).is_dir():
+                return cand
+        break                  # every file's command has the same flags
+    return baseline.project if Path(baseline.project).is_dir() else None
+
+
+def _runner(cancel: Callable[[], bool] | None, cwd: str | None = None) -> RunFn:
     def run(argv: list[str], timeout: float) -> tuple[int, list[str]]:
         lines: list[str] = []
 
@@ -161,7 +223,10 @@ def _runner(cancel: Callable[[], bool] | None) -> RunFn:
             if cancel and cancel():
                 raise subproc.Cancelled()
         try:
-            rc = subproc.Runner(on_line=on_line, on_tick=on_tick).run(argv, timeout=timeout, env=subproc.tool_env("plain"))
+            # own process group + reaper + PDEATHSIG: a compile never outlives a killed session
+            rc = subproc.Runner(on_line=on_line, on_tick=on_tick).run(
+                argv, cwd=cwd, timeout=timeout, env=subproc.tool_env("plain"), preexec_fn=subproc.pdeathsig_term,
+                reaper=True)
         except FileNotFoundError:
             raise HelperError("missing-tool", f"{Path(argv[0]).name} isn't installed yet.", fix("Open Setup", "setup"))
         return rc, lines
@@ -181,10 +246,11 @@ def frontend_command(argv: list[str], out: str) -> list[str]:
 
 
 def _diagnostics(lines: list[str]) -> list[dict]:
+    """Every diagnostic, errors first (PatchError keeps MAX_DIAGNOSTICS and the total)."""
     found = diagnostics.parse(lines, failed=True, demangler=None)
     errors = [d for d in found if d.get("severity") == "error"]
     rest = [d for d in found if d.get("severity") != "error"]
-    return (errors + rest)[:MAX_DIAGNOSTICS]
+    return errors + rest
 
 
 def _rel(baseline: Baseline, path: str | None) -> str | None:
@@ -227,7 +293,7 @@ def make_patch(baseline: Baseline, changed_files: list[str] | None, seq: int, ou
                run: RunFn | None = None, sign: bool = True, data_dir: Path | None = None) -> PatchResult:
     """Build patch `seq` from the files that differ from the baseline (or `changed_files`, project-relative or
     absolute). See the module doc for the steps and errors."""
-    run = run or _runner(cancel)
+    run = run or _runner(cancel, work_dir(baseline))
     step = on_step or (lambda _name: None)
     out_dir = Path(out_dir) if out_dir else baseline.patches_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +345,9 @@ def make_patch(baseline: Baseline, changed_files: list[str] | None, seq: int, ou
     steps["check"] += _ms(t0)
     if blockers:
         raise _unsupported(blockers)
+    unchecked = [rel for rel in files if not _baseline_object(baseline, rel)]
+    if unchecked:      # its opaque types can't be compared: refuse rather than risk a body of another type
+        raise _unchecked(unchecked)
     _check_cancel(cancel)
 
     work = Path(tempfile.mkdtemp(prefix=f".patch-{seq}-", dir=out_dir))
@@ -295,9 +364,9 @@ def make_patch(baseline: Baseline, changed_files: list[str] | None, seq: int, ou
         # ---- check: opaque result types
         t0 = time.monotonic()
         for rel, obj in zip(files, objects):
-            base_o = baseline.objects.get(rel)
-            if not base_o or not Path(base_o).is_file():
-                continue
+            base_o = _baseline_object(baseline, rel)
+            if not base_o:
+                raise _unchecked([rel])
             try:
                 blockers += checks.opaque_blockers(base_o, obj, sources[rel], rel)
             except macho.MachOError as exc:
@@ -350,6 +419,20 @@ def _ms(t0: float) -> int:
 def _file_blocker(kind: str, rel: str) -> dict:
     verb = "Adds" if kind == "new-file" else "Removes"
     return {"kind": kind, "file": rel, "message": f"{verb} the file {Path(rel).name}."}
+
+
+def _baseline_object(baseline: Baseline, rel: str) -> str | None:
+    base_o = baseline.objects.get(rel)
+    return base_o if base_o and Path(base_o).is_file() else None
+
+
+def _unchecked(files: list[str]) -> PatchError:
+    """Changed files without a baseline object: the opaque-type check can't run, so the patch is refused."""
+    more = f" (and {len(files) - 1} more)" if len(files) > 1 else ""
+    blockers = [{"kind": "unchecked", "file": rel,
+                 "message": f"Can't check {Path(rel).name} against the running app."} for rel in files]
+    return PatchError("unsupported-change", f"Can't check {Path(files[0]).name}{more} against the running app. "
+                      "Press Run to rebuild.", restart_fix(), file=files[0], blockers=blockers)
 
 
 def _unsupported(blockers: list[dict]) -> PatchError:
@@ -419,7 +502,7 @@ def warm_up(baseline: Baseline, *, cancel: Callable[[], bool] | None = None, run
             timeout: float = WARM_UP_TIMEOUT) -> float | None:
     """Compile one file to a throwaway output so the implicit module cache is warm (≈12 s cold, then ≈0.5 s per
     patch compile). Returns the seconds it took, or None if it failed (patches then just pay the cost once)."""
-    run = run or _runner(cancel)
+    run = run or _runner(cancel, work_dir(baseline))
     rel = next(iter(sorted(baseline.frontend)), None)
     if rel is None:
         return None

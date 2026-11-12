@@ -241,8 +241,9 @@ if "-###" in a and "-emit-library" in a:
 elif "-###" in a:
     fs = files()
     for f in fs:
+        wd = ["-Xcc", "-working-directory", "-Xcc", val("-working-directory")] if "-working-directory" in a else []
         print(shlex.join([os.path.join(d, "swift-frontend"), "-frontend", "-c", "-primary-file", f,
-                          *[o for o in fs if o != f], "-module-name", val("-module-name"), "-o", "/nowhere/x.o"]))
+                          *[o for o in fs if o != f], "-module-name", val("-module-name"), *wd, "-o", "/nowhere/x.o"]))
 elif "-emit-library" in a:
     if os.environ.get("FAKE_LINK_FAIL"):
         print("ld64.lld: error: undefined symbol: _missing"); sys.exit(1)
@@ -276,11 +277,18 @@ shutil.copy(os.environ["FAKE_PATCH"], a[a.index("-o") + 1])
 '''
 
 FAKE_FRONTEND = r'''#!/usr/bin/env python3
-import os, shutil, sys
+import os, shutil, sys, time
 a = sys.argv[1:]
 src = a[a.index("-primary-file") + 1]
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calls"), "a") as f:
+d = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(d, "calls"), "a") as f:
     f.write("frontend " + os.path.basename(src) + "\n")
+with open(os.path.join(d, "cwds"), "a") as f:
+    f.write(os.getcwd() + "\n")
+if os.environ.get("FAKE_FRONTEND_HANG"):        # write our pid, then hang (a compile a killed session must not orphan)
+    with open(os.environ["FAKE_FRONTEND_HANG"], "w") as f:
+        f.write(str(os.getpid()))
+    time.sleep(60)
 text = open(src).read()
 if "COMPILE_ERROR" in text:
     line = text[:text.index("COMPILE_ERROR")].count("\n") + 1
@@ -295,8 +303,9 @@ shutil.copy(pick if os.path.exists(pick) else os.path.join(objs, "default.o"), a
 
 
 def fake_toolchain(folder: Path) -> Path:
-    """swiftc, swift-frontend, clang and ld64.lld fakes in `folder` (calls logged to folder/calls). The compiled
-    object comes from $FAKE_OBJ_DIR/<stem>.o (or default.o), the linked dylib from $FAKE_PATCH."""
+    """swiftc, swift-frontend, clang and ld64.lld fakes in `folder` (calls logged to folder/calls, each compile's
+    working directory to folder/cwds). The compiled object comes from $FAKE_OBJ_DIR/<stem>.o (or default.o), the
+    linked dylib from $FAKE_PATCH. $FAKE_FRONTEND_HANG=<file>: a compile writes its pid there and hangs."""
     folder.mkdir(parents=True, exist_ok=True)
     for name, text in (("swiftc", FAKE_SWIFTC), ("clang", FAKE_CLANG), ("ld64.lld", FAKE_LD),
                        ("swift-frontend", FAKE_FRONTEND)):

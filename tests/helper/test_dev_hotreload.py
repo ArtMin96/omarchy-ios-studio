@@ -3,7 +3,8 @@ the real daemon with a fake house_arrest AFC at the pymobiledevice3 service boun
 
 push writes Library/Caches/HotReload/patch-<seq>.dylib.part, renames it, and reads ack-<seq>.json every 50 ms until
 waitMs; a fake runtime answers after a delay (or never: acked false). clean removes only patches and acks; runtime
-reads runtime.json. An app that isn't installed is `not-installed`, an App Store app `not-dev-app`.
+reads runtime.json. An app that isn't installed is `not-installed`, an App Store app `not-dev-app`. Only patches in
+the helper's store (<cache>/hot-reload/<key>/patches/patch-<n>.dylib) are sent, streamed in AFC chunks, ≤ 64 MB.
 
     .venv/bin/pytest -q tests/helper/test_dev_hotreload.py
     cd tests && PYTHONPATH=../helper:. ~/pymobile3-venv/bin/python -m unittest helper.test_dev_hotreload
@@ -146,6 +147,14 @@ class Afc:
         return False
 
 
+def store_patch(size: int = 3000, name: str | None = None) -> Path:
+    """A patch where the helper's session leaves them: <cache>/hot-reload/<key>/patches/patch-<size>.dylib."""
+    p = hr.patch_store() / "0123456789ab" / "patches" / (name or f"patch-{size}.dylib")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(bytes(range(256)) * (size // 256) + b"x" * (size % 256))
+    return p
+
+
 class Harness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -195,9 +204,7 @@ class Harness(unittest.IsolatedAsyncioTestCase):
                                "SignerIdentity": "Apple Development: x" if developer else "Apple iPhone OS Application Signing"}
 
     def patch_file(self, size: int = 3000) -> Path:
-        p = self.tmp / f"patch-{size}.dylib"
-        p.write_bytes(bytes(range(256)) * (size // 256) + b"x" * (size % 256))
-        return p
+        return store_patch(size)
 
     async def push(self, **kw):
         return await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(self.patch_file()), "seq": 1, **kw})
@@ -217,6 +224,46 @@ class Push(Harness):
         self.assertEqual(self.phone.tree[f"{DIR}/patch-7.dylib"], src.read_bytes())
         self.assertNotIn(f"{DIR}/patch-7.dylib.part", self.phone.tree)
         self.assertEqual([(b, docs) for b, docs, _ in self.phone.opened], [(BID, False)])   # whole container
+
+    async def test_streams_in_chunks_without_reading_the_whole_file(self):
+        src = self.patch_file(2_500_000)
+        writes = []
+        afc_write = Afc.fwrite
+
+        async def fwrite(afc, h, data):
+            writes.append(len(data))
+            await afc_write(afc, h, data)
+        with mock.patch.object(Afc, "fwrite", fwrite), \
+                mock.patch.object(Path, "read_bytes", side_effect=AssertionError("read whole")):
+            out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 2})
+        self.assertEqual(out["bytes"], 2_500_000)
+        self.assertEqual(writes, [1 << 20, 1 << 20, 2_500_000 - (2 << 20)])
+
+    async def test_only_patches_from_the_store(self):
+        outside = self.tmp / "patch-1.dylib"
+        outside.write_bytes(b"x" * 100)
+        inside = store_patch(100)
+        sneaky = inside.parent / "patch-9.dylib"
+        sneaky.symlink_to(outside)                   # a link in the store to a file elsewhere
+        other = store_patch(100, name="notes.txt")   # in the store, but not a patch
+        for src in (outside, sneaky, other, Path("/etc/passwd"), f"file://{outside}"):
+            if not Path(str(src).removeprefix("file://")).exists():
+                continue
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1})
+            self.assertEqual(cm.exception.code, "bad-args", src)
+        self.assertEqual(self.phone.opened, [])
+        out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": f"file://{inside}", "seq": 1})
+        self.assertEqual(out["bytes"], 100)
+
+    async def test_too_big(self):
+        self.assertEqual(hr.PATCH_MAX, 64 << 20)
+        src = self.patch_file(5000)
+        with mock.patch.object(hr, "PATCH_MAX", 4096):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1})
+        self.assertEqual(cm.exception.code, "too-big")
+        self.assertEqual(self.phone.opened, [])
 
     async def test_second_push_reuses_the_connection_and_app_info(self):
         await self.push(seq=1)
@@ -348,13 +395,17 @@ class Demo(unittest.IsolatedAsyncioTestCase):
         reg = DemoBackend(None).registry
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        src = tmp / "patch-1.dylib"
-        src.write_bytes(b"x" * 1234)
+        src = store_patch(1234)
+        outside = tmp / "patch-1.dylib"
+        outside.write_bytes(b"x" * 1234)
         dev = next(b for _n, b, _h, _s, d, *_ in APPS if d)
         store = next(b for _n, b, _h, _s, d, *_ in APPS if not d)
         out = await reg.lookup("hotreload.push")(None, {"bundleId": dev, "src": str(src), "seq": 1})
         self.assertEqual(set(out), {"seq", "bytes", "pushMs", "acked", "ack", "ackMs"})
         self.assertEqual((out["bytes"], out["acked"], out["ack"]["ok"], out["ack"]["swapped"]), (1234, True, True, 3))
+        with self.assertRaises(HelperError) as cm:           # the same check as the real one
+            await reg.lookup("hotreload.push")(None, {"bundleId": dev, "src": str(outside), "seq": 1})
+        self.assertEqual(cm.exception.code, "bad-args")
         self.assertEqual(reg.lookup("hotreload.clean")(None, {"bundleId": dev}), {"removed": 0})
         rt = reg.lookup("hotreload.runtime")(None, {"bundleId": dev})
         self.assertEqual((rt["present"], set(rt["runtime"])), (True, {"version", "pid", "started"}))

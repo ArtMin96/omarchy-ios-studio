@@ -5,7 +5,8 @@ Your own development builds only: everything goes through the app's whole contai
 VendContainer) under Library/Caches/HotReload, on the files feature's cached connection per app (F.on_container:
 a kept connection that went stale is retried once on a fresh one). A push writes patch-<seq>.dylib.part, renames
 it to patch-<seq>.dylib (the runtime only looks at whole names), then reads ack-<seq>.json every 50 ms until it
-is there or waitMs (≤ 15 s) has passed. Uses the files feature's helpers, so it loads only when that one does.
+is there or waitMs (≤ 15 s) has passed. The patch (from the helper's patch store only, ≤ PATCH_MAX) is streamed
+from disk in AFC chunks, never read whole. Uses the files feature's helpers, so it loads only when that one does.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import asyncio
 import contextlib
 import posixpath
 import time
+from pathlib import Path
 
 from pymobiledevice3.exceptions import AfcException, AfcFileNotFoundError, AppNotInstalledError
 
@@ -72,18 +74,34 @@ async def _read_small(afc, path: str) -> bytes | None:
             await asyncio.shield(afc.fclose(h))
 
 
-async def _write(afc, data: bytes, final: str) -> None:
-    """data -> final through final.part and a rename (so the runtime never loads half a patch)."""
+async def _write(afc, src: Path, final: str) -> int:
+    """The local patch -> final through final.part and a rename (so the runtime never loads half a patch), in
+    AFC-sized chunks. Returns the bytes sent; a file that grew past PATCH_MAX meanwhile is too-big."""
     if not await afc.exists(hr.DIR):
         await afc.makedirs(hr.DIR)
     part = final + ".part"
-    h = await afc.fopen(part, "w")
     try:
-        for i in range(0, len(data), df.CHUNK):
-            await afc.fwrite(h, data[i:i + df.CHUNK])
-    finally:
-        with contextlib.suppress(BaseException):
-            await asyncio.shield(afc.fclose(h))
+        f = open(src, "rb")
+    except OSError:
+        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(src)) from None
+    sent = 0
+    with f:
+        h = await afc.fopen(part, "w")
+        try:
+            while True:
+                try:
+                    chunk = f.read(df.CHUNK)
+                except OSError as exc:
+                    raise HelperError("not-found", "The patch file couldn't be read.", None, str(exc)) from None
+                if not chunk:
+                    break
+                sent += len(chunk)
+                if sent > hr.PATCH_MAX:
+                    raise HelperError("too-big", hr.too_big(sent))
+                await afc.fwrite(h, chunk)
+        finally:
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(afc.fclose(h))
     try:
         await afc.rename(part, final)
     except AfcFileNotFoundError:
@@ -92,6 +110,7 @@ async def _write(afc, data: bytes, final: str) -> None:
         with contextlib.suppress(AfcFileNotFoundError):
             await afc.rm(final, force=True)
         await afc.rename(part, final)
+    return sent
 
 
 def register(reg):
@@ -102,11 +121,10 @@ def register(reg):
         s = d.need_session(a)
         bid, seq, src, wait = hr.push_args(a)
         await _app(d, s, bid)
-        data = await asyncio.to_thread(src.read_bytes)
         final = hr.patch_path(seq)
         async with locks.setdefault(bid, asyncio.Lock()):
             t0 = time.monotonic()
-            await _call(s, bid, lambda afc: _write(afc, data, final))
+            size = await _call(s, bid, lambda afc: _write(afc, src, final))
             push_ms = int((time.monotonic() - t0) * 1000)
             t1 = time.monotonic()
             deadline = t1 + wait / 1000
@@ -117,11 +135,11 @@ def register(reg):
                 if raw is not None or time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(hr.POLL_S)
-        out = {"seq": seq, "bytes": len(data), "pushMs": push_ms, "acked": raw is not None}
+        out = {"seq": seq, "bytes": size, "pushMs": push_ms, "acked": raw is not None}
         if raw is not None:
             out["ack"] = hr.parse_ack(raw, seq)
             out["ackMs"] = int((time.monotonic() - t1) * 1000)
-        dlog(f"hotreload: patch {seq} for {bid}: {len(data)} bytes in {push_ms} ms, "
+        dlog(f"hotreload: patch {seq} for {bid}: {size} bytes in {push_ms} ms, "
              f"{'acked' if raw is not None else 'no ack'}")
         return out
 
