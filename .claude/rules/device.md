@@ -41,6 +41,9 @@ Wire format: [docs/deviced-protocol.md](../../docs/deviced-protocol.md).
 - Every background task is tracked and cancelled: `d.bg.spawn(coro, name)` (a `TaskSet`) or a feature's own
   set, cleaned up in `@reg.on_tunnel_drop`, `on_client_gone`, `on_session_end`, `on_shutdown`.
 - Every await on the phone has a timeout; long-polls cap their wait (e.g. `min(wait, 20)`).
+- A request is cancelled when its client disconnects (and at shutdown): a handler cleans up in
+  `try/finally` (bounded: about 15 s in all) and doesn't swallow `CancelledError`. A client that starts long
+  work (an install) keeps its connection open until the reply; ending a `--once` process cancels its request.
 - Streams buffer in `kit.CursorRing(max_items=…, max_bytes=…)`; every queue, cache and dict that grows per
   event has a count or byte cap. Files you write are pruned (`fileio.prune`).
 
