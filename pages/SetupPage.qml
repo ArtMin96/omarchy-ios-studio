@@ -272,7 +272,7 @@ PageFrame {
                  : Util.alpha(Commons.Color.foreground, 0.12)
             Behavior on color { ColorAnimation { duration: 220 } }
             SequentialAnimation on opacity {
-              running: seg.vs === "running"; loops: Animation.Infinite
+              running: seg.vs === "running" && seg.visible; loops: Animation.Infinite
               NumberAnimation { to: 0.45; duration: 700; easing.type: Easing.InOutSine }
               NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutSine }
               onStopped: seg.opacity = 1

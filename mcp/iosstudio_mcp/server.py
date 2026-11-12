@@ -29,7 +29,7 @@ iOS Studio builds, signs, installs and debugs iPhone apps on this Linux computer
 - Human-only steps (never ask for passwords or 2FA): Apple ID sign-in, Xcode .xip download, pairing/Trust, Developer Mode, polkit dialogs. Explain them and use ios_open_app(page=...).
 - Results are kept small (~12 KB); a cut result has truncated=true and a `note` on how to get more; next_steps says what to call next.
 - udid parameters default to the active iPhone.
-- Read the resource iosstudio://guide for how the tools fit together (watch mode, packages, presets, screen/UI, app data, debugger, performance).
+- Read the resource iosstudio://guide for how the tools fit together (watch mode, hot reload, packages, presets, screen/UI, app data, debugger, performance).
 """
 
 

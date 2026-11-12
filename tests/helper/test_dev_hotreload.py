@@ -1,0 +1,481 @@
+"""Hot reload device feature (helper/iosstudio/device/features/hotreload/): hotreload.push, clean and runtime through
+the real daemon with a fake house_arrest AFC at the pymobiledevice3 service boundary, plus the demo twin.
+
+push writes Library/Caches/HotReload/patch-<seq>.dylib.part, renames it, and reads ack-<seq>.json every 50 ms until
+waitMs; a fake runtime answers after a delay (or never: acked false). clean removes only patches and acks; runtime
+reads runtime.json. An app that isn't installed is `not-installed`, an App Store app `not-dev-app`. Only patches in
+a helper's store (…/hot-reload/<key>/patches/patch-<n>.dylib, symlink-free, owned by the daemon's user; the store
+here is outside the daemon's own cache folder, like a helper started with another XDG_CACHE_HOME) are sent,
+opened with O_NOFOLLOW and checked to be the file that was checked, streamed in AFC chunks, ≤ 64 MB.
+
+    .venv/bin/pytest -q tests/helper/test_dev_hotreload.py
+    cd tests && PYTHONPATH=../helper:. ~/pymobile3-venv/bin/python -m unittest helper.test_dev_hotreload
+"""
+from __future__ import annotations
+
+import asyncio
+import atexit
+import json
+import os
+import posixpath
+import shutil
+import tempfile
+import time
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from support import devtest
+from support.pmd3_stub import stub_pmd3
+
+devtest.isolate()
+
+from iosstudio.core.output import HelperError  # noqa: E402
+from iosstudio.device.features.hotreload import core as hr  # noqa: E402
+
+UDID = "00008150-HOTRELOAD"
+BID = "XTL-TEAM1.dev.iosstudio.crashlab"
+STORE_APP = "com.example.notes"
+DIR = "/Library/Caches/HotReload"
+
+
+class Phone:
+    """An app container as a dict {path: bytes | None (folder)} behind house_arrest, with a fake hot reload
+    runtime: when patch-<seq>.dylib appears it writes ack-<seq>.json after `ack_delay` s (never when None)."""
+
+    def __init__(self, g):
+        self.NotFound = g["AfcFileNotFoundError"]
+        self.AfcError = g["AfcException"]
+        self.tree: dict[str, bytes | None] = {"/": None, "/Documents": None, "/Library": None,
+                                              "/Library/Caches": None}
+        self.opened: list = []
+        self.renames: list[tuple[str, str]] = []
+        self.ack_delay: float | None = 0.12
+        self.ack: dict | bytes | None = None
+        self.tasks: list[asyncio.Task] = []
+        phone = self
+
+        class HouseArrestService:
+            @staticmethod
+            async def create(rsd, bid, documents_only=False):
+                afc = Afc(phone)
+                phone.opened.append((bid, documents_only, afc))
+                return afc
+        self.HouseArrestService = HouseArrestService
+
+    def loaded(self, path: str) -> None:
+        name = posixpath.basename(path)
+        if not (name.startswith("patch-") and name.endswith(".dylib")) or self.ack_delay is None:
+            return
+        seq = int(name[len("patch-"):-len(".dylib")])
+
+        async def answer():
+            await asyncio.sleep(self.ack_delay)
+            body = self.ack if self.ack is not None else {
+                "seq": seq, "ok": True, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "error": None,
+                "generation": seq}
+            self.tree[f"{DIR}/ack-{seq}.json"] = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.tasks.append(asyncio.ensure_future(answer()))
+
+
+class Afc:
+    def __init__(self, phone: Phone):
+        self.phone, self.stale, self.closed = phone, False, False
+        self.handles: dict[int, list] = {}
+
+    def _need(self, p):
+        if self.stale or p not in self.phone.tree:
+            raise self.phone.NotFound(f"no {p}", 8)
+
+    async def stat(self, p):
+        self._need(p)
+        v = self.phone.tree[p]
+        return {"st_ifmt": "S_IFDIR" if v is None else "S_IFREG", "st_size": 0 if v is None else len(v)}
+
+    async def exists(self, p):
+        if self.stale:
+            raise self.phone.NotFound(f"no {p}", 8)
+        return p in self.phone.tree
+
+    async def makedirs(self, p):
+        if self.stale:
+            raise self.phone.NotFound(f"no {p}", 8)
+        while p not in self.phone.tree:
+            self.phone.tree[p] = None
+            p = posixpath.dirname(p)
+
+    async def listdir(self, p):
+        self._need(p)
+        return sorted(posixpath.basename(x) for x in self.phone.tree if posixpath.dirname(x) == p and x != p)
+
+    async def fopen(self, p, mode):
+        if mode == "r":
+            self._need(p)
+        elif self.stale or posixpath.dirname(p) not in self.phone.tree:
+            raise self.phone.NotFound(f"no {posixpath.dirname(p)}", 8)
+        h = len(self.handles) + 1
+        self.handles[h] = [p, mode, 0, bytearray()]
+        return h
+
+    async def fread(self, h, n):
+        p, _, pos, _ = self.handles[h]
+        data = self.phone.tree[p][pos:pos + n]
+        self.handles[h][2] += len(data)
+        return data
+
+    async def fwrite(self, h, data):
+        self.handles[h][3] += data
+
+    async def fclose(self, h):
+        p, mode, _, buf = self.handles.pop(h)
+        if mode == "w":
+            self.phone.tree[p] = bytes(buf)
+
+    async def rename(self, a, b):
+        self._need(a)
+        self.phone.tree[b] = self.phone.tree.pop(a)
+        self.phone.renames.append((a, b))
+        self.phone.loaded(b)
+
+    async def rm(self, p, force=False):
+        self._need(p)
+        del self.phone.tree[p]
+        return []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self.closed = True
+        return False
+
+
+# A helper's cache that isn't the daemon's (its XDG_CACHE_HOME differs): the daemon takes the path it is sent.
+STORE_ROOT = Path(os.path.realpath(tempfile.mkdtemp(prefix="hr-store-")))
+atexit.register(shutil.rmtree, STORE_ROOT, ignore_errors=True)
+KEY = "0123456789ab"
+
+
+def store_patch(size: int = 3000, name: str | None = None, key: str = KEY) -> Path:
+    """A patch where a helper's session leaves them: <cache>/hot-reload/<key>/patches/patch-<size>.dylib."""
+    p = STORE_ROOT / "hot-reload" / key / "patches" / (name or f"patch-{size}.dylib")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(bytes(range(256)) * (size // 256) + b"x" * (size % 256))
+    return p
+
+
+class Harness(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        stub = stub_pmd3()
+        stub.__enter__()
+        self.addCleanup(stub.__exit__, None, None, None)
+        from iosstudio.device.real import core, daemon
+        p = mock.patch.object(core, "BROKER", types.SimpleNamespace(emit=lambda n, d: None, syslog=None))
+        p.start()
+        self.addCleanup(p.stop)
+        self.d = daemon.Daemon(types.SimpleNamespace(version="fake",
+                                                     iter_remote_pair_records_by_identifier=lambda: iter(())))
+        self.addAsyncCleanup(self.d.shutdown)
+        self.assertIsNotNone(self.d.registry.lookup("hotreload.push"), self.d.registry.failed)
+        files_g = self.d.registry.lookup("container.list").__globals__
+        self.phone = Phone(files_g)
+        self.installed: dict[str, dict] = {}
+        self.installed_calls = 0
+
+        async def installed_apps(pmd3, rsd, application_type="Any", bundle_identifiers=None):
+            self.installed_calls += 1
+            return {b: v for b, v in self.installed.items() if not bundle_identifiers or b in bundle_identifiers}
+        for name, value in (("HouseArrestService", self.phone.HouseArrestService), ("installed_apps", installed_apps)):
+            p = mock.patch.dict(files_g, {name: value})
+            p.start()
+            self.addCleanup(p.stop)
+
+        s = daemon.Session(self.d, UDID)
+        s.rsd = types.SimpleNamespace(udid=UDID, all_values={})
+        s.where = {"transport": "wifi"}
+        s.connected.set()
+
+        async def no_ddi():
+            pass
+        s.ensure_ddi = no_ddi
+        self.d.session = self.s = s
+        self.dev_app()
+
+    async def asyncTearDown(self):
+        for t in self.phone.tasks:
+            t.cancel()
+
+    def dev_app(self, bid: str = BID, developer: bool = True) -> None:
+        self.installed[bid] = {"CFBundleDisplayName": "CrashLab", "CFBundleExecutable": "CrashLab",
+                               "Entitlements": {"get-task-allow": developer},
+                               "SignerIdentity": "Apple Development: x" if developer else "Apple iPhone OS Application Signing"}
+
+    def patch_file(self, size: int = 3000) -> Path:
+        return store_patch(size)
+
+    async def push(self, **kw):
+        return await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(self.patch_file()), "seq": 1, **kw})
+
+
+class Push(Harness):
+    async def test_push_writes_part_renames_and_returns_the_ack(self):
+        src = self.patch_file(2_500_000)            # several AFC chunks
+        out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 7})
+        self.assertEqual(set(out), {"seq", "bytes", "pushMs", "acked", "ack", "ackMs"})
+        self.assertEqual((out["seq"], out["bytes"], out["acked"]), (7, 2_500_000, True))
+        self.assertEqual(out["ack"], {"seq": 7, "ok": True, "ms": 3.1, "swapped": 4, "kept": 12, "vtable": 0, "reverted": 0,
+                                      "error": None, "generation": 7})
+        self.assertGreaterEqual(out["ackMs"], 100)
+        self.assertLess(out["ackMs"], 2000)
+        self.assertEqual(self.phone.renames, [(f"{DIR}/patch-7.dylib.part", f"{DIR}/patch-7.dylib")])
+        self.assertEqual(self.phone.tree[f"{DIR}/patch-7.dylib"], src.read_bytes())
+        self.assertNotIn(f"{DIR}/patch-7.dylib.part", self.phone.tree)
+        self.assertEqual([(b, docs) for b, docs, _ in self.phone.opened], [(BID, False)])   # whole container
+
+    async def test_streams_in_chunks_without_reading_the_whole_file(self):
+        src = self.patch_file(2_500_000)
+        writes = []
+        afc_write = Afc.fwrite
+
+        async def fwrite(afc, h, data):
+            writes.append(len(data))
+            await afc_write(afc, h, data)
+        with mock.patch.object(Afc, "fwrite", fwrite), \
+                mock.patch.object(Path, "read_bytes", side_effect=AssertionError("read whole")):
+            out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 2})
+        self.assertEqual(out["bytes"], 2_500_000)
+        self.assertEqual(writes, [1 << 20, 1 << 20, 2_500_000 - (2 << 20)])
+
+    async def test_only_patches_from_the_store(self):
+        outside = self.tmp / "patch-1.dylib"
+        outside.write_bytes(b"x" * 100)
+        inside = store_patch(100)
+        sneaky = inside.parent / "patch-9.dylib"
+        sneaky.symlink_to(outside)                   # a link in the store to a file elsewhere
+        other = store_patch(100, name="notes.txt")   # in the store, but not a patch
+        for src in (outside, sneaky, other, Path("/etc/passwd"), f"file://{outside}"):
+            if not Path(str(src).removeprefix("file://")).exists():
+                continue
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1})
+            self.assertEqual(cm.exception.code, "bad-args", src)
+        self.assertEqual(self.phone.opened, [])
+        out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": f"file://{inside}", "seq": 1})
+        self.assertEqual(out["bytes"], 100)
+
+    async def test_a_store_outside_the_daemons_cache_folder(self):
+        from iosstudio.core import appdirs
+        src = store_patch(321)
+        self.assertFalse(str(src).startswith(str(appdirs.cache_dir())))
+        out = await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1, "key": KEY})
+        self.assertEqual(out["bytes"], 321)
+
+    async def test_refused_paths(self):
+        src = store_patch(100)
+        linked = self.tmp / "linked-cache"
+        linked.symlink_to(STORE_ROOT)                     # the same file, named through a symlink
+        via_link = linked / src.relative_to(STORE_ROOT)
+        self.assertTrue(via_link.is_file())
+        relative = os.path.relpath(src)
+        for args in ({"src": str(via_link)}, {"src": relative}, {"src": str(src), "key": "ffffffffffff"},
+                     {"src": str(src), "key": "../x"}, {"src": str(store_patch(100, key="not-a-key"))}):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "seq": 1, **args})
+            self.assertEqual(cm.exception.code, "bad-args", args)
+        with mock.patch.object(os, "getuid", return_value=os.getuid() + 1):   # someone else's file
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "seq": 1, "src": str(src)})
+            self.assertEqual(cm.exception.code, "bad-args")
+        self.assertEqual(self.phone.opened, [])
+
+    async def test_a_file_swapped_after_the_check_is_not_sent(self):
+        src = store_patch(100)
+        checked = hr.check_patch(str(src))
+        other = src.with_name("patch-other.tmp")
+        other.write_bytes(b"y" * 100)
+        os.replace(other, src)                            # another file under the checked name
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "bad-args")
+        checked = hr.check_patch(str(src))
+        src.unlink()
+        src.symlink_to(self.tmp / "elsewhere")             # a symlink in its place: O_NOFOLLOW
+        (self.tmp / "elsewhere").write_bytes(b"z")
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "bad-args")
+        src.unlink()
+        with self.assertRaises(HelperError) as cm:
+            hr.open_patch(checked)
+        self.assertEqual(cm.exception.code, "not-found")
+        src = store_patch(100)
+        with hr.open_patch(hr.check_patch(str(src))) as f:
+            self.assertEqual(len(f.read()), 100)
+            self.assertTrue(os.get_inheritable(f.fileno()) is False)
+
+    async def test_too_big(self):
+        self.assertEqual(hr.PATCH_MAX, 64 << 20)
+        src = self.patch_file(5000)
+        with mock.patch.object(hr, "PATCH_MAX", 4096):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", {"bundleId": BID, "src": str(src), "seq": 1})
+        self.assertEqual(cm.exception.code, "too-big")
+        self.assertEqual(self.phone.opened, [])
+
+    async def test_second_push_reuses_the_connection_and_app_info(self):
+        await self.push(seq=1)
+        calls = self.installed_calls
+        out = await self.push(seq=2)
+        self.assertTrue(out["acked"])
+        self.assertEqual(len(self.phone.opened), 1)
+        self.assertEqual(self.installed_calls, calls)
+
+    async def test_no_ack_in_time(self):
+        self.phone.ack_delay = None                  # app not running, or a build without the runtime
+        t0 = time.monotonic()
+        out = await self.push(waitMs=300)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.3)
+        self.assertEqual(out["acked"], False)
+        self.assertNotIn("ack", out)
+        self.assertNotIn("ackMs", out)
+        self.assertIn(f"{DIR}/patch-1.dylib", self.phone.tree)
+
+    async def test_wait_is_capped(self):
+        self.assertEqual(hr.wait_ms({"waitMs": 999_999}), hr.WAIT_MAX_MS)
+        self.assertEqual(hr.wait_ms({}), hr.WAIT_DEFAULT_MS)
+        self.assertEqual(hr.wait_ms({"waitMs": -5}), 0)
+        self.phone.ack_delay = None
+        out = await self.push(waitMs=0)              # one look, no waiting
+        self.assertFalse(out["acked"])
+
+    async def test_failed_ack_and_unreadable_ack(self):
+        self.phone.ack = {"seq": 1, "ok": False, "ms": 0.4, "swapped": 0, "kept": 0, "vtable": 0,
+                          "error": "dlopen: symbol not found", "generation": 3}
+        out = await self.push()
+        self.assertEqual((out["acked"], out["ack"]["ok"], out["ack"]["error"]), (True, False, "dlopen: symbol not found"))
+        self.phone.ack = b"{not json"
+        out = await self.push(seq=2)
+        self.assertEqual((out["acked"], out["ack"]["ok"]), (True, False))
+        self.assertIn("couldn't be read", out["ack"]["error"])
+        self.phone.ack = b"[" + b"1," * hr.ACK_MAX + b"1]"     # bounded read: too big is a failed ack
+        out = await self.push(seq=3)
+        self.assertEqual((out["acked"], out["ack"]["ok"]), (True, False))
+
+    async def test_stale_connection_is_retried_once(self):
+        await self.push(seq=1)
+        self.phone.opened[0][2].stale = True          # the app was relaunched meanwhile
+        out = await self.push(seq=2)
+        self.assertTrue(out["acked"])
+        self.assertEqual(len(self.phone.opened), 2)
+        self.assertTrue(self.phone.opened[0][2].closed)
+
+    async def test_not_installed_and_not_dev(self):
+        self.installed.clear()
+        with self.assertRaises(HelperError) as cm:
+            await self.push()
+        self.assertEqual(cm.exception.code, "not-installed")
+        self.assertEqual(cm.exception.fix["page"], "projects")
+        self.dev_app(STORE_APP, developer=False)
+        with self.assertRaises(HelperError) as cm:
+            await self.d.dispatch("hotreload.push", {"bundleId": STORE_APP, "src": str(self.patch_file()), "seq": 1})
+        self.assertEqual(cm.exception.code, "not-dev-app")
+        self.assertEqual(self.phone.opened, [])
+
+    async def test_bad_args(self):
+        for args, code in (({"src": str(self.patch_file()), "seq": 1}, "bad-args"),
+                           ({"bundleId": BID, "src": str(self.patch_file())}, "bad-args"),
+                           ({"bundleId": BID, "src": str(self.patch_file()), "seq": 0}, "bad-args"),
+                           ({"bundleId": BID, "seq": 1}, "bad-args"),
+                           ({"bundleId": BID, "src": str(self.tmp / "gone.dylib"), "seq": 1}, "not-found")):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch("hotreload.push", args)
+            self.assertEqual(cm.exception.code, code, args)
+
+
+class CleanAndRuntime(Harness):
+    async def test_clean_removes_only_patches_and_acks(self):
+        self.assertEqual(await self.d.dispatch("hotreload.clean", {"bundleId": BID}), {"removed": 0})   # no folder yet
+        keep = {f"{DIR}/runtime.json": b"{}", f"{DIR}/notes.txt": b"x", "/Library/Caches/other.bin": b"x"}
+        mine = {f"{DIR}/patch-1.dylib": b"x", f"{DIR}/patch-2.dylib.part": b"x", f"{DIR}/ack-1.json": b"{}",
+                f"{DIR}/ack-2.json.tmp": b"{}"}
+        self.phone.tree.update({DIR: None, **keep, **mine})
+        self.assertEqual(await self.d.dispatch("hotreload.clean", {"bundleId": BID}), {"removed": 4})
+        for p in mine:
+            self.assertNotIn(p, self.phone.tree)
+        for p in keep:
+            self.assertIn(p, self.phone.tree)
+
+    async def test_runtime_absent_then_present(self):
+        self.assertEqual(await self.d.dispatch("hotreload.runtime", {"bundleId": BID}), {"present": False})
+        self.phone.tree[DIR] = None
+        self.phone.tree[f"{DIR}/runtime.json"] = b'{"version": 1, "pid": 4242, "started": 1793383925}'
+        self.assertEqual(await self.d.dispatch("hotreload.runtime", {"bundleId": BID}),
+                         {"present": True, "runtime": {"version": 1, "pid": 4242, "started": 1793383925.0}})
+        self.phone.tree[f"{DIR}/runtime.json"] = b"garbage"
+        self.assertEqual(await self.d.dispatch("hotreload.runtime", {"bundleId": BID}), {"present": False})
+
+    async def test_runtime_on_a_stale_connection_is_retried(self):
+        await self.d.dispatch("hotreload.runtime", {"bundleId": BID})
+        self.phone.tree.update({DIR: None, f"{DIR}/runtime.json": b'{"version": 1, "pid": 9, "started": 5}'})
+        self.phone.opened[0][2].stale = True
+        out = await self.d.dispatch("hotreload.runtime", {"bundleId": BID})
+        self.assertTrue(out["present"])
+        self.assertEqual(len(self.phone.opened), 2)
+
+    async def test_not_installed(self):
+        self.installed.clear()
+        for cmd in ("hotreload.clean", "hotreload.runtime"):
+            with self.assertRaises(HelperError) as cm:
+                await self.d.dispatch(cmd, {"bundleId": BID})
+            self.assertEqual(cm.exception.code, "not-installed", cmd)
+
+
+class CoreParsing(unittest.TestCase):
+    def test_ack_fields_are_typed(self):
+        a = hr.parse_ack(b'{"seq": 4, "ok": true, "ms": 2, "swapped": "x", "kept": 3, "generation": 2}', 4)
+        self.assertEqual(a, {"seq": 4, "ok": True, "ms": 2.0, "swapped": 0, "kept": 3, "vtable": 0, "reverted": 0, "error": None,
+                             "generation": 2})
+        self.assertEqual(hr.parse_ack(b'{"ok": false}', 9)["error"], "The app couldn't load this patch.")
+        self.assertEqual(hr.parse_ack(b'"text"', 9)["ok"], False)
+
+    def test_ours(self):
+        for n in ("patch-1.dylib", "patch-12.dylib.part", "ack-3.json", "ack-3.json.tmp"):
+            self.assertTrue(hr.is_ours(n), n)
+        for n in ("runtime.json", "runtime.json.tmp", "patch-x.dylib", "notes.txt"):
+            self.assertFalse(hr.is_ours(n), n)
+
+
+class Demo(unittest.IsolatedAsyncioTestCase):
+    async def test_demo_answers_like_the_real_one(self):
+        from iosstudio.device.demo.core import APPS
+        from iosstudio.device.demo.daemon import DemoBackend
+        reg = DemoBackend(None).registry
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        src = store_patch(1234)
+        outside = tmp / "patch-1.dylib"
+        outside.write_bytes(b"x" * 1234)
+        dev = next(b for _n, b, _h, _s, d, *_ in APPS if d)
+        store = next(b for _n, b, _h, _s, d, *_ in APPS if not d)
+        out = await reg.lookup("hotreload.push")(None, {"bundleId": dev, "src": str(src), "seq": 1})
+        self.assertEqual(set(out), {"seq", "bytes", "pushMs", "acked", "ack", "ackMs"})
+        self.assertEqual((out["bytes"], out["acked"], out["ack"]["ok"], out["ack"]["swapped"]), (1234, True, True, 3))
+        with self.assertRaises(HelperError) as cm:           # the same check as the real one
+            await reg.lookup("hotreload.push")(None, {"bundleId": dev, "src": str(outside), "seq": 1})
+        self.assertEqual(cm.exception.code, "bad-args")
+        self.assertEqual(reg.lookup("hotreload.clean")(None, {"bundleId": dev}), {"removed": 0})
+        rt = reg.lookup("hotreload.runtime")(None, {"bundleId": dev})
+        self.assertEqual((rt["present"], set(rt["runtime"])), (True, {"version", "pid", "started"}))
+        with self.assertRaises(HelperError) as cm:
+            reg.lookup("hotreload.runtime")(None, {"bundleId": "com.example.nope"})
+        self.assertEqual(cm.exception.code, "not-installed")
+        with self.assertRaises(HelperError) as cm:
+            reg.lookup("hotreload.clean")(None, {"bundleId": store})
+        self.assertEqual(cm.exception.code, "not-dev-app")
+
+
+if __name__ == "__main__":
+    unittest.main()

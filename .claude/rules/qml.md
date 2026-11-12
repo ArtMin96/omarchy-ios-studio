@@ -38,6 +38,9 @@ APIs: [docs/components.md](../../docs/components.md). Wiring: [docs/development.
   fixed lists (a handful of rows).
 - Streaming buffers change in place (`push`/`splice`, `ListModel.append` of a batch), never copied per
   update, and have a cap (see `components/common/LogView.qml`). Batch frequent events before they hit the model.
+- Nothing animates unseen: an `Icon` with `spinning` turns only while it's visible and the window isn't
+  hidden; bind a StatusPill's `level: "busy"` to work that is running (never leave it on a hidden pill), and
+  gate your own animations and timers on `visible`. A hidden spinner keeps the whole window redrawing.
 
 ## Files and imports
 

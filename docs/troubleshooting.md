@@ -334,6 +334,57 @@ The error says which rule it breaks: a name longer than 40 characters or already
 
 Look at the diff image: the pink pixels are what changed. Usual causes are an animation or a spinner caught mid-move, a blinking cursor, a date or time inside the app (only the status bar is ignored), or content that loads late. Wait for the screen to settle before comparing, raise the threshold a little, or ignore a busy area (`--mask` for the helper). `size-mismatch` means the screenshot comes from another iPhone model or orientation than the baseline: save a baseline for that phone. Without Pillow a full-size compare takes a second or two; see [features/screenshot-compare.md](features/screenshot-compare.md#speed-and-pillow).
 
+## Hot reload
+
+### I saved, but the change didn't show up
+
+Check the project card or Logs › Console first: if the reload failed, the message says why (the entries below). If it says it reloaded:
+
+- The view has no `@ObserveHotReload var reload`. The new code is in the app, but SwiftUI only shows it when the view draws again. Add the property (and `import HotReload`), press Run again in the hot reload bar, and later saves redraw it.
+- The change is in a view that isn't on screen, or in code that only runs once (an `init`, a `.task` or `.onAppear` that already ran, a `Task` or callback created before the reload). Those keep the old code until they run again: go back and forth to the screen.
+- The reload counted functions it couldn't swap (`notSwapped` in the reload's details): the app calls them directly. Press Run again.
+- The file isn't in the app's own module (code in a Swift package, a resource). Hot reload only swaps Swift files under the app's `Sources/` folder; press Run again. A Swift file in another target of the project gets its own message (below).
+
+### "… This change needs a full build" (can't hot-reload)
+
+A reload swaps functions; it can't change how values are laid out in memory. Adding or removing a type, a stored property (`@State` and other property wrappers too), an enum case, a method of a non-final class (`class var` too), a conformance or a file is refused, and so is changing the type of a static or global stored property or changing a type alias, and so is a `body` that returns a different kind of view without `.hotReloadable()`. The message names the change, for example "Adds the stored property count to ContentView." Press Run again: it builds and installs the app with the change, and the next saves reload from there. See [features/hot-reload.md](features/hot-reload.md#what-cant-be-hot-reloaded) for every kind.
+
+### "Your app didn't take the change: it isn't running on your iPhone"
+
+The patch reached the phone, but the app didn't answer within 5 s. It's closed, iOS suspended it in the background, or the app on the phone is a build without hot reload (installed from somewhere else, or before you turned it on). Open the app on the phone and save again: each reload has all your changes, so nothing is lost. If it's open and still doesn't answer, press Run again.
+
+### "The app couldn't load the change" (load-failed)
+
+The app got the patch but iOS refused to load it. The message ends with the system's reason. Most often it's code signing: iOS only loads a patch signed by the same team as the app, so it fails when the app on the phone was signed with another Apple ID. Press Run again so the app and its patches are signed with the Apple ID you're signed in with now. If it keeps failing, check the Apple ID page for a revoked or expired certificate.
+
+### "Can't check ContentView.swift against the running app. Press Run to rebuild."
+
+The object file the last build made for that file is missing from the hot reload cache, so iOS Studio can't compare the change with what the app on the phone runs, and it won't send something it hasn't checked. Press Run again: the new build records it again.
+
+### "ContentView.swift changed while building. Press Run to include it."
+
+You changed a file while the session's first build ran, and it's one iOS Studio could only copy after the build (a very large module, or a file outside `Sources/`), so it can't tell which version the app was built from. Press Run again. Files under `Sources/` that you save during the build are simply reloaded once it's done.
+
+### "Late.swift is a new file: new files need a full build."
+
+A reload can't add a file to the app. That includes a Swift file you created while the session's first build was running: the build may already have planned its files, so the app on the phone doesn't have it even if the build finished after you made it. Press Run again: the new build includes the file, and saves reload from there. Swift files that were in the module's folder before the build but aren't compiled (left out with `exclude:`, resources) never count as new.
+
+### "Hot reload only updates the app target. Changes in … need a full Run."
+
+The file you saved is in another target of the project (a library under `Sources/<Target>/`). Hot reload only patches the app's own module; press Run again to build the change into the app.
+
+### "… now needs more memory per call than the running app reserved. Press Run to rebuild."
+
+An async function's new body keeps more values alive across an `await` than the version the app was built with, and callers set aside room for the old size, so the app refuses the patch (`load-failed`). Press Run again. Changes that keep the function as small, or make it smaller, reload fine.
+
+### "Too many reloads in this run (100). Press Run to start fresh."
+
+Each reload stays loaded in the app until it quits, so the runtime takes at most 100 per run. Press Run again and keep going.
+
+### "The hot reload lines at the end of Package.swift were changed by hand"
+
+iOS Studio only edits the lines between `// >>> iOS Studio hot reload` and `// <<< iOS Studio hot reload`, and won't touch them when the end marker is gone. Put back the `// <<< iOS Studio hot reload` line after the block, or delete the lines from `// >>> iOS Studio hot reload` on, then turn hot reload on or off again.
+
 ## Setup and updates
 
 ### Swift broke after a system update
