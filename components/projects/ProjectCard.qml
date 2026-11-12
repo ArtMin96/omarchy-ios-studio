@@ -10,6 +10,9 @@ import "../../lib/Model.js" as Model
 // One app project on the Projects page (projects slice).
 //   ProjectCard { project: modelData; svc: app.projects; hasCursor: …; onRun: … }
 // Run is the card's primary action; the rest live behind "More", which expands in place.
+// The folder (~/…, elided in the middle) is always on the third line; when another listed app has the same name
+// (sameName, set by the page: e.g. a copy of the app in another folder) it reads a step brighter, as the line
+// that tells the two apart.
 // Run is a split button (RunSplitButton): its chevron picks the run preset (launch arguments,
 // environment, language) Run uses, and "Edit presets…" there or under More emits editPresets() (the
 // page opens RunPresetsSheet). A selected preset shows as a quiet "Runs with …" after the bundle ID.
@@ -45,6 +48,7 @@ BorderSurface {
   property var debugSvc: svc && svc.app ? svc.app.editorDebug : null   // app.editorDebug (EditorDebugService)
   property bool hasCursor: false
   property bool expanded: false
+  property bool sameName: false         // another listed project has this name: the folder line stands out
   readonly property bool isBuilding: !!(svc && svc.building && svc.build.path === project.path)
   readonly property bool otherBuilding: !!(svc && svc.building && !isBuilding)
   readonly property var last: project.lastBuild || null
@@ -263,8 +267,17 @@ BorderSurface {
           spacing: Style.spacing.lg
           Icon { glyph: Model.Glyph.folder; size: Style.font.bodySmall; color: Theme.faint }
           // The branch follows the path (the path only takes what it needs), so it sits in the same
-          // place whether or not the card shows a signing badge on the right.
-          AppText { text: root.project.displayPath || ""; tone: "faint"; size: "small"; elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.maximumWidth: implicitWidth + 1; Layout.minimumWidth: Style.space(60) }
+          // place whether or not the card shows a signing badge on the right. The path keeps up to 220 px
+          // before it elides (in the middle): the editor hint after it gives way first.
+          AppText {
+            text: root.project.displayPath || ""
+            tone: root.sameName ? "dim" : "faint"
+            size: "small"
+            elide: Text.ElideMiddle
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth + 1
+            Layout.minimumWidth: Math.min(implicitWidth + 1, Style.space(220))
+          }
           Icon { visible: !!root.project.branch; glyph: Model.Glyph.link; size: Style.font.bodySmall; color: Theme.faint; Layout.leftMargin: Style.spacing.md }
           AppText { visible: !!root.project.branch; text: root.project.branch || ""; tone: "faint"; size: "small"; elide: Text.ElideRight; Layout.maximumWidth: Style.space(160) }
           // Editor hint: only when completion isn't ready here yet (quiet; gives way first)
