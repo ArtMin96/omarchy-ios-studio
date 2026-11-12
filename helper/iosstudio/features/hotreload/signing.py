@@ -4,10 +4,13 @@ xtool keeps the identity of each team in `<xtool data>/<TEAMID>`: a binary plist
 `{privateKey: {data: <key bytes>}, certificate: <DER bytes>}`. The key bytes may be PEM or DER, PKCS#1 or PKCS#8;
 rcodesign wants a PEM `PRIVATE KEY` (PKCS#8), so other forms are converted in memory.
 
-    sign_dylib(path, team=None, data_dir=None) -> float      seconds it took
+    sign_dylib(path, team=None, data_dir=None, identifier=ID) -> float      seconds it took
 
-runs `rcodesign sign --pem-file /dev/stdin --team-name TEAM --timestamp-url none <dylib>` with the certificate and
-the key as one PEM stream on rcodesign's stdin (a pipe). THE PRIVATE KEY NEVER TOUCHES THE DISK: no file, no temp
+runs `rcodesign sign --pem-file /dev/stdin --team-name TEAM --binary-identifier ID --timestamp-url none <dylib>`
+with the certificate and the key as one PEM stream on rcodesign's stdin (a pipe). ID is the installed app's bundle
+id (with xtool's XTL-<team> prefix when it added one): iOS checks a dylib in the app's data container against the
+installed profile whose app ID is <TEAM>.<identifier>, so any other identifier (e.g. `patch-N`) is rejected by AMFI
+("The best matching profile does not match the entitlements of this file"). THE PRIVATE KEY NEVER TOUCHES THE DISK: no file, no temp
 file, no log line, no error detail; `Identity` doesn't show it in its repr.
 
 The xtool data folder is $IOSSTUDIO_XTOOL_DATA when set (tests point it at a throwaway identity), else
@@ -238,15 +241,18 @@ def rcodesign_path() -> str | None:
 
 
 def sign_dylib(path: str | Path, team: str | None = None, data_dir: Path | None = None,
-               rcodesign: str | None = None, timeout: float = SIGN_TIMEOUT) -> float:
-    """Sign `path` in place with the team's development identity; returns the seconds rcodesign took."""
+               rcodesign: str | None = None, timeout: float = SIGN_TIMEOUT, *, identifier: str) -> float:
+    """Sign `path` in place with the team's development identity and `identifier` (the installed app's bundle
+    id); returns the seconds rcodesign took."""
+    if not identifier:
+        raise sign_failed("The reload can't be signed: the app's bundle ID is unknown.")
     tool = rcodesign or rcodesign_path()
     if not tool:
         raise HelperError("missing-tool", "rcodesign isn't installed yet, so the reload can't be signed.",
                           fix("Open Setup", "setup"))
     ident = load_identity(team, data_dir)
-    argv = [tool, "sign", "--pem-file", "/dev/stdin", "--team-name", ident.team, "--timestamp-url", "none",
-            str(path)]
+    argv = [tool, "sign", "--pem-file", "/dev/stdin", "--team-name", ident.team, "--binary-identifier", identifier,
+            "--timestamp-url", "none", str(path)]
     started = time.monotonic()
     try:
         r = subproc.run_group(argv, timeout=timeout, input=ident.pem(), text=False,

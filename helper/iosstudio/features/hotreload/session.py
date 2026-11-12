@@ -43,6 +43,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import re
 import select
 import signal
 import sys
@@ -72,6 +73,7 @@ WARM_WAIT = 1.0            # for the warm-up compile (killed on cancel)
 CLOSE_WAIT = 2.0           # for the device daemon connection to close
 FILES_SHOWN = 5            # pending / history files
 RELOAD_FILES = 10          # lastReload files
+LOAD_ERROR_SHOWN = 400     # chars of the app's load error in the lastError message (the full one is in detail)
 STEP_TEXT = {"check": "Checking the change", "compile": "Compiling", "link": "Linking", "sign": "Signing",
              "push": "Sending it to your iPhone"}
 RUN_FIX = fix("Run again", "projects", action="hot-reload-restart")
@@ -88,6 +90,19 @@ def clamp_debounce(v: Any) -> int:
 
 def _name(rel: str) -> str:
     return rel.rsplit("/", 1)[-1]
+
+
+_LONG_PATH = re.compile(r"/[^\s'\",()]{40,}/([^\s'\",()/]+)")
+
+
+def load_error_text(why: str, limit: int = LOAD_ERROR_SHOWN) -> str:
+    """The app's load error for a person: long paths (the app's data container) cut to their file name, then, if
+    still too long, clipped in the middle so dyld's reason at the end ("code signature invalid ...") survives."""
+    text = _LONG_PATH.sub(lambda m: "…/" + m.group(1), why.strip())
+    if len(text) <= limit:
+        return text
+    head = limit // 3
+    return text[:head].rstrip() + " … " + text[-(limit - head - 3):].lstrip()
 
 
 def _files_text(files: list[str]) -> str:
@@ -940,7 +955,7 @@ class Session:
         if not ack.get("ok"):
             why = str(ack.get("error") or "unknown error")
             out.error = {"code": "load-failed", "fix": RUN_FIX, "detail": why[:2000],
-                         "message": f"The app couldn't load the change: {why[:300]}"}
+                         "message": f"The app couldn't load the change: {load_error_text(why)}"}
             return out
         steps = {**res.steps, "push": int(reply.get("pushMs") or 0) + int(reply.get("ackMs") or 0),
                  "apply": round(float(ack.get("ms") or 0), 1)}

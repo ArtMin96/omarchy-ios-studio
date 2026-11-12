@@ -63,7 +63,7 @@ __attribute__((visibility("default"), used)) const int iosstudio_hot_reload_load
 #define HR_MAX_DIR_ENTRIES 4096     // directory scans stop here
 #define HR_MAX_SYMBOLS 1000000      // a patch with more external symbols is refused
 #define HR_MAX_SCAN_BYTES (64u << 20) // vtable scan: at most this much of the app's data sections
-#define HR_ERROR_MAX 400
+#define HR_ERROR_MAX 512
 #define HR_MAX_LOADED 100           // patches dlopened in one run (never closed); later ones are refused
 #define HR_MAX_NAME 1024            // longer symbol names aren't looked up with a suffix (method descriptors)
 
@@ -84,6 +84,34 @@ int iosstudio_hot_reload_is_active(void) { return atomic_load(&g_active); }
 long iosstudio_hot_reload_generation(void) { return atomic_load(&g_generation); }
 
 // MARK: - Small helpers
+
+// hr_short_dlerror: dyld's message with the long container path cut down, so the reason survives the error cap.
+// Every `path` becomes `file`, and of the `tried:` list only the first entry is kept (the others repeat it for
+// /private/var and the cryptex prefixes): "dlopen(patch-1.dylib, 0x0002): tried: 'patch-1.dylib' (code
+// signature invalid ...), ...". Pure C (no Apple headers), so tests/cli/test_hot_reload_runtime.py compiles it.
+static void hr_short_dlerror(char *out, size_t size, const char *e, const char *path, const char *file) {
+    if (!size) return;
+    size_t plen = strlen(path), flen = strlen(file), n = 0;
+    const char *tried = strstr(e, "tried: ");
+    int depth = 0, in_list = 0;
+    for (const char *c = e; *c && n + 1 < size; ) {
+        if (tried && c == tried + 7) in_list = 1;
+        if (plen && strncmp(c, path, plen) == 0) {
+            for (size_t i = 0; i < flen && n + 1 < size; i++) out[n++] = file[i];
+            c += plen;
+            continue;
+        }
+        if (in_list && *c == '(') depth++;
+        if (in_list && *c == ')' && --depth == 0) {
+            out[n++] = ')';
+            if (c[1] && n + 6 <= size) { memcpy(out + n, ", \xe2\x80\xa6", 5); n += 5; }
+            break;
+        }
+        out[n++] = *c++;
+    }
+    out[n < size ? n : size - 1] = 0;
+}
+// END hr_short_dlerror
 
 static double now_ms(void) {
     static mach_timebase_info_data_t tb;
@@ -584,7 +612,9 @@ static void apply_patch(long seq, hr_result *res) {
     void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         const char *e = dlerror();
-        snprintf(res->error, sizeof res->error, "could not load the patch: %s", e ? e : "unknown error");
+        char why[HR_ERROR_MAX];
+        hr_short_dlerror(why, sizeof why, e ? e : "unknown error", path, file);
+        snprintf(res->error, sizeof res->error, "could not load the patch: %s", why);
         goto done;
     }
     g_loaded++;

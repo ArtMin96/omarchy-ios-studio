@@ -111,7 +111,7 @@ Then each save, once you stop saving for 150 ms (and at least every 2 s if saves
 | compile | compiles each changed file with its baseline command, up to 4 at a time |
 | check, again | compares the compiled `body` view types with the baseline's, and checks that the app calls the changed functions through the pointer table |
 | link | links them into `patch-<n>.dylib` with `ld64.lld` (through the Swift driver if that fails) |
-| sign | signs it with your development certificate (rcodesign; the private key goes through a pipe and never touches the disk) |
+| sign | signs it with your development certificate (rcodesign; the private key goes through a pipe and never touches the disk), with the installed app's bundle ID as the signing identifier (`--binary-identifier`, read from the built app's Info.plist, so `XTL-<team>.<id>` when xtool prefixed it). iOS checks a library in the app's data folder against the installed profile whose app ID matches that identifier; with any other identifier (`patch-N`) AMFI refuses it. If the build has no bundle ID, the reload stops with `no-baseline` and asks for a Run |
 | push | copies it to the app's `Library/Caches/HotReload/` on the phone and waits up to 5 s for the app's answer |
 | apply | the runtime in the app loads it, points the app at the new functions, and redraws the `@ObserveHotReload` views |
 
@@ -168,7 +168,7 @@ A failed reload doesn't end the session: the state becomes `failed`, `lastError`
 | `not-signed-in` | no development certificate for the app's team | sign in on the Apple ID page |
 | `not-interposable` | the app was built without hot reload | Run again |
 | `app-not-running` | the app didn't answer within 5 s: it isn't open (or iOS suspended it in the background), or the installed build has no runtime | open the app on the phone and save again, or Run again |
-| `load-failed` | the app got the patch but couldn't load it; the message has the system's reason (`dlerror`), often code signing or library validation, or the runtime's own (a bigger async function, too many reloads: see [Limits](#limits)) | Run again; see [troubleshooting](../troubleshooting.md#the-app-couldnt-load-the-change-load-failed) |
+| `load-failed` | the app got the patch but couldn't load it; the message has the system's reason (`dlerror`, with the phone's long paths cut to the file name and only the first `tried:` entry kept so the reason fits; the full text is in `detail`), often code signing or library validation, or the runtime's own (a bigger async function, too many reloads: see [Limits](#limits)) | Run again; see [troubleshooting](../troubleshooting.md#the-app-couldnt-load-the-change-load-failed) |
 | `no-baseline` | the records of the last build are missing or unreadable, the build left no app in `xtool/` newer than its start, its `.ipa` can't be read (or an entry in it is over 256 MB), or the compiler's plan for the module is over 16 MB | Run again |
 | `not-enabled` | hot reload is off for the project | turn it on |
 | `no-device` | no iPhone connected | connect it |

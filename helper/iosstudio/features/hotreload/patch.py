@@ -12,7 +12,9 @@ patch alone holds every change. Steps, each timed in ms in PatchResult.steps:
   compile   each file's frontend command (from the baseline), output in a work folder; in parallel (≤4)
   link      one dylib `patch-<seq>.dylib` (install name @rpath/patch-<seq>.dylib): ld64.lld directly (≈0.8 s),
             falling back to the swiftc driver (≈2 s) if that fails
-  sign      signing.sign_dylib() with the baseline's team
+  sign      signing.sign_dylib() with the baseline's team and the built app's bundle id (Baseline.bundle_id, from its
+            Info.plist, so XTL-<team>-prefixed as installed) as the code-signing identifier: iOS only loads a dylib
+            from the data container whose identifier matches an installed profile's app ID. Unknown → no-baseline.
 
 The dylib lands in <cache>/<key>/patches/ (newest 10 kept). Errors are PatchError (a HelperError) with the
 `lastError` fields of the session snapshot: code (unsupported-change, new-file, compile-failed, link-failed,
@@ -335,6 +337,9 @@ def make_patch(baseline: Baseline, changed_files: list[str] | None, seq: int, ou
                 files.append(rel)
     if not files:
         raise HelperError("no-changes", "Nothing changed since the app was built.")
+    if sign and not baseline.bundle_id:
+        raise PatchError("no-baseline", "The built app has no bundle ID, so the reload can't be signed for it: "
+                         "press Run to build it again.", restart_fix())
 
     # ---- check: the structure of each file
     step("check")
@@ -410,7 +415,7 @@ def make_patch(baseline: Baseline, changed_files: list[str] | None, seq: int, ou
         if sign:
             step("sign")
             t0 = time.monotonic()
-            signing.sign_dylib(tmp_dylib, baseline.team, data_dir)
+            signing.sign_dylib(tmp_dylib, baseline.team, data_dir, identifier=baseline.bundle_id or "")
             steps["sign"] = _ms(t0)
             signed = True
         _check_cancel(cancel)

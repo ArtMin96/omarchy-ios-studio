@@ -87,6 +87,7 @@ class PatchTests(unittest.TestCase):
         self.assertTrue(res.signed)
         sign = next(c for c in self.calls() if c.startswith("sign "))
         self.assertIn("--team-name ABCDE12345", sign)
+        self.assertIn("--binary-identifier dev.example.app ", sign)
         self.assertTrue(sign.endswith("patch-4.dylib"))
 
     def test_driver_link_when_ld_fails(self):

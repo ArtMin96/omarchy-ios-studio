@@ -87,6 +87,8 @@ class Identity(unittest.TestCase):
         self.assertEqual(signing._scrub("a -----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY----- b"),
                          "a [pem] b")
 
+BID = "XTL-ABCDE12345.dev.example.app"   # the installed bundle id: the patch's code-signing identifier
+
 
 @unittest.skipUnless(OPENSSL and RCODESIGN, "needs openssl and rcodesign")
 class Sign(unittest.TestCase):
@@ -100,7 +102,7 @@ class Sign(unittest.TestCase):
 
     def test_signs_without_writing_the_key(self):
         before = set(Path(tempfile.gettempdir()).rglob("*"))
-        secs = signing.sign_dylib(self.path, "ABCDE12345", self.data)
+        secs = signing.sign_dylib(self.path, "ABCDE12345", self.data, identifier=BID)
         self.assertLess(secs, signing.SIGN_TIMEOUT)
         self.assertTrue(macho.MachO.load(self.path).has_code_signature)
         self.assertEqual(sorted(p.name for p in self.work.iterdir()), ["patch-1.dylib"])
@@ -113,13 +115,14 @@ class Sign(unittest.TestCase):
     def test_rcodesign_failure(self):
         self.path.write_bytes(b"not a mach-o")
         with self.assertRaises(HelperError) as cm:
-            signing.sign_dylib(self.path, "ABCDE12345", self.data)
+            signing.sign_dylib(self.path, "ABCDE12345", self.data, identifier=BID)
         self.assertEqual(cm.exception.code, "sign-failed")
         self.assertNotIn("PRIVATE KEY", cm.exception.detail or "")
 
     def test_missing_tool(self):
         with self.assertRaises(HelperError) as cm:
-            signing.sign_dylib(self.path, "ABCDE12345", self.data, rcodesign=str(self.tmp / "no-rcodesign"))
+            signing.sign_dylib(self.path, "ABCDE12345", self.data, rcodesign=str(self.tmp / "no-rcodesign"),
+                               identifier=BID)
         self.assertEqual(cm.exception.code, "missing-tool")
 
 
@@ -137,10 +140,10 @@ class FakeRcodesign(unittest.TestCase):
         fake.chmod(0o755)
         target = tmp / "x.dylib"
         target.write_bytes(b"x")
-        signing.sign_dylib(target, None, data, rcodesign=str(fake))
+        signing.sign_dylib(target, None, data, rcodesign=str(fake), identifier=BID)
         argv = (tmp / "argv").read_text().split("\n")
-        self.assertEqual(argv[:8], ["sign", "--pem-file", "/dev/stdin", "--team-name", "ABCDE12345",
-                                    "--timestamp-url", "none", str(target)])
+        self.assertEqual(argv[:10], ["sign", "--pem-file", "/dev/stdin", "--team-name", "ABCDE12345",
+                                     "--binary-identifier", BID, "--timestamp-url", "none", str(target)])
         shutil.rmtree(tmp)
 
 

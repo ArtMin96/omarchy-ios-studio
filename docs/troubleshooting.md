@@ -359,7 +359,9 @@ The patch reached the phone, but the app didn't answer within 5 s. It's closed, 
 
 ### "The app couldn't load the change" (load-failed)
 
-The app got the patch but iOS refused to load it. The message ends with the system's reason. Most often it's code signing: iOS only loads a patch signed by the same team as the app, so it fails when the app on the phone was signed with another Apple ID. Press Run again so the app and its patches are signed with the Apple ID you're signed in with now. If it keeps failing, check the Apple ID page for a revoked or expired certificate.
+The app got the patch but iOS refused to load it. The message ends with the system's reason (long paths on the phone are cut to the file name, so the reason fits; the full text is in the error's detail). Most often it's code signing: iOS only loads a patch signed by the same team as the app, so it fails when the app on the phone was signed with another Apple ID. Press Run again so the app and its patches are signed with the Apple ID you're signed in with now. If it keeps failing, check the Apple ID page for a revoked or expired certificate.
+
+When the reason is `code signature invalid` or the phone's log says "The best matching profile does not match the entitlements of this file": iOS checks a patch in the app's folder against the app's installed provisioning profile, so the patch has to carry the installed app's bundle ID (`XTL-<team>.<id>` for a free account) as its signing identifier. iOS Studio signs every patch that way, with the bundle ID from the app the last Run built. If the error persists, press Run again: the next build records the bundle ID and refreshes the hot reload runtime in the project.
 
 ### "Can't check ContentView.swift against the running app. Press Run to rebuild."
 
