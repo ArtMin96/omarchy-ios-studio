@@ -352,15 +352,42 @@ class CloseRunningApp(InstallCase):
         self.assert_clean()
 
     async def test_silence_says_it_waits_for_the_app_then_the_install_finishes(self):
+        self.phone.running = [777]
         self.phone.script = [{"Status": "TakingInstallLock", "PercentComplete": 0}, 0.3, *DONE]
         with mock.patch.object(self.INS, "WAITING_NOTICE_S", 0.05):
             out = await asyncio.wait_for(self.install(), WAIT)
         self.assertEqual(out["bundleId"], INSTALLED)
         notes = [d for n, d in self.events if n == "installProgress" and "message" in d]
         self.assertEqual(notes, [{"path": str(self.ipa), "percent": 0, "status": "installing",
-                                  "message": "Waiting for CrashLab to close on your iPhone"}])
+                                  "message": "Waiting for your iPhone. If CrashLab is open on it, close it"}])
         self.assertEqual(self.progress()[-1], ("done", 100))
         self.assert_clean()
+
+    async def test_a_slow_install_of_an_app_that_was_not_running_doesnt_blame_the_app(self):
+        self.phone.script = [{"Status": "TakingInstallLock", "PercentComplete": 0}, 0.3, *DONE]
+        with mock.patch.object(self.INS, "WAITING_NOTICE_S", 0.05):
+            await asyncio.wait_for(self.install(), WAIT)
+        notes = [d["message"] for n, d in self.events if n == "installProgress" and "message" in d]
+        self.assertEqual(notes, ["Waiting for your iPhone to finish installing CrashLab"])
+        self.assert_clean()
+
+    async def test_a_failed_close_keeps_the_hint(self):
+        self.phone.running = [777]
+        self.phone.kill_fails = True
+        self.phone.script = [0.3, *DONE]
+        with mock.patch.object(self.INS, "WAITING_NOTICE_S", 0.05):
+            await asyncio.wait_for(self.install(), WAIT)
+        notes = [d["message"] for n, d in self.events if n == "installProgress" and "message" in d]
+        self.assertEqual(notes, ["Waiting for your iPhone. If CrashLab is open on it, close it"])
+
+    def test_only_the_copy_the_package_replaces_is_closed(self):
+        pick = self.INS.installed_entry
+        plain, xtl, other = ({"bundleId": BID}, {"bundleId": INSTALLED}, {"bundleId": f"XTL-TEAM2.{BID}"})
+        self.assertIs(pick([xtl, plain], BID), plain)          # the same id wins over a free-team copy
+        self.assertIs(pick([xtl], BID), xtl)                   # a free team's XTL- copy of it
+        self.assertIsNone(pick([xtl, other], BID))             # two teams' copies: can't tell, close none
+        self.assertIsNone(pick([{"bundleId": BID + ".widget"}, {"bundleId": "x" + BID}], BID))
+        self.assertIsNone(pick([], BID))                       # a fresh install
 
     async def test_stall_message_names_the_app(self):
         self.phone.script = []

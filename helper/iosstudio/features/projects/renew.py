@@ -94,7 +94,8 @@ def renew_due(days: float, dry: bool) -> int:
         except HelperError as exc:
             data, err = None, exc
         if err is None and data and data.get("needsInstall"):
-            reply = _deviced_once("app.install", {"udid": it["udid"], "path": data["ipa"]})
+            # as long as the Run button and watch mode give it: ending the --once process cancels the install
+            reply = _deviced_once("app.install", {"udid": it["udid"], "path": data["ipa"]}, 600)
             if reply and reply.get("ok"):
                 store.record_signing(it["path"], it["udid"], data.get("bundleId"), "wifi", data.get("profile"))
             else:

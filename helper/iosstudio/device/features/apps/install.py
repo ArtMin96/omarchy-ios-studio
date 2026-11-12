@@ -10,8 +10,10 @@ cancellation included; the staged package is removed best effort within CLEANUP_
 
 Like Xcode, the app is closed (app.kill) before the installer runs: iOS can't end an app that's in the
 foreground for an update ("termination resistance"), and the installer then sends nothing until the app
-leaves the screen. If the installer is silent for WAITING_NOTICE_S anyway, installProgress carries a
-`message` saying it's waiting for the app to close.
+leaves the screen. Only the installed copy the package replaces is closed (installed_entry: the same bundle
+id, or its one free-team XTL-<TEAM>. copy); a fresh install closes nothing. If the installer is silent for
+WAITING_NOTICE_S anyway, installProgress carries a `message` (waiting_message: the hint to close the app only
+when it was running or closing it failed).
 """
 from __future__ import annotations
 
@@ -39,6 +41,14 @@ CLEANUP_S = 10.0          # removing the staged package; left behind if the phon
 
 STALLED_MESSAGE = ("Your iPhone stopped answering while it installed {app}. Close {app} on the iPhone if it's "
                    "open, keep the iPhone unlocked and awake, then try again. If it keeps happening, restart the iPhone.")
+
+
+def waiting_message(app: str, may_be_open: bool) -> str:
+    """installProgress `message` after WAITING_NOTICE_S of installer silence. The hint to close the app only
+    when it was running (or closing it failed): a slow phone is silent too."""
+    if may_be_open:
+        return f"Waiting for your iPhone. If {app} is open on it, close it"
+    return f"Waiting for your iPhone to finish installing {app}"
 
 
 class InstallStalled(Exception):
@@ -128,26 +138,36 @@ async def run_installer(ip, remote: str, on_percent, on_waiting=lambda: None) ->
             return
 
 
-async def close_running_app(d, s, rsd, bid: str) -> str | None:
+def installed_entry(apps: list[dict], bid: str) -> dict | None:
+    """The installed app a package with bundle id `bid` replaces: the same id, else the one free-team copy
+    (XTL-<TEAM>.<bid>). Several XTL- copies (apps of other teams): None, as we can't tell which one it is."""
+    exact = next((e for e in apps if e.get("bundleId") == bid), None)
+    if exact is not None:
+        return exact
+    near = [e for e in apps if bundle_matches(str(e.get("bundleId") or ""), bid)]
+    return near[0] if len(near) == 1 else None
+
+
+async def close_running_app(d, s, rsd, bid: str) -> tuple[str | None, bool]:
     """Close the installed copy of this app if it runs (app.kill), so iOS can replace it. Best effort and
-    bounded: a failure only means the installer may wait for the app to leave the screen. Returns its
-    name as installed (for messages), or None when it isn't installed."""
+    bounded: a failure only means the installer may wait for the app to leave the screen. Returns (its
+    name as installed, or None when it isn't installed; whether it may be open: it ran or closing failed)."""
     async def close():
         apps, _, _ = await INDEX.list(s.udid, "User", device_fetcher(d.pmd3, rsd))
-        hit = next((e for e in sorted(apps, key=lambda e: e["bundleId"]) if bundle_matches(e["bundleId"], bid)), None)
+        hit = installed_entry(apps, bid)
         if hit is None:
-            return None
+            return None, False
         out = await d.registry.lookup("app.kill")(d, {"bundleId": hit["bundleId"], "udid": s.udid})
         if out.get("killed"):
             dlog(f"app.install: closed {hit['bundleId']} (pid {', '.join(map(str, out['killed']))}) first")
-        return hit.get("name") or None
+        return hit.get("name") or None, bool(out.get("killed"))
     try:
         return await asyncio.wait_for(close(), CLOSE_APP_S)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001
         dlog(f"app.install: couldn't close the running app first: {exc!r}")
-        return None
+        return None, True
 
 
 async def _remove_staged(afc, remote: str) -> None:
@@ -180,6 +200,7 @@ def register(reg):
         emit("installProgress", {"path": sp, "percent": 0, "status": "uploading"})
         last = [-1]
         name = [path.stem]
+        may_be_open = [False]
 
         def on_percent(pct):
             p = int(pct)
@@ -189,7 +210,7 @@ def register(reg):
 
         def on_waiting():
             emit("installProgress", {"path": sp, "percent": max(last[0], 0), "status": "installing",
-                                     "message": f"Waiting for {name[0]} to close on your iPhone"})
+                                     "message": waiting_message(name[0], may_be_open[0])})
 
         t0 = time.monotonic()
         remote = f"{STAGING_DIR}/{uuid.uuid4()}.ipa"
@@ -198,7 +219,8 @@ def register(reg):
                 try:
                     await upload(afc, remote, data)
                     on_percent(0)   # uploaded: the phone's installer takes over
-                    name[0] = await close_running_app(d, s, rsd, bid) or name[0]
+                    installed_name, may_be_open[0] = await close_running_app(d, s, rsd, bid)
+                    name[0] = installed_name or name[0]
                     async with s.open_service(d.pmd3.InstallationProxyService) as ip:
                         await run_installer(ip, remote, on_percent, on_waiting)
                 finally:

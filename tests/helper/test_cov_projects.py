@@ -322,14 +322,16 @@ def test_renew_due_installs_over_wifi_and_records(state, tmp_path, monkeypatch, 
     monkeypatch.setattr(renew, "_notify", lambda *a: notes.append(a))
     monkeypatch.setattr(renew.build, "do_build", lambda flags, kind, interactive: (
         0, {"needsInstall": True, "ipa": "/x.ipa", "bundleId": "com.x", "profile": {"expires": 99.0}}, None))
-    monkeypatch.setattr(renew, "_deviced_once", lambda cmd, args: asked.append((cmd, args)) or {"ok": True})
+    monkeypatch.setattr(renew, "_deviced_once",
+                        lambda cmd, args, timeout=300: asked.append((cmd, args, timeout)) or {"ok": True})
     assert renew.renew_due(2, dry=False) == 0
-    assert asked == [("app.install", {"udid": "U1", "path": "/x.ipa"})]
+    # as long as the Run button gives an install: ending the --once process now cancels it in the daemon
+    assert asked == [("app.install", {"udid": "U1", "path": "/x.ipa"}, 600)]
     assert store.load_renewals()[paths["Soon"]]["via"] == "wifi"
     assert events(capsys)[-1]["data"]["renewed"] == [paths["Soon"]]
     assert notes and notes[0][0] == "Apps renewed" and notes[0][2] == "low"
     # an unreachable phone is a "try later"
-    monkeypatch.setattr(renew, "_deviced_once", lambda cmd, args: None)
+    monkeypatch.setattr(renew, "_deviced_once", lambda cmd, args, timeout=300: None)
     assert renew.renew_due(2, dry=False) == renew.EXIT_TEMP
 
 
