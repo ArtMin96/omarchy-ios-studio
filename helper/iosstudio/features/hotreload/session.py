@@ -32,7 +32,8 @@ failure is `failed` with lastError (PatchError.to_json(); ack.ok false -> load-f
 -> app-not-running); the session keeps watching. The app gone from the phone (not-installed) ends it (app-exited).
 
 Stop: {"cancel": true} or {"cmd": "stop"} on stdin ({"cmd": "pause" | "resume"} also work), SIGTERM/SIGINT/SIGHUP,
-`hotreload stop` (SIGTERM), the parent process ending. The build is cancelled (its process group killed after
+`hotreload stop` (SIGTERM), the parent process ending (checked every step, so `hotreload run` must run under a
+process that stays alive; the app and the MCP server do). The build is cancelled (its process group killed after
 the grace period), running compiles are killed, the final `stopped` snapshot is written, then `done`; all of it
 within SHUTDOWN_BUDGET (state.STOP_WAIT waits longer before it kills the session).
 """
@@ -511,7 +512,7 @@ class Session:
                 self.publish(self.idle_state(), self.idle_message())
         if self.check_parent and os.getppid() != self.ppid:
             self.stop_reason = "stopped"
-            self.stop_message = "Stopped: the app that started hot reload has closed"
+            self.stop_message = "Stopped: the app or tool that started hot reload has closed"
 
     def apply_control(self) -> None:
         c = rt.read_control(self.key)

@@ -364,3 +364,21 @@ def fake_build(project: Path, tools: Path, module: str = "App", files: dict[str,
     if team:
         (app / "embedded.mobileprovision").write_bytes(fake_profile(team))
     return project
+
+
+def pack_ipa(app: Path, ipa: Path | None = None, remove: bool = True,
+             extra: dict[str, bytes] | None = None) -> Path:
+    """A Wi-Fi build's xtool/<App>.ipa from the .app fake_build made (Payload/<App>.app/<files>), the .app removed
+    (as `xtool dev build --ipa` leaves it) unless remove=False. `extra`: more entries, by their name in the zip."""
+    import zipfile
+    ipa = ipa or app.with_suffix(".ipa")
+    with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"Payload/{app.name}/", b"")
+        for p in sorted(app.rglob("*")):
+            if p.is_file():
+                z.write(p, f"Payload/{app.name}/{p.relative_to(app)}")
+        for name, data in (extra or {}).items():
+            z.writestr(name, data)
+    if remove:
+        shutil.rmtree(app)
+    return ipa

@@ -291,6 +291,37 @@ class RealCli(unittest.TestCase):
         self.assertTrue(err["message"])
         self.assertTrue(any("BROKEN" in d["message"] for d in err.get("diagnostics") or []), err)
 
+    def test_wifi_build_reloads_from_the_ipa(self):
+        # `--ipa` leaves xtool/App.ipa; the older xtool/App.app (broken here) is an earlier build's and isn't used
+        env = dict(self.env, FAKE_XTOOL_WIFI="1", FAKE_XTOOL_LEFTOVER="1")
+        with self.w.deviced() as d:
+            s = self.start(env)
+            watching = s.state("watching", 30)
+            self.assertEqual(watching["bundleId"], INSTALLED)
+            self.assertTrue(d.sent("app.install")[0]["path"].endswith("xtool/App.ipa"))
+            self.w.card.write_text(CARD.replace('Text("Hello")', 'Text("Over Wi-Fi")', 1))
+            ok = s.state("reloaded", 20)
+            self.assertEqual(ok["lastReload"]["files"], ["Sources/App/Card.swift"])
+            self.assertEqual(len(d.sent("hotreload.push")), 1)
+            s.proc.send_signal(signal.SIGTERM)
+            self.assertTrue(s.done()["ok"])
+        cache = Path(self.env["XDG_CACHE_HOME"]) / "ios-studio/hot-reload"
+        self.assertEqual([x.name for x in cache.iterdir() if x.name.startswith(".")], [])   # the unpacked app went
+        self.assertFalse(list(self.w.proj.glob("xtool/Payload")))                         # nothing in the project
+
+    def test_only_an_older_app_is_a_plain_error(self):
+        old = time.time() - 3600
+        app = self.w.proj / "xtool/App.app"
+        for p in [*app.iterdir(), app]:
+            os.utime(p, (old, old))
+        with self.w.deviced():
+            done = self.start(dict(self.env, FAKE_XTOOL_STALE="1")).done(30)
+        self.assertFalse(done["ok"])
+        err = done["error"]
+        self.assertEqual((err["code"], err["fix"]["action"]), ("no-baseline", "hot-reload-restart"))
+        self.assertIn("this build made", err["message"])
+        self.assertNotIn("build the app first", err["message"])
+
     def test_not_enabled(self):
         w = SessionWorld(self.tmp / "off", enabled=False)
         s = Stream(str(w.proj), w.env)

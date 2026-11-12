@@ -17,7 +17,7 @@ command it ends in (≈0.8 s instead of ≈2 s through the driver).
       <cache_root>/<key>/baseline.json   the Baseline (compact JSON: one shared frontend argv + per-file changes)
                          sources/        the module's Swift files as built (from the snapshot; by project path)
                          objects/        their baseline .o files (<File>.o)
-                         app.bin         the built app executable (xtool/<App>.app/<exe>)
+                         app.bin         the built app executable (xtool/<App>.app/<exe>, or from xtool/<App>.ipa)
                          patches/        written by patch.py (newest 10 kept)
     load_baseline(project, cache_root=None) -> Baseline | None
 
@@ -30,6 +30,11 @@ snapshot are listed in Baseline.late (the session asks for a Run). The baseline 
 taken (started_at) and which Swift files under Sources/ existed then without being compiled (excluded): patch.py
 calls any other Swift file in the module's folders new, even one created during the build (before its link).
 With a prebuild command the session takes the snapshot again once the prebuild has finished (session.py).
+
+The app is the newest xtool/<App>.app or xtool/<App>.ipa written since the snapshot (find_app): a Wi-Fi build
+(`--ipa`) leaves only the .ipa, and an older .app next to it is a leftover. From a .ipa, Info.plist, the executable
+and embedded.mobileprovision are unpacked (capped, plain names only) into a staging folder
+<cache_root>/.<key>-ipa-XXXX that is removed when the capture ends; nothing is written into the project.
 
 key = the first 12 hex digits of sha1(project path); the whole cache is kept under 300 MB (oldest projects go
 first; projects with a live hot reload session never). Anything missing fails with HelperError('no-baseline').
@@ -49,10 +54,13 @@ import struct
 import subprocess
 import tempfile
 import time
+import zipfile
+import zlib
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from xml.parsers.expat import ExpatError
 
 from iosstudio.core import appdirs, fileio, subproc
 from iosstudio.core.output import HelperError, fix
@@ -99,7 +107,7 @@ class Baseline:
     link: list[str]                       # the patch link through the driver, without objects/-o/install name
     ld: list[str] | None                  # the same as a direct ld64.lld argv template (ld_command fills it)
     app_binary: str                       # the cached copy (app.bin)
-    app_path: str                         # xtool/<App>.app/<exe> as built
+    app_path: str                         # xtool/<App>.app/<exe> as built (xtool/<App>.ipa/Payload/<App>.app/<exe>)
     bundle_id: str | None
     team: str | None                      # from the app's embedded.mobileprovision (None: an unsigned dev build)
     built_at: float                       # mtime of the app executable
@@ -717,27 +725,130 @@ def ld_command(ld: list[str], objects: list[str], out: str, install_name: str) -
 
 # ---------------------------------------------------------------- the app bundle
 
-def find_app(project: Path, module: str) -> Path:
-    """xtool/<App>.app: the one named for the module, else the only (or newest) .app there."""
+APP_TIME_SLACK = 2.0             # seconds: file times are coarse; an artifact this much older than the build counts
+IPA_MAX_EXE = 256 * 1024 * 1024  # the app executable read from a .ipa
+IPA_MAX_SMALL = 4 * 1024 * 1024  # Info.plist / embedded.mobileprovision read from a .ipa
+NO_APP = "Couldn't find the built app in the project's xtool folder. Press Run to build it again."
+STALE_APP = ("Couldn't find the app this build made in the project's xtool folder (only older builds are there). "
+             "Press Run to build it again.")
+
+
+def _plain_name(name: str) -> bool:
+    """A single path component (no folders, no `..`): safe to join to a folder of ours."""
+    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\\0")
+
+
+def _artifact_mtime(p: Path) -> float:
+    """When a build last wrote this .ipa / .app. For a .app the newest of its folder, Info.plist, _CodeSignature
+    and executable: signing rewrites files inside without touching the folder itself."""
+    paths = [p]
+    if p.suffix == ".app":
+        paths += [p / "Info.plist", p / "_CodeSignature", p / p.stem]
+        try:
+            info = plistlib.loads((p / "Info.plist").read_bytes())
+            exe = info.get("CFBundleExecutable") if isinstance(info, dict) else None
+            if isinstance(exe, str) and _plain_name(exe):
+                paths.append(p / exe)
+        except (OSError, plistlib.InvalidFileException, ValueError, ExpatError):
+            pass
+    times = []
+    for q in paths:
+        try:
+            times.append(q.stat().st_mtime)
+        except OSError:
+            pass
+    return max(times, default=0.0)
+
+
+def find_app(project: Path, module: str, since: float | None = None) -> Path:
+    """The app the last build left in xtool/: the newest of its .app folders and .ipa files (one named for the
+    module wins a tie). A Wi-Fi build (`--ipa`) leaves only xtool/<App>.ipa, a cable one xtool/<App>.app; whichever
+    is older is a leftover of an earlier build. With `since` (when this build started) anything older than that
+    is skipped too, so a stale app is never taken for this build's."""
     base = project / "xtool"
-    named = base / f"{module}.app"
-    if named.is_dir():
-        return named
     try:
-        apps = sorted((p for p in base.iterdir() if p.suffix == ".app" and p.is_dir()),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
+        found = [p for p in base.iterdir() if not p.name.startswith(".") and
+                 ((p.suffix == ".app" and p.is_dir()) or (p.suffix == ".ipa" and p.is_file()))]
     except OSError:
-        apps = []
-    if not apps:
-        raise no_baseline("The built app is missing: build the app first.")
-    return apps[0]
+        found = []
+    if not found:
+        raise no_baseline(NO_APP)
+    ranked = sorted(((_artifact_mtime(p), p.stem == module, p.name, p) for p in found), reverse=True)
+    if since is not None:
+        ranked = [r for r in ranked if r[0] >= since - APP_TIME_SLACK]
+        if not ranked:
+            raise no_baseline(STALE_APP)
+    return ranked[0][3]
+
+
+def _zip_copy(z: zipfile.ZipFile, entry: str, dst: Path, cap: int) -> None:
+    """One entry into dst, at most `cap` bytes (the header's size isn't trusted: the copy counts). KeyError if the
+    entry isn't there."""
+    info = z.getinfo(entry)
+    if info.is_dir():
+        raise KeyError(entry)
+    too_big = no_baseline(f"The built app's {Path(entry).name} is over {cap >> 20} MB, too big for hot reload.")
+    if info.file_size > cap:
+        raise too_big
+    total = 0
+    with z.open(info) as src, open(dst, "xb") as out:
+        while chunk := src.read(1 << 20):
+            total += len(chunk)
+            if total > cap:
+                raise too_big
+            out.write(chunk)
+
+
+def unpack_ipa(ipa: Path, module: str, dest: Path) -> Path:
+    """What hot reload reads from a .ipa's Payload/<App>.app (Info.plist, the executable named in it and
+    embedded.mobileprovision, nothing else) copied into dest/<App>.app, which is returned. Entry names are never
+    used as paths: the app folder's name and the executable's must be plain names; every file is read with a cap.
+    The copies get the .ipa's time (Baseline.built_at)."""
+    bad = "The built app (.ipa) can't be read: press Run to build it again."
+    try:
+        with zipfile.ZipFile(ipa) as z:
+            apps = sorted({parts[1] for n in z.namelist() if len(parts := n.split("/")) > 2
+                           and parts[0] == "Payload" and parts[1].endswith(".app") and _plain_name(parts[1])})
+            if not apps:
+                raise no_baseline("The built app (.ipa) has no app inside: press Run to build it again.")
+            name = f"{module}.app" if f"{module}.app" in apps else apps[0]
+            prefix = f"Payload/{name}/"
+            app = dest / name
+            app.mkdir(parents=True)
+            try:
+                _zip_copy(z, prefix + "Info.plist", app / "Info.plist", IPA_MAX_SMALL)
+                info = plistlib.loads((app / "Info.plist").read_bytes())
+            except KeyError:
+                raise no_baseline("The built app has no Info.plist: press Run to build it again.") from None
+            exe = info.get("CFBundleExecutable") if isinstance(info, dict) else None
+            exe = exe if isinstance(exe, str) and exe else Path(name).stem
+            if not _plain_name(exe):
+                raise no_baseline("The built app's Info.plist names an executable that can't be right: press Run "
+                                  "to build it again.", exe[:200])
+            try:
+                _zip_copy(z, prefix + exe, app / exe, IPA_MAX_EXE)
+            except KeyError:
+                raise no_baseline("The built app has no executable: press Run to build it again.") from None
+            try:
+                _zip_copy(z, prefix + "embedded.mobileprovision", app / "embedded.mobileprovision", IPA_MAX_SMALL)
+            except KeyError:
+                pass                                 # an unsigned build
+    except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError, ValueError,
+            ExpatError) as exc:
+        raise no_baseline(bad, str(exc)[:500]) from None
+    except OSError as exc:
+        raise no_baseline(bad, str(exc)[:500]) from None
+    t = ipa.stat().st_mtime
+    for p in app.iterdir():
+        os.utime(p, (t, t))
+    return app
 
 
 def app_info(app: Path) -> tuple[Path, str | None]:
     """(executable, bundle id) from the .app's Info.plist."""
     try:
         info = plistlib.loads((app / "Info.plist").read_bytes())
-    except (OSError, plistlib.InvalidFileException, ValueError):
+    except (OSError, plistlib.InvalidFileException, ValueError, ExpatError):
         raise no_baseline("The built app has no readable Info.plist: build the app again.") from None
     exe = app / str(info.get("CFBundleExecutable") or app.stem)
     if not exe.is_file():
@@ -776,13 +887,31 @@ def capture_baseline(project: str | Path, module: str, cache_dir: Path | None = 
     """Read the last build of `project` and copy what patches need into the hot-reload cache (see the module doc).
     cache_dir is the hot-reload cache root (default ~/.cache/ios-studio/hot-reload). snapshot: the sources from
     before the build (snapshot_sources), used as the built ones; without it the live files are copied. cancel():
-    the driver calls are killed and subproc.Cancelled raised. The previous baseline is replaced only on success."""
+    the driver calls are killed and subproc.Cancelled raised. The previous baseline is replaced only on success.
+    The app is the one this build left (find_app, newer than the snapshot); a .ipa is unpacked (unpack_ipa) into a
+    staging folder of the cache, removed when the capture ends."""
     proj = Path(project).resolve()
     root = cache_dir or cache_root()
     args, build_data = driver_args(proj, module)
+    built = find_app(proj, module, snapshot.started if snapshot and snapshot.started else None)
+    if built.suffix != ".ipa":
+        return _capture(proj, module, root, args, build_data, built, built, snapshot, cancel)
+    root.mkdir(parents=True, exist_ok=True)
+    unpacked = Path(tempfile.mkdtemp(prefix=f".{project_key(proj)}-ipa-", dir=root))
+    try:
+        return _capture(proj, module, root, args, build_data, unpack_ipa(built, module, unpacked), built, snapshot,
+                        cancel)
+    finally:
+        shutil.rmtree(unpacked, ignore_errors=True)
+
+
+def _capture(proj: Path, module: str, root: Path, args: list[str], build_data: Path, app: Path, built: Path,
+             snapshot: SourceSnapshot | None, cancel: Callable[[], bool] | None) -> Baseline:
+    """capture_baseline once the app is found: `app` is the .app to read, `built` what the build left (the same
+    .app, or the .ipa it was unpacked from)."""
     ofm = output_file_map(args)
-    app = find_app(proj, module)
     exe, bundle_id = app_info(app)
+    app_path = exe if built == app else built / "Payload" / app.name / exe.name
     app_link = link_args(build_data, module, exe.name)
     try:
         binary = macho.MachO.load(exe)
@@ -832,7 +961,7 @@ def capture_baseline(project: str | Path, module: str, cache_dir: Path | None = 
         link = patch_link_args(app_link)
         base = Baseline(
             project=str(proj), module=module, key=key, cache_dir=str(dest), swiftc=args[0], frontend=frontend,
-            link=link, ld=direct_ld(link, cwd, cancel), app_binary=str(dest / "app.bin"), app_path=str(exe),
+            link=link, ld=direct_ld(link, cwd, cancel), app_binary=str(dest / "app.bin"), app_path=str(app_path),
             bundle_id=bundle_id, team=team_of(app), built_at=exe.stat().st_mtime, captured_at=time.time(),
             objects=objects, interposable=self_bound(binary), late=sorted(late), working_dir=cwd,
             started_at=snapshot.started if snapshot else 0.0, excluded=_excluded(snapshot, frontend))

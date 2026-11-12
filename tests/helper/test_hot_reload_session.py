@@ -194,6 +194,13 @@ class SessionBase(unittest.TestCase):
 
 
 class SessionReloadTests(SessionBase):
+    def test_the_parent_closing_stops_the_session(self):
+        # `hotreload run` watches the process that started it: a script that exits ends the session (by design)
+        self.s.check_parent, self.s.ppid = True, -1
+        self.s.step(0)
+        self.assertEqual(self.s.stop_reason, "stopped")
+        self.assertEqual(self.s.stop_message, "Stopped: the app or tool that started hot reload has closed")
+
     def test_success_fills_last_reload(self):
         snap = self.reload()
         self.assertEqual(snap["state"], "reloaded")

@@ -381,6 +381,14 @@ An async function's new body keeps more values alive across an `await` than the 
 
 Each reload stays loaded in the app until it quits, so the runtime takes at most 100 per run. Press Run again and keep going.
 
+### "Couldn't find the app this build made in the project's xtool folder"
+
+Hot reload reads the app the build just made: `xtool/<App>.app` after a build over a cable, `xtool/<App>.ipa` after one over Wi-Fi. Only an app written after the session's build started counts, so an older one left by an earlier build is never used by mistake. This message means the build finished but left neither (or only older ones), for example because something deleted or moved the `xtool/` folder during the build. Press Run again in the hot reload bar.
+
+### "Stopped: the app or tool that started hot reload has closed"
+
+A session ends with the program that started it: quitting iOS Studio ends its sessions, and an agent's ends with its MCP server. If you start `iosstudio-helper hotreload run` from your own script, it stops about half a second after that script exits; keep the script running while the session should run (run it in the foreground, or `wait` for it). See [features/hot-reload.md](features/hot-reload.md#helper-commands).
+
 ### "The hot reload lines at the end of Package.swift were changed by hand"
 
 iOS Studio only edits the lines between `// >>> iOS Studio hot reload` and `// <<< iOS Studio hot reload`, and won't touch them when the end marker is gone. Put back the `// <<< iOS Studio hot reload` line after the block, or delete the lines from `// >>> iOS Studio hot reload` on, then turn hot reload on or off again.

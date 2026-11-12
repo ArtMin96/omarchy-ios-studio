@@ -5,7 +5,10 @@
         p = subprocess.Popen(HELPER_PY + ["hotreload", "run", "--project", str(w.proj)], env=w.env, ...)
 
 The fake xtool is signed in, sees the iPhone on USB and "builds" in FAKE_XTOOL_SECONDS (FAKE_XTOOL_FAIL=1: a
-compile error; FAKE_XTOOL_EDIT="<path>::<text>": that file is saved during the build). The build tree it would
+compile error; FAKE_XTOOL_EDIT="<path>::<text>": that file is saved during the build). A cable build re-signs
+xtool/App.app (its files get new times); FAKE_XTOOL_WIFI=1: the iPhone isn't on USB, and the `--ipa` build packs
+the app into xtool/App.ipa and removes the .app (FAKE_XTOOL_LEFTOVER=1: it keeps it as an earlier build's, older and
+with a broken executable); FAKE_XTOOL_STALE=1: the build writes no app at all. The build tree it would
 leave is made up front by support.hot_reload.fake_build, so the real
 buildinfo.capture_baseline and patch.make_patch run (compile, link, interposable check, sign) against fakes.
 The fake device daemon answers apps.list, hotreload.clean/runtime, app.launch and hotreload.push (its patch path
@@ -36,7 +39,9 @@ a = sys.argv[1:]
 if a[:2] == ["auth", "status"]:
     print("Logged in."); sys.exit(0)
 if a[:1] == ["devices"]:
-    print("{UDID}"); sys.exit(0)
+    if not os.environ.get("FAKE_XTOOL_WIFI"):
+        print("{UDID}")
+    sys.exit(0)
 print("fake xtool", " ".join(a), flush=True)
 time.sleep(float(os.environ.get("FAKE_XTOOL_SECONDS") or 0.2))
 edit = os.environ.get("FAKE_XTOOL_EDIT")       # "<path>::<text>": the user saves a file while the app builds
@@ -49,6 +54,26 @@ if os.environ.get("FAKE_XTOOL_FAIL"):
     print(f"{{src}}:3:5: error: cannot find 'BROKEN' in scope")
     print("error: fatalError")
     sys.exit(1)
+app = os.path.join("xtool", "App.app")
+if os.environ.get("FAKE_XTOOL_STALE"):
+    pass                                         # nothing written: only an earlier build's app is there
+elif "--ipa" in a:                               # a Wi-Fi build: xtool/App.ipa instead of the .app
+    import shutil, zipfile
+    with zipfile.ZipFile(os.path.join("xtool", "App.ipa"), "w", zipfile.ZIP_DEFLATED) as z:
+        for name in sorted(os.listdir(app)):
+            z.write(os.path.join(app, name), "Payload/App.app/" + name)
+    if os.environ.get("FAKE_XTOOL_LEFTOVER"):    # an earlier cable build's .app stays, older and unusable
+        with open(os.path.join(app, "App"), "wb") as f:
+            f.write(b"not this build")
+        old = time.time() - 3600
+        for name in os.listdir(app):
+            os.utime(os.path.join(app, name), (old, old))
+        os.utime(app, (old, old))
+    else:
+        shutil.rmtree(app)
+else:                                            # signing rewrites the bundle
+    for name in os.listdir(app):
+        os.utime(os.path.join(app, name))
 print("Build complete! (0.1 secs)")
 """
 
@@ -112,6 +137,7 @@ class SessionWorld:
         return FakeDeviced(self.tmp / "rt", {
             "apps.list": {"apps": [{"bundleId": "com.apple.mobilesafari"}, {"bundleId": INSTALLED}]},
             "hotreload.clean": {"removed": 0},
+            "app.install": {"bundleId": INSTALLED, "installed": True},
             "app.launch": {"bundleId": INSTALLED, "pid": APP_PID},
             "hotreload.runtime": {"present": True, "runtime": {"version": 1, "pid": APP_PID, "started": 0}},
             "hotreload.push": self.push,

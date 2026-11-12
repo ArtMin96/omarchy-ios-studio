@@ -2,7 +2,8 @@
 the darwin SDK, openssl or rcodesign).
 
 A copy of CrashLab (without .build/, xtool/ and .git/; CrashLab itself is never touched) gets the -interposable
-linker flag, is built with `xtool dev build`, and its baseline captured. Then a Text string in ContentView.swift
+linker flag, is built with `xtool dev build --ipa` (as Run over Wi-Fi builds it: only xtool/CrashLab.ipa, no .app;
+an earlier build's .app left in the copy must not be used), and its baseline captured from the .ipa. Then a Text string in ContentView.swift
 changes: make_patch must give a signed arm64 MH_DYLIB that exports ContentView.body's getter, which the app calls
 through an indirect pointer. Changing CrashRow.body's view structure must be refused (opaque-type).
 
@@ -53,18 +54,28 @@ class CrashLabPatch(unittest.TestCase):
         proj = Path(given) if given else _copy_crashlab(tmp / "CrashLab")
         self.assertNotEqual(proj.resolve(), CRASHLAB.resolve())
         timings: dict[str, float] = {}
+        snap = None
         if not given:
+            stale = proj / "xtool/CrashLab.app"            # an earlier cable build's leftover: never this build's
+            stale.mkdir(parents=True)
+            (stale / "Info.plist").write_bytes(b"not this build")
+            os.utime(stale / "Info.plist", (time.time() - 3600,) * 2)
+            os.utime(stale, (time.time() - 3600,) * 2)
+            snap = buildinfo.snapshot_sources(proj, tmp / "cache")
             t0 = time.monotonic()
             env = subproc.tool_env("xtool", {"XDG_CONFIG_HOME": str(Path.home() / ".config")})
-            rc = subproc.Runner().run([XTOOL, "dev", "build"], cwd=proj, env=env, timeout=1200)
-            self.assertEqual(rc, 0, "xtool dev build failed")
+            rc = subproc.Runner().run([XTOOL, "dev", "build", "--ipa"], cwd=proj, env=env, timeout=1200)
+            self.assertEqual(rc, 0, "xtool dev build --ipa failed")
             timings["build"] = time.monotonic() - t0
+            self.assertTrue((proj / "xtool/CrashLab.ipa").is_file())
 
         content = proj / "Sources/CrashLab/ContentView.swift"
         original = content.read_text()
         try:
             t0 = time.monotonic()
-            base = buildinfo.capture_baseline(proj, "CrashLab", tmp / "cache")
+            base = buildinfo.capture_baseline(proj, "CrashLab", tmp / "cache", snapshot=snap)
+            if not given:
+                self.assertTrue(base.app_path.startswith(str(proj / "xtool/CrashLab.ipa/")), base.app_path)
             timings["baseline"] = time.monotonic() - t0
             self.assertGreater(base.interposable, 0, "the app wasn't linked with -interposable")
             self.assertIsNotNone(base.ld)

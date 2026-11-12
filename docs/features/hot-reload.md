@@ -83,7 +83,7 @@ While hot reload is on, a bar under the project's details (also when the card is
 
 Pause keeps the session and the app running but stops sending changes. Saves are still noticed and counted: the bar shows "2 saved files waiting" and "ContentView.swift, ForecastView.swift reload together when you resume." Resume sends them all at once in one reload. Pause and Resume become usable once the session is watching. Pausing is handy when you're halfway through an edit that won't compile yet, or want to make several changes and see them together.
 
-A session ends when you stop it, when you turn hot reload off, when the app is removed from the phone, when its first build fails, or when the program that started it closes: quitting iOS Studio ends the sessions it started ("Stopped: the app that started hot reload has closed"), and an agent's ends with its MCP server. One project has at most one session; different projects can each have one.
+A session ends when you stop it, when you turn hot reload off, when the app is removed from the phone, when its first build fails, or when the program that started it closes: quitting iOS Studio ends the sessions it started ("Stopped: the app or tool that started hot reload has closed"), and an agent's ends with its MCP server. One project has at most one session; different projects can each have one.
 
 Starting a session stops [watch mode](watch-mode.md) for that project, since watch mode's auto-run would install the app over the running one. The session says so in a notice.
 
@@ -97,7 +97,7 @@ When a session starts, it:
 2. takes a snapshot of the sources (a digest of each watched file and a copy of each Swift file under `Sources/`, up to 64 MB of copies), so it knows what the build reads;
 3. runs the same build as the Run button (with the project's selected run preset), which shows in the build history like any other build. If the project has a prebuild command, the snapshot is taken again when the prebuild finishes and before xtool starts, so the files it generates or rewrites (Swift files, `xtool.yml`, a plist) count as built, not as saves made during the build;
 4. after the install, deletes old patches from the app's folder on the phone (the runtime also clears them at each launch) and opens the app with the console attached, so the runtime's `[HotReload]` lines show in Logs › Console;
-5. records the baseline: the exact compile command of each Swift file, the app's link command, the sources from the snapshot, the object files as built, and the app's executable;
+5. records the baseline: the exact compile command of each Swift file, the app's link command, the sources from the snapshot, the object files as built, and the app's executable. The app is the one this build left in the project's `xtool/` folder: a build over a cable leaves `xtool/<App>.app`, one over Wi-Fi only `xtool/<App>.ipa`, so the newer of the two that's newer than the snapshot is used, and an older one (left by an earlier build) never is. From a `.ipa`, only `Info.plist`, the executable and `embedded.mobileprovision` are unpacked, into a staging folder of the cache that's deleted right after; nothing is written into the project. If the build left no app newer than the snapshot, the session stops with `no-baseline`: "Couldn't find the app this build made in the project's xtool folder (only older builds are there). Press Run to build it again.";
 6. compiles one file in the background, so the compiler's module cache is warm before your first save;
 7. waits up to 10 s for the app's runtime to say it's running, then watches `Sources/`. If the runtime never answers, the session reports `app-not-running` and keeps watching.
 
@@ -169,7 +169,7 @@ A failed reload doesn't end the session: the state becomes `failed`, `lastError`
 | `not-interposable` | the app was built without hot reload | Run again |
 | `app-not-running` | the app didn't answer within 5 s: it isn't open (or iOS suspended it in the background), or the installed build has no runtime | open the app on the phone and save again, or Run again |
 | `load-failed` | the app got the patch but couldn't load it; the message has the system's reason (`dlerror`), often code signing or library validation, or the runtime's own (a bigger async function, too many reloads: see [Limits](#limits)) | Run again; see [troubleshooting](../troubleshooting.md#the-app-couldnt-load-the-change-load-failed) |
-| `no-baseline` | the records of the last build are missing or unreadable (or the compiler's plan for the module is over 16 MB) | Run again |
+| `no-baseline` | the records of the last build are missing or unreadable, the build left no app in `xtool/` newer than its start, its `.ipa` can't be read (or an entry in it is over 256 MB), or the compiler's plan for the module is over 16 MB | Run again |
 | `not-enabled` | hot reload is off for the project | turn it on |
 | `no-device` | no iPhone connected | connect it |
 | `missing-tool` | xtool or rcodesign isn't installed | Setup installs both |
@@ -200,10 +200,10 @@ On the computer, in `~/.cache/ios-studio/hot-reload/<key>/` (key = the first 12 
 | `baseline.json` | the module, each file's compile command (compact: one shared command plus each file's own arguments; format version 2), the link command, the app's binary and bundle ID, the team |
 | `sources/` | the Swift files as they were built (from the snapshot taken before the build) |
 | `objects/` | their object files from that build |
-| `app.bin` | the built app's executable |
+| `app.bin` | the built app's executable (from `xtool/<App>.app`, or unpacked from `xtool/<App>.ipa`) |
 | `patches/` | the signed patches; the newest 10 are kept |
 
-The whole `hot-reload/` folder is kept under 300 MB: when a session starts, the oldest projects' folders go first, but never the folder of a project whose session is running. A new baseline replaces the old one at each session start: it's written into a staging folder (`.<key>-…`, which starts as the snapshot) and swapped in only when complete, so a failed capture keeps the old one. Staging folders older than 6 hours (left by a killed session) are deleted.
+The whole `hot-reload/` folder is kept under 300 MB: when a session starts, the oldest projects' folders go first, but never the folder of a project whose session is running. A new baseline replaces the old one at each session start: it's written into a staging folder (`.<key>-…`, which starts as the snapshot) and swapped in only when complete, so a failed capture keeps the old one. The app unpacked from a Wi-Fi build's `.ipa` goes to a staging folder too (`.<key>-ipa-…`), deleted when the baseline is recorded. Staging folders older than 6 hours (left by a killed session) are deleted.
 
 In `$XDG_RUNTIME_DIR/ios-studio/` (the same base as [watch mode](watch-mode.md#files); demo mode uses `ios-studio-demo/`):
 
@@ -234,6 +234,8 @@ iosstudio-helper hotreload resume  --project P
 `enable` returns `{enabled: true, mode: "on", appTarget, changed, diff, truncated, fullDiffPath?, packagePath, dryRun, runtimeUpdated}`. `disable` returns `{enabled: false, mode: "off" | "stub", importedBy, changed, diff, …}` and, when a session was running, stops it first (`sessionStopped`). `diff` is the unified diff of `Package.swift`, cut at `--max-bytes` (12,000 by default); the whole diff is then saved in `~/.cache/ios-studio/packages/diffs/` (`fullDiffPath`). `--dry-run` returns the diff and changes nothing.
 
 `run` streams one `hotreload` event per snapshot and ends with `{"event": "done", "ok": true, "data": <the last snapshot with history>}` when it was stopped or the app went away, or `ok: false` with `error` (the `lastError`) when it couldn't start. `--debounce-ms` takes 50 to 5,000. Written to its stdin, `{"cancel": true}` or `{"cmd": "stop"}` stops it, and `{"cmd": "pause"}` / `{"cmd": "resume"}` pause and resume; SIGTERM, SIGINT and SIGHUP stop it too. A second `run` for the same project fails with `busy`.
+
+`run` watches the process that started it and stops about half a second after that process exits ("Stopped: the app or tool that started hot reload has closed", `stopReason: "stopped"`). The app and the MCP server stay alive for as long as their sessions should run, so this is what ends a session when you quit them. In a script, keep the parent alive while the session runs: run `hotreload run` in the foreground (or `wait` for it) instead of starting it in the background from a script that then exits, and use `hotreload stop` to end it.
 
 `status --project P` returns `{project, enabled, mode, session}` (`session` is null when it never ran, and has `running`). With `--wait-seconds N` (at most 25) it returns as soon as a reload newer than `--after-seq` finishes (by default, newer than the newest one finished now), or the session stops, or N seconds pass (`timedOut`); pass the newest `seq` you saw, so a reload that finished just before the call isn't missed. Without `--project` it returns `{sessions, projects}`: the running sessions and those stopped in the last 10 minutes, and `{path: {enabled, mode}}` for every listed project (read from `Package.swift`, no Swift call).
 
