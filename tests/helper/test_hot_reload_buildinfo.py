@@ -159,6 +159,36 @@ class Capture(unittest.TestCase):
         B.capture_baseline(proj, "App", self.cache)
         self.assertFalse((base.patches_dir / "patch-1.dylib").exists())
 
+    def test_working_dir_is_kept(self):
+        proj = fake_build(self.tmp / "App", self.tools)
+        base = B.capture_baseline(proj, "App", self.cache)
+        self.assertEqual(base.working_dir, str(proj / "xtool"))
+        self.assertEqual(B.load_baseline(proj, self.cache).working_dir, str(proj / "xtool"))
+        doc = json.loads((self.cache / base.key / "baseline.json").read_text())
+        self.assertEqual(doc["working_dir"], str(proj / "xtool"))
+
+    def test_the_app_link_among_several(self):
+        proj = fake_build(self.tmp / "App", self.tools)
+        bd = proj / ".build/out/Intermediates.noindex/XCBuildData/abc.xcbuilddata"
+        manifest = json.loads((bd / "manifest.json").read_text())
+        cmds = manifest["commands"]
+        app_key = next(k for k in cmds if "target-App-App:" in k)
+        app_cmd = cmds.pop(app_key)
+        ext = ["/sw/swiftc", "-emit-executable", "-o", "/out/Products/Widget-Ext"]
+        manifest["commands"] = {"P2:target-Widget-Ext:Ld /out/Products/Widget-Ext normal": {"args": ext},
+                                app_key: app_cmd, **cmds}
+        (bd / "manifest.json").write_text(json.dumps(manifest))
+        self.assertEqual(B.link_args(bd, "App", "App"), app_cmd["args"])
+        self.assertEqual(B.link_args(bd), ext)                         # no module given: the first, as before
+        # keys that don't say which target: the -o that is the app's executable
+        renamed = {"P2:a:Ld x normal": {"args": ext},
+                   "P2:b:Ld y normal": {"args": ["/sw/swiftc", "-emit-executable", "-o", "/out/MyApp"]}}
+        (bd / "manifest.json").write_text(json.dumps({"commands": renamed}))
+        self.assertEqual(B.link_args(bd, "App", "MyApp")[-1], "/out/MyApp")
+        self.assertEqual(B.link_args(bd, "App", "Nope"), ext)          # nothing matches: the first
+        base = B.capture_baseline(proj, "App", self.cache)            # the app's executable here is "App"
+        self.assertNotIn("/out/MyApp", base.link)
+
     def test_unsigned_dev_build_has_no_team(self):
         proj = fake_build(self.tmp / "App", self.tools, team=None)
         self.assertIsNone(B.capture_baseline(proj, "App", self.cache).team)
@@ -202,6 +232,157 @@ class Capture(unittest.TestCase):
         B.prune_cache(self.cache, protect=keep, max_bytes=2500)
         self.assertTrue(keep.exists())
         self.assertEqual([d.exists() for d in old], [False, False, True])
+
+
+class Snapshot(unittest.TestCase):
+    """The baseline is the sources from before the build, swapped in only when complete; baseline.json is compact."""
+
+    def setUp(self):
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, ignore_errors=True)
+        env = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
+        os.environ["IOSSTUDIO_RUNTIME_DIR"] = str(self.tmp / "rt")
+        self.tools = fake_toolchain(self.tmp / "tools")
+        self.cache = self.tmp / "cache"
+
+    def staging(self) -> list[str]:
+        return [p.name for p in self.cache.iterdir() if p.name.startswith(".")]
+
+    def test_a_save_during_the_build_differs_from_the_baseline(self):
+        from iosstudio.features.hotreload import patch
+        proj = fake_build(self.tmp / "App", self.tools)
+        snap = B.snapshot_sources(proj, self.cache)          # the build starts
+        self.assertIn("Sources/App/ContentView.swift", snap.copied)
+        cv = proj / "Sources/App/ContentView.swift"
+        cv.write_text("struct ContentView { var x = 1 }\n")  # saved while it builds
+        base = B.capture_baseline(proj, "App", self.cache, snapshot=snap)
+        self.assertEqual(base.source_copy("Sources/App/ContentView.swift").read_text(), "struct ContentView {}\n")
+        self.assertEqual(patch.source_changes(base).changed, ["Sources/App/ContentView.swift"])
+        self.assertEqual(base.late, [])
+        self.assertEqual(self.staging(), [])
+        self.assertEqual(snap.digests["Sources/App/ContentView.swift"],
+                         __import__("hashlib").sha1(b"struct ContentView {}\n").hexdigest())
+
+    def test_files_the_snapshot_missed_and_changed_are_late(self):
+        proj = fake_build(self.tmp / "App", self.tools)
+        snap = B.snapshot_sources(proj, self.cache)
+        snap.copied.discard("Sources/App/App.swift")            # as if over the snapshot's size cap
+        time.sleep(0.01)
+        (proj / "Sources/App/App.swift").write_text("struct App { }\n")
+        base = B.capture_baseline(proj, "App", self.cache, snapshot=snap)
+        self.assertEqual(base.late, ["Sources/App/App.swift"])
+
+    def test_other_targets_are_not_kept(self):
+        proj = fake_build(self.tmp / "App", self.tools)
+        (proj / "Sources/Kit").mkdir()
+        (proj / "Sources/Kit/Model.swift").write_text("struct Model {}\n")
+        snap = B.snapshot_sources(proj, self.cache)
+        self.assertIn("Sources/Kit/Model.swift", snap.copied)
+        base = B.capture_baseline(proj, "App", self.cache, snapshot=snap)
+        self.assertFalse((base.sources_dir / "Sources/Kit").exists())
+
+    def test_a_failed_capture_keeps_the_previous_baseline(self):
+        proj = fake_build(self.tmp / "App", self.tools)
+        base = B.capture_baseline(proj, "App", self.cache)
+        base.patches_dir.mkdir(parents=True)
+        (base.patches_dir / "patch-1.dylib").write_bytes(b"x")
+        snap = B.snapshot_sources(proj, self.cache)
+        real = B.self_bound
+        B.self_bound = lambda _b: (_ for _ in ()).throw(RuntimeError("boom"))   # fails after the copies
+        try:
+            with self.assertRaises(RuntimeError):
+                B.capture_baseline(proj, "App", self.cache, snapshot=snap)
+        finally:
+            B.self_bound = real
+        self.assertEqual(B.load_baseline(proj, self.cache), base)
+        self.assertTrue(base.source_copy("Sources/App/ContentView.swift").is_file())
+        self.assertTrue((base.patches_dir / "patch-1.dylib").is_file())
+        self.assertEqual(self.staging(), [])
+
+    def test_cancel_stops_the_capture(self):
+        from iosstudio.core import subproc
+        proj = fake_build(self.tmp / "App", self.tools)
+        snap = B.snapshot_sources(proj, self.cache)
+        with self.assertRaises(subproc.Cancelled):
+            B.capture_baseline(proj, "App", self.cache, snapshot=snap, cancel=lambda: True)
+        self.assertFalse((self.cache / B.project_key(proj)).exists())
+        B.discard_snapshot(snap)                                 # what the session does after a failed start
+        self.assertEqual(self.staging(), [])
+
+    def test_baseline_json_is_compact_and_loads_back(self):
+        files = {f"View{i:03}.swift": f"struct View{i} {{}}\n" for i in range(60)}
+        proj = fake_build(self.tmp / "App", self.tools, files=files)
+        base = B.capture_baseline(proj, "App", self.cache)
+        doc = (self.cache / base.key / "baseline.json").read_text()
+        self.assertNotIn("\n ", doc)
+        self.assertNotIn('"frontend":', doc)
+        unpacked = len(json.dumps(base.frontend))
+        self.assertLess(len(doc), unpacked / 10)                # O(files), not O(files²)
+        self.assertEqual(B.load_baseline(proj, self.cache), base)
+
+    def test_pack_round_trip_odd_commands(self):
+        fe = {"a.swift": ["/fe", "-c", "-primary-file", "/a.swift", "/b.swift", "-o", "/o/a.o"],
+              "b.swift": ["/fe", "-c", "/a.swift", "-primary-file", "/b.swift", "-o", "/o/b.o"],
+              "e.swift": ["/fe", "-c", "-primary-file", "/b.swift", "/a.swift", "-o", "/o/e.o"],  # moved first
+              "c.swift": ["/fe", "-c", "/c.swift", "-o", "/o/c.o"],                     # no -primary-file
+              "d.swift": ["/fe", "-primary-file", "/d.swift", "-o", "/o/d.o"]}          # another length
+        shared, files = B.pack_frontends(fe)
+        self.assertEqual(files["b.swift"], {"primary": 3, "set": {"5": "/o/b.o"}})
+        self.assertEqual(files["e.swift"], {"primary": 2, "from": 3, "set": {"5": "/o/e.o"}})
+        self.assertIn("argv", files["c.swift"])
+        self.assertEqual(B.unpack_frontends(json.loads(json.dumps(shared)), json.loads(json.dumps(files))), fe)
+        with self.assertRaises(ValueError):
+            B.unpack_frontends(shared, {"x": {"primary": 99, "set": {}}})
+
+    def test_prune_spares_live_sessions_and_removes_old_staging(self):
+        from iosstudio.features.hotreload import state
+        live_key = state.key("/x/Live")
+        fh = state.acquire(live_key, "/x/Live")
+        self.addCleanup(state.release, fh)
+        dirs = []
+        for i, name in enumerate([live_key, "old1", "old2"]):
+            d = self.cache / name
+            d.mkdir(parents=True)
+            (d / "app.bin").write_bytes(b"x" * 1000)
+            os.utime(d, (time.time() - 1000 + i, time.time() - 1000 + i))
+            dirs.append(d)
+        keep = self.cache / "current"
+        keep.mkdir()
+        (keep / "app.bin").write_bytes(b"x" * 1000)
+        stale, fresh = self.cache / ".abc-old", self.cache / ".abc-new"
+        stale.mkdir()
+        fresh.mkdir()
+        os.utime(stale, (time.time() - B.STAGE_STALE - 5,) * 2)
+        B.prune_cache(self.cache, protect=keep, max_bytes=1500)
+        self.assertEqual([d.exists() for d in dirs], [True, False, False])
+        self.assertTrue(keep.exists())
+        self.assertEqual((stale.exists(), fresh.exists()), (False, True))
+
+
+class RunTool(unittest.TestCase):
+    def test_long_lines_whole_and_stderr_apart(self):
+        import sys
+        r = B.run_tool([sys.executable, "-c", "import sys; print('x' * 200000); sys.stderr.write('warn')"])
+        self.assertEqual((r.returncode, len(r.stdout), r.stderr), (0, 200001, "warn"))
+
+    def test_timeout_and_cancel_kill_the_group(self):
+        import subprocess
+        import sys
+
+        from iosstudio.core import subproc
+        script = "import subprocess, time; subprocess.Popen(['sleep', '30']); time.sleep(30)"
+        t0 = time.monotonic()
+        r = B.run_tool([sys.executable, "-c", script], timeout=0.5)
+        self.assertEqual(r.returncode, 124)
+        calls = []
+        with self.assertRaises(subproc.Cancelled):
+            B.run_tool([sys.executable, "-c", script], cancel=lambda: calls.append(1) or len(calls) > 2)
+        self.assertLess(time.monotonic() - t0, 5)
+        time.sleep(0.2)
+        left = subprocess.run(["pgrep", "-f", script], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "")
+        self.assertEqual(B.run_tool(["/nonexistent/tool"]).returncode, 127)
 
 
 if __name__ == "__main__":
