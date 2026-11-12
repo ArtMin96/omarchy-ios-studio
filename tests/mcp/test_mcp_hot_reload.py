@@ -336,8 +336,8 @@ class StatusTool(HotReloadCase):
     async def test_more_history_when_asked_and_waiting(self):
         self.helper.reply("hotreload", "status", {"project": PROJ, "enabled": True, "mode": "on", "timedOut": True,
                                                   "waited": 20.0, "session": snapshot(history=history(12))})
-        d = await self.data(HR, "ios_hot_reload_status", project_path="Weather", history=12, after_seq=12)
-        self.assertEqual(len(d["history"]), 12)
+        d = await self.data(HR, "ios_hot_reload_status", project_path="Weather", history=HR.HISTORY_MAX, after_seq=12)
+        self.assertEqual(len(d["history"]), HR.HISTORY_MAX)
         self.assertEqual(d["reload_result"], "waiting")
         self.assertTrue(d["timed_out"])
         self.assertIsNone(self.helper.flag(self.helper.calls("hotreload", "status")[0], "wait_seconds"))

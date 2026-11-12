@@ -53,6 +53,10 @@ BLOCKERS = 10
 DIAGNOSTICS = 5
 FILES = 5
 HISTORY = 5
+HISTORY_MAX = 10        # what fits next to a failed reload's last_error in the default budget
+HISTORY_CUT = 80        # characters of a history item's message (last_error has the newest failure's whole)
+HISTORY_FILES = 2       # files per history item
+STEPS = 10              # reload step timings kept (the helper sends 6)
 SESSIONS = 10
 PROJECTS = 20
 MESSAGE_CUT = 300
@@ -93,8 +97,8 @@ HINTS = {
     "missing-tool": "Call ios_toolchain_check, then ios_toolchain_install.",
     "no-bundle-id": "The project has no bundle ID: set it with ios_project_set, then start again.",
     # ios_hot_reload_set
-    "manifest-invalid": "Nothing was changed: fix the Package.swift errors in the message, then retry.",
-    "manifest-unsupported": "Nothing was changed: this Package.swift isn't `let package = Package(…)`, so the user "
+    "manifest-invalid": "Package.swift was left as it is: fix its errors in the message, then retry.",
+    "manifest-unsupported": "Package.swift was left as it is: it isn't `let package = Package(…)`, so the user "
                             "has to add hot reload by hand (docs: Hot reload).",
     "block-damaged": "Ask the user to restore or delete the hot reload lines at the end of Package.swift (the "
                      "message says how), then retry.",
@@ -111,9 +115,16 @@ def _hint(code: str | None, path: str | None, fix: dict | None = None) -> str | 
     return next_step(str(code or ""), fix, hints)
 
 
-def _rehint(exc: BaseException, path: str | None) -> ToolError:
+def _rehint(exc: BaseException, path: str | None, session_stopped: bool = False) -> ToolError:
+    """The error with this feature's next step; session_stopped (ios_hot_reload_set off failed after stopping the
+    session) says so first, since the hint alone reads as if nothing happened."""
     p = helper.tilde(path) or "<project>"
-    return rehint(exc, {k: v.format(p=p) for k, v in HINTS.items()})
+    err = rehint(exc, {k: v.format(p=p) for k, v in HINTS.items()})
+    if not session_stopped:
+        return err
+    head, _, nxt = str(err).partition(" Next: ")
+    return ToolError(f"{head} Next: The session was stopped, but Package.swift was left as it is. "
+                     f"{nxt + ' ' if nxt else ''}ios_hot_reload_start(project_path='{p}') starts it again.")
 
 
 def _same(a: str | None, b: str | None) -> bool:
@@ -143,7 +154,9 @@ class ReloadError(Out):
     seq: int | None = Field(None, description="The reload that failed (none: a start problem)")
     location: str | None = None
     blockers: list[Blocker] = Field(default_factory=list, description="≤ 10: what the change does that can't be swapped")
+    blockers_total: int | None = Field(None, description="Blockers found (more than listed: truncated)")
     diagnostics: list[Diagnostic] = Field(default_factory=list, description="≤ 5 compiler errors, errors first")
+    diagnostics_total: int | None = None
     log_file: str | None = Field(None, description="The first build's log (build-failed): ios_build_log(log_file=...)")
     detail: str | None = None
 
@@ -261,6 +274,11 @@ def _int(v: Any) -> int:
         return 0
 
 
+def _short(v: Any, n: int = 80) -> str | None:
+    """A name-like field (kind, type, step) from the helper, clipped in case it isn't one."""
+    return B.clip(v, n) if v not in (None, "") else None
+
+
 def _loc(file: Any, line: Any = None, col: Any = None, root: str | None = None) -> str | None:
     if not file:
         return None
@@ -285,25 +303,47 @@ def last_seq(snap: dict) -> int:
 def _error(e: Any, root: str | None) -> ReloadError | None:
     if not isinstance(e, dict):
         return None
-    blockers = [Blocker(kind=str(b.get("kind") or "unparsed"), location=_loc(b.get("file"), b.get("line"), root=root),
-                        type=b.get("type"), name=b.get("name"), message=B.clip(b.get("message"), MESSAGE_CUT))
-                for b in (e.get("blockers") or [])[:BLOCKERS] if isinstance(b, dict)]
-    diags = [Diagnostic(severity=d.get("severity"), location=_loc(d.get("file"), d.get("line"), d.get("col"), root),
+    raw_b = [b for b in e.get("blockers") or [] if isinstance(b, dict)]
+    raw_d = [d for d in e.get("diagnostics") or [] if isinstance(d, dict)]
+    blockers = [Blocker(kind=_short(b.get("kind")) or "unparsed", location=_loc(b.get("file"), b.get("line"), root=root),
+                        type=_short(b.get("type")), name=_short(b.get("name")),
+                        message=B.clip(b.get("message"), MESSAGE_CUT)) for b in raw_b[:BLOCKERS]]
+    diags = [Diagnostic(severity=_short(d.get("severity")), location=_loc(d.get("file"), d.get("line"), d.get("col"), root),
                         message=B.clip(" ".join(str(d.get("message") or "").split()), MESSAGE_CUT))
-             for d in (e.get("diagnostics") or [])[:DIAGNOSTICS] if isinstance(d, dict)]
+             for d in raw_d[:DIAGNOSTICS]]
     detail = None
     if e.get("detail") and not blockers and not diags:
         detail = B.clip(" ".join(str(e["detail"]).split()), MESSAGE_CUT)
-    return ReloadError(code=str(e.get("code") or "failed"), message=B.clip(e.get("message") or "Failed.", MESSAGE_CUT),
+    # the helper caps both lists too; blockersTotal / diagnosticsTotal (when sent) count what it found
+    b_total = max(_int(e.get("blockersTotal")), len(raw_b))
+    d_total = max(_int(e.get("diagnosticsTotal")), len(raw_d))
+    return ReloadError(code=_short(e.get("code")) or "failed", message=B.clip(e.get("message") or "Failed.", MESSAGE_CUT),
                        seq=_int(e.get("seq")) or None, location=_loc(e.get("file"), e.get("line"), root=root),
-                       blockers=blockers, diagnostics=diags, log_file=helper.tilde(e.get("logFile")), detail=detail)
+                       blockers=blockers, blockers_total=b_total or None, diagnostics=diags,
+                       diagnostics_total=d_total or None, log_file=helper.tilde(e.get("logFile")), detail=detail)
+
+
+def _cut_note(err: ReloadError | None, path: str | None) -> str | None:
+    """A note when the error lists fewer blockers or compiler errors than there are."""
+    if err is None:
+        return None
+    cut = [f"{len(xs)} of {total} {what}" for xs, total, what in
+           ((err.blockers, err.blockers_total, "blockers"), (err.diagnostics, err.diagnostics_total, "compiler errors"))
+           if total and total > len(xs)]
+    if not cut:
+        return None
+    p = helper.tilde(path) or "<project>"
+    more = (f"ios_build_diagnostics(project_path='{p}') lists them all" if err.log_file else
+            "fix these and save again; the next reload lists the rest")
+    return f"last_error shows {' and '.join(cut)}: {more}."
 
 
 def _reload(r: Any) -> LastReload | None:
     if not isinstance(r, dict) or not r.get("seq"):
         return None
     files = [str(f) for f in r.get("files") or []]
-    steps = {str(k): round(float(v), 1) for k, v in (r.get("steps") or {}).items() if isinstance(v, (int, float))}
+    raw = r.get("steps") if isinstance(r.get("steps"), dict) else {}
+    steps = {B.clip(k, 20): round(float(v), 1) for k, v in list(raw.items())[:STEPS] if isinstance(v, (int, float))}
     return LastReload(seq=_int(r["seq"]), files=files[:FILES], file_count=_int(r.get("fileCount")) or len(files),
                       ms=r.get("ms"), steps=steps, swapped=_int(r.get("swapped")), reverted=_int(r.get("reverted")),
                       not_swapped=_int(r.get("notSwapped")), time=iso(r.get("time")))
@@ -311,9 +351,9 @@ def _reload(r: Any) -> LastReload | None:
 
 def _history(h: dict) -> HistoryItem:
     result = "failed" if not h.get("ok") else "unchanged" if h.get("unchanged") else "reloaded"
-    return HistoryItem(seq=_int(h.get("seq")), result=result, files=[str(f) for f in h.get("files") or []][:3],
-                       ms=h.get("ms"), swapped=h.get("swapped"), code=h.get("code"),
-                       message=B.clip(h["message"], 200) if h.get("message") else None, time=iso(h.get("time")))
+    return HistoryItem(seq=_int(h.get("seq")), result=result, files=[str(f) for f in h.get("files") or []][:HISTORY_FILES],
+                       ms=h.get("ms"), swapped=h.get("swapped"), code=_short(h.get("code")),
+                       message=B.clip(h["message"], HISTORY_CUT) if h.get("message") else None, time=iso(h.get("time")))
 
 
 def _progress(p: Any) -> Progress | None:
@@ -346,6 +386,9 @@ def to_view(snap: dict | None, *, path: str | None = None, running: bool | None 
         stop_reason=snap.get("stopReason") if st == "stopped" else None,
         history=[_history(h) for h in hist[:history]], history_total=len(hist), log_file=helper.tilde(snap.get("logFile")),
         **extra)
+    note = _cut_note(v.last_error, root)
+    if note:
+        v.truncated, v.note = True, note
     if after_seq is not None:
         newer = [h for h in hist if _int(h.get("seq")) > after_seq]
         if newer:
@@ -643,8 +686,10 @@ def register(mcp: MCPServer) -> None:
         flags = {"project": path, "dry_run": dry_run, "max_bytes": int(B.room(None) * 0.9)}
         try:
             d = await helper.call("hotreload", "enable" if enabled else "disable", flags, timeout=90) or {}
-        except ToolError as exc:
-            raise _rehint(exc, path) from None
+        except ToolError as exc:     # off stops the session before it checks Package.swift (on purpose)
+            err = getattr(exc, "error", None)
+            helper_stopped = isinstance(err, dict) and bool(err.get("sessionStopped"))
+            raise _rehint(exc, path, session_stopped=stopped or helper_stopped) from None
         users = [str(u) for u in d.get("importedBy") or []]
         mode = str(d.get("mode") or ("on" if enabled else "off"))
         changed = bool(d.get("changed"))
@@ -742,7 +787,7 @@ def register(mcp: MCPServer) -> None:
         project_path: Annotated[str | None, Field(description="Omit: all sessions")] = None,
         after_seq: Annotated[int | None, Field(ge=0, description="last_seq of an earlier result")] = None,
         wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT, description="Wait for a reload after after_seq")] = 0,
-        history: Annotated[int, Field(ge=0, le=20, description="Reloads listed")] = HISTORY,
+        history: Annotated[int, Field(ge=0, le=HISTORY_MAX, description="Reloads listed")] = HISTORY,
     ) -> HotReloadSession:
         """A project's hot reload session: state, the last reload (timings) or why it failed (blockers, compiler
         errors, the fix). After saving a file, pass after_seq=last_seq with wait_seconds=20 to get that save's
@@ -777,7 +822,10 @@ def register(mcp: MCPServer) -> None:
                 await state.jobs.cancel(mine)
                 await _settle(mine)
                 return job_view(mine, message="Hot reload stopped.")
-            d = await helper.call("hotreload", "stop", {"project": path}, timeout=STOP_TIMEOUT) or {}
+            try:
+                d = await helper.call("hotreload", "stop", {"project": path}, timeout=STOP_TIMEOUT) or {}
+            except ToolError as exc:
+                raise _rehint(exc, path) from None
             msg = "Hot reload stopped." if d.get("stopped") else "Hot reload wasn't running for this project."
             return status_view({"session": d.get("session")}, path, state, message=msg)
         try:
