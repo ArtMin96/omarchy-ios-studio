@@ -23,8 +23,11 @@ step or while a tool runs (killed; subproc.Cancelled raised); the work folder is
 Every tool runs in the build's working directory (work_dir()), in its own process group with a reaper and
 PR_SET_PDEATHSIG, so a compile or link never outlives a killed session. A changed file whose baseline object is
 missing is refused (its opaque types can't be checked). New files are Swift files under the module's folders that
-aren't in the build and were created or moved there after it (older ones are excluded on purpose: `exclude:`,
-resources); hidden folders, nested packages and Package.swift manifests are never sources.
+aren't in the build and weren't there when it started: missing from the pre-build snapshot (Baseline.excluded lists
+the ones it saw: excluded on purpose, `exclude:`, resources), or, where the snapshot doesn't reach (an old baseline,
+a folder fswatch ignores), created or moved there after the snapshot (Baseline.started_at, else built_at). A file
+created during the build is new too, even before the link. Hidden folders, nested packages and Package.swift
+manifests are never sources.
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ from iosstudio.core.output import HelperError, fix
 from iosstudio.features import diagnostics
 from iosstudio.features.hotreload import buildinfo, checks, macho, signing
 from iosstudio.features.hotreload.buildinfo import Baseline
+from iosstudio.features.watch import fswatch
 
 COMPILE_TIMEOUT = 120
 LINK_TIMEOUT = 60
@@ -147,17 +151,25 @@ def source_changes(baseline: Baseline) -> SourceChanges:
         if now != then:
             out.changed.append(rel)
     added: set[str] = set()
+    excluded = getattr(baseline, "excluded", None)
+    seen = set(excluded) if excluded is not None else None
+    since = getattr(baseline, "started_at", 0.0) or baseline.built_at
     for path in _module_swift_files(baseline):
         rel = str(path.relative_to(proj))
         if rel in known or rel in added:
+            continue
+        # A file that was there when the build started but wasn't compiled is excluded on purpose (`exclude:`, a
+        # resource). The snapshot says which were there; where it doesn't reach, the file's times do (ctime too: a
+        # file moved in keeps its mtime but gets a new ctime).
+        if seen is not None and fswatch.relevant(rel):
+            if rel not in seen:
+                added.add(rel)
             continue
         try:
             st = path.stat()
         except OSError:
             continue
-        # A file that was there at build time but wasn't compiled is excluded on purpose (`exclude:`, a resource).
-        # ctime too: a file moved in keeps its mtime but gets a new ctime.
-        if max(st.st_mtime, st.st_ctime) > baseline.built_at:
+        if max(st.st_mtime, st.st_ctime) > since:
             added.add(rel)
     out.added = sorted(added)
     return out

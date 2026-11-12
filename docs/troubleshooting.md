@@ -365,6 +365,10 @@ The object file the last build made for that file is missing from the hot reload
 
 You changed a file while the session's first build ran, and it's one iOS Studio could only copy after the build (a very large module, or a file outside `Sources/`), so it can't tell which version the app was built from. Press Run again. Files under `Sources/` that you save during the build are simply reloaded once it's done.
 
+### "Late.swift is a new file: new files need a full build."
+
+A reload can't add a file to the app. That includes a Swift file you created while the session's first build was running: the build may already have planned its files, so the app on the phone doesn't have it even if the build finished after you made it. Press Run again: the new build includes the file, and saves reload from there. Swift files that were in the module's folder before the build but aren't compiled (left out with `exclude:`, resources) never count as new.
+
 ### "Hot reload only updates the app target. Changes in … need a full Run."
 
 The file you saved is in another target of the project (a library under `Sources/<Target>/`). Hot reload only patches the app's own module; press Run again to build the change into the app.

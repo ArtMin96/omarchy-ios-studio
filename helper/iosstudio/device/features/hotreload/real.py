@@ -5,8 +5,9 @@ Your own development builds only: everything goes through the app's whole contai
 VendContainer) under Library/Caches/HotReload, on the files feature's cached connection per app (F.on_container:
 a kept connection that went stale is retried once on a fresh one). A push writes patch-<seq>.dylib.part, renames
 it to patch-<seq>.dylib (the runtime only looks at whole names), then reads ack-<seq>.json every 50 ms until it
-is there or waitMs (≤ 15 s) has passed. The patch (from the helper's patch store only, ≤ PATCH_MAX) is streamed
-from disk in AFC chunks, never read whole. Uses the files feature's helpers, so it loads only when that one does.
+is there or waitMs (≤ 15 s) has passed. The patch (a file in a helper's patch store only, ≤ PATCH_MAX, checked
+and opened by core.check_patch / open_patch) is streamed from disk in AFC chunks, never read whole. Uses the
+files feature's helpers, so it loads only when that one does.
 """
 from __future__ import annotations
 
@@ -14,7 +15,6 @@ import asyncio
 import contextlib
 import posixpath
 import time
-from pathlib import Path
 
 from pymobiledevice3.exceptions import AfcException, AfcFileNotFoundError, AppNotInstalledError
 
@@ -74,16 +74,13 @@ async def _read_small(afc, path: str) -> bytes | None:
             await asyncio.shield(afc.fclose(h))
 
 
-async def _write(afc, src: Path, final: str) -> int:
+async def _write(afc, src: hr.Patch, final: str) -> int:
     """The local patch -> final through final.part and a rename (so the runtime never loads half a patch), in
     AFC-sized chunks. Returns the bytes sent; a file that grew past PATCH_MAX meanwhile is too-big."""
     if not await afc.exists(hr.DIR):
         await afc.makedirs(hr.DIR)
     part = final + ".part"
-    try:
-        f = open(src, "rb")
-    except OSError:
-        raise HelperError("not-found", "The patch file isn't there anymore.", None, str(src)) from None
+    f = hr.open_patch(src)
     sent = 0
     with f:
         h = await afc.fopen(part, "w")

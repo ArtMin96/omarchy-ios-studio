@@ -1220,7 +1220,7 @@ its answer. Your own development builds only (house_arrest VendContainer, on the
 
 | cmd | args | reply data |
 |---|---|---|
-| `hotreload.push` | `{bundleId, src (a patch in the helper's store, below), seq (≥ 1), waitMs?: 5000 (0 to 15000), udid?}` | `{seq, bytes, pushMs, acked, ack?: Ack, ackMs?}`; `acked: false` (no `ack`) = no answer within `waitMs` (the app isn't running, or the build has no runtime) |
+| `hotreload.push` | `{bundleId, src (a patch in the helper's store, below), seq (≥ 1), key? (the project key the patch's folder must have), waitMs?: 5000 (0 to 15000), udid?}` | `{seq, bytes, pushMs, acked, ack?: Ack, ackMs?}`; `acked: false` (no `ack`) = no answer within `waitMs` (the app isn't running, or the build has no runtime) |
 | `hotreload.clean` | `{bundleId, udid?}` | `{removed}`: deletes `patch-*` and `ack-*` (also half-written `.part`/`.tmp`), never `runtime.json` |
 | `hotreload.runtime` | `{bundleId, udid?}` | `{present, runtime?: {version, pid, started}}` from `runtime.json`, which the runtime writes at each launch (`started` in Unix seconds tells which launch) |
 
@@ -1234,13 +1234,17 @@ its answer. Your own development builds only (house_arrest VendContainer, on the
   own reason: a grown async context, too many reloads) when the app couldn't load the patch; an ack that can't be read (not JSON, over 64 KB) is `ok: false` too. Pushes to one
   app run one at a time. The file is streamed in 1 MiB AFC chunks, never read whole. Patches over 64 MB are
   `too-big`.
-- `src` is resolved (symlinks followed) and must be a `patch-<n>.dylib` in the `patches/` folder of a project in
-  the helper's hot reload cache (`~/.cache/ios-studio/hot-reload/`); any other file is `bad-args`, in real and
-  demo mode.
+- `src` must be an absolute path with no symlink in it (the helper sends the `realpath`) shaped exactly
+  `…/hot-reload/<key>/patches/patch-<n>.dylib` (`<key>`: 12 hex digits, the request's `key` when given), and be a
+  regular file owned by the daemon's user in a `patches` folder owned by it. The daemon doesn't look for the store
+  in its own cache folder, so a daemon started with another `XDG_CACHE_HOME` than the helper still takes the
+  helper's patches. The file is opened with `O_NOFOLLOW | O_CLOEXEC` and the open file must be the one checked
+  (same device and inode), so it can't be swapped in between. Anything else is `bad-args`, in real and demo mode.
 - The runtime deletes every patch and ack at launch and keeps the newest 3 after each load, so nothing on the
   phone needs pruning; `clean` runs at the start of a session.
 - Errors: `not-installed` (fix → Projects, `action: "build"`), `not-dev-app` (an App Store app), `bad-args`
-  (also a `src` outside the patch store), `not-found` (`src` is gone), `too-big`, plus the AFC errors of
+  (also a `src` outside a patch store, through a symlink, someone else's, or swapped after the check), `not-found`
+  (`src` is gone), `too-big`, plus the AFC errors of
   `container.*` (`denied`, `no-space`).
 - Demo: every development app has the runtime; a push answers after about 300 ms with `ok: true, swapped: 3`.
 

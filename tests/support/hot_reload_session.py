@@ -8,8 +8,8 @@ The fake xtool is signed in, sees the iPhone on USB and "builds" in FAKE_XTOOL_S
 compile error; FAKE_XTOOL_EDIT="<path>::<text>": that file is saved during the build). The build tree it would
 leave is made up front by support.hot_reload.fake_build, so the real
 buildinfo.capture_baseline and patch.make_patch run (compile, link, interposable check, sign) against fakes.
-The fake device daemon answers apps.list, hotreload.clean/runtime, app.launch and hotreload.push; `push_mode`
-picks the push answer: ok, noack, load-failed, gone (not-installed).
+The fake device daemon answers apps.list, hotreload.clean/runtime, app.launch and hotreload.push (its patch path
+checked as the real daemon checks it); `push_mode` picks the push answer: ok, noack, load-failed, gone (not-installed).
 """
 from __future__ import annotations
 
@@ -95,8 +95,12 @@ class SessionWorld:
         seq = int(a["seq"])
         if self.push_mode == "gone":
             return {"error": {"code": "not-installed", "message": "The app isn't installed on your iPhone."}}
-        if not Path(a["src"]).is_file():
-            return {"error": {"code": "not-found", "message": "The patch file isn't there anymore."}}
+        from iosstudio.core.output import HelperError
+        from iosstudio.device.features.hotreload import core
+        try:
+            core.check_patch(a["src"], a.get("key"))      # the real daemon's check: what the helper sends passes it
+        except HelperError as exc:
+            return {"error": {"code": exc.code, "message": exc.message}}
         if self.push_mode == "noack":
             return {"seq": seq, "bytes": 10, "pushMs": 5, "acked": False}
         ok = self.push_mode == "ok"

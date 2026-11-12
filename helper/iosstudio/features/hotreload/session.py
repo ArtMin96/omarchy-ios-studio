@@ -8,7 +8,9 @@ Start (a worker thread; the main loop meanwhile answers stdin, signals and pause
   watch mode    stopped if it watches this project (snapshot `notice`)
   snapshot      buildinfo.snapshot_sources: the watched files (digests, Swift copies) as the build will read them
   build         `build run` as a helper child (history, log, signing records like the Run button), its progress
-                forwarded as building / installing; a Wi-Fi build is installed through the device daemon
+                forwarded as building / installing; a Wi-Fi build is installed through the device daemon. With a
+                prebuild command the snapshot is taken again when the prebuild step is done (before xtool starts):
+                the build compiles what the prebuild wrote, so its files aren't saves made during the build
   launch        the installed bundle id (apps.list, free teams' XTL-…), `hotreload.clean`, `app.launch` with the
                 console (the runtime's [HotReload] lines show in Logs › Console)
   baseline      buildinfo.capture_baseline from the snapshot (interposable == 0 -> not-interposable), warm_up in
@@ -631,6 +633,18 @@ class Session:
         except OSError:
             return None                       # no cache folder: the baseline copies the live files instead
 
+    def resnapshot(self) -> None:
+        """The prebuild is done and the compile hasn't started: what it generated or rewrote (Sources/, xtool.yml,
+        a plist) is what the build reads, so the snapshot is taken again (kept as it was if that fails)."""
+        from iosstudio.features.hotreload import buildinfo
+        if self.snapshot is None:
+            return
+        new = self.take_snapshot()
+        if new is None:
+            return
+        old, self.snapshot = self.snapshot, new
+        buildinfo.discard_snapshot(old)
+
     def _helper_build(self, extra: list[str], build_id: str) -> Any:
         from iosstudio.features.watch.builds import HelperBuild
         return HelperBuild("run", str(self.root), build_id, extra)
@@ -683,6 +697,8 @@ class Session:
 
     def on_build_event(self, ev: dict) -> None:
         kind = ev.get("event")
+        if kind == "step" and ev.get("id") == "prebuild" and ev.get("state") == "done":
+            self.resnapshot()
         if kind == "build" and ev.get("logFile"):
             self.publish(logFile=ev["logFile"])
         elif kind == "step" and ev.get("state") == "running":
@@ -880,8 +896,10 @@ class Session:
         out.files = list(res.files)
         self.on_step("push")
         try:
-            reply = self.request("hotreload.push", {"bundleId": self.bundle_id, "src": res.dylib, "seq": seq,
-                                                    "waitMs": PUSH_WAIT_MS}, PUSH_WAIT_MS / 1000 + 60)
+            push = {"bundleId": self.bundle_id, "src": os.path.realpath(res.dylib), "seq": seq, "waitMs": PUSH_WAIT_MS}
+            if getattr(self.baseline, "key", None):
+                push["key"] = self.baseline.key       # the daemon checks the patch is in this project's store
+            reply = self.request("hotreload.push", push, PUSH_WAIT_MS / 1000 + 60)
         except subproc.Cancelled:
             out.cancelled = True
             return out

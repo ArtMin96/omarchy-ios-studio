@@ -10,6 +10,8 @@ One session per project, found through files in the runtime dir ($IOSSTUDIO_RUNT
 A snapshot whose session died without saying so (killed, crashed: the lock is free) is rewritten as stopped
 with stopReason `session-died` by whoever reads it first. Stopped state files older than PRUNE_AFTER go at the
 next session start, and so do lock files without a state file or a holder (reading status never creates one).
+Pruning removes a lock file only while it holds that lock itself, so a session starting meanwhile either waits a
+moment for it (ACQUIRE_WAIT) or finds its file gone after its own flock and takes the new one.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ STOP_WAIT = 10.0          # `hotreload stop` waits this long before killing the 
                           # shutdown (session.SHUTDOWN_BUDGET), while stop still answers well within 15 s
 LOCK_ORPHAN_AGE = 60      # seconds an unheld lock file without a state file is kept (a session just starting)
 CONTROL_WAIT = 2.0        # pause/resume wait this long for the session to show the change
+ACQUIRE_WAIT = 0.5        # a starting session retries a held lock this long (prune holds it for a moment)
 MAX_STATUS_WAIT = 25
 
 
@@ -84,19 +87,27 @@ def clear_control(k: str) -> None:
 def acquire(k: str, path: str) -> IO[str]:
     """Take the project's session lock (kept while the returned file is open) and write our pid into it.
     HelperError('busy') with the running session's pid when another session holds it."""
+    deadline = time.monotonic() + ACQUIRE_WAIT
     for _ in range(5):
         fh = open(lock_path(k), "a+")
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            fh.close()
-            pid = session_pid(k)
-            raise HelperError("busy", f"Hot reload is already running for this project (process {pid}).",
-                              output.fix("Stop it", "projects", action="hot-reload-stop"),
-                              detail=f"pid {pid} {path}") from None
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() < deadline and _same_file(fh, lock_path(k)):
+                    time.sleep(0.02)     # held by prune() for a moment, or by a live session: ask again
+                    continue
+                if not _same_file(fh, lock_path(k)):
+                    break                # prune() removed it: open the new one
+                fh.close()
+                pid = session_pid(k)
+                raise HelperError("busy", f"Hot reload is already running for this project (process {pid}).",
+                                  output.fix("Stop it", "projects", action="hot-reload-stop"),
+                                  detail=f"pid {pid} {path}") from None
         if _same_file(fh, lock_path(k)):
             break
-        fh.close()                       # prune() removed the file between our open and flock: take the new one
+        fh.close()                       # prune() removed the file before or while we took it: take the new one
     else:
         raise HelperError("busy", "Hot reload couldn't take its lock for this project. Try again.",
                           output.fix("Start hot reload", "projects", action="hot-reload-start"))
@@ -311,9 +322,7 @@ def prune(now: float | None = None) -> int:
         st: Any = fileio.load_json(p)
         stale = not isinstance(st, dict) or (st.get("state") == "stopped"
                                              and now - float(st.get("stoppedAt") or 0) > PRUNE_AFTER)
-        if stale and session_pid(k) is None:
-            for f in (p, control_path(k), lock_path(k)):
-                f.unlink(missing_ok=True)
+        if stale and _remove_unheld(lock_path(k), p, control_path(k)):
             removed += 1
     for p in runtime_dir().glob("hotreload-*.lock"):
         k = p.name.removeprefix("hotreload-").removesuffix(".lock")
@@ -321,7 +330,33 @@ def prune(now: float | None = None) -> int:
             young = now - p.stat().st_mtime < LOCK_ORPHAN_AGE
         except OSError:
             continue
-        if not young and not state_path(k).exists() and session_pid(k) is None:
-            p.unlink(missing_ok=True)
+        if not young and not state_path(k).exists() and _remove_unheld(p):
             removed += 1
     return removed
+
+
+def _remove_unheld(lock: Path, *also: Path) -> bool:
+    """Delete `also` and then the lock file, holding the lock meanwhile (a session holds it while it lives, so getting
+    it means none does). False, nothing deleted, when it is held. A missing lock file counts as free."""
+    try:
+        fh = open(lock)
+    except FileNotFoundError:
+        fh = None
+    except OSError:
+        return False
+    try:
+        if fh is not None:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return False
+            if not _same_file(fh, lock):     # replaced meanwhile: that one may be a new session's
+                return False
+        for f in also:
+            f.unlink(missing_ok=True)
+        if fh is not None:
+            lock.unlink(missing_ok=True)     # while we hold it: a starter's flock waits, then sees it gone
+        return True
+    finally:
+        if fh is not None:
+            fh.close()

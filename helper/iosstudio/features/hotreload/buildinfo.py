@@ -26,11 +26,15 @@ build started, so a file saved meanwhile differs from it and the next patch incl
 after the build would make that save look built). The new baseline is written into a staging folder
 (<cache_root>/.<key>-XXXX, the snapshot's) and swapped in only once it is complete, so a failed capture leaves the
 previous one intact. Frontend files the snapshot missed (over its caps) are copied live; those changed since the
-snapshot are listed in Baseline.late (the session asks for a Run).
+snapshot are listed in Baseline.late (the session asks for a Run). The baseline also keeps when the snapshot was
+taken (started_at) and which Swift files under Sources/ existed then without being compiled (excluded): patch.py
+calls any other Swift file in the module's folders new, even one created during the build (before its link).
+With a prebuild command the session takes the snapshot again once the prebuild has finished (session.py).
 
 key = the first 12 hex digits of sha1(project path); the whole cache is kept under 300 MB (oldest projects go
 first; projects with a live hot reload session never). Anything missing fails with HelperError('no-baseline').
-The `-###` driver calls run in their own process group, killed whole on a timeout or a cancel.
+The `-###` driver calls run in their own process group, killed whole on a timeout, a cancel or output past
+MAX_TOOL_OUTPUT.
 """
 from __future__ import annotations
 
@@ -104,6 +108,10 @@ class Baseline:
     interposable: int = 0                 # the app's own exported symbols bound through pointer entries
     late: list[str] = field(default_factory=list)   # copied after the build and changed since it started
     working_dir: str | None = None        # the driver's -working-directory (the frontend commands' cwd)
+    started_at: float = 0.0               # when the snapshot was taken (the build's start); 0: no snapshot
+    # Swift files under Sources/ that were there when the build started but aren't in the module (`exclude:`,
+    # resources, other targets); None when there was no complete snapshot (patch.py then goes by file times)
+    excluded: list[str] | None = None
     version: int = BASELINE_VERSION
 
     # ---- paths
@@ -260,6 +268,7 @@ class SourceSnapshot:
     digests: dict[str, str | None]            # project-relative -> fswatch.file_digest(), every watched file
     copied: set[str] = field(default_factory=set)   # files with a copy under dir/sources/
     started: float = 0.0                      # time.time() when it was taken
+    complete: bool = True                     # every watched file is in digests (scan_files' cap not reached)
 
 
 def snapshot_sources(project: str | Path, cache_dir: Path | None = None) -> SourceSnapshot:
@@ -274,7 +283,9 @@ def snapshot_sources(project: str | Path, cache_dir: Path | None = None) -> Sour
     snap = SourceSnapshot(project=str(proj), dir=str(stage), digests={}, started=time.time())
     total = 0
     try:
-        for rel in fswatch.scan_files(proj, fswatch.PRIME_MAX_FILES):
+        scanned = fswatch.scan_files(proj, fswatch.PRIME_MAX_FILES)
+        snap.complete = len(scanned) < fswatch.PRIME_MAX_FILES
+        for rel in scanned:
             path = proj / rel
             try:
                 size = path.stat().st_size
@@ -308,10 +319,11 @@ def discard_snapshot(snap: SourceSnapshot | None) -> None:
 
 def run_tool(argv: list[str], cwd: str | None = None, cancel: Callable[[], bool] | None = None,
              timeout: float = HASH_TIMEOUT) -> subprocess.CompletedProcess:
-    """argv to its end in its own process group, stdout and stderr through temp files (each ≤ MAX_TOOL_OUTPUT
-    read): a frontend line lists every module file, far longer than a streamed line may be. cancel() (checked every
-    0.2 s) kills the group and raises subproc.Cancelled; past `timeout` the group is killed and returncode is 124.
-    A missing program is 127, another OSError 126 (like run_cmd(check=False))."""
+    """argv to its end in its own process group, stdout and stderr through temp files: a frontend line lists every
+    module file, far longer than a streamed line may be. cancel() (checked every 0.2 s) kills the group and raises
+    subproc.Cancelled; past `timeout` the group is killed and returncode is 124; a temp file past MAX_TOOL_OUTPUT
+    (checked every 0.2 s) gets the group killed and returncode 125 with stderr "output too large". A missing
+    program is 127, another OSError 126 (like run_cmd(check=False))."""
     argv = [str(a) for a in argv]
     if cancel and cancel():
         raise subproc.Cancelled()
@@ -334,14 +346,22 @@ def run_tool(argv: list[str], cwd: str | None = None, cancel: Callable[[], bool]
                         raise subproc.Cancelled() from None
                     if time.monotonic() >= deadline:
                         rc = 124
+                    elif _too_big(out, err):
+                        rc = 125
         finally:
-            subproc.kill_group(proc.pid, 0)      # on a cancel or timeout, and anything it left behind
+            subproc.kill_group(proc.pid, 0)      # on a cancel, timeout or too much output, and what it left behind
             subproc.kill_proc(proc)
 
         def text(fh) -> str:
             fh.seek(0)
             return fh.read(MAX_TOOL_OUTPUT).decode("utf-8", "replace")
+        if rc == 125 or _too_big(out, err):     # also one that wrote it all within a tick: its output is cut
+            return subprocess.CompletedProcess(argv, 125, "", "output too large")
         return subprocess.CompletedProcess(argv, rc, text(out), "timeout" if rc == 124 else text(err))
+
+
+def _too_big(*files) -> bool:
+    return any(os.fstat(f.fileno()).st_size > MAX_TOOL_OUTPUT for f in files)
 
 
 # ---------------------------------------------------------------- msgpack (enough of it for task-store)
@@ -771,6 +791,9 @@ def capture_baseline(project: str | Path, module: str, cache_dir: Path | None = 
 
     cwd = _working_dir(args)
     r = run_tool(frontend_request(args), cwd, cancel)
+    if r.returncode == 125:
+        raise no_baseline(f"The Swift compiler's plan for this project is over {MAX_TOOL_OUTPUT >> 20} MB, too big "
+                          "for hot reload.", r.stderr)
     if r.returncode != 0:
         raise no_baseline("The Swift compiler couldn't plan a patch for this project.", (r.stderr or r.stdout)[-2000:])
     frontends = parse_frontends(r.stdout)
@@ -811,7 +834,8 @@ def capture_baseline(project: str | Path, module: str, cache_dir: Path | None = 
             project=str(proj), module=module, key=key, cache_dir=str(dest), swiftc=args[0], frontend=frontend,
             link=link, ld=direct_ld(link, cwd, cancel), app_binary=str(dest / "app.bin"), app_path=str(exe),
             bundle_id=bundle_id, team=team_of(app), built_at=exe.stat().st_mtime, captured_at=time.time(),
-            objects=objects, interposable=self_bound(binary), late=sorted(late), working_dir=cwd)
+            objects=objects, interposable=self_bound(binary), late=sorted(late), working_dir=cwd,
+            started_at=snapshot.started if snapshot else 0.0, excluded=_excluded(snapshot, frontend))
         fileio.atomic_write(stage / "baseline.json", json.dumps(base.to_json(), separators=(",", ":")))
         _swap_in(stage, dest)                # patches of an older build don't apply to this one: they go with it
     except BaseException:
@@ -820,6 +844,13 @@ def capture_baseline(project: str | Path, module: str, cache_dir: Path | None = 
     os.utime(dest)                       # this project is the newest in the cache
     prune_cache(root, protect=dest)
     return base
+
+
+def _excluded(snapshot: SourceSnapshot | None, frontend: dict[str, list[str]]) -> list[str] | None:
+    """The snapshot's Swift files under Sources/ that the module doesn't compile (None without a complete one)."""
+    if not snapshot or not snapshot.complete:
+        return None
+    return sorted(r for r in snapshot.digests if r.startswith("Sources/") and r.endswith(".swift") and r not in frontend)
 
 
 def _changed_since(path: Path, t: float) -> bool:
