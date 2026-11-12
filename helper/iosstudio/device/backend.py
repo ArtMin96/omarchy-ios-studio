@@ -25,6 +25,8 @@ from typing import Callable
 from iosstudio.device import kit, protocol
 from iosstudio.device.protocol import DeviceError
 
+CANCEL_WAIT_S = 15.0   # TaskSet.close: cancelled tasks get this long to end (as broker.REQUEST_CANCEL_S)
+
 
 class TaskSet:
     """Background tasks a backend starts and doesn't await at once (closing a service after a tunnel
@@ -52,15 +54,20 @@ class TaskSet:
     def __iter__(self):
         return iter(list(self.tasks))
 
-    async def close(self, grace: float = 0.0) -> None:
-        """Wait up to `grace` seconds for running tasks, then cancel what's left and wait for it."""
+    async def close(self, grace: float = 0.0, limit: float = CANCEL_WAIT_S) -> None:
+        """Wait up to `grace` seconds for running tasks, then cancel what's left and wait up to `limit`
+        seconds for it to end: a task that swallows the cancel (a connection mid-read) is left behind
+        (logged) instead of holding up the shutdown."""
         pending = [t for t in self.tasks if not t.done()]
         if pending and grace > 0:
             _, pending = await asyncio.wait(pending, timeout=grace)
         for t in pending:
             t.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            _, late = await asyncio.wait(pending, timeout=limit)
+            if late and self.log is not None:
+                self.log(f"{len(late)} background task(s) didn't stop within {limit:g} s: "
+                         + ", ".join(sorted(t.get_name() for t in late))[:300])
 
 
 def unknown_command(cmd: str) -> DeviceError:

@@ -159,15 +159,23 @@ async def resolve_app(state: AppState, bundle_id: str, udid: str | None = None) 
 
 # ------------------------------------------------------------------ slots for ios_run / ios_status
 
+def install_detail(pct: float, status: str) -> str:
+    """The progress line for install_ipa's on_progress: the daemon's sentence as is (the installer waits for
+    the iPhone or the app to close), else "<status> <percent>%"."""
+    return status if " " in status else f"{status or 'installing'} {pct:.0f}%"
+
+
 async def install_ipa(state: AppState, udid: str | None, path: str, on_progress=None) -> dict:
-    """app.install with installProgress forwarded to on_progress(percent, status)."""
+    """app.install with installProgress forwarded to on_progress(percent, status); status is the event's
+    `message` when it has one (a sentence: show it with install_detail)."""
     h = hub(state)
 
     def listener(name: str, data: Any) -> None:
         if name == "installProgress" and isinstance(data, dict) and on_progress and \
                 (not data.get("path") or data.get("path") == path):
             try:
-                r = on_progress(float(data.get("percent") or 0), str(data.get("status") or ""))
+                r = on_progress(float(data.get("percent") or 0),
+                                str(data.get("message") or data.get("status") or "")[:200])
                 if asyncio.iscoroutine(r):
                     asyncio.ensure_future(r)
             except Exception:  # noqa: BLE001
@@ -183,8 +191,8 @@ async def install_ipa(state: AppState, udid: str | None, path: str, on_progress=
 
 async def _install_for_job(state: AppState, udid: str, ipa: str, job: Job) -> dict:
     def prog(pct: float, status: str) -> None:
-        job.set_step("install", "Installing", "running", detail=f"{status or 'installing'} {pct:.0f}%", owner="mcp")
-        job.progress_detail = f"Installing on the iPhone: {pct:.0f}%"
+        job.set_step("install", "Installing", "running", detail=install_detail(pct, status), owner="mcp")
+        job.progress_detail = status if " " in status else f"Installing on the iPhone: {pct:.0f}%"
         job.touch()
     res = await install_ipa(state, udid, ipa, prog)
     job.add_line(f"Installed {res.get('bundleId') or ipa} on the iPhone in {res.get('seconds') or '?'} s")
@@ -210,7 +218,7 @@ def start_install(state: AppState, udid: str | None, pkg: str, project: dict | N
 
     def prog(job: Job, pct: float, status: str) -> None:
         job.data["percent"], job.data["status"] = pct, status
-        job.report(pct / 100, f"{status or 'installing'} {pct:.0f}%")
+        job.report(pct / 100, install_detail(pct, status))
 
     async def run(job: Job) -> dict:
         u = udid or await state.active_udid()

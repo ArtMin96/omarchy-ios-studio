@@ -179,7 +179,7 @@ ShellRoot {
                 hurry = false
                 if (current) pageArea.shownPage = modelData.key
                 var m = Object.assign({}, app.pageItems); m[modelData.key] = item; app.pageItems = m
-                if (current && typeof item.activated === "function") item.activated(app.pageParams)
+                if (current && typeof item.activated === "function") item.activated(app.takePageParams(modelData.key))
               }
               onStatusChanged: if (status === Loader.Error) console.warn("page failed to load:", modelData.file)
             }
@@ -228,7 +228,7 @@ ShellRoot {
         function onNavigated(page, params) {
           if (app.pageItems[page]) pageArea.shownPage = page
           var item = app.pageItems[page]
-          if (item && typeof item.activated === "function") item.activated(params)
+          if (item && typeof item.activated === "function") item.activated(app.takePageParams(page))
         }
       }
 

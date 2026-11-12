@@ -18,6 +18,7 @@ PageFrame {
   readonly property var acct: app.account
   readonly property var dev: app.device
   readonly property var proj: app.projects
+  readonly property var sharedNames: Model.sharedNames(proj.items)   // names two listed apps share
   readonly property var logs: app.logs
 
   readonly property bool wide: width >= Style.space(820)
@@ -535,7 +536,9 @@ PageFrame {
           }
         ]
         title: modelData.name || "App"
-        subtitle: modelData.bundleId || modelData.displayPath || ""
+        // Two apps with one name (a copy in another folder) show their folder instead of the shared bundle ID.
+        subtitle: page.sharedNames[modelData.name] === true ? (modelData.displayPath || "")
+                  : (modelData.bundleId || modelData.displayPath || "")
         meta: {
           if (prow.mine) return "Building…"
           if (prow.sg && prow.sg.daysLeft !== null && prow.sg.daysLeft !== undefined)

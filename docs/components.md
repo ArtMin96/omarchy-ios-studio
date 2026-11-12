@@ -48,7 +48,7 @@ PageFrame {
   title: "iPhone"; subtitle: "…"
 
   // all optional hooks, called by shell.qml when they exist:
-  function activated(params) {}          // on every nav() to this page (params = app.pageParams), incl. deep links
+  function activated(params) {}          // on every nav() to this page, incl. deep links (params once: see below)
   function handleKey(event) { return false }   // page cursor model; return true if consumed
   function focusSearch() {}              // global "/"
   function refresh() {}                  // global "r" (default: the page's service.refresh())
@@ -59,7 +59,10 @@ PageFrame {
 - Pages are loaded lazily on first visit and **kept alive**, so page-local state survives switching.
   Shared state belongs in the service (`app.device`, …). The load starts in the background (the page you came
   from stays on screen, so the click shows at once); after 50 ms the shell finishes it in one go, and past 150 ms
-  a spinner replaces the old page. `activated(params)` runs once the page exists. Keep what a page builds up
+  a spinner replaces the old page. `activated(params)` runs once the page exists. A nav()'s params reach it once
+  (`app.takePageParams(key)`, `Model.takePageParams`): when the page loads again (a retry), `activated` gets
+  `app.pageParams` without `action`, so it goes back to the same tab or item but doesn't repeat an action such as
+  `{action: "renew"}`. Each nav() is a new request, so the same action from a second click runs again. Keep what a page builds up
   front small: load tabs and sheets on first use (DevicePage's `TabLoader`), and start a view's work when it's
   shown, not in `Component.onCompleted`.
 - Global keys that the shell handles first: `1`–`8` pages, `?` shortcut sheet, `r` refresh, `/` search,
@@ -74,7 +77,7 @@ PageFrame {
 
 | Member | |
 |---|---|
-| `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and `activated(params)`. |
+| `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and, once, in `activated(params)`. |
 | `app.openSetupStep(id)` | `nav("setup", {step: id})` |
 | `app.toast(text, level?)` | level: `info` (default), `ok`, `warn`, `error` |
 | `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. Returns a handle. A dialog asked for while another is open is queued and shown after it, so no question is lost. |
@@ -215,7 +218,7 @@ header tab list element linkVariant (element roles) and contrast textSize clippe
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
+`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(items)` → `{name: true}` for the names that more than one folder has, from projects or build history entries (`{name, path}`; many builds of one app don't count). The Projects card, Projects › Recent builds, Home's projects and Logs › Build logs then show the folder; `tildePath(path, home)` → "~/Projects/App"; `installProgressText(event)` (the Run bar's line for a Wi-Fi install's `installProgress`: the daemon's waiting `message` instead of the percent while it lasts) and `installWaitMessage(event)` (that message, or ""); `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 Run presets (mirroring `helper/iosstudio/features/run_presets.py`, so the editor can preview and validate as you type; the helper
@@ -667,7 +670,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **AccountRevokeWarning**: explains why one Apple ID on two computers revokes the other's certificate.
   Props: `compact`, `expanded`.
 - **ProjectCard**: one project on the Projects page. Props: `project`, `svc` (`app.projects`), `hasCursor`,
-  `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
+  `expanded`, `sameName` (another listed project has this name, from `Model.sharedNames`: the folder line, always
+  on the card as `displayPath` elided in the middle, then reads dim instead of faint); read-only `narrow`. The folder
+  keeps up to 220 px before it elides; the editor hint after it gives way first. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
   `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
   `openBuildSettings()`, `editPresets()` (Edit presets… in Run's menu, or More › Run presets), `showBuild()`,
   `hovered(bool)`; read-only `blocked` (a generated project its build settings don't allow yet) and `runPreset` (the
@@ -1001,7 +1006,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   stderr-only (when the streams are split), pause, copy, export and clear. Read-only `view`, `search`;
   `togglePause()`, `copySelected()`. See [features/app-console.md](features/app-console.md).
 - **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history (rows: kind · duration, then when ·
-  problem counts; the glyph shows the result), then the selected build's summary, problems and full log. The
+  problem counts; the glyph shows the result; when builds from two folders share a name, `folderText(b)` puts
+  the folder first in the row and in the detail line), then the selected build's summary, problems and full log. The
   detail pane shrinks with the window: the build name has its result pill beside it, and below 560 px
   (`detail.narrow`) the name gets the header row (with the buttons; Rebuild shows only its hammer, the tooltip
   names it), the pill and the details move to a row below it (the details wrap at the dots), and the log
@@ -1105,7 +1111,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       (10 to 20 s) the form stays visible but disabled, Esc, the scrim and × don't close it (`dismissible: false`),
       Cancel is disabled, and a ProgressTrack on the content edges shows the step: "Waiting for iOS to save
       X's settings…" (until 10 s after the app stopped, from DeviceAppDataView's `waitLeft()`), "Writing…", then
-      "Reinstalling X…". The bar moves (indeterminate) and the right caption counts seconds until an
+      "Reinstalling X…" (or the event's waiting `message`, `Model.installWaitMessage`, while the iPhone's installer
+      is silent). The bar moves (indeterminate) and the right caption counts seconds until an
       `installProgress` event brings a percent above 0 (over Wi-Fi none comes), then it shows the percent. A faint two-line note says the change
       reinstalls the same build and the data stays. Dictionaries and arrays are sent as `type: "json"`; a value
       shortened for display is fetched whole before the sheet opens.
@@ -1130,7 +1137,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       button goes under the text). Each opens a Sheet that runs the dry run (`confirm: false`), lists what goes
       (count, files, size, the capped item list), then a danger button runs it with `confirm: true, stopApp: true`
       and toasts the result; while it runs a ProgressTrack shows "Deleting N items…" and then the install from
-      `installProgress` (a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
+      `installProgress` (its waiting `message` while the installer is silent; a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
       `warning`). Signal `done()`: the other panes reload on their next show.
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
   copyable; no copy button on an empty "—" value), Profiles tab (read-only, expired ones behind `showExpired`; a `StateView` on

@@ -30,6 +30,7 @@ Sheet {
   property bool refresh: true                // install the build after the write (the daemon's default)
   property string phase: ""                  // wait | write | install, while saving
   property real installPercent: -1
+  property string installMessage: ""         // the installer waits for the iPhone (installProgress `message`)
   property real startedAt: 0
   property int elapsed: 0                    // seconds since the change started, while saving
   Timer { interval: 1000; repeat: true; running: root.saving; onTriggered: root.elapsed = Math.round((Date.now() - root.startedAt) / 1000) }
@@ -120,6 +121,7 @@ Sheet {
   function _startSteps() {
     var left = root.view.waitLeft()
     root.installPercent = -1
+    root.installMessage = ""
     root.startedAt = Date.now()
     root.elapsed = 0
     root.phase = left > 0 ? "wait" : "write"
@@ -131,6 +133,7 @@ Sheet {
     function onDaemonEvent(name, data) {
       if (name !== "installProgress" || !root.saving || !data) return
       root.phase = "install"
+      root.installMessage = Model.installWaitMessage(data)
       // over Wi-Fi the install reports no numbers (or only 0): keep the bar moving until real ones arrive
       var pct = Number(data.percent)
       if (isFinite(pct) && pct > 0) root.installPercent = pct
@@ -287,7 +290,7 @@ Sheet {
     value: Math.max(0, root.installPercent) / 100
     label: root.phase === "wait" ? "Waiting for iOS to save " + root.view.appName + "'s settings…"
          : root.phase === "write" ? (root.deleting ? "Deleting the key…" : "Writing…")
-         : "Reinstalling " + root.view.appName + "…"
+         : root.installMessage || "Reinstalling " + root.view.appName + "…"
     // a percent once the install reports one, else the seconds so far
     trailing: root.phase === "install" && root.installPercent > 0 ? Math.round(root.installPercent) + "%" : Model.formatDuration(root.elapsed)
   }

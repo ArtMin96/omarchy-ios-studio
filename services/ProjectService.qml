@@ -254,8 +254,7 @@ Item {
     ignoreUnknownSignals: true
     function onDaemonEvent(name, data) {
       if (name !== "installProgress" || !root.building || !data || data.path !== root.build.ipaPath) return
-      var text = data.status === "uploading" ? "Sending the app to your iPhone over Wi-Fi"
-               : data.status === "done" ? "Installed" : "Installing on your iPhone… " + data.percent + "%"
+      var text = Model.installProgressText(data)   // the daemon's waiting message instead of "0%" while it lasts
       root._setStep("install", "running", text)
       root._patch({ detail: text })
     }

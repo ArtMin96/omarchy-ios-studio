@@ -14,6 +14,8 @@ Item {
   required property var app
   readonly property var svc: app.logs
   readonly property var builds: svc.builds || []
+  // Names whose builds come from more than one folder (a copy of an app elsewhere): those rows name the folder.
+  readonly property var sharedNames: Model.sharedNames(builds.map(function(b) { return { name: b.name || b.project, path: b.path } }))
 
   property int cursor: 0
   property var selected: null
@@ -71,11 +73,16 @@ Item {
     if (b.warnings) parts.push(Model.plural(b.warnings, "warning"))
     return parts.join(", ")
   }
+  // The build's folder ("~/Projects/App") when another folder has builds under the same name, else "".
+  function folderText(b) {
+    return b && root.sharedNames[b.name || b.project] === true ? Model.tildePath(b.path, root.app.home) : ""
+  }
   // Each part keeps its words together (no-break spaces), so a wrapped line breaks only at the dots.
   function metaText(b) {
     if (!b) return ""
-    return [svc.buildKindLabel(b.kind, b), b.config === "release" ? "Release" : "Debug", "took " + Model.formatDuration(b.duration),
+    return [folderText(b), svc.buildKindLabel(b.kind, b), b.config === "release" ? "Release" : "Debug", "took " + Model.formatDuration(b.duration),
             new Date(b.time * 1000).toLocaleString(Qt.locale(), "d MMM, HH:mm")]
+      .filter(function(p) { return p !== "" })
       .map(function(p) { return String(p).replace(/ /g, "\u00a0") }).join(" · ")
   }
   function logLines(text) {
@@ -119,8 +126,9 @@ Item {
         glyph: Model.levelGlyph(root.resultLevel(modelData))
         glyphColor: Theme.levelColor(root.resultLevel(modelData))
         title: modelData.name || modelData.project || "Build"
-        // The glyph already says succeeded/failed; kind + duration fit one line, when + problems the next.
-        subtitle: [root.svc.buildKindLabel(modelData.kind, modelData), Model.formatDuration(modelData.duration)].filter(function(s) { return s !== "" }).join(" · ")
+        // The glyph already says succeeded/failed; kind + duration fit one line (after the folder when another
+        // folder's builds share the name), when + problems the next.
+        subtitle: [root.folderText(modelData), root.svc.buildKindLabel(modelData.kind, modelData), Model.formatDuration(modelData.duration)].filter(function(s) { return s !== "" }).join(" · ")
         meta: [Model.relativeTime(modelData.time), root.countsText(modelData)].filter(function(s) { return s !== "" }).join(" · ")
         hasCursor: root.cursor === index
         current: root.keyOf(root.selected) === root.keyOf(modelData)

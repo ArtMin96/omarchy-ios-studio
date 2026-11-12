@@ -47,6 +47,8 @@ MAX_LINE = protocol.MAX_LINE
 CLIENT_BUFFER_MAX = 32 * 1024 * 1024   # a client that stops reading is disconnected
 CLIENT_CLOSE_GRACE_S = 2.0              # a closing client's last replies get this long to flush
 STALLED_CLOSE_GRACE_S = 0.1             # ... and one already CLIENT_BUFFER_MAX behind only this long
+REQUEST_CANCEL_S = 15.0                 # a cancelled request (client gone, shutdown) gets this long to clean up
+EXIT_GRACE_S = 5.0                      # run_bounded: leftover tasks get this long to finish cancelling
 LOG_MAX = 4 * 1024 * 1024               # deviced.log (tmpfs, so RAM) moves to deviced.log.1 past this
 LOG_CHECK_S = 30.0
 
@@ -494,6 +496,7 @@ class Client:
         self.events: set[str] | None = None     # None = everything
         self.since = time.time()
         self.closed = False
+        self.requests: set[asyncio.Task] = set()   # its requests still running (cancelled when it leaves)
 
     def wants(self, name: str) -> bool:
         return self.events is None or name in self.events
@@ -559,6 +562,7 @@ class Broker:
         self._lock: contextlib.ExitStack | None = None   # holds the lock file's flock while we serve
         self._log_redirected = False
         self._bg = TaskSet(log)               # fire-and-forget work, cancelled at shutdown
+        self._requests: set[asyncio.Task] = set()   # every request still running, of any client
 
     def spawn(self, coro, name: str | None = None) -> asyncio.Task:
         """A background task the broker keeps a reference to until it ends (or shutdown cancels it)."""
@@ -704,6 +708,7 @@ class Broker:
             self.begin_shutdown()
             for c in list(self.clients):
                 c.close()
+            await _cancel_all(self._requests, "at shutdown")
             if self.backend is not None:
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(self.backend.shutdown(), 8)
@@ -727,7 +732,6 @@ class Broker:
         self.clients.add(c)
         self._check_idle()
         log(f"{c.name} connected ({len(self.clients)} client(s))")
-        tasks: set[asyncio.Task] = set()
         try:
             for name, data in await self.backend.welcome():
                 if name == "ready" and isinstance(data, dict):
@@ -745,8 +749,7 @@ class Broker:
                         t = asyncio.create_task(self._request(c, m))
                     finally:
                         _current.reset(token)
-                    tasks.add(t)
-                    t.add_done_callback(tasks.discard)
+                    self._track(c, t)
             except protocol.LineTooLong:
                 c.send(protocol.event("log", {"level": "warn", "text": "request line too long"}))
         except (ConnectionError, OSError):
@@ -759,8 +762,18 @@ class Broker:
             self.spawn(self._client_gone(c), name=f"{c.name}-gone")
             self._check_idle()
 
+    def _track(self, c: Client, t: asyncio.Task) -> None:
+        """Keep a request task referenced until it ends: the loop holds tasks only weakly, so one waiting on
+        a connection nothing else references would be garbage-collected mid-flight ("Task was destroyed but
+        it is pending!") with its cleanup never run."""
+        for s in (c.requests, self._requests):
+            s.add(t)
+            t.add_done_callback(s.discard)
+
     async def _client_gone(self, c: Client):
-        """Release what the client held (mirror, port forwards, ...), then tell the backend."""
+        """Cancel the client's unanswered requests (nobody is left to read their replies), release what it
+        held (mirror, port forwards, ...), then tell the backend."""
+        await _cancel_all(c.requests, f"of {c.name}")
         await self.resources.client_gone(c)
         if self.backend is not None:
             with contextlib.suppress(Exception):
@@ -812,6 +825,50 @@ class Broker:
         if cmd == "syslog.stop":
             return await self.syslog.stop(c)
         return await self.backend.dispatch(cmd, a)
+
+
+async def _cancel_all(tasks: set[asyncio.Task], why: str) -> None:
+    """Cancel these request tasks and wait (up to REQUEST_CANCEL_S) for them to close their connections."""
+    pending = [t for t in tasks if not t.done()]
+    if not pending:
+        return
+    log(f"cancelling {len(pending)} unanswered request(s) {why}")
+    for t in pending:
+        t.cancel()
+    _, late = await asyncio.wait(pending, timeout=REQUEST_CANCEL_S)
+    if late:
+        log(f"{len(late)} cancelled request(s) {why} are still cleaning up")
+
+
+def run_bounded(coro, grace: float = EXIT_GRACE_S, hard_exit=os._exit, log=log) -> int:
+    """asyncio.run(coro) with a bounded teardown. asyncio.run cancels leftover tasks and then waits for them
+    and for the default executor's threads without a limit, so one task that won't end (a pymobiledevice3
+    connection mid-read, a to_thread call stuck in I/O) kept a stopped daemon alive after "bye", deaf to
+    SIGTERM. Here leftovers get `grace` seconds after cancelling; the executor isn't waited for (both
+    daemons' main() exit with os._exit right after). If even that wait hangs (a callback blocking the
+    loop), a timer calls hard_exit(code)."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    code = 1
+    try:
+        code = loop.run_until_complete(coro)
+        return code
+    finally:
+        backstop = threading.Timer(grace + 2, hard_exit, (code,))
+        backstop.daemon = True
+        backstop.start()
+        try:
+            left = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in left:
+                t.cancel()
+            if left:
+                _, late = loop.run_until_complete(asyncio.wait(left, timeout=grace))
+                if late:
+                    log(f"exiting with {len(late)} task(s) that didn't stop: "
+                         + ", ".join(sorted(t.get_name() for t in late))[:300])
+        finally:
+            backstop.cancel()
+        asyncio.set_event_loop(None)
 
 
 # ====================================================================== launcher / bridge

@@ -32,7 +32,8 @@ failure is `failed` with lastError (PatchError.to_json(); ack.ok false -> load-f
 -> app-not-running); the session keeps watching. The app gone from the phone (not-installed) ends it (app-exited).
 
 Stop: {"cancel": true} or {"cmd": "stop"} on stdin ({"cmd": "pause" | "resume"} also work), SIGTERM/SIGINT/SIGHUP,
-`hotreload stop` (SIGTERM), the parent process ending. The build is cancelled (its process group killed after
+`hotreload stop` (SIGTERM), the parent process ending (checked every step, so `hotreload run` must run under a
+process that stays alive; the app and the MCP server do). The build is cancelled (its process group killed after
 the grace period), running compiles are killed, the final `stopped` snapshot is written, then `done`; all of it
 within SHUTDOWN_BUDGET (state.STOP_WAIT waits longer before it kills the session).
 """
@@ -154,7 +155,7 @@ class DeviceLink:
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, name="hotreload-device", daemon=True)
         self.thread.start()
-        self.client = DeviceClient(name=name, events=[])
+        self.client = DeviceClient(name=name, events=["installProgress"])   # the Wi-Fi install's waiting message
 
     def request(self, cmd: str, args: dict, timeout: float, cancel: Callable[[], bool] | None = None) -> Any:
         args = {k: v for k, v in args.items() if v is not None}
@@ -172,6 +173,10 @@ class DeviceLink:
                     raise HelperError("timeout", "Your iPhone didn't answer in time.", DEVICE_FIX) from None
             except concurrent.futures.CancelledError:
                 raise subproc.Cancelled() from None
+
+    def on_event(self, callback: Callable[[str, Any], None], names: list[str]) -> Callable[[], None]:
+        """callback(name, data) for these daemon events, on the link's loop thread. Returns the unsubscribe."""
+        return self.client.on_event(callback, names)
 
     def close(self, timeout: float = CLOSE_WAIT) -> None:
         end = time.monotonic() + timeout
@@ -511,7 +516,7 @@ class Session:
                 self.publish(self.idle_state(), self.idle_message())
         if self.check_parent and os.getppid() != self.ppid:
             self.stop_reason = "stopped"
-            self.stop_message = "Stopped: the app that started hot reload has closed"
+            self.stop_message = "Stopped: the app or tool that started hot reload has closed"
 
     def apply_control(self) -> None:
         c = rt.read_control(self.key)
@@ -712,13 +717,31 @@ class Session:
             self.publish(progress={"fraction": ev.get("fraction"), "detail": str(ev.get("detail") or "")[:200]})
 
     def install(self, data: dict) -> None:
-        """A Wi-Fi build: the device daemon installs the .ipa (like the Run button does)."""
-        self.publish("installing", "Installing on your iPhone over Wi-Fi", progress=None)
+        """A Wi-Fi build: the device daemon installs the .ipa (like the Run button does). Its installProgress
+        `message` (the installer waits for the phone or the app to close) replaces the bar's text meanwhile."""
+        ipa, base = data["ipa"], "Installing on your iPhone over Wi-Fi"
+        self.publish("installing", base, progress=None)
+        gate, live = threading.Lock(), [True]
+
+        def on_progress(_name: str, ev: Any) -> None:
+            if not isinstance(ev, dict) or ev.get("path") != ipa or ev.get("status") == "done":
+                return
+            text = str(ev.get("message") or "")[:200] or base
+            with gate:
+                if live[0] and text != self.snap.get("message"):
+                    self.publish(message=text)
+
+        on_event = getattr(self.device, "on_event", None)
+        off = on_event(on_progress, ["installProgress"]) if on_event else (lambda: None)
         try:
-            self.request("app.install", {"path": data["ipa"]}, INSTALL_TIMEOUT)
+            self.request("app.install", {"path": ipa}, INSTALL_TIMEOUT)
         except HelperError as exc:
             raise StartFailed("error", {**exc.to_json(), "message": "Built and signed, but installing failed: "
                                         + exc.message}) from None
+        finally:
+            with gate:
+                live[0] = False
+            off()
         try:
             from iosstudio.features.projects.store import record_signing
             record_signing(str(self.root), self.udid, data.get("bundleId"), "wifi", data.get("profile"))

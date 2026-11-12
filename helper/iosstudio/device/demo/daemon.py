@@ -119,8 +119,7 @@ def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--once":
         return once(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "{}")
     if len(sys.argv) >= 2 and sys.argv[1] == "--serve":
-        code = asyncio.run(serve())
-        os._exit(code)
+        os._exit(device_broker.run_bounded(serve()))   # bounded: a task that won't stop can't keep it alive
     print("usage: demo/daemon.py --serve | --once <cmd> '<json>'  (normally started by bin/iosstudio-deviced)",
           file=sys.stderr)
     return 2

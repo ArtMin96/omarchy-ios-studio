@@ -998,6 +998,11 @@ async def serve() -> int:
     return await broker.run(make)
 
 
+def run_bounded(coro, grace: float = device_broker.EXIT_GRACE_S, hard_exit=os._exit) -> int:
+    """asyncio.run(coro) with a bounded teardown (device_broker.run_bounded), logged through dlog."""
+    return device_broker.run_bounded(coro, grace, hard_exit, log=lambda text: dlog(text))
+
+
 def main() -> int:
     # Before anything can print: the protocol keeps a private copy of stdout and fd 1 becomes stderr
     # (pymobiledevice3, loaded later with the features, prints progress bars). Not done at import, so
@@ -1006,10 +1011,10 @@ def main() -> int:
     code = 0
     try:
         if len(sys.argv) >= 3 and sys.argv[1] == "--once":
-            code = asyncio.run(once(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "{}"))
+            code = run_bounded(once(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "{}"))
             return code
         if len(sys.argv) >= 2 and sys.argv[1] == "--serve":
-            code = asyncio.run(serve())
+            code = run_bounded(serve())
             return code
         print("usage: real/daemon.py --serve | --once <cmd> '<json args>'  (normally run by bin/iosstudio-deviced)",
               file=sys.stderr)
