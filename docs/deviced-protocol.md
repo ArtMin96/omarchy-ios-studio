@@ -248,7 +248,7 @@ the tunnel is up.
 | `pair` | Pair (below) | pairing flow progress |
 | `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list (or, after a reply sent while the tunnel was coming up, the running apps) changed; also after every `app.launch` (with a pid) and `app.kill`, from any client, with the cached user app list (`system: false`) and the new `running`/`pid` (no phone round trip; not sent when no user list is cached or the app isn't in it) |
 | `appIcons` | `{udid, icons: {bundleId: path}}` | icons fetched in the background after `apps.list`, batched (at most every 250 ms or 10 icons) |
-| `installProgress` | `{path, percent, status}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing`, `done` (100) |
+| `installProgress` | `{path, percent, status, message?}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing` (percent 0 once the upload is done), `done` (100); `message` only while the installer waits for the app to close (see [Installing apps](#installing-apps-appinstall)) |
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list {sizes: true}` (sizes are slow to compute) |
 | `condition` | Condition + `reason` (see [Network conditions](#network-conditions)) | a condition was set or switched off |
 | `pcap` | Capture (see [Packet capture](#packet-capture)) | about once a second while capturing, and when it stops |
@@ -375,7 +375,23 @@ events (the first icon at once, then at most every 250 ms or every 10 icons).
 
 Works over the active tunnel, Wi-Fi or USB (installation_proxy over RSD, the same path the transport in
 helper/iosstudio/device/link.py uses; ~7 s for a 45 MB app over Wi-Fi). The reply comes after the phone reports
-"Complete". Error codes besides the common ones:
+"Complete".
+
+The package goes up over AFC to `/PublicStaging/pymobiledevice3/` in 1 MiB chunks, then installation_proxy
+installs it. Before the installer runs, the installed copy of the app is closed if it's running (what `app.kill`
+does, best effort). Xcode does the same: iOS won't end an app in the foreground for an update ("termination
+resistance"), and its installer then sends nothing until the app leaves the screen. Each step is bounded. An
+upload chunk gets 60 s. The installer gets 120 s between two messages: after 20 s of silence an
+`installProgress` event with a `message` ("Waiting for <App> to close on your iPhone") is sent once, and at
+120 s the request fails with `install-stalled`. The AFC and installation_proxy connections are opened per
+request and closed on every way out, including cancellation. The staged package is removed (10 s at most) and
+the tunnel is kept.
+
+A request whose client disconnects is cancelled, `app.install` included, because nobody is left to read its
+reply. Its connections close and the staged file is removed. The same happens to requests still running
+when the daemon shuts down.
+
+Error codes besides the common ones:
 
 | code | message |
 |---|---|
@@ -385,6 +401,7 @@ helper/iosstudio/device/link.py uses; ~7 s for a 45 MB app over Wi-Fi). The repl
 | `no-space` | not enough free storage on the iPhone |
 | `locked` | the iPhone is locked |
 | `incompatible` / `bad-signature` | iOS version/architecture mismatch, invalid signature |
+| `install-stalled` | "Your iPhone stopped answering while it installed <App>. Close <App> on the iPhone if it's open, keep the iPhone unlocked and awake, then try again…" (fix → iPhone page, `action: "reconnect"`; `detail` names the step, e.g. `no answer for 120 s while installing (last step: TakingInstallLock)`) |
 | `install-failed` | anything else (`detail` holds the installer's text) |
 
 ### Screen
