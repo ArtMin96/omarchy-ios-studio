@@ -5,12 +5,17 @@
 // changed source files), it dlopens it and rebinds symbols in two directions:
 //
 //   swap  functions in the patch's __TEXT,__text that the app also defines (except `…Ma` metadata
-//         accessors): the app's symbol pointers (__got / __la_symbol_ptr, reached through the indirect
-//         symbol table because the app is linked with -interposable) now point at the patch, and words in
-//         the app's __DATA,__data (+ __objc_data) equal to the old address (class vtables) are replaced.
+//         accessors and the `…vau` addressors of globals, see hr_rules.h), and async function pointers
+//         (`…Tu`) whose context still fits: the app's symbol pointers (__got / __la_symbol_ptr, reached
+//         through the indirect symbol table because the app is linked with -interposable) now point at the
+//         patch, and words in the app's __DATA,__data (+ __objc_data) equal to the old address (class vtables;
+//         an async method's slot holds its `…Tu`) are replaced.
 //   keep  every other symbol the patch defines that the app defines too (type metadata, descriptors,
-//         accessors, witness tables): the patch's own pointers now point at the app's, so new code keeps
-//         using the original types.
+//         accessors, addressors, witness tables): the patch's own pointers now point at the app's, so new code
+//         keeps using the original types and globals.
+//
+// A patch is refused before anything changes when one of its async functions needs a bigger context than the
+// app's callers allocate (they read the size from the app's `…Tu`), or after HR_MAX_LOADED patches in a run.
 //
 // Then it writes ack-<seq>.json, prunes old patches and, on the main queue, bumps the generation, posts the
 // local notification "dev.iosstudio.hot-reload" and logs one line to stderr (the app console) and os_log.
@@ -51,12 +56,16 @@ __attribute__((visibility("default"), used)) const int iosstudio_hot_reload_load
 #include <time.h>
 #include <unistd.h>
 
+#include "hr_rules.h"
+
 #define HR_VERSION 1
 #define HR_KEEP_BEHIND 3            // patches/acks with seq < newest - 3 are deleted
 #define HR_MAX_DIR_ENTRIES 4096     // directory scans stop here
 #define HR_MAX_SYMBOLS 1000000      // a patch with more external symbols is refused
 #define HR_MAX_SCAN_BYTES (64u << 20) // vtable scan: at most this much of the app's data sections
 #define HR_ERROR_MAX 400
+#define HR_MAX_LOADED 100           // patches dlopened in one run (never closed); later ones are refused
+#define HR_MAX_NAME 1024            // longer symbol names aren't looked up with a suffix (method descriptors)
 
 _Static_assert(HR_VERSION == 1, "iosstudio_hot_reload_loader holds the protocol version");
 
@@ -64,6 +73,9 @@ static _Atomic int g_active;
 static _Atomic long g_generation;   // published on the main queue
 static long g_applied;              // loader queue only: patches applied so far
 static long g_last_seq;             // loader queue only: newest seq looked at
+static long g_loaded;               // loader queue only: patches dlopened so far (they stay loaded)
+static long g_started;              // unix time of the start, for runtime.json
+static char g_caches[PATH_MAX];
 static char g_dir[PATH_MAX];
 static dispatch_queue_t g_queue;
 static dispatch_source_t g_source;
@@ -276,7 +288,9 @@ typedef struct {
     const char *name;
     void *to;       // the address pointers for `name` should hold
     void *from[2];  // vtable scan: words equal to these become `to` (NULL = unused)
-    int hit;
+    int hit;        // a pointer or vtable word now holds `to`
+    int vhit;       // a vtable word was rewritten
+    int async;      // an async function pointer (`…Tu`), not a function
 } hr_entry;
 
 typedef struct {
@@ -434,6 +448,7 @@ static int scan_section(void *ctx, const struct segment_command_64 *seg, const s
         if (!hit) continue;
         __atomic_store_n(w, (uintptr_t)hit->entry->to, __ATOMIC_RELEASE);
         hit->entry->hit = 1;
+        hit->entry->vhit = 1;
         sc->replaced++;
     }
     return sc->budget > 0;
@@ -500,10 +515,55 @@ static int find_patch(const char *path, const char *file, hr_image *patch) {
     return 0;
 }
 
-static int is_swift_metadata_accessor(const char *name) {
-    size_t n = strlen(name);
-    int swift = strncmp(name, "_$s", 3) == 0 || strncmp(name, "_$S", 3) == 0 || strncmp(name, "__T0", 4) == 0;
-    return swift && n > 2 && name[n - 2] == 'M' && name[n - 1] == 'a';
+typedef struct { uintptr_t lo, hi; intptr_t slide; int found; } hr_span;
+
+static int span_section(void *ctx, const struct segment_command_64 *seg, const struct section_64 *s, uint32_t ord) {
+    (void)seg, (void)ord;
+    hr_span *sp = ctx;
+    uintptr_t start = (uintptr_t)s->addr + (uintptr_t)sp->slide;
+    if (sp->lo >= start && sp->hi <= start + (uintptr_t)s->size) {
+        sp->found = 1;
+        return 0;
+    }
+    return 1;
+}
+
+// [addr, addr + len) lies in one of the image's sections (so reading it can't fault).
+static int in_image(const hr_image *img, const void *addr, size_t len) {
+    hr_span sp = {.lo = (uintptr_t)addr, .hi = (uintptr_t)addr + len, .slide = img->slide};
+    for_each_section(img->header, span_section, &sp);
+    return sp.found;
+}
+
+// The app exports `name` (with its leading '_') followed by `suffix`.
+static int app_has_suffixed(const char *name, const char *suffix) {
+    char buf[HR_MAX_NAME];
+    int n = snprintf(buf, sizeof buf, "%s%s", name + 1, suffix);
+    return n > 0 && (size_t)n < sizeof buf && dlsym(RTLD_MAIN_ONLY, buf) != NULL;
+}
+
+static const hr_entry *find_suffixed(const hr_table *t, const char *name, const char *suffix) {
+    char buf[HR_MAX_NAME];
+    int n = snprintf(buf, sizeof buf, "%s%s", name, suffix);
+    return n > 0 && (size_t)n < sizeof buf ? table_find(t, buf) : NULL;
+}
+
+typedef char *(*hr_demangle_fn)(const char *, size_t, char *, size_t *, uint32_t);
+
+// The first `len` bytes of a Swift symbol as people read it (`Fix.load() async -> Swift.Int`), through the Swift
+// runtime's swift_demangle when it is there, else the mangled name.
+static void readable_name(char *out, size_t size, const char *name, size_t len) {
+    static hr_demangle_fn demangle;
+    static int looked;
+    if (!looked) {
+        demangle = (hr_demangle_fn)dlsym(RTLD_DEFAULT, "swift_demangle");
+        looked = 1;
+    }
+    if (len && name[0] == '_') name++, len--;
+    char *text = demangle ? demangle(name, len, NULL, NULL, 0) : NULL;
+    if (text) snprintf(out, size, "%s", text);
+    else snprintf(out, size, "%.*s", (int)(len < 200 ? len : 200), name);
+    free(text);
 }
 
 static void apply_patch(long seq, hr_result *res) {
@@ -516,12 +576,18 @@ static void apply_patch(long seq, hr_result *res) {
         snprintf(res->error, sizeof res->error, "patch path too long");
         goto done;
     }
+    if (g_loaded >= HR_MAX_LOADED) {
+        snprintf(res->error, sizeof res->error, "Too many reloads in this run (%d). Press Run to start fresh.",
+                 HR_MAX_LOADED);
+        goto done;
+    }
     void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         const char *e = dlerror();
         snprintf(res->error, sizeof res->error, "could not load the patch: %s", e ? e : "unknown error");
         goto done;
     }
+    g_loaded++;
     // Never dlclose: old code may still be running on another thread, and Swift registered its metadata.
     hr_image app, patch;
     if (!find_app(&app)) {
@@ -541,11 +607,14 @@ static void apply_patch(long seq, hr_result *res) {
         goto done;
     }
 
-    // Sort the patch's exported symbols: swap (new function bodies for the app), keep (the patch uses the
-    // app's: types, metadata, accessors) and, in patch_table, where the patch's own pointers must point:
-    // keep -> the app's, everything else -> the patch's own. That last part matters: -interposable links
-    // self-references as flat-namespace binds, which dyld resolves by searching the app (and older patches)
-    // first, so the patch's calls between its own changed or new functions could land in old copies.
+    // Sort the patch's exported symbols (hr_rules.h): swap (new function bodies for the app), keep (the patch
+    // uses the app's: types, metadata, accessors, globals) and, in patch_table, where the patch's own pointers
+    // must point: keep -> the app's, everything else -> the patch's own. That last part matters: -interposable
+    // links self-references as flat-namespace binds, which dyld resolves by searching the app (and older
+    // patches) first, so the patch's calls between its own changed or new functions could land in old copies.
+    // Nothing changes yet, so a patch refused here leaves the app as it was.
+    size_t grew = 0;
+    char grew_name[HR_ERROR_MAX / 2] = "";
     for (uint32_t i = patch.iextdef; i < patch.iextdef + patch.nextdef; i++) {
         const struct nlist_64 *nl = &patch.syms[i];
         if ((nl->n_type & N_STAB) || !(nl->n_type & N_EXT) || (nl->n_type & N_TYPE) != N_SECT) continue;
@@ -554,19 +623,45 @@ static void apply_patch(long seq, hr_result *res) {
         void *in_patch = (void *)((uintptr_t)nl->n_value + (uintptr_t)patch.slide);
         void *in_app = dlsym(RTLD_MAIN_ONLY, name + 1);
         if (in_app == in_patch) continue;
-        int ok;
-        if (!in_app)
+        int in_text = patch.text_ordinal && nl->n_sect == patch.text_ordinal;
+        hr_sym_kind kind = hr_classify(name, in_text, in_app != NULL);
+        if (kind == HR_SYM_ASYNC && (!in_image(&patch, in_patch, 8) || !in_image(&app, in_app, 8)))
+            kind = HR_SYM_KEEP;   // not a record we can read: leave it alone
+        int ok = 1;
+        switch (kind) {
+        case HR_SYM_NEW:
             ok = table_push(&patch_table, (hr_entry){.name = name, .to = in_patch});
-        else if (nl->n_sect == patch.text_ordinal && patch.text_ordinal && !is_swift_metadata_accessor(name))
+            break;
+        case HR_SYM_ASYNC:
+            // The app's callers allocate the context size of the app's record, then call through the swapped
+            // pointers: a bigger context would overflow their allocation.
+            if (hr_async_context_grew(in_app, in_patch)) {
+                if (!grew++) readable_name(grew_name, sizeof grew_name, name, strlen(name) - 2);
+                break;
+            }
+            ok = table_push(&swap, (hr_entry){.name = name, .to = in_patch, .from = {in_app, NULL}, .async = 1}) &&
+                 table_push(&patch_table, (hr_entry){.name = name, .to = in_patch});
+            break;
+        case HR_SYM_SWAP:
             ok = table_push(&swap, (hr_entry){.name = name, .to = in_patch, .from = {in_app, NULL}}) &&
                  table_push(&patch_table, (hr_entry){.name = name, .to = in_patch});
-        else if ((ok = table_push(&patch_table, (hr_entry){.name = name, .to = in_app})))
-            res->kept++;
+            break;
+        case HR_SYM_KEEP:
+            if ((ok = table_push(&patch_table, (hr_entry){.name = name, .to = in_app}))) res->kept++;
+            break;
+        }
         if (!ok) {
             snprintf(res->error, sizeof res->error, "out of memory");
             goto done;
         }
     }
+    if (grew == 1)
+        snprintf(res->error, sizeof res->error, "%s now needs more memory per call than the running app reserved. "
+                 "Press Run to rebuild.", grew_name);
+    else if (grew)
+        snprintf(res->error, sizeof res->error, "%s and %zu more async functions now need more memory per call "
+                 "than the running app reserved. Press Run to rebuild.", grew_name, grew - 1);
+    if (grew) goto done;
     table_sort(&swap);
     table_sort(&patch_table);
 
@@ -590,7 +685,7 @@ static void apply_patch(long seq, hr_result *res) {
     for (size_t i = 0; i < g_installed.count; i++) {
         const hr_entry *old = &g_installed.items[i];
         if (table_find(&swap, old->name)) continue;
-        hr_entry e = {.name = old->name, .to = old->from[0], .from = {old->to, NULL}};
+        hr_entry e = {.name = old->name, .to = old->from[0], .from = {old->to, NULL}, .async = old->async};
         if (!table_push(&app_table, e)) { snprintf(res->error, sizeof res->error, "out of memory"); goto done; }
     }
     res->reverted = app_table.count - first_revert;
@@ -598,15 +693,24 @@ static void apply_patch(long seq, hr_result *res) {
 
     rebind_image(&app, &app_table, &rb);
     res->vtable = rewrite_vtables(&app, &app_table);
-    for (size_t i = 0; i < app_table.count; i++)
-        if (app_table.items[i].hit && table_find(&swap, app_table.items[i].name)) res->swapped++;
+    // `swapped` counts the patch's functions the app now reaches. A class method (it has a method descriptor,
+    // `…Tq`) is called through its class's vtable, so it counts only when a vtable word was rewritten for it or
+    // its `…Tu`: a generic class's vtable is built at run time and is never found.
+    for (size_t i = 0; i < app_table.count; i++) {
+        const hr_entry *e = &app_table.items[i];
+        if (e->async || !table_find(&swap, e->name)) continue;
+        const hr_entry *tu = find_suffixed(&app_table, e->name, "Tu");
+        int via_vtable = e->vhit || (tu && tu->vhit);
+        if (app_has_suffixed(e->name, "Tq") ? via_vtable : (e->hit || (tu && tu->hit))) res->swapped++;
+    }
 
     // Remember what is installed now (exactly this patch's functions), with owned names.
     hr_table installed = {0};
     for (size_t i = 0; i < swap.count; i++) {
         char *name = strdup(swap.items[i].name);
         if (!name || !table_push(&installed, (hr_entry){.name = name, .to = swap.items[i].to,
-                                                         .from = {swap.items[i].from[0], NULL}})) {
+                                                         .from = {swap.items[i].from[0], NULL},
+                                                         .async = swap.items[i].async})) {
             free(name);
             break;
         }
@@ -695,15 +799,29 @@ static void check_folder(void) {
 
 static void watch_folder(void);
 
+// Makes Library/Caches (it may have been cleared as a whole) and Library/Caches/HotReload. 0 with errno on failure.
+static int make_folder(void) {
+    mkdir(g_caches, 0755);
+    return mkdir(g_dir, 0755) == 0 || errno == EEXIST;
+}
+
+static void write_runtime(void) {
+    char body[160];
+    int n = snprintf(body, sizeof body, "{\"version\": %d, \"pid\": %d, \"started\": %ld}\n", HR_VERSION,
+                     (int)getpid(), g_started);
+    if (n > 0) write_atomic("runtime.json", body, (size_t)n);
+}
+
 static void on_event(void *ctx) {
     (void)ctx;
     unsigned long flags = dispatch_source_get_data(g_source);
     if (flags & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME | DISPATCH_VNODE_REVOKE)) {
-        // The folder went away (the app's caches were cleared): make it again and watch the new one.
+        // The folder went away (the app's caches were cleared): make it (and runtime.json, so iOS Studio still
+        // sees a hot-reload build running) again and watch the new one.
         dispatch_source_cancel(g_source);
         dispatch_release(g_source);
         g_source = NULL;
-        mkdir(g_dir, 0755);
+        if (make_folder()) write_runtime();
         watch_folder();
         return;
     }
@@ -739,21 +857,17 @@ static void start(void *ctx) {
     (void)ctx;
     const char *home = getenv("HOME");
     if (!home || !*home) return;
-    char caches[PATH_MAX];
-    if (snprintf(caches, sizeof caches, "%s/Library/Caches", home) >= (int)sizeof caches) return;
-    if (snprintf(g_dir, sizeof g_dir, "%s/HotReload", caches) >= (int)sizeof g_dir) return;
-    mkdir(caches, 0755);
-    if (mkdir(g_dir, 0755) != 0 && errno != EEXIST) {
+    if (snprintf(g_caches, sizeof g_caches, "%s/Library/Caches", home) >= (int)sizeof g_caches) return;
+    if (snprintf(g_dir, sizeof g_dir, "%s/HotReload", g_caches) >= (int)sizeof g_dir) return;
+    g_started = (long)time(NULL);
+    if (!make_folder()) {
         char line[PATH_MAX + 64];
         snprintf(line, sizeof line, "[HotReload] off: could not create %s (%s)", g_dir, strerror(errno));
         post_notice(0, 0, line);
         return;
     }
-    prune(HR_PRUNE_ALL, 0);
-    char body[160];
-    int n = snprintf(body, sizeof body, "{\"version\": %d, \"pid\": %d, \"started\": %ld}\n", HR_VERSION,
-                     (int)getpid(), (long)time(NULL));
-    if (n > 0) write_atomic("runtime.json", body, (size_t)n);
+    prune(HR_PRUNE_ALL, 0);   // before runtime.json, so no patch pushed for this run is deleted
+    write_runtime();
     watch_folder();
 }
 

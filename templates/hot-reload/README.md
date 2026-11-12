@@ -6,7 +6,7 @@ only code of iOS Studio that runs inside the user's app. User-facing docs: `docs
 ```
 version.txt                       bump on any change here: enable re-copies the package when it differs
 full/Package.swift                library "HotReload"; C target HotReloadLoader + Swift target HotReload
-full/Sources/HotReloadLoader/     loader.c (+ include/HotReloadLoader.h)
+full/Sources/HotReloadLoader/     loader.c, hr_rules.h (its symbol rules, also compiled by the tests), include/HotReloadLoader.h
 full/Sources/HotReload/           HotReload.swift: the public API
 stub/                             same product, module and API as no-ops; no C target, no linker flags
 ```
@@ -58,8 +58,9 @@ Folder: `$HOME/Library/Caches/HotReload/` in the app's data container (house_arr
 All runtime writes go through `<name>.tmp` + `rename`. At launch the runtime deletes every `patch-*` and `ack-*`.
 A `DISPATCH_SOURCE_TYPE_VNODE` source on the folder (write/delete/rename; no polling) wakes it; it then loads
 only the newest `patch-<seq>.dylib` with a seq above the last one it looked at (patches are cumulative), acks it,
-and deletes patches and acks older than seq − 3. If the folder itself is removed, it is made again and watched
-anew. Patches are never `dlclose`d.
+and deletes patches and acks older than seq − 3. If the folder itself is removed (also with all of
+`Library/Caches`), it is made again with a new `runtime.json` (same pid and start time) and watched anew. Patches
+are never `dlclose`d; after 100 loaded patches in one run, later ones are refused (see Limits).
 
 `reverted` is an addition to the design contract: the number of functions an earlier patch had replaced that
 this patch no longer contains (the file went back to how it was built), now pointing at the app's code again.
@@ -80,10 +81,22 @@ runtime finds the app (the `MH_EXECUTE` image) and the patch (the newest image n
 or the same device and inode) and sorts each exported symbol the patch defines (`iextdefsym`/`nextdefsym`):
 
 1. **swap**: defined in the patch's `__TEXT,__text`, also defined by the app (`dlsym(RTLD_MAIN_ONLY)`), not a
-   Swift metadata accessor (`$s…Ma`). The app's pointers for it should hold the patch's function.
-2. **keep**: any other symbol the app also defines (metadata, descriptors, accessors, witness tables, globals).
-   The patch's pointers for it should hold the app's, so new code uses the original types and state.
-3. not in the app at all (a new function): the patch's pointers for it should hold its own. Flat-namespace binds
+   Swift metadata accessor (`$s…Ma`) and not an addressor (`$s…v` + `a`/`l` + `u`/`O`/`o`/`p`, optional `Z`;
+   in practice `…vau`, which Swift emits for every global and static stored property). The app's pointers for it
+   should hold the patch's function. An addressor reaches its own storage and its `Wz` once token / `WZ`
+   initializer directly, so swapping it would hand old and new code the patch's fresh storage (a second
+   `static let shared` instance, globals back to their initial values).
+2. **async function pointer** (`$s…Tu`, a `{int32 relative pointer to the function, uint32 context size}` record
+   in `__DATA,__data`) that the app also defines: callers read the context size from the app's record, allocate
+   that much and call through the swapped pointers. If the patch's record asks for more than the app's for any
+   function, the whole patch is refused before anything changes, with the ack error `<function> now needs more
+   memory per call than the running app reserved. Press Run to rebuild.` (the name through the runtime's
+   `swift_demangle`). Otherwise it is swapped like a function, which matters for vtables: an async method's slot
+   holds its `…Tu`, not the function.
+3. **keep**: any other symbol the app also defines (metadata, descriptors, accessors, addressors, witness tables,
+   global storage). The patch's pointers for it should hold the app's, so new code uses the original types and
+   state.
+4. not in the app at all (a new function): the patch's pointers for it should hold its own. Flat-namespace binds
    search the app and older patches first, so without this, calls between the patch's own new or changed
    functions could reach old copies. The same goes for swap symbols, which the patch's pointers also get.
 
@@ -96,13 +109,15 @@ Then, in this order:
   that this one lacks → the app's original (reverted).
 - **vtables**: Swift class metadata (and so vtables) lives in the app's `__DATA,__data` (checked on a built
   app); with `-interposable` its entries are binds too. Every aligned word of `__DATA,__data` and
-  `__DATA,__objc_data` (also in `__DATA_DIRTY`) equal to a function's original address or the address the
-  previous patch installed becomes the new one. Capped at 64 MB scanned.
+  `__DATA,__objc_data` (also in `__DATA_DIRTY`) equal to a function's (or async function pointer's) original
+  address or the address the previous patch installed becomes the new one. Capped at 64 MB scanned.
 
 Writes: the page range of the section is queried with `vm_region_64`; if it isn't writable (`__DATA_CONST` after
 launch), `vm_protect(…, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY)`, write each slot with one aligned
 store, restore the old protection. A section that can't be made writable is skipped and counted; the ack then
-says `ok: false`. `swapped` counts swap symbols that at least one app pointer or vtable word now reaches.
+says `ok: false`. `swapped` counts swapped functions that at least one app pointer or vtable word now reaches; a
+class method (the app has its method descriptor, `…Tq`) counts only when a vtable word was rewritten for it or its
+`…Tu`, since calls to it go through the vtable.
 
 Chained fixups (what the app and patch get on iOS 17): dyld has already rewritten the chains into plain pointers
 by the time the runtime runs, and the indirect symbol table and `__got` still exist, so nothing differs. arm64 only;
@@ -121,9 +136,21 @@ table, and all work runs on a private utility queue off the launch path.
   through their (swapped) callers.
 - Code already running, closures and function values captured before the reload (a `Task`, a stored callback,
   a protocol witness table built elsewhere) keep the old code until they are created again.
-- Static initializers in the patch run on `dlopen`; Objective-C classes defined in a patch register twice (the
-  runtime logs "implemented in both").
-- Patches stay loaded until the app exits (a few hundred KB each).
+- A patch carries its own copy of the type metadata of the types its files declare, and its code mostly reaches
+  that copy directly. To the Swift runtime and SwiftUI those are other types: a child view declared in a patched
+  file can lose its `@State` on the first reload, and `as!`/`as?` between a value made by the app's code and the
+  type as the patch sees it can fail. Globals and static stored properties are shared (their addressors are kept).
+- Static initializers in the patch run on `dlopen`. Every class a patch declares (Swift classes are Objective-C
+  classes on Apple platforms, not only `@objc` ones) registers a second time, and the Objective-C runtime logs
+  "Class … is implemented in both …" once per class and reload.
+- An async function whose new body needs a bigger async context than the build's (more values kept across an
+  `await`) is refused, since callers allocate the size the app was built with: press Run. A smaller one is fine.
+- Methods of a generic class (or one whose metadata is built at run time) aren't swapped for calls through the
+  vtable: its vtable lives in heap metadata the scan never sees. They don't count in `swapped`.
+- Patches stay loaded until the app exits (a few hundred KB each, mostly clean file-backed pages; each also adds
+  its metadata and conformance records to the Swift runtime's lookups and its classes to the Objective-C
+  runtime). After 100 in one run the runtime refuses more (`Too many reloads in this run (100). Press Run to start
+  fresh.`): enough for a long session of saves, and it keeps that growth bounded without a measurement on a phone.
 - A body whose concrete view type changes needs `.hotReloadable()`, else the helper refuses it (opaque type check).
 
 ## Verified on Linux, and what needs an iPhone
@@ -133,7 +160,11 @@ Checked here: both packages build for `arm64-apple-ios` in debug and release, in
 holds only the `-u` constant; an xtool build (debug and release) of an app with the managed block contains `_iosstudio_hot_reload_loader`, the
 constructor (in `__TEXT,__init_offsets`, the chained-fixups form of `__mod_init_func`) and indirect `__got`
 entries for its own Swift functions; class metadata sits in `__DATA,__data` with its vtable entries as binds. The
-stub builds with the block without linker flags. `tests/cli/test_hot_reload_runtime.py` repeats the package builds.
+stub builds with the block without linker flags. `tests/cli/test_hot_reload_runtime.py` repeats the package builds (the release one with both SwiftPM build
+systems: native and SwiftBuild, what xtool uses) and compiles `hr_rules.h` for the host to check it against a small
+app and patch built for `arm64-apple-ios`: addressors are kept and reached through the patch's symbol pointers,
+async function pointer records have the layout the loader reads, a grown context is caught, and an async method's
+vtable slot binds its `…Tu`.
 
 Only a device can show:
 
@@ -146,4 +177,8 @@ Only a device can show:
   rewrite takes effect for a changed class method;
 - the log line shows in Logs › Console and Logs › Device log;
 - the Swift runtime copes with the patch's duplicate type and conformance records (it should use the app's);
+- after a reload of the file declaring `static let shared = …`, the app keeps its one instance (init doesn't run
+  again), and a patch with a grown async function is refused with the ack message;
+- an async class method's change takes effect through the vtable;
+- the folder and `runtime.json` come back after `Library/Caches` is deleted while the app runs;
 - reverting a file (cumulative patch without it) brings back the original behaviour.
