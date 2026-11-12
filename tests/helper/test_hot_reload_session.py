@@ -301,6 +301,136 @@ class SessionReloadTests(SessionBase):
         self.assertEqual(self.s.snap["notice"]["id"], "needs-run")
         self.assertEqual(self.s.sched.files, [])
 
+    def app_module(self) -> None:
+        from types import SimpleNamespace
+        self.s.baseline = SimpleNamespace(project=str(self.root), frontend={"Sources/App/Card.swift": []})
+        self.s.app_roots = self.s.module_folders()
+        self.assertEqual(self.s.app_roots, ["Sources/App/"])
+
+    def test_saves_in_another_target_get_a_notice_and_no_reload(self):
+        self.app_module()
+        self.save("Sources/Kit/Model.swift")
+        for _ in range(5):
+            self.clock.t += 1
+            self.s.step(0.01)
+        n = self.s.snap["notice"]
+        self.assertEqual((n["id"], n["fix"]["action"]), ("other-target", "hot-reload-restart"))
+        self.assertIn("Changes in Kit need a full Run", n["message"])
+        self.assertEqual((self.patches, self.s.history, self.s.sched.files), ([], [], []))
+        self.assertNotEqual(self.s.snap["message"], "Back to the built version")
+        snap = self.reload("Sources/App/Card.swift", "Sources/Kit/Model.swift")   # the app file still reloads
+        self.assertEqual(snap["state"], "reloaded")
+        self.assertTrue(self.s.in_app("Sources"))                  # a folder above the module counts
+
+    def test_a_save_during_the_build_reloads_right_after_the_start(self):
+        from iosstudio.features.watch.fswatch import file_digest
+        self.s.built_digests = {"Sources/App/Card.swift": file_digest(self.src)}
+        self.src.write_text("v1 saved while building\n")
+        self.s.filter.prime()
+        self.s.catch_up()
+        self.assertEqual(self.s.snap["notice"]["id"], "changed-while-building")
+        self.run_until(lambda: self.s.history)
+        self.assertEqual(self.patches[0][0], 1)
+        self.assertEqual(self.s.snap["state"], "reloaded")
+
+    def test_nothing_changed_during_the_build(self):
+        from iosstudio.features.watch.fswatch import file_digest
+        self.s.built_digests = {"Sources/App/Card.swift": file_digest(self.src)}
+        self.s.catch_up()
+        self.assertIsNone(self.s.snap["notice"])
+        self.assertEqual(self.s.sched.files, [])
+
+    def test_late_files_ask_for_a_run(self):
+        self.s.late = ["Sources/App/Card.swift"]
+        self.s.built_digests = {"Sources/App/Card.swift": "what the snapshot read"}
+        self.s.catch_up()
+        self.assertEqual(self.s.sched.files, [])                 # its copy is the live file: nothing to patch
+        n = self.s.snap["notice"]
+        self.assertEqual((n["id"], n["message"], n["fix"]["action"]),
+                         ("changed-during-build", "Card.swift changed while building. Press Run to include it.",
+                          "hot-reload-restart"))
+
+    def test_shutdown_stays_within_its_budget(self):
+        stuck = threading.Event()
+        self.s.worker = threading.Thread(target=stuck.wait, daemon=True)
+        self.s.worker.start()
+        self.s.warm_thread = threading.Thread(target=stuck.wait, daemon=True)
+        self.s.warm_thread.start()
+        self.addCleanup(stuck.set)
+        saved = session.JOIN_WAIT, session.SHUTDOWN_BUDGET
+        session.JOIN_WAIT, session.SHUTDOWN_BUDGET = 0.3, 0.6
+        try:
+            t0 = time.monotonic()
+            self.s.shutdown()
+            self.assertLess(time.monotonic() - t0, 1.2)
+        finally:
+            session.JOIN_WAIT, session.SHUTDOWN_BUDGET = saved
+        self.assertEqual(self.s.snap["state"], "stopped")
+
+    def test_stop_waits_longer_than_a_shutdown_and_answers_in_time(self):
+        self.assertGreater(state.STOP_WAIT, session.SHUTDOWN_BUDGET)
+        self.assertLessEqual(session.JOIN_WAIT + session.WARM_WAIT + session.CLOSE_WAIT, session.SHUTDOWN_BUDGET)
+        self.assertLess(state.STOP_WAIT + 2 + 1 + 1, 15)   # + the SIGKILL wait, a pid wait, startup < MCP's 15 s
+
+
+class StartTests(unittest.TestCase):
+    """Session.start with the build faked: the snapshot is taken before the build and handed to the baseline."""
+
+    def setUp(self):
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        env = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
+        os.environ["IOSSTUDIO_RUNTIME_DIR"] = str(self.tmp / "rt")
+        os.environ["XDG_CACHE_HOME"] = str(self.tmp / "cache")
+        self.root = self.tmp / "App"
+        (self.root / "Sources/App").mkdir(parents=True)
+        (self.root / "Sources/App/Card.swift").write_text("v0\n")
+        self.order: list[str] = []
+
+    def session(self, baseliner) -> session.Session:
+        s = session.Session(self.root, udid="U1", device=FakeDevice(), write=lambda _e: None, check_parent=False,
+                            checks=lambda _r, u: (u, []), stop_watch=lambda _r: None, baseliner=baseliner,
+                            warmer=lambda *_a, **_k: None, build_factory=None)
+        s.run_build = lambda: (self.order.append("build"),
+                               (self.root / "Sources/App/Card.swift").write_text("v1\n"))[1] and {}
+        s.installed_id = lambda _d: "XTL-T.dev.app"
+        s.launch = lambda _d: None
+        s.confirm_runtime = lambda _pid: None
+        s.capture = lambda: (self.order.append("capture"), baseliner(s.root, "App", snapshot=s.snapshot,
+                                                                      cancel=s.cancelled))[1]
+        self.addCleanup(s.shutdown)
+        return s
+
+    def test_snapshot_before_the_build(self):
+        seen = {}
+
+        class Base:
+            interposable = 1
+            late: list = []
+
+        def baseliner(root, module, *, snapshot, cancel):
+            seen["copy"] = (Path(snapshot.dir) / "sources/Sources/App/Card.swift").read_text()
+            seen["digest"] = snapshot.digests["Sources/App/Card.swift"]
+            return Base()
+        s = self.session(baseliner)
+        s.start()
+        self.assertEqual(self.order, ["build", "capture"])
+        self.assertEqual(seen["copy"], "v0\n")
+        self.assertEqual(s.built_digests["Sources/App/Card.swift"], seen["digest"])
+        self.assertIsNone(s.snapshot)
+        cache = self.tmp / "cache/ios-studio/hot-reload"
+        self.assertEqual([p.name for p in cache.iterdir() if p.name.startswith(".")], [])   # discarded
+
+    def test_a_failed_start_discards_the_snapshot(self):
+        def baseliner(root, module, *, snapshot, cancel):
+            raise HelperError("no-baseline", "The last build's records are missing.")
+        s = self.session(baseliner)
+        with self.assertRaises(HelperError):
+            s.start()
+        cache = self.tmp / "cache/ios-studio/hot-reload"
+        self.assertEqual([p.name for p in cache.iterdir() if p.name.startswith(".")], [])
+
 
 class StateFileTests(SessionBase):
     def test_state_file_keeps_twenty_reloads(self):
@@ -369,6 +499,40 @@ class RuntimeFileTests(unittest.TestCase):
             state.set_paused(self.k, "/x/App", True)
         self.assertEqual((cm.exception.code, cm.exception.fix["action"]), ("not-running", "hot-reload-start"))
         self.assertEqual(state.stop(self.k), {"stopped": False, "session": None})
+
+    def test_reading_never_creates_a_lock_file(self):
+        self.assertIsNone(state.session_pid(self.k))
+        self.assertIsNone(state.current(self.k))
+        self.assertEqual(state.stop(self.k)["stopped"], False)
+        with self.assertRaises(HelperError):
+            state.set_paused(self.k, "/x/App", True)
+        self.assertFalse(state.lock_path(self.k).exists())
+
+    def test_prune_removes_orphan_locks_only(self):
+        rt = state.runtime_dir()
+        rt.mkdir(parents=True, exist_ok=True)
+        old = time.time() - state.LOCK_ORPHAN_AGE - 5
+        orphan, young, with_state = state.key("/x/Orphan"), state.key("/x/Young"), state.key("/x/Kept")
+        for k in (orphan, young, with_state):
+            state.lock_path(k).write_text("")
+        for k in (orphan, with_state):
+            os.utime(state.lock_path(k), (old, old))
+        state.write_state(with_state, {"state": "stopped", "stoppedAt": time.time()})
+        held = state.acquire(self.k, "/x/App")
+        self.addCleanup(state.release, held)
+        os.utime(state.lock_path(self.k), (old, old))
+        state.prune()
+        self.assertEqual([state.lock_path(k).exists() for k in (orphan, young, with_state, self.k)],
+                         [False, True, True, True])
+        self.assertEqual(state.live_keys(), [self.k])
+
+    def test_acquire_after_its_lock_file_was_pruned(self):
+        fh = state.acquire(self.k, "/x/App")
+        state.release(fh)
+        state.lock_path(self.k).unlink()
+        fh = state.acquire(self.k, "/x/App")
+        self.addCleanup(state.release, fh)
+        self.assertEqual(state.session_pid(self.k), os.getpid())
 
     def test_prune_and_list(self):
         now = time.time()

@@ -9,7 +9,7 @@ One session per project, found through files in the runtime dir ($IOSSTUDIO_RUNT
 
 A snapshot whose session died without saying so (killed, crashed: the lock is free) is rewritten as stopped
 with stopReason `session-died` by whoever reads it first. Stopped state files older than PRUNE_AFTER go at the
-next session start.
+next session start, and so do lock files without a state file or a holder (reading status never creates one).
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ from iosstudio.features.watch.runtime import backoff, runtime_dir, save_json
 HISTORY_MAX = 20          # reload summaries kept in the state file
 STOPPED_KEEP = 600        # seconds a stopped session stays in `hotreload status` without --project
 PRUNE_AFTER = 24 * 3600   # seconds after which a stopped session's files are deleted
-STOP_WAIT = 5.0           # `hotreload stop` waits this long before killing the session
+STOP_WAIT = 10.0          # `hotreload stop` waits this long before killing the session: more than its whole
+                          # shutdown (session.SHUTDOWN_BUDGET), while stop still answers well within 15 s
+LOCK_ORPHAN_AGE = 60      # seconds an unheld lock file without a state file is kept (a session just starting)
 CONTROL_WAIT = 2.0        # pause/resume wait this long for the session to show the change
 MAX_STATUS_WAIT = 25
 
@@ -82,15 +84,22 @@ def clear_control(k: str) -> None:
 def acquire(k: str, path: str) -> IO[str]:
     """Take the project's session lock (kept while the returned file is open) and write our pid into it.
     HelperError('busy') with the running session's pid when another session holds it."""
-    fh = open(lock_path(k), "a+")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        fh.close()
-        pid = session_pid(k)
-        raise HelperError("busy", f"Hot reload is already running for this project (process {pid}).",
-                          output.fix("Stop it", "projects", action="hot-reload-stop"),
-                          detail=f"pid {pid} {path}") from None
+    for _ in range(5):
+        fh = open(lock_path(k), "a+")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fh.close()
+            pid = session_pid(k)
+            raise HelperError("busy", f"Hot reload is already running for this project (process {pid}).",
+                              output.fix("Stop it", "projects", action="hot-reload-stop"),
+                              detail=f"pid {pid} {path}") from None
+        if _same_file(fh, lock_path(k)):
+            break
+        fh.close()                       # prune() removed the file between our open and flock: take the new one
+    else:
+        raise HelperError("busy", "Hot reload couldn't take its lock for this project. Try again.",
+                          output.fix("Start hot reload", "projects", action="hot-reload-start"))
     fh.seek(0)
     fh.truncate()
     fh.write(f"{os.getpid()}\n")
@@ -107,11 +116,19 @@ def release(fh: IO[str]) -> None:
     fh.close()
 
 
+def _same_file(fh: IO[str], path: Path) -> bool:
+    try:
+        a, b = os.fstat(fh.fileno()), os.stat(path)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
 def session_pid(k: str) -> int | None:
     """The live session's pid (its flock is held), -1 if it just took the lock, None when no session runs.
-    Never blocks."""
+    Never blocks, never creates the lock file."""
     try:
-        fh = open(lock_path(k), "a+")
+        fh = open(lock_path(k))
     except OSError:
         return None
     try:
@@ -128,6 +145,16 @@ def session_pid(k: str) -> int | None:
         return None
     finally:
         fh.close()
+
+
+def live_keys() -> list[str]:
+    """The keys of every project whose session is alive (its lock is held)."""
+    try:
+        locks = list(runtime_dir().glob("hotreload-*.lock"))
+    except OSError:
+        return []
+    keys = [p.name.removeprefix("hotreload-").removesuffix(".lock") for p in locks]
+    return [k for k in keys if session_pid(k) is not None]
 
 
 # ================================================================ reading status
@@ -273,7 +300,8 @@ def set_paused(k: str, path: str, paused: bool) -> dict:
 # ================================================================ pruning
 
 def prune(now: float | None = None) -> int:
-    """Delete the files of sessions stopped more than PRUNE_AFTER ago (and stray control files)."""
+    """Delete the files of sessions stopped more than PRUNE_AFTER ago (and stray control files), and lock files
+    that no session holds and no state file goes with (older than LOCK_ORPHAN_AGE)."""
     now = time.time() if now is None else now
     removed = 0
     for p in runtime_dir().glob("hotreload-*.json"):
@@ -286,5 +314,14 @@ def prune(now: float | None = None) -> int:
         if stale and session_pid(k) is None:
             for f in (p, control_path(k), lock_path(k)):
                 f.unlink(missing_ok=True)
+            removed += 1
+    for p in runtime_dir().glob("hotreload-*.lock"):
+        k = p.name.removeprefix("hotreload-").removesuffix(".lock")
+        try:
+            young = now - p.stat().st_mtime < LOCK_ORPHAN_AGE
+        except OSError:
+            continue
+        if not young and not state_path(k).exists() and session_pid(k) is None:
+            p.unlink(missing_ok=True)
             removed += 1
     return removed

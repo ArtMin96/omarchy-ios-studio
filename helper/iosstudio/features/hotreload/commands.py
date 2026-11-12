@@ -1,7 +1,8 @@
 """`hotreload <action>` handlers: flags in, JSON out; the work is in the other modules of this package.
 
     hotreload enable  --project P [--dry-run] [--max-bytes N]
-    hotreload disable --project P [--dry-run] [--max-bytes N]      stops a running session first
+    hotreload disable --project P [--dry-run] [--max-bytes N]      stops a running session first (an error
+                      after that carries sessionStopped: true)
     hotreload run     --project P [--udid U] [--preset ID] [--debounce-ms 150]     streaming (session.py)
     hotreload status  [--project P] [--wait-seconds N (≤25)] [--after-seq S]
                       -> {project, enabled, mode, session: snapshot | null, waited?, timedOut?} with --project,
@@ -38,14 +39,16 @@ def cmd_enable(flags: dict) -> int:
 def cmd_disable(flags: dict) -> int:
     from iosstudio.features.hotreload import project_setup, state
     from iosstudio.features.packages import project
+    stopped = False
     try:
         root = project.project_root(flags)
         dry = bool(flags.get("dry_run"))
-        stopped = False
         if not dry and state.session_pid(state.key(root)) is not None:
             stopped = bool(state.stop(state.key(root))["stopped"])
         return output.ok({**project_setup.disable(root, dry, max_bytes_flag(flags)), "sessionStopped": stopped})
     except HelperError as exc:
+        if stopped:                  # the session is gone even though Package.swift kept its block
+            exc.extra = {**(getattr(exc, "extra", None) or {}), "sessionStopped": True}  # type: ignore[attr-defined]
         return fail(exc)
 
 

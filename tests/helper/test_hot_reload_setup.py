@@ -236,7 +236,7 @@ class Project(unittest.TestCase):
         with self.assertRaises(HelperError) as cm:
             S.enable(self.root)
         self.assertEqual(cm.exception.code, "manifest-invalid")
-        self.assertIn("nothing was changed", cm.exception.message)
+        self.assertIn("Package.swift was left as it is", cm.exception.message)
         self.assertTrue(getattr(cm.exception, "extra", {}).get("diagnostics"))
         self.assertEqual(self.manifest.read_bytes(), self.before)
         self.assertFalse((self.root / ".iosstudio").exists())
@@ -262,6 +262,44 @@ class Project(unittest.TestCase):
         with self.assertRaises(HelperError) as cm:
             S.enable(self.root)
         self.assertEqual(cm.exception.code, "no-app-target")
+
+
+class DisableAfterStop(unittest.TestCase):
+    """`hotreload disable` stops a running session first; when the disable then fails, the error says so."""
+
+    def run_disable(self, stop_result: bool, error: HelperError) -> dict:
+        import contextlib
+        import io
+        import json
+
+        from iosstudio.features.hotreload import commands, state
+        from iosstudio.features.packages import project
+        saved = (state.session_pid, state.stop, S.disable, project.project_root)
+        state.session_pid = lambda _k: 4242
+        state.stop = lambda _k: {"stopped": stop_result, "session": None}
+        S.disable = lambda *_a, **_k: (_ for _ in ()).throw(error)
+        project.project_root = lambda _f: Path("/x/App")
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = commands.cmd_disable({"project": "/x/App"})
+        finally:
+            state.session_pid, state.stop, S.disable, project.project_root = saved
+        self.assertEqual(rc, 1)
+        return json.loads(buf.getvalue().strip().splitlines()[-1])
+
+    def test_a_failed_disable_after_the_stop_says_the_session_is_gone(self):
+        err = HelperError("manifest-invalid", "Package.swift wouldn't work after the change to turn hot reload "
+                          "off, so Package.swift was left as it is: oops")
+        err.extra = {"diagnostics": [{"message": "oops"}]}
+        out = self.run_disable(True, err)
+        self.assertEqual((out["ok"], out["error"]["code"], out["error"]["sessionStopped"]),
+                         (False, "manifest-invalid", True))
+        self.assertEqual(out["error"]["diagnostics"], [{"message": "oops"}])
+
+    def test_no_session_stopped_no_flag(self):
+        out = self.run_disable(False, HelperError("block-damaged", "The hot reload block was edited by hand."))
+        self.assertNotIn("sessionStopped", out["error"])
 
 
 if __name__ == "__main__":

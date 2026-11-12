@@ -5,7 +5,8 @@
         p = subprocess.Popen(HELPER_PY + ["hotreload", "run", "--project", str(w.proj)], env=w.env, ...)
 
 The fake xtool is signed in, sees the iPhone on USB and "builds" in FAKE_XTOOL_SECONDS (FAKE_XTOOL_FAIL=1: a
-compile error). The build tree it would leave is made up front by support.hot_reload.fake_build, so the real
+compile error; FAKE_XTOOL_EDIT="<path>::<text>": that file is saved during the build). The build tree it would
+leave is made up front by support.hot_reload.fake_build, so the real
 buildinfo.capture_baseline and patch.make_patch run (compile, link, interposable check, sign) against fakes.
 The fake device daemon answers apps.list, hotreload.clean/runtime, app.launch and hotreload.push; `push_mode`
 picks the push answer: ok, noack, load-failed, gone (not-installed).
@@ -38,6 +39,11 @@ if a[:1] == ["devices"]:
     print("{UDID}"); sys.exit(0)
 print("fake xtool", " ".join(a), flush=True)
 time.sleep(float(os.environ.get("FAKE_XTOOL_SECONDS") or 0.2))
+edit = os.environ.get("FAKE_XTOOL_EDIT")       # "<path>::<text>": the user saves a file while the app builds
+if edit:
+    path, _, text = edit.partition("::")
+    with open(path, "w") as f:
+        f.write(text)
 if os.environ.get("FAKE_XTOOL_FAIL"):
     src = os.path.abspath("Sources/App/Card.swift")
     print(f"{{src}}:3:5: error: cannot find 'BROKEN' in scope")

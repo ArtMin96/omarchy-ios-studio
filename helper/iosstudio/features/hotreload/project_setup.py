@@ -320,7 +320,7 @@ def validate(plan: Plan) -> None:
     if exc is not None:
         what = "turn hot reload on" if plan.mode == "on" else "turn hot reload off"
         err = HelperError("manifest-invalid", f"Package.swift wouldn't work after the change to {what}, so "
-                                              f"nothing was changed: {exc.message}", exc.fix, exc.detail)
+                                              f"Package.swift was left as it is: {exc.message}", exc.fix, exc.detail)
         err.extra = getattr(exc, "extra", None) or {}   # type: ignore[attr-defined]
         raise err
     if plan.mode == "off" or dump is None:

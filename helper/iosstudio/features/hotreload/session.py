@@ -6,27 +6,33 @@ Start (a worker thread; the main loop meanwhile answers stdin, signals and pause
   prechecks     hot reload on (else not-enabled; an outdated runtime copy is refreshed), xtool and rcodesign
                 (missing-tool), an Apple ID (not-signed-in), an iPhone (no-device)
   watch mode    stopped if it watches this project (snapshot `notice`)
+  snapshot      buildinfo.snapshot_sources: the watched files (digests, Swift copies) as the build will read them
   build         `build run` as a helper child (history, log, signing records like the Run button), its progress
                 forwarded as building / installing; a Wi-Fi build is installed through the device daemon
   launch        the installed bundle id (apps.list, free teams' XTL-…), `hotreload.clean`, `app.launch` with the
                 console (the runtime's [HotReload] lines show in Logs › Console)
-  baseline      buildinfo.capture_baseline (interposable == 0 -> not-interposable), warm_up in the background
+  baseline      buildinfo.capture_baseline from the snapshot (interposable == 0 -> not-interposable), warm_up in
+                the background
   runtime       `hotreload.runtime` until runtime.json is from this launch (≤ RUNTIME_WAIT); if it never shows,
                 lastError app-not-running and the session keeps watching
 A failed build ends the session (stopReason build-failed); any other start failure too (stopReason error).
 
-Then Sources/ is watched (fswatch). Each settled save (debounce, default 150 ms) makes one cumulative patch
-(patch.make_patch(baseline, None, seq)) and pushes it (`hotreload.push`, waits for the ack). Only one reload runs
-at a time: saves during a reload are collected and make exactly one more after it. Paused, saves are only
-collected (`pending`, `pendingCount`); resume makes one cumulative patch at once. Files back to the build
+Then Sources/ is watched (fswatch). Files saved while the app was building (their digest differs from the snapshot)
+reload right away (notice `changed-while-building`); a module file the snapshot couldn't hold that changed
+meanwhile gets notice `changed-during-build` (press Run). Each settled save (debounce, default 150 ms) makes one
+cumulative patch (patch.make_patch(baseline, None, seq)) and pushes it (`hotreload.push`, waits for the ack). Only
+one reload runs at a time: saves during a reload are collected and make exactly one more after it. Paused, saves
+are only collected (`pending`, `pendingCount`); resume makes one cumulative patch at once. Files back to the build
 (`no-changes`) push nothing: "Back to the built version", with a notice to press Run when the app still runs an
-earlier reload. Package.swift, xtool.yml or resource changes get a notice (they need Run). A reload's failure is
-`failed` with lastError (PatchError.to_json(); ack.ok false -> load-failed with the dlerror text; no ack ->
-app-not-running); the session keeps watching. The app gone from the phone (not-installed) ends it (app-exited).
+earlier reload. Package.swift, xtool.yml or resource changes get a notice (they need Run), and so do Swift files
+outside the app module's folders (notice `other-target`: hot reload patches the app target only). A reload's
+failure is `failed` with lastError (PatchError.to_json(); ack.ok false -> load-failed with the dlerror text; no ack
+-> app-not-running); the session keeps watching. The app gone from the phone (not-installed) ends it (app-exited).
 
 Stop: {"cancel": true} or {"cmd": "stop"} on stdin ({"cmd": "pause" | "resume"} also work), SIGTERM/SIGINT/SIGHUP,
 `hotreload stop` (SIGTERM), the parent process ending. The build is cancelled (its process group killed after
-the grace period), running compiles are killed, the final `stopped` snapshot is written, then `done`.
+the grace period), running compiles are killed, the final `stopped` snapshot is written, then `done`; all of it
+within SHUTDOWN_BUDGET (state.STOP_WAIT waits longer before it kills the session).
 """
 from __future__ import annotations
 
@@ -57,7 +63,10 @@ INSTALL_TIMEOUT = 600
 REQUEST_TIMEOUT = 60
 RELOADED_SHOWN = 1.5       # seconds `reloaded` shows before `watching`
 PROGRESS_EVERY = 1.0       # seconds between build progress snapshots
-JOIN_WAIT = 8.0            # seconds shutdown waits for the start / reload threads
+SHUTDOWN_BUDGET = 9.0      # seconds the whole shutdown may take (state.STOP_WAIT, 10 s, covers it)
+JOIN_WAIT = 6.0            # of that, for the start / reload threads (a cancelled build gets CANCEL_GRACE, 5 s)
+WARM_WAIT = 1.0            # for the warm-up compile (killed on cancel)
+CLOSE_WAIT = 2.0           # for the device daemon connection to close
 FILES_SHOWN = 5            # pending / history files
 RELOAD_FILES = 10          # lastReload files
 STEP_TEXT = {"check": "Checking the change", "compile": "Compiling", "link": "Linking", "sign": "Signing",
@@ -162,13 +171,14 @@ class DeviceLink:
             except concurrent.futures.CancelledError:
                 raise subproc.Cancelled() from None
 
-    def close(self) -> None:
+    def close(self, timeout: float = CLOSE_WAIT) -> None:
+        end = time.monotonic() + timeout
         try:
-            asyncio.run_coroutine_threadsafe(self.client.close(), self.loop).result(5)
+            asyncio.run_coroutine_threadsafe(self.client.close(), self.loop).result(timeout)
         except Exception:  # noqa: BLE001 - closing never fails the session
             pass
         self.loop.call_soon_threadsafe(self.loop.stop)
-        self.thread.join(5)
+        self.thread.join(max(0.1, end - time.monotonic()))
 
 
 # ================================================================ one reload's result
@@ -260,13 +270,15 @@ def match_installed(apps: Any, want: str) -> str | None:
 class Session:
     """See the module doc. Everything with side effects is a parameter, so tests swap in fakes:
     device (.request(cmd, args, timeout, cancel) / .close()), build_factory(extra, build_id) -> HelperBuild,
-    patcher = patch.make_patch, baseliner = buildinfo.capture_baseline, warmer = patch.warm_up,
-    watcher_factory = fswatch.make_watcher, checks = prechecks, stop_watch = stop_watch_mode."""
+    patcher = patch.make_patch, baseliner = buildinfo.capture_baseline(root, module, snapshot=, cancel=),
+    snapshotter = buildinfo.snapshot_sources, warmer = patch.warm_up, watcher_factory = fswatch.make_watcher,
+    checks = prechecks, stop_watch = stop_watch_mode."""
 
     def __init__(self, root: Path, *, udid: str | None = None, preset: str | None = None,
                  debounce_ms: int = DEFAULT_DEBOUNCE_MS, device: Any = None,
                  build_factory: Callable[[list[str], str], Any] | None = None, patcher: Callable | None = None,
-                 baseliner: Callable | None = None, warmer: Callable | None = None,
+                 baseliner: Callable | None = None, snapshotter: Callable | None = None,
+                 warmer: Callable | None = None,
                  watcher_factory: Callable | None = None, checks: Callable | None = None,
                  stop_watch: Callable | None = None, clock: Callable[[], float] = time.monotonic,
                  write: Callable[[dict], None] = output._write, check_parent: bool = True):
@@ -280,6 +292,7 @@ class Session:
         self.build_factory = build_factory or self._helper_build
         self.patcher = patcher
         self.baseliner = baseliner
+        self.snapshotter = snapshotter
         self.warmer = warmer
         self.watcher_factory = watcher_factory
         self.checks = checks or prechecks
@@ -298,6 +311,10 @@ class Session:
         self.reloads = 0                # applied reloads
         self.swapped_any = False        # the app runs code of a reload (a Run brings back the build)
         self.baseline: Any = None
+        self.snapshot: Any = None       # buildinfo.SourceSnapshot from before the build (until the baseline has it)
+        self.built_digests: dict | None = None   # the snapshot's digests: what the build read
+        self.late: list[str] = []       # module files copied after the build that changed while it ran
+        self.app_roots: list[str] | None = None  # project-relative folders of the app module ("Sources/App/")
         self.bundle_id: str | None = None
         self.build: Any = None
         self.watcher: Any = None
@@ -517,15 +534,31 @@ class Session:
         raw = self.watcher.read(self.clock()) if self.watcher else []
         return self.filter.changed(raw) if raw else []
 
-    def on_changes(self, rels: list[str]) -> None:
+    def in_app(self, rel: str) -> bool:
+        """rel is in (or a folder above) the app module's folders; True while they aren't known."""
+        if self.app_roots is None:
+            return True
+        return any(not r or rel.startswith(r) or r.startswith(rel.rstrip("/") + "/") for r in self.app_roots)
+
+    def on_changes(self, rels: list[str], during_build: bool = False) -> None:
         code = [r for r in rels if r.startswith("Sources/") and (r.endswith(".swift") or "." not in _name(r))]
         other = [r for r in rels if r not in code]
+        elsewhere = [r for r in code if not self.in_app(r)]
+        code = [r for r in code if r not in elsewhere]
         if other:
             self.notice({"id": "needs-run", "level": "warn", "fix": RUN_FIX,
                          "message": f"{_name(other[0])} changed. Hot reload swaps Swift code only: press Run again "
                                     "to use this change."})
+        if elsewhere:
+            parts = elsewhere[0].split("/")
+            target = parts[1] if len(parts) > 2 else _name(elsewhere[0])
+            self.notice({"id": "other-target", "level": "warn", "fix": RUN_FIX, "file": elsewhere[0],
+                         "message": f"Hot reload only updates the app target. Changes in {target} need a full Run."})
         if not code:
             return
+        if during_build:
+            self.notice({"id": "changed-while-building", "level": "info",
+                         "message": f"{_files_text(code)} changed while the app was building: reloading it now."})
         self.sched.changed(code, self.clock())
         if self.sched.paused:
             self.publish(message=self.idle_message())
@@ -559,17 +592,26 @@ class Session:
             self.notice(n)
         self.notice(self.stop_watch(self.root))
         self._prune()
-        data = self.run_build()
-        if data.get("needsInstall") and data.get("ipa"):
-            self.install(data)
-        self.bundle_id = self.installed_id(data)
+        self.snapshot = self.take_snapshot()      # before the build: what it compiles (see the module doc)
         try:
-            self.request("hotreload.clean", {"bundleId": self.bundle_id}, 30)
-        except HelperError:
-            pass                              # not installed yet / no folder: nothing to clean
-        pid = self.launch(data)
-        self.publish("launching", "Getting hot reload ready", progress=None)
-        self.baseline = self.capture()
+            data = self.run_build()
+            if data.get("needsInstall") and data.get("ipa"):
+                self.install(data)
+            self.bundle_id = self.installed_id(data)
+            try:
+                self.request("hotreload.clean", {"bundleId": self.bundle_id}, 30)
+            except HelperError:
+                pass                              # not installed yet / no folder: nothing to clean
+            pid = self.launch(data)
+            self.publish("launching", "Getting hot reload ready", progress=None)
+            self.baseline = self.capture()
+        finally:
+            from iosstudio.features.hotreload import buildinfo
+            if self.snapshot is not None:
+                self.built_digests = dict(self.snapshot.digests)
+                buildinfo.discard_snapshot(self.snapshot)    # a capture took its folder already
+                self.snapshot = None
+        self.late = list(getattr(self.baseline, "late", None) or [])
         self.warm_thread = threading.Thread(target=self._warm, name="hotreload-warm", daemon=True)
         self.warm_thread.start()
         self.confirm_runtime(pid)
@@ -581,6 +623,13 @@ class Session:
             buildinfo.prune_cache(protect=buildinfo.project_cache(self.root))
         except OSError:
             pass
+
+    def take_snapshot(self) -> Any:
+        from iosstudio.features.hotreload import buildinfo
+        try:
+            return (self.snapshotter or buildinfo.snapshot_sources)(self.root)
+        except OSError:
+            return None                       # no cache folder: the baseline copies the live files instead
 
     def _helper_build(self, extra: list[str], build_id: str) -> Any:
         from iosstudio.features.watch.builds import HelperBuild
@@ -699,7 +748,8 @@ class Session:
         if not module:
             from iosstudio.features.projects.model import project_info
             module = project_info(self.root)["product"]
-        base = (self.baseliner or buildinfo.capture_baseline)(self.root, module)
+        base = (self.baseliner or buildinfo.capture_baseline)(self.root, module, snapshot=self.snapshot,
+                                                               cancel=self.cancelled)
         if not base.interposable:
             raise StartFailed("error", {"code": "not-interposable", "fix": RUN_FIX,
                                         "message": "The app was built without hot reload, so its functions can't be "
@@ -753,9 +803,38 @@ class Session:
             if why and why != "forced":
                 self.notice({"id": "polling", "level": "info", "message": f"Checking files every second: {why}."})
         self.filter.prime()
+        self.app_roots = self.module_folders()
         self.ready = True
         self.publish(self.idle_state(), self.idle_message(), progress=None,
                      mode=getattr(self.watcher, "mode", None))
+        self.catch_up()
+
+    def module_folders(self) -> list[str] | None:
+        """The app module's folders, project-relative with a trailing slash ("" for the project itself)."""
+        if not hasattr(self.baseline, "frontend") or not hasattr(self.baseline, "project"):
+            return None
+        from iosstudio.features.hotreload import patch
+        proj = Path(self.baseline.project)
+        out = []
+        for root in patch.module_roots(self.baseline):
+            try:
+                rel = root.relative_to(proj).as_posix()
+            except ValueError:
+                continue
+            out.append("" if rel == "." else rel + "/")
+        return out or None
+
+    def catch_up(self) -> None:
+        """Saves made while the app was building: the watcher never saw them, so compare the files now with what
+        the build read (the snapshot's digests) and reload what differs."""
+        if self.built_digests is not None:
+            before, now = self.built_digests, self.filter.known
+            changed = sorted(r for r in set(before) | set(now) if before.get(r) != now.get(r) and r not in self.late)
+            if changed:
+                self.on_changes(changed, during_build=True)
+        if self.late:                         # copied after the build: a patch can't tell what the build read
+            self.notice({"id": "changed-during-build", "level": "warn", "fix": RUN_FIX, "file": self.late[0],
+                         "message": f"{_files_text(self.late)} changed while building. Press Run to include it."})
 
     # ---------------------------------------------------------------- reloads
     def start_reload(self, files: list[str]) -> None:
@@ -867,23 +946,28 @@ class Session:
             return                            # already shut down
         self.stopping.set()
         self.ready = False
+        t0 = time.monotonic()
         if self.build:
             self.build.cancel()
-        deadline = time.monotonic() + JOIN_WAIT
         for t in (self.start_thread, self.worker):
             if t:
-                t.join(max(0.0, deadline - time.monotonic()))
+                t.join(max(0.0, t0 + JOIN_WAIT - time.monotonic()))
         if self.build:
             self.build.kill()
             self.build = None
+        left = lambda cap: max(0.0, min(cap, t0 + SHUTDOWN_BUDGET - time.monotonic()))  # noqa: E731
         if self.warm_thread:
-            self.warm_thread.join(3)
+            self.warm_thread.join(left(WARM_WAIT))
         if self.watcher:
             self.watcher.close()
             self.watcher = None
         if self._device is not None:
             try:
-                self._device.close()
+                close = self._device.close
+                if isinstance(self._device, DeviceLink):
+                    close(max(0.5, left(CLOSE_WAIT)))
+                else:
+                    close()
             except Exception:  # noqa: BLE001
                 pass
         reason = self.stop_reason or "stopped"

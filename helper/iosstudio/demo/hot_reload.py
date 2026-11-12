@@ -5,8 +5,10 @@ UI shows what a real project gets. WeatherGlance's views `import HotReload`, so 
 
 run/status/stop/pause/resume are the real session commands on the demo runtime dir with DemoSession: nothing is
 built or pushed; a scripted session plays starting -> building (progress) -> installing -> launching -> watching,
-then a save of ContentView.swift every few seconds: reloading -> reloaded (~2.4 s, steps filled) -> watching ->
+reloads ContentView.swift at once as if it was saved during the build (notice `changed-while-building`), then a
+save of ContentView.swift every few seconds: reloading -> reloaded (~2.4 s, steps filled) -> watching ->
 reloading -> failed (unsupported-change: a stored property `count` added to ContentView) -> … until stopped.
+Every fourth save is in another target (Sources/<Name>Kit/, notice `other-target`, nothing reloads).
 Paused, the scripted saves collect as pending; resume reloads them in one patch (always succeeds).
 Pretend-work pauses scale with IOSSTUDIO_DEMO_DELAY (the gaps between saves never go below SAVE_GAP_MIN).
 """
@@ -153,6 +155,10 @@ class DemoSession(S.Session):
 
     def on_started(self) -> None:
         super().on_started()
+        if not self.ready:
+            return
+        self.app_roots = [f"Sources/{self.root.name}/"]
+        self.on_changes([self._file()], during_build=True)      # "saved while it was building"
         self.next_save = self.clock() + max(SAVE_GAP_MIN, subproc.demo_delay(SAVE_GAP * 0.75))
 
     def poll_changes(self) -> list[str]:
@@ -160,6 +166,8 @@ class DemoSession(S.Session):
             return []
         self.saves += 1
         self.next_save = self.clock() + max(SAVE_GAP_MIN, subproc.demo_delay(SAVE_GAP))
+        if not self.sched.paused and self.saves % 4 == 3:
+            return [f"Sources/{self.root.name}Kit/Forecast.swift"]
         name = PAUSED_FILES[self.saves % len(PAUSED_FILES)] if self.sched.paused else "ContentView.swift"
         return [self._file(name)]
 

@@ -235,6 +235,50 @@ class RealCli(unittest.TestCase):
             self.assertTrue(done["ok"])
             self.assertEqual([h["seq"] for h in done["data"]["history"]], [1, 2])
 
+    def test_a_save_during_the_build_reloads_at_once(self):
+        changed = CARD.replace('Text("Hello")', 'Text("Saved while building")', 1)
+        with self.w.deviced() as d:
+            s = self.start(dict(self.env, FAKE_XTOOL_SECONDS="0.5", FAKE_XTOOL_EDIT=f"{self.w.card}::{changed}"))
+            s.state("watching", 30)
+            ok = s.state("reloaded", 20)          # nobody saved after the start: the build-time save is the patch
+            self.assertEqual(ok["lastReload"]["files"], ["Sources/App/Card.swift"])
+            notices = [e["notice"] for e in s.snapshot() if e.get("notice")]
+            self.assertIn("changed-while-building", [n["id"] for n in notices])
+            self.assertEqual(len(d.sent("hotreload.push")), 1)
+            cache = Path(self.env["XDG_CACHE_HOME"]) / "ios-studio/hot-reload"
+            copies = list(cache.glob("*/sources/Sources/App/Card.swift"))
+            self.assertEqual([c.read_text() for c in copies], [CARD])      # the baseline is what was built
+            self.assertEqual([x.name for x in cache.iterdir() if x.name.startswith(".")], [])
+
+            # a Swift file of another target: a notice, nothing compiled or pushed
+            kit = self.w.proj / "Sources/Kit/Model.swift"
+            kit.parent.mkdir()
+            kit.write_text("struct Model {}\n")
+            ev = s.wait_for(lambda e: (e.get("notice") or {}).get("id") == "other-target", what="other-target")
+            self.assertIn("Changes in Kit need a full Run", ev["notice"]["message"])
+            self.assertEqual(ev["notice"]["fix"]["action"], "hot-reload-restart")
+            time.sleep(1)
+            self.assertEqual(len(d.sent("hotreload.push")), 1)
+            self.assertNotIn("Back to the built version", [e.get("message") for e in s.snapshot()])
+            s.proc.send_signal(signal.SIGTERM)
+            self.assertTrue(s.done()["ok"])
+
+    def test_a_stored_property_added_during_the_build_is_caught(self):
+        changed = CARD.replace("struct Card: View {", "struct Card: View {\n    @State var count = 0")
+        with self.w.deviced() as d:
+            s = self.start(dict(self.env, FAKE_XTOOL_SECONDS="0.5", FAKE_XTOOL_EDIT=f"{self.w.card}::{changed}"))
+            failed = s.state("failed", 30)
+            self.assertEqual(failed["lastError"]["blockers"][0]["name"], "count")
+            self.assertEqual(d.sent("hotreload.push"), [])
+            s.proc.send_signal(signal.SIGTERM)
+            self.assertTrue(s.done()["ok"])
+
+    def test_status_and_stop_leave_no_lock_file(self):
+        other = str(self.tmp / "Elsewhere")
+        self.hr("status", "--project", other)
+        self.hr("stop", "--project", other)
+        self.assertEqual(list((self.tmp / "rt").glob("**/hotreload-*.lock")), [])
+
     def test_build_failure_ends_the_session(self):
         with self.w.deviced():
             s = self.start(dict(self.env, FAKE_XTOOL_FAIL="1"))
