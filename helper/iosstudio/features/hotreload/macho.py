@@ -12,8 +12,10 @@ ValueError) at once instead of reading past the end or looping. Only what the ho
 from __future__ import annotations
 
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 MH_MAGIC_64 = 0xFEEDFACF
 FAT_MAGIC = 0xCAFEBABE
@@ -161,6 +163,7 @@ class MachO:
     id_dylib: str | None = None
     code_signature: tuple[int, int] | None = None    # (dataoff, datasize)
     _end: int = 0
+    _memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)   # defined(), indirect_names()
 
     def __post_init__(self) -> None:
         if len(self.data) > MAX_FILE:
@@ -283,13 +286,17 @@ class MachO:
             return b"\0" * min(sect.size, MAX_FILE)
         return self._bytes(sect.offset, sect.size)
 
-    def defined(self, ext_only: bool = True) -> dict[str, Symbol]:
-        """Defined symbols by name (external ones only by default; private externs count as not external)."""
-        out: dict[str, Symbol] = {}
-        for s in self.symbols:
-            if s.defined and s.name and (not ext_only or (s.ext and not s.private_ext)):
-                out.setdefault(s.name, s)
-        return out
+    def defined(self, ext_only: bool = True) -> Mapping[str, Symbol]:
+        """Defined symbols by name (external ones only by default; private externs count as not external).
+        Read once per object and cached (read-only), so a cached app binary answers every save in O(1)."""
+        key = ("defined", ext_only)
+        if key not in self._memo:
+            out: dict[str, Symbol] = {}
+            for s in self.symbols:
+                if s.defined and s.name and (not ext_only or (s.ext and not s.private_ext)):
+                    out.setdefault(s.name, s)
+            self._memo[key] = MappingProxyType(out)
+        return self._memo[key]
 
     def exported(self, segname: str | None = None, sectname: str | None = None) -> dict[str, Symbol]:
         """External defined symbols, optionally only those in one section (e.g. __TEXT,__text: the functions)."""
@@ -330,10 +337,14 @@ class MachO:
                 out.append((sect, i, name))
         return out
 
-    def indirect_names(self, pointers_only: bool = True) -> set[str]:
-        """Names bound through pointer sections (__got, __la_symbol_ptr …; also stubs unless pointers_only)."""
-        return {n for sect, _i, n in self.indirect_entries()
-                if n and (sect.type in POINTER_SECTIONS or not pointers_only)}
+    def indirect_names(self, pointers_only: bool = True) -> frozenset[str]:
+        """Names bound through pointer sections (__got, __la_symbol_ptr …; also stubs unless pointers_only).
+        Cached per object like defined()."""
+        key = ("indirect", pointers_only)
+        if key not in self._memo:
+            self._memo[key] = frozenset(n for sect, _i, n in self.indirect_entries()
+                                        if n and (sect.type in POINTER_SECTIONS or not pointers_only))
+        return self._memo[key]
 
     def relocations(self, sect: Section) -> list[Relocation]:
         """The section's relocations (object files keep them per section), ADDEND pairs folded into the next."""
