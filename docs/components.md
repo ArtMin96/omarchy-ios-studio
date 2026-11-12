@@ -726,11 +726,12 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   detail line, then the buttons: the error's fix (primary; hot reload's own fix actions run in the service),
   Pause/Resume (disabled with the reason until the session watches), Stop, or Start when nothing runs, and a close
   button on a stopped or failed-to-start bar. Under it: the build's ProgressTrack, a failed reload's blockers (≤ 3,
-  `file:line` opens the editor at the line, "and N more"), the first compiler error, and the session's notice (one
-  small line with its fix). Below 640 px, in every state, the buttons go under the text and the blockers. The top
-  row keeps a two-line minimum, so Watching, Reloading and Reloaded have one height; a failed reload puts "Still
-  watching" next to its first place. Stop shows while a session of ours is still starting (before its first
-  snapshot), with the pill "Stopping" after a click. Blockers don't rebuild on the clock's tick.
+  `file:line` opens the editor at the line, "and N more" counted from `blockersTotal`), the first compiler
+  error, and the session's notice (one small line with its fix). Below 640 px, in every state, the buttons go
+  under the text and the blockers. The top row keeps a two-line minimum, so Watching, Reloading and Reloaded
+  have one height; a failed reload puts "Still watching" next to its first place. Stop shows while a session of
+  ours is still starting (before its first snapshot), with the pill "Stopping" after a click. Blockers don't
+  rebuild on the clock's tick.
 - **HotReloadStubNote**: one faint line when hot reload is off but views still `import HotReload` (mode stub): the
   files (`Model.hotReloadFileNames` of `importedBy`) and Clean up (signal `cleanUp()`; the card calls
   `app.hotReload.cleanUp(project)` and passes `busy` while its entry's action is `cleaning`). Its glyph uses the

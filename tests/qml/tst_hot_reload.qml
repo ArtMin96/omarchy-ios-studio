@@ -103,6 +103,16 @@ TestCase {
                              message: "Adds the stored property count to ContentView." }] }
     var l1 = Model.hotReloadLabel(feed(started(), [snap(1, "failed", { lastError: one })]), on, 0)
     compare(l1.blockers.length, 1); compare(l1.blockers[0].where, "ContentView.swift:12"); compare(l1.blockers[0].text, "")
+    // the reply lists 10 of 25: "and 22 more" counts blockersTotal, not the list
+    var many = []
+    for (var k = 0; k < 10; k++)
+      many.push({ kind: "stored-property", file: "Sources/CrashLab/ContentView.swift", line: 20 + k, message: "Adds the stored property q" + k + "." })
+    var cut = { code: "unsupported-change", message: "These changes need a full build.", blockers: many, blockersTotal: 25 }
+    var l25 = Model.hotReloadLabel(feed(started(), [snap(1, "failed", { lastError: cut })]), on, 0)
+    compare(l25.blockers.length, 3); compare(l25.moreBlockers, 22)
+    // an older reply without blockersTotal: the list length
+    delete cut.blockersTotal
+    compare(Model.hotReloadLabel(feed(started(), [snap(1, "failed", { lastError: cut })]), on, 0).moreBlockers, 7)
   }
 
   function test_compileFailedShowsTheFirstError() {

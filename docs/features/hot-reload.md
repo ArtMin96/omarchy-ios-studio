@@ -135,7 +135,7 @@ What's refused, by `kind` in `lastError.blockers`:
 |---|---|
 | `new-type` | adds a struct, class, enum, actor or protocol |
 | `removed-type` | removes one |
-| `stored-property` | adds, removes, reorders or changes the type of a stored property, `@State` and other property wrappers included; changes the type of, or removes, a static or global stored property (new ones are fine) |
+| `stored-property` | adds, removes, reorders or changes the type of a stored property, `@State` and other property wrappers included; changes the type of, or removes, a static or global stored property (new ones are fine). The type is the annotation, else what the initial value plainly is (a literal, an array or dictionary of them, `Type(…)`, `Type.member`): `let total = 3` to `"3"` is refused, while a new value whose type can't be told that way (`3 * 4`, a closure, a function call) is sent |
 | `enum-case` | adds, removes or reorders an enum case |
 | `class-method` | adds or removes an overridable member of a non-final class (it changes the class's method table; `class func`, `class var` and `class subscript` included), or a protocol requirement (static requirements included) |
 | `generic-signature` | changes a type's declaration: its generic parameters, superclass or conformances |
@@ -145,6 +145,8 @@ What's refused, by `kind` in `lastError.blockers`:
 | `removed-file` | deletes one |
 | `unchecked` | the build's object file for a changed file is missing, so iOS Studio can't compare it with the running app: "Can't check ContentView.swift against the running app. Press Run to rebuild." |
 | `unparsed` | iOS Studio couldn't read the file well enough to be sure, so it doesn't guess |
+
+A new value for an existing static or global stored property is fine to send, but the running app keeps the old value (it was set once, when the app first used it); the new one shows after the next Run.
 
 The message names the first one, for example "Adds the stored property count to ContentView. This change needs a full build." The reply lists up to 10, and `blockersTotal` counts them all.
 

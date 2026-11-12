@@ -6,7 +6,9 @@ change how values are laid out in memory or which slots a class's vtable has, so
    overridable class members (vtable layout: `class func`/`class var`/`class subscript` too), protocol requirements
    (static ones too), generic signatures / superclasses / conformances, changed or removed type aliases, and static
    or global stored properties whose type changes or that go away (the app's storage stays in use; new ones are
-   fine). Function bodies, computed properties, new functions and extensions without conformances are fine.
+   fine). A stored property's type is its annotation, else the type its initial value shows plainly (a literal,
+   an array or dictionary of them, `Type(…)`, `Type.member`); a new value whose type can't be told that way isn't
+   a blocker. Function bodies, computed properties, new functions and extensions without conformances are fine.
    Conservative: anything the scanner can't read is a blocker (kind `unparsed`) rather than a guess.
 2. opaque_blockers(baseline_o, patch_o, new_source, file)   a `some View` body fixes its concrete type in an opaque
    type descriptor (`…QOMQ`); its `_symbolic` relocation targets name that type. A different type would corrupt
@@ -339,6 +341,7 @@ class Member:
     name: str
     sig: str
     line: int
+    typ: str = ""                # a stored property's type (UNKNOWN: not told by its initial value); sig ends with it
 
 
 @dataclass
@@ -362,6 +365,7 @@ class Scoped:
     name: str
     sig: str
     line: int
+    typ: str = ""
 
 
 @dataclass
@@ -628,7 +632,7 @@ class _Parser:
                 j = self.match[j] + 1
             computed = block is not None and not self._observer_block(block[0])
             layout = [m for m in mods if m in LAYOUT_MODS]
-            typ = f": {_norm(type_toks)}" if type_toks else " = " + _inferred(init_toks)
+            typ = _norm(type_toks) if type_toks else _inferred(init_toks)
             if owner is not None and owner.kind == "protocol":
                 owner.requirements.append(Member(name, f"{'static ' if static else ''}{kw.text} {name}: "
                                                        f"{_norm(type_toks)} "
@@ -642,7 +646,7 @@ class _Parser:
             elif static or (owner is None and not ext):
                 if not computed:        # the app's storage stays in use, so its type can't change
                     self.model.add(self.model.statics, Scoped(
-                        prefix[:-1], name, " ".join([*attrs, *layout, kw.text, f"{name}{typ}"]), line))
+                        prefix[:-1], name, " ".join([*attrs, *layout, kw.text, f"{name}: {typ}"]), line, typ))
             elif owner is not None:
                 if computed:
                     owner.tails[name] = [t.text for t in self.t[max(block[0] + 1, block[1] - 8):block[1]]]
@@ -651,8 +655,8 @@ class _Parser:
                     elif "override" in mods and owner.kind == "class":
                         owner.vtable.append(Member(name, f"override var {name}: {_norm(type_toks)}", line))
                 elif not ext:
-                    sig = " ".join([*attrs, *layout, kw.text, f"{name}{typ}"])
-                    owner.stored.append(Member(name, sig, line))
+                    sig = " ".join([*attrs, *layout, kw.text, f"{name}: {typ}"])
+                    owner.stored.append(Member(name, sig, line, typ))
                     if owner.kind == "class" and "override" in mods:
                         owner.vtable.append(Member(name, f"override var {name}", line))
             if self.is_p(j, ","):
@@ -744,33 +748,125 @@ class _Parser:
         return f"{name}({''.join(labels)})"
 
 
-def _inferred(toks: list[Tok]) -> str:
-    """What decides an unannotated stored property's type: a literal's kind, a call's callee, else the text."""
-    if not toks:
-        return "?"
-    body = toks[1:] if toks[0].kind == "op" and toks[0].text == "-" and len(toks) > 1 else toks
-    if len(body) == 1:
-        t = body[0]
-        if t.kind == "num":
-            low = t.text.lower()
-            is_float = ("." in t.text or ("e" in low and not low.startswith("0x")) or
-                        (low.startswith("0x") and "p" in low))
-            return "<float literal>" if is_float else "<integer literal>"
-        if t.kind == "str":
-            return "<string literal>"
-        if t.kind == "id" and t.text in ("true", "false"):
-            return "<bool literal>"
-    head: list[Tok] = []
-    for k, t in enumerate(toks):
-        if t.kind == "punct" and t.text in "({" and head:
-            return _norm(head) + t.text
-        if t.kind == "id" or (t.kind == "punct" and t.text == "." and head):
-            head.append(t)
+UNKNOWN = "?"
+MAX_LITERAL_ITEMS = 1000
+
+
+def _close(toks: list[Tok], i: int) -> int:
+    """The index of the bracket that closes toks[i] (len(toks) when it isn't closed here)."""
+    depth = 0
+    for k in range(i, len(toks)):
+        t = toks[k]
+        if t.kind == "punct" and t.text in "([{":
+            depth += 1
+        elif t.kind == "punct" and t.text in ")]}":
+            depth -= 1
+            if depth == 0:
+                return k
+    return len(toks)
+
+
+def _split(toks: list[Tok], sep: str) -> list[list[Tok]]:
+    """toks split at the top-level `sep` punctuation."""
+    parts: list[list[Tok]] = [[]]
+    k = 0
+    while k < len(toks):
+        t = toks[k]
+        if t.kind == "punct" and t.text == sep:
+            parts.append([])
+            k += 1
+        elif t.kind == "punct" and t.text in "([{":
+            c = _close(toks, k)
+            parts[-1] += toks[k:c + 1]
+            k = c + 1
+        else:
+            parts[-1].append(t)
+            k += 1
+    return parts
+
+
+def _literal(t: Tok) -> str:
+    if t.kind == "num":
+        low = t.text.lower()
+        is_float = ("." in t.text or ("e" in low and not low.startswith("0x")) or
+                    (low.startswith("0x") and "p" in low))
+        return "Double" if is_float else "Int"
+    if t.kind == "str":
+        if t.text.lstrip("#").startswith("/"):
+            return "Regex " + t.text           # its captures decide the type: any edit counts
+        return "String"
+    if t.kind == "id" and t.text in ("true", "false"):
+        return "Bool"
+    return UNKNOWN
+
+
+def _collection(toks: list[Tok], depth: int) -> str:
+    """`[a, b]` or `[k: v]` whose items all have one type, `[T]()` / `[K: V]()`; else UNKNOWN."""
+    c = _close(toks, 0)
+    inner, rest = toks[1:c], toks[c + 1:]
+    if rest:
+        if [t.text for t in rest] == ["(", ")"]:
+            return f"[ {_norm(inner)} ]"
+        return UNKNOWN
+    items = [x for x in _split(inner, ",") if x]       # a trailing comma leaves an empty item
+    if not items or len(items) > MAX_LITERAL_ITEMS:
+        return UNKNOWN
+    pairs = [_split(x, ":") for x in items]
+    if all(len(p) == 1 for p in pairs):
+        types = {_inferred(x, depth + 1) for x in items}
+        return f"[ {types.pop()} ]" if len(types) == 1 and UNKNOWN not in types else UNKNOWN
+    if all(len(p) == 2 for p in pairs):
+        keys = {_inferred(p[0], depth + 1) for p in pairs}
+        values = {_inferred(p[1], depth + 1) for p in pairs}
+        if len(keys) == len(values) == 1 and UNKNOWN not in keys | values:
+            return f"[ {keys.pop()} : {values.pop()} ]"
+    return UNKNOWN
+
+
+def _inferred(toks: list[Tok], depth: int = 0) -> str:
+    """The type an unannotated stored property's initial value plainly has, else UNKNOWN.
+
+    Literals (Int, Double, String, Bool), arrays and dictionaries of one such type, `Type(…)`, `Type.init(…)`,
+    `Type { … }`, `Mod.Type(…)` and `Type.member`. Anything else (an operator, a closure, a function call, a chain)
+    is UNKNOWN: its edits can't be told apart from a type change cheaply, so they aren't blockers.
+    """
+    if not toks or depth > MAX_DEPTH:
+        return UNKNOWN
+    if len(toks) == 2 and toks[0].kind == "op" and toks[0].text == "-" and toks[1].kind == "num":
+        return _literal(toks[1])
+    if len(toks) == 1:
+        return _literal(toks[0])
+    if toks[0].kind == "punct" and toks[0].text == "[":
+        return _collection(toks, depth)
+    ids: list[str] = []
+    k = 0
+    while k < len(toks) and toks[k].kind == "id":
+        ids.append(toks[k].text)
+        k += 1
+        if k + 1 < len(toks) and toks[k].kind == "punct" and toks[k].text == "." and toks[k + 1].kind == "id":
+            k += 1
             continue
         break
+    n_type = next((j for j, x in enumerate(ids) if not x[:1].isupper()), len(ids))
+    type_ids, members = ids[:n_type], ids[n_type:]
+    if not type_ids:
+        return UNKNOWN
+    rest = toks[k:]
+    if rest and rest[0].kind == "punct" and rest[0].text == "(":
+        rest = rest[_close(rest, 0) + 1:]
+        called = True
     else:
-        return _norm(head)
-    return _norm(toks)
+        called = False
+    if rest and rest[0].kind == "punct" and rest[0].text == "{":
+        rest = rest[_close(rest, 0) + 1:]
+        called = True
+    if rest:
+        return UNKNOWN
+    if called and members in ([], ["init"]):
+        return " . ".join(type_ids)
+    if not called and len(members) == 1:
+        return " . ".join(type_ids)
+    return UNKNOWN
 
 
 def scan(source: str) -> FileModel:
@@ -812,6 +908,15 @@ def _keyed(members: list[Member]) -> dict[str, Member]:
     return out
 
 
+def _changed(old: Member | Scoped, new: Member | Scoped) -> bool:
+    """Do two declarations differ? A stored property's UNKNOWN type matches any type."""
+    if old.sig == new.sig:
+        return False
+    if old.typ and new.typ and UNKNOWN in (old.typ, new.typ):
+        return old.sig.removesuffix(old.typ) != new.sig.removesuffix(new.typ)
+    return True
+
+
 def _compare_members(old: list[Member], new: list[Member], kind: str, tname: str, file: str, what: str,
                      out: list[dict]) -> None:
     olds, news = _keyed(old), _keyed(new)
@@ -819,7 +924,7 @@ def _compare_members(old: list[Member], new: list[Member], kind: str, tname: str
     for key, m in news.items():
         if key not in olds:
             out.append(_blocker(kind, file, f"Adds {what} {m.name} to {_display(tname)}.", m.line, tname, m.name))
-        elif olds[key].sig != m.sig:
+        elif _changed(olds[key], m):
             out.append(_blocker(kind, file, f"Changes {what} {m.name} of {_display(tname)}.", m.line, tname, m.name))
     for key, m in olds.items():
         if key not in news:
@@ -837,7 +942,7 @@ def _compare_scoped(old: dict[str, Scoped], new: dict[str, Scoped], kind: str, f
     """Changed or removed declarations are blockers; new ones are fine (the patch brings its own)."""
     for key, d in new.items():
         o = old.get(key)
-        if o is not None and o.sig != d.sig:
+        if o is not None and _changed(o, d):
             out.append(_blocker(kind, file, f"Changes the {of(d)}.", d.line, d.owner or None, d.name))
     for key, o in old.items():
         if key not in new:
