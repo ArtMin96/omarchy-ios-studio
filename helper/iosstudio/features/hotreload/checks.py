@@ -3,8 +3,10 @@ change how values are laid out in memory or which slots a class's vtable has, so
 
 1. structural_blockers(old_source, new_source, file)   a Swift scanner compares the baseline and the new text of
    one file: new or removed types, stored properties (property wrappers such as @State included), enum cases,
-   overridable class members (vtable layout), protocol requirements, and generic signatures / superclasses /
-   conformances. Function bodies, computed properties, new functions and extensions without conformances are fine.
+   overridable class members (vtable layout: `class func`/`class var`/`class subscript` too), protocol requirements
+   (static ones too), generic signatures / superclasses / conformances, changed or removed type aliases, and static
+   or global stored properties whose type changes or that go away (the app's storage stays in use; new ones are
+   fine). Function bodies, computed properties, new functions and extensions without conformances are fine.
    Conservative: anything the scanner can't read is a blocker (kind `unparsed`) rather than a guess.
 2. opaque_blockers(baseline_o, patch_o, new_source, file)   a `some View` body fixes its concrete type in an opaque
    type descriptor (`…QOMQ`); its `_symbolic` relocation targets name that type. A different type would corrupt
@@ -19,6 +21,7 @@ A blocker is {kind, type?, name?, file, line?, message}.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -219,6 +222,9 @@ class _Lexer:
             elif c in PUNCT:
                 out.append(Tok("punct", c, line, nl, sp))
                 i += 1
+            elif c == "/" and _regex_position(out, nl) and (j := _skip_bare_regex(s, i)) > 0:
+                out.append(Tok("str", s[i:j][:200], line, nl, sp))
+                i = j
             elif c in OP_CHARS:
                 j = i
                 while j < n and s[j] in OP_CHARS and not s.startswith("//", j) and not s.startswith("/*", j):
@@ -259,6 +265,51 @@ def _skip_regex(s: str, i: int) -> int:
     if k < 0:
         raise ScanError("An unterminated regex literal.")
     return k + len(close)
+
+
+# keywords after which an expression (so a `/regex/`) starts; any other identifier is an operand (`a / b`)
+EXPR_KW = {"return", "case", "in", "where", "if", "guard", "while", "throw", "try", "await", "switch", "yield", "then"}
+
+
+def _regex_position(out: list[Tok], nl: bool) -> bool:
+    """Can a `/` here start a bare regex literal (Swift 5.7: only where an expression starts, not after an operand)?"""
+    if not out or nl:
+        return True
+    p = out[-1]
+    if p.kind == "id":
+        return p.text in EXPR_KW
+    if p.kind == "punct":
+        return p.text in "([{,:;"
+    if p.kind == "op":
+        return p.sp            # a binary or prefix operator (`= /x/`), not a postfix one (`a! / b`)
+    return False
+
+
+def _skip_bare_regex(s: str, i: int) -> int:
+    """i at the '/' of a bare regex literal -> index after its closing '/', or -1 when it isn't one: it can't start
+    or end with a space, can't span lines and can't hold an unbalanced ')' (Swift's own rules for `/.../`)."""
+    n = len(s)
+    j = i + 1
+    if j >= n or s[j] in " \t\r\n":
+        return -1
+    depth = 0
+    while j < n:
+        c = s[j]
+        if c == "\n" or (c == "\\" and s.startswith("\n", j + 1)):
+            return -1
+        if c == "\\":
+            j += 2
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth < 0:
+                return -1
+        elif c == "/":
+            return -1 if s[j - 1] in " \t" else j + 1
+        j += 1
+    return -1
 
 
 def tokenize(src: str) -> list[Tok]:
@@ -305,9 +356,28 @@ class TypeDecl:
 
 
 @dataclass
+class Scoped:
+    """A declaration that belongs to a type (or extension) by name, or to the file when owner is ''."""
+    owner: str
+    name: str
+    sig: str
+    line: int
+
+
+@dataclass
 class FileModel:
     types: dict[str, TypeDecl] = field(default_factory=dict)
     conformances: list[tuple[str, str, int]] = field(default_factory=list)   # (extended type, inheritance, line)
+    statics: dict[str, Scoped] = field(default_factory=dict)    # static and global stored properties
+    aliases: dict[str, Scoped] = field(default_factory=dict)    # type aliases
+
+    def add(self, table: dict[str, Scoped], item: Scoped) -> None:
+        key = f"{item.owner}.{item.name}"
+        k = 2
+        while key in table:              # the same name in two #if branches
+            key = f"{item.owner}.{item.name}#{k}"
+            k += 1
+        table[key] = item
 
 
 def _norm(toks: list[Tok]) -> str:
@@ -421,7 +491,7 @@ class _Parser:
             elif kw == "extension":
                 i = self.extension(i, end, prefix)
             elif kw in ("var", "let"):
-                i = self.binding(i, end, owner, attrs, mods, ext)
+                i = self.binding(i, end, owner, attrs, mods, ext, prefix)
             elif kw == "case" and owner is not None and owner.kind == "enum":
                 i = self.enum_case(i, end, owner, mods)
             elif kw in ("func", "init", "subscript", "deinit"):
@@ -429,6 +499,12 @@ class _Parser:
             elif kw == "associatedtype" and owner is not None and owner.kind == "protocol":
                 e = self.decl_end(i, end)
                 owner.requirements.append(Member(_norm(self.t[i:e]), _norm(self.t[i:e]), tok.line))
+                i = e
+            elif kw == "typealias" and self.is_id(i + 1):
+                e = self.decl_end(i, end)
+                stop = e - 1 if self.is_p(e - 1, ";") else e
+                self.model.add(self.model.aliases, Scoped(prefix[:-1], self.t[i + 1].text,
+                                                          _norm(self.t[i + 1:stop]), tok.line))
                 i = e
             elif tok.kind == "pound":
                 i += 1                              # #warning(…), #Preview { … }, macro expansions
@@ -512,10 +588,11 @@ class _Parser:
         return self.match[brace] + 1
 
     def binding(self, i: int, end: int, owner: TypeDecl | None, attrs: list[str], mods: list[str],
-                ext: bool) -> int:
+                ext: bool, prefix: str = "") -> int:
         kw = self.t[i]
         e = self.decl_end(i, end)
-        static = "static" in mods or "class" in mods
+        static = "static" in mods
+        class_member = "class" in mods          # `class var`: computed, overridable unless final
         j = i + 1
         while j < e:
             name_toks: list[Tok]
@@ -550,20 +627,30 @@ class _Parser:
                 block = (j, self.match[j])
                 j = self.match[j] + 1
             computed = block is not None and not self._observer_block(block[0])
-            if owner is not None and not static:
-                if owner.kind == "protocol":
-                    owner.requirements.append(Member(name, f"{kw.text} {name}: {_norm(type_toks)} "
-                                                           f"{_norm(self.t[block[0]:block[1] + 1]) if block else ''}",
-                                                     line))
-                elif computed:
+            layout = [m for m in mods if m in LAYOUT_MODS]
+            typ = f": {_norm(type_toks)}" if type_toks else " = " + _inferred(init_toks)
+            if owner is not None and owner.kind == "protocol":
+                owner.requirements.append(Member(name, f"{'static ' if static else ''}{kw.text} {name}: "
+                                                       f"{_norm(type_toks)} "
+                                                       f"{_norm(self.t[block[0]:block[1] + 1]) if block else ''}",
+                                                 line))
+            elif class_member:
+                if owner is not None and owner.kind == "class" and not ext and (
+                        "override" in mods or (not owner.final and "final" not in mods)):
+                    owner.vtable.append(Member(name, ("override " if "override" in mods else "") +
+                                               f"class var {name}: {_norm(type_toks)}", line))
+            elif static or (owner is None and not ext):
+                if not computed:        # the app's storage stays in use, so its type can't change
+                    self.model.add(self.model.statics, Scoped(
+                        prefix[:-1], name, " ".join([*attrs, *layout, kw.text, f"{name}{typ}"]), line))
+            elif owner is not None:
+                if computed:
                     owner.tails[name] = [t.text for t in self.t[max(block[0] + 1, block[1] - 8):block[1]]]
                     if owner.kind == "class" and not owner.final and "final" not in mods:
                         owner.vtable.append(Member(name, f"var {name}: {_norm(type_toks)}", line))
                     elif "override" in mods and owner.kind == "class":
                         owner.vtable.append(Member(name, f"override var {name}: {_norm(type_toks)}", line))
                 elif not ext:
-                    layout = [m for m in mods if m in LAYOUT_MODS]
-                    typ = f": {_norm(type_toks)}" if type_toks else " = " + _inferred(init_toks)
                     sig = " ".join([*attrs, *layout, kw.text, f"{name}{typ}"])
                     owner.stored.append(Member(name, sig, line))
                     if owner.kind == "class" and "override" in mods:
@@ -607,8 +694,9 @@ class _Parser:
     def function(self, i: int, end: int, owner: TypeDecl | None, attrs: list[str], mods: list[str],
                  ext: bool) -> int:
         kw = self.t[i]
-        header, brace = self._header(i, end)
-        stop = brace if brace >= 0 else self.decl_end(i, end)
+        e = self.decl_end(i, end)
+        header, brace = self._header(i, e)      # a requirement without a body ends at its line
+        stop = brace if brace >= 0 else e
         sig_toks = self.t[i:stop]
         name = self._selector(i, stop)
         sig = _norm(sig_toks)
@@ -712,19 +800,29 @@ def _display(name: str) -> str:
     return name.split("#", 1)[0]
 
 
+def _keyed(members: list[Member]) -> dict[str, Member]:
+    """Members by name, overloads with the same labels (`f(_:)` taking Int, then String) numbered in order."""
+    out: dict[str, Member] = {}
+    for m in members:
+        key, k = m.name, 2
+        while key in out:
+            key = f"{m.name}#{k}"
+            k += 1
+        out[key] = m
+    return out
+
+
 def _compare_members(old: list[Member], new: list[Member], kind: str, tname: str, file: str, what: str,
                      out: list[dict]) -> None:
-    olds = {m.name: m for m in old}
-    news = {m.name: m for m in new}
-    old_keys = [m.name for m in old]
-    new_keys = [m.name for m in new]
-    for m in new:
-        if m.name not in olds:
+    olds, news = _keyed(old), _keyed(new)
+    old_keys, new_keys = list(olds), list(news)
+    for key, m in news.items():
+        if key not in olds:
             out.append(_blocker(kind, file, f"Adds {what} {m.name} to {_display(tname)}.", m.line, tname, m.name))
-        elif olds[m.name].sig != m.sig:
+        elif olds[key].sig != m.sig:
             out.append(_blocker(kind, file, f"Changes {what} {m.name} of {_display(tname)}.", m.line, tname, m.name))
-    for m in old:
-        if m.name not in news:
+    for key, m in olds.items():
+        if key not in news:
             out.append(_blocker(kind, file, f"Removes {what} {m.name} from {_display(tname)}.", None, tname, m.name))
     common_old = [k for k in old_keys if k in news]
     common_new = [k for k in new_keys if k in olds]
@@ -732,6 +830,18 @@ def _compare_members(old: list[Member], new: list[Member], kind: str, tname: str
         first = next(news[b] for a, b in zip(common_old, common_new) if a != b)
         out.append(_blocker(kind, file, f"Reorders the {what.split(' ', 1)[-1]}s of {_display(tname)}.", first.line,
                             tname))
+
+
+def _compare_scoped(old: dict[str, Scoped], new: dict[str, Scoped], kind: str, file: str, out: list[dict],
+                    of: Callable[[Scoped], str], from_: Callable[[Scoped], str]) -> None:
+    """Changed or removed declarations are blockers; new ones are fine (the patch brings its own)."""
+    for key, d in new.items():
+        o = old.get(key)
+        if o is not None and o.sig != d.sig:
+            out.append(_blocker(kind, file, f"Changes the {of(d)}.", d.line, d.owner or None, d.name))
+    for key, o in old.items():
+        if key not in new:
+            out.append(_blocker(kind, file, f"Removes the {from_(o)}.", None, o.owner or None, o.name))
 
 
 def structural_blockers(old_source: str, new_source: str, file: str) -> list[dict]:
@@ -765,6 +875,12 @@ def structural_blockers(old_source: str, new_source: str, file: str) -> list[dic
             _compare_members(o.vtable, t.vtable, "class-method", key, file, "the overridable member", out)
         if t.kind == "protocol":
             _compare_members(o.requirements, t.requirements, "class-method", key, file, "the requirement", out)
+    _compare_scoped(old.statics, new.statics, "stored-property", file, out,
+                    lambda d: f"static property {d.name} of {d.owner}" if d.owner else f"global variable {d.name}",
+                    lambda d: f"static property {d.name} from {d.owner}" if d.owner else f"global variable {d.name}")
+    _compare_scoped(old.aliases, new.aliases, "type-alias", file, out,
+                    lambda d: f"type alias {d.name} of {d.owner}" if d.owner else f"type alias {d.name}",
+                    lambda d: f"type alias {d.name} from {d.owner}" if d.owner else f"type alias {d.name}")
     old_conf = sorted((n, h) for n, h, _ in old.conformances)
     new_conf = sorted((n, h) for n, h, _ in new.conformances)
     if old_conf != new_conf:
