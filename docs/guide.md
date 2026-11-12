@@ -120,7 +120,7 @@ Packet capture needs a USB cable, because the phone only shares its traffic over
 
 ![Projects](screenshots/projects.png)
 
-Your apps. iOS Studio looks for xtool projects (a folder with `Package.swift` and `xtool.yml`) in your project folders, which you set in Settings. A copy of an app in another folder under them is listed too, as its own card: each card shows its folder under the bundle ID, and when two apps share a name, that line and their rows under Recent builds name the folder so you can tell them apart. ⋮ More › Remove from list hides a card you don't want; the folder stays on disk.
+Your apps. iOS Studio looks for xtool projects (a folder with `Package.swift` and `xtool.yml`) in your project folders, which you set in Settings. A copy of an app in another folder under them is listed too, as its own card: each card shows its folder under the bundle ID, and when two apps share a name, that line, their rows under Recent builds, on Home and in Logs › Build logs name the folder so you can tell them apart. ⋮ More › Remove from list hides a card you don't want; the folder stays on disk.
 
 - New app (`n`) creates an app from a template: a simple SwiftUI app, a tabs app, or a list with a detail screen. It also gets `AGENTS.md` and `CLAUDE.md`, which tell coding agents to build through iOS Studio instead of Xcode (see [Connect an AI agent](#connect-an-ai-agent)).
 - The folder button (`a`) adds a project you already have. A plain Swift package can be turned into an app; iOS Studio adds an `xtool.yml` (and `AGENTS.md` and `CLAUDE.md` when they're missing) and leaves your code alone.

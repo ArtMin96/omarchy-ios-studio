@@ -18,13 +18,26 @@ TestCase {
   }
 
   function test_sharedNamesThreeCopiesAndOddInput() {
-    compare(Model.sharedNames([{ name: "A" }, { name: "A" }, { name: "A" }]), { A: true })
+    compare(Model.sharedNames([{ name: "A", path: "/a" }, { name: "A", path: "/b" }, { name: "A", path: "/c" }]), { A: true })
     compare(Model.sharedNames([]), {})
     compare(Model.sharedNames(null), {})
-    compare(Model.sharedNames([null, {}, { name: "" }, { name: "" }]), {})
+    compare(Model.sharedNames([null, {}, { name: "", path: "/a" }, { name: "", path: "/b" }]), {})
     // names that are also Object members aren't mistaken for a second copy
-    compare(Model.sharedNames([{ name: "constructor" }, { name: "toString" }]), {})
-    compare(Model.sharedNames([{ name: "constructor" }, { name: "constructor" }]), { constructor: true })
+    compare(Model.sharedNames([{ name: "constructor", path: "/a" }, { name: "toString", path: "/b" }]), {})
+    compare(Model.sharedNames([{ name: "constructor", path: "/a" }, { name: "constructor", path: "/b" }]), { constructor: true })
+  }
+
+  // Build history (Logs › Build logs, Projects › Recent builds): many builds of one app are one folder.
+  function test_sharedNamesBuildHistory() {
+    var builds = [
+      { name: "CrashLab", path: "/home/me/Projects/CrashLab" },
+      { name: "CrashLab", path: "/home/me/Projects/CrashLab" },
+      { name: "WeatherGlance", path: "/home/me/Developer/WeatherGlance" },
+      { name: "WeatherGlance", path: "/home/me/Developer/WeatherGlance" },
+    ]
+    compare(Model.sharedNames(builds), {})
+    builds.push({ name: "CrashLab", path: "/home/me/Projects/ios-studio-wt/crashlab-hr-test" })
+    compare(Model.sharedNames(builds), { CrashLab: true })
   }
 
   function test_tildePath() {

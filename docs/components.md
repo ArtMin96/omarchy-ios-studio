@@ -215,7 +215,7 @@ header tab list element linkVariant (element roles) and contrast textSize clippe
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(projects)` → `{name: true}` for the names more than one listed project has (the Projects page then shows their folder more clearly); `tildePath(path, home)` → "~/Projects/App"; `greeting()`; `keyAction(event)`; `PAGES`,
+`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(items)` → `{name: true}` for the names that more than one folder has, from projects or build history entries (`{name, path}`; many builds of one app don't count). The Projects card, Projects › Recent builds, Home's projects and Logs › Build logs then show the folder; `tildePath(path, home)` → "~/Projects/App"; `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 Run presets (mirroring `helper/iosstudio/features/run_presets.py`, so the editor can preview and validate as you type; the helper
@@ -1003,7 +1003,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   stderr-only (when the streams are split), pause, copy, export and clear. Read-only `view`, `search`;
   `togglePause()`, `copySelected()`. See [features/app-console.md](features/app-console.md).
 - **LogBuildsTab**: the Logs page's Build logs tab (`app`): build history (rows: kind · duration, then when ·
-  problem counts; the glyph shows the result), then the selected build's summary, problems and full log. The
+  problem counts; the glyph shows the result; when builds from two folders share a name, `folderText(b)` puts
+  the folder first in the row and in the detail line), then the selected build's summary, problems and full log. The
   detail pane shrinks with the window: the build name has its result pill beside it, and below 560 px
   (`detail.narrow`) the name gets the header row (with the buttons; Rebuild shows only its hammer, the tooltip
   names it), the pill and the details move to a row below it (the details wrap at the dots), and the log
