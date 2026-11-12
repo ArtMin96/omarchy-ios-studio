@@ -42,6 +42,7 @@ Item {
   // ------------------------------------------------------------ navigation
   property string page: "home"
   property var pageParams: ({})
+  property var pendingParams: null    // {page, params} of the last nav() until its page's activated() got them
   property var visited: ({ home: true })
   property bool userNavigated: false
   property bool shortcutsOpen: false
@@ -55,17 +56,26 @@ Item {
   signal navigated(string page, var params)
 
   // nav("account", {action: "signin"}) — params reach the page as
-  // app.pageParams and through the page's optional activated(params) hook.
+  // app.pageParams and through the page's optional activated(params) hook, once: see takePageParams.
   function nav(name, params) {
     var key = Model.resolvePage(name)
     if (key === "") { console.warn("nav: unknown page", name); return false }
     root.pageParams = params || {}
+    root.pendingParams = { page: key, params: root.pageParams }
     if (!root.visited[key]) {
       var v = Object.assign({}, root.visited); v[key] = true; root.visited = v
     }
     root.page = key
     root.navigated(key, root.pageParams)
     return true
+  }
+
+  // The params for page `key`'s activated() (shell.qml): the last nav()'s the first time, then, for the current
+  // page, the same without `action`, so a page that loads again doesn't repeat it (Model.takePageParams).
+  function takePageParams(key) {
+    var r = Model.takePageParams(root.pendingParams, key, key === root.page ? root.pageParams : {})
+    root.pendingParams = r.pending
+    return r.params
   }
 
   function openSetupStep(id) { return nav("setup", { step: id }) }

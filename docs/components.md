@@ -48,7 +48,7 @@ PageFrame {
   title: "iPhone"; subtitle: "…"
 
   // all optional hooks, called by shell.qml when they exist:
-  function activated(params) {}          // on every nav() to this page (params = app.pageParams), incl. deep links
+  function activated(params) {}          // on every nav() to this page, incl. deep links (params once: see below)
   function handleKey(event) { return false }   // page cursor model; return true if consumed
   function focusSearch() {}              // global "/"
   function refresh() {}                  // global "r" (default: the page's service.refresh())
@@ -59,7 +59,10 @@ PageFrame {
 - Pages are loaded lazily on first visit and **kept alive**, so page-local state survives switching.
   Shared state belongs in the service (`app.device`, …). The load starts in the background (the page you came
   from stays on screen, so the click shows at once); after 50 ms the shell finishes it in one go, and past 150 ms
-  a spinner replaces the old page. `activated(params)` runs once the page exists. Keep what a page builds up
+  a spinner replaces the old page. `activated(params)` runs once the page exists. A nav()'s params reach it once
+  (`app.takePageParams(key)`, `Model.takePageParams`): when the page loads again (a retry), `activated` gets
+  `app.pageParams` without `action`, so it goes back to the same tab or item but doesn't repeat an action such as
+  `{action: "renew"}`. Each nav() is a new request, so the same action from a second click runs again. Keep what a page builds up
   front small: load tabs and sheets on first use (DevicePage's `TabLoader`), and start a view's work when it's
   shown, not in `Component.onCompleted`.
 - Global keys that the shell handles first: `1`–`8` pages, `?` shortcut sheet, `r` refresh, `/` search,
@@ -74,7 +77,7 @@ PageFrame {
 
 | Member | |
 |---|---|
-| `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and `activated(params)`. |
+| `app.nav(page, params?)` | Switch page. Accepts aliases (`"iphone"`, `"sdk"`). Params land in `app.pageParams` and, once, in `activated(params)`. |
 | `app.openSetupStep(id)` | `nav("setup", {step: id})` |
 | `app.toast(text, level?)` | level: `info` (default), `ok`, `warn`, `error` |
 | `app.confirm({title, message, confirmText, cancelText, destructive, glyph, onConfirm, onCancel})` | Cancel is the default button. Use it for every destructive action. Returns a handle. A dialog asked for while another is open is queued and shown after it, so no question is lost. |
