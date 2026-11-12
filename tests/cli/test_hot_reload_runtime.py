@@ -440,3 +440,52 @@ def test_rules_on_a_compiled_app_and_patch(tmp_path, rules):
     targets = {r.symbol for r in obj.relocations(data) if r.extern and r.length == 3}   # 8-byte pointers
     method = next(n for n in kinds if readable[n] == "Fix.K.m() async -> Swift.Int")
     assert method + "Tu" in targets and method not in targets
+
+
+DLERROR_HARNESS = r"""
+#include <stdio.h>
+#include <string.h>
+%s
+int main(int argc, char **argv) {
+    char out[%s];
+    if (argc != 4) return 2;
+    hr_short_dlerror(out, sizeof out, argv[1], argv[2], argv[3]);
+    printf("%%s", out);
+    return 0;
+}
+"""
+
+
+def test_loader_keeps_the_dlopen_reason(tmp_path):
+    """The loader cuts dyld's long container paths and the repeated `tried:` entries, so the reason
+    ("code signature invalid") fits the error cap; hr_short_dlerror is compiled for this machine."""
+    cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
+    if not cc:
+        pytest.skip("no C compiler")
+    loader = (FULL / "Sources/HotReloadLoader/loader.c").read_text()
+    fn = loader[loader.index("static void hr_short_dlerror("):loader.index("// END hr_short_dlerror")]
+    cap = re.search(r"#define HR_ERROR_MAX (\d+)", loader).group(1)
+    (tmp_path / "h.c").write_text(DLERROR_HARNESS % (fn, cap))
+    exe = tmp_path / "h"
+    run = subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Wconversion", "-Werror", str(tmp_path / "h.c"),
+                          "-o", str(exe)], capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+
+    def short(e: str, path: str, file: str) -> str:
+        return subprocess.run([str(exe), e, path, file], capture_output=True, text=True, timeout=30,
+                              check=True).stdout
+
+    d = "/var/mobile/Containers/Data/Application/0B1C2D3E-4F5A-6B7C-8D9E-0F1A2B3C4D5E/Library/Caches/HotReload"
+    p = f"{d}/patch-1.dylib"
+    e = (f"dlopen({p}, 0x0002): tried: '{p}' (code signature invalid in <1A2B3C4D-1234-5678-9ABC-DEF012345678> "
+         f"'{p}' (errno=1) sliceOffset=0x00000000, codeBlobOffset=0x0000C450, codeBlobSize=0x00004A10), "
+         f"'/System/Volumes/Preboot/Cryptexes/OS{p}' (no such file), '/private{p}' (code signature invalid in "
+         f"<1A2B> '/private{p}' (errno=1))")
+    assert short(e, p, "patch-1.dylib") == (
+        "dlopen(patch-1.dylib, 0x0002): tried: 'patch-1.dylib' (code signature invalid in "
+        "<1A2B3C4D-1234-5678-9ABC-DEF012345678> 'patch-1.dylib' (errno=1) sliceOffset=0x00000000, "
+        "codeBlobOffset=0x0000C450, codeBlobSize=0x00004A10), …")
+    assert short("symbol not found: _foo", p, "patch-1.dylib") == "symbol not found: _foo"
+    assert short(f"dlopen({p}): tried: '{p}' (no such file)", p, "patch-1.dylib") == \
+        "dlopen(patch-1.dylib): tried: 'patch-1.dylib' (no such file)"
+    assert len(short("x" * 2000, p, "patch-1.dylib").encode()) < int(cap)
