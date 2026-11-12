@@ -7,13 +7,17 @@
   (20 failed items with 200-char messages next to a failed last_error don't fit 12 KB at any useful clip).
 - ios_hot_reload_control(action='stop') errors carry the feature's next step.
 - Name-like fields from the helper (blocker type/name, step keys) are clipped.
+- A stop outlasts the session's whole shutdown (SHUTDOWN_BUDGET, 9 s) before SIGKILL, and a cancel whose caller
+  gives up early (jobs.cancel waits 10 s for on_cancel) keeps the one stop going instead of starting another.
 
 Needs the MCP server's dependencies (the dev venv; skipped otherwise):
     python -m pytest tests/mcp/test_mcp_hot_reload_bounds.py
 """
 from __future__ import annotations
 
+import asyncio
 import unittest
+from unittest import mock
 
 from test_mcp_hot_reload import PROJ, SRC, TPROJ, HotReloadCase, snapshot
 
@@ -137,6 +141,29 @@ class Clips(unittest.TestCase):
         r = HR._reload({"seq": 1, "steps": {("s" * 300 + str(i)): i for i in range(40)}})
         self.assertLessEqual(len(r.steps), HR.STEPS)
         self.assertTrue(all(len(k) <= 30 for k in r.steps))
+
+
+class StopGrace(unittest.IsolatedAsyncioTestCase):
+    def test_grace_outlasts_the_session_shutdown(self):
+        self.assertGreaterEqual(HR.STOP_GRACE + HR.TERM_GRACE, 9.0 + 1)     # session.SHUTDOWN_BUDGET + 1 s
+
+    async def test_a_cut_cancel_keeps_the_one_stop(self):
+        gate, calls = asyncio.Event(), []
+
+        async def slow_stop(s):
+            calls.append(s)
+            await gate.wait()
+
+        s = HR.Live(path=PROJ)
+        job = mock.Mock(data={"live": s})
+        with mock.patch.object(HR, "_stop_proc", slow_stop):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(HR._on_cancel(job), 0.05)
+            self.assertFalse(s.stopper.done())
+            self.assertIs(HR._stopping(s), s.stopper)
+            gate.set()
+            await asyncio.wait_for(asyncio.shield(HR._stopping(s)), 1)
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

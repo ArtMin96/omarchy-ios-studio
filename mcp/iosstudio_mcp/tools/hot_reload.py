@@ -61,9 +61,9 @@ SESSIONS = 10
 PROJECTS = 20
 MESSAGE_CUT = 300
 STDERR_KEEP = 20
-STOP_GRACE = 6.0        # seconds the session gets to cancel its build and write `stopped` after {"cancel": true}
-TERM_GRACE = 3.0        # then after SIGTERM
-STOP_TIMEOUT = 15       # `hotreload stop`: SIGTERM, ≤ 5 s, then SIGKILL
+STOP_GRACE = 7.0        # after {"cancel": true}; + TERM_GRACE = 10 s, more than the session's whole shutdown (9 s)
+TERM_GRACE = 3.0        # then after SIGTERM, before SIGKILL (jobs.cancel waits ~10 s + 5 s; the stop goes on, shielded)
+STOP_TIMEOUT = 15       # `hotreload stop`: SIGTERM, ≤ 10 s for the session to end, then SIGKILL
 CONTROL_TIMEOUT = 10    # `hotreload pause|resume`: ≤ 2 s for the session to show it
 
 STARTING = ("starting", "building", "installing", "launching")
@@ -135,7 +135,7 @@ def _same(a: str | None, b: str | None) -> bool:
 
 class Blocker(Out):
     kind: str = Field(description="new-type, removed-type, stored-property, enum-case, class-method, generic-signature, "
-                                  "opaque-type, new-file, removed-file, unparsed")
+                                  "opaque-type, type-alias, new-file, removed-file, unchecked, unparsed")
     location: str | None = Field(None, description="'Sources/App/File.swift:12'")
     type: str | None = None
     name: str | None = None
@@ -467,6 +467,7 @@ class Live:
     done: dict | None = None
     error: dict | None = None
     ended: bool = False
+    stopper: asyncio.Task | None = None
     seq: int = 0
     stderr: list = field(default_factory=list)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -551,7 +552,7 @@ async def _run(job: Job, flags: dict) -> dict:
                     _apply(job, s, ev)
         await proc.wait()
     except asyncio.CancelledError:          # the server is stopping (or the job was cancelled hard)
-        await asyncio.shield(_stop_proc(s))
+        await asyncio.shield(_stopping(s))
         raise
     finally:
         with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
@@ -568,8 +569,15 @@ async def _run(job: Job, flags: dict) -> dict:
     return s.snap or {}
 
 
+def _stopping(s: Live) -> asyncio.Task:
+    """One stop per session, so a cancel cut short by its caller's timeout keeps going (and isn't restarted)."""
+    if s.stopper is None:
+        s.stopper = asyncio.ensure_future(_stop_proc(s))
+    return s.stopper
+
+
 async def _on_cancel(job: Job) -> None:
-    await _stop_proc(_live(job))
+    await asyncio.shield(_stopping(_live(job)))
 
 
 def _jobs(state: AppState) -> list[Job]:
