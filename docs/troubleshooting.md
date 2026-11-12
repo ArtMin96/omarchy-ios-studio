@@ -50,6 +50,10 @@ Every new bundle ID registers an App ID with Apple. Free accounts get 10 new one
 
 A phone has to be registered with your account before apps can be signed for it. Connect it with a cable and press Run once. That registers it. xtool can't register a phone over Wi-Fi, so a phone that was only ever connected wirelessly fails with Apple's "There are no current iOS devices on this team" (HTTP 409); the build shows it as a signing problem with this fix.
 
+### Installing stops at 0%, or "Your iPhone stopped answering while it installed …"
+
+iOS can't replace an app while it's on the screen, and the iPhone's installer waits without saying anything until the app closes. So iOS Studio closes the old copy of the app before it installs, the way Xcode does. If the installer is still silent after 20 seconds, the progress line says "Waiting for <App> to close on your iPhone". Swipe the app away on the iPhone and keep the phone unlocked and awake. After 2 minutes of silence the install stops with this message instead of hanging. Press Reconnect iPhone on the message, then Run again. If it keeps happening, restart the iPhone. Cancelling an install (stopping hot reload, cancelling the job) stops it on the computer's side at once. Nothing is left open, and the next install starts on fresh connections.
+
 ### "Your iPhone doesn't trust this developer yet"
 
 The app installed, but iOS won't open apps from a developer it hasn't trusted. On the iPhone: Settings › General › VPN & Device Management, tap your Apple Development profile, then Trust. You only do this once per Apple ID on each phone.

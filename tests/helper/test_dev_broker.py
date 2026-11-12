@@ -403,6 +403,7 @@ class SlowClients(BrokerCase):
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.until(lambda: len(self.b.clients) == 1), 0.3)
             self.assertEqual(len(self.b.clients), 1, "the stalled client is still connected")
+            await self.until(lambda: self.backend.gone)   # told from a background task, a moment later
             self.assertEqual(len(self.backend.gone), 1)
 
 
