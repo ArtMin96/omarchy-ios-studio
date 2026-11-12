@@ -48,6 +48,7 @@ CLIENT_BUFFER_MAX = 32 * 1024 * 1024   # a client that stops reading is disconne
 CLIENT_CLOSE_GRACE_S = 2.0              # a closing client's last replies get this long to flush
 STALLED_CLOSE_GRACE_S = 0.1             # ... and one already CLIENT_BUFFER_MAX behind only this long
 REQUEST_CANCEL_S = 15.0                 # a cancelled request (client gone, shutdown) gets this long to clean up
+EXIT_GRACE_S = 5.0                      # run_bounded: leftover tasks get this long to finish cancelling
 LOG_MAX = 4 * 1024 * 1024               # deviced.log (tmpfs, so RAM) moves to deviced.log.1 past this
 LOG_CHECK_S = 30.0
 
@@ -837,6 +838,37 @@ async def _cancel_all(tasks: set[asyncio.Task], why: str) -> None:
     _, late = await asyncio.wait(pending, timeout=REQUEST_CANCEL_S)
     if late:
         log(f"{len(late)} cancelled request(s) {why} are still cleaning up")
+
+
+def run_bounded(coro, grace: float = EXIT_GRACE_S, hard_exit=os._exit, log=log) -> int:
+    """asyncio.run(coro) with a bounded teardown. asyncio.run cancels leftover tasks and then waits for them
+    and for the default executor's threads without a limit, so one task that won't end (a pymobiledevice3
+    connection mid-read, a to_thread call stuck in I/O) kept a stopped daemon alive after "bye", deaf to
+    SIGTERM. Here leftovers get `grace` seconds after cancelling; the executor isn't waited for (both
+    daemons' main() exit with os._exit right after). If even that wait hangs (a callback blocking the
+    loop), a timer calls hard_exit(code)."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    code = 1
+    try:
+        code = loop.run_until_complete(coro)
+        return code
+    finally:
+        backstop = threading.Timer(grace + 2, hard_exit, (code,))
+        backstop.daemon = True
+        backstop.start()
+        try:
+            left = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in left:
+                t.cancel()
+            if left:
+                _, late = loop.run_until_complete(asyncio.wait(left, timeout=grace))
+                if late:
+                    log(f"exiting with {len(late)} task(s) that didn't stop: "
+                         + ", ".join(sorted(t.get_name() for t in late))[:300])
+        finally:
+            backstop.cancel()
+        asyncio.set_event_loop(None)
 
 
 # ====================================================================== launcher / bridge

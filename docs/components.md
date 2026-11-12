@@ -218,7 +218,7 @@ header tab list element linkVariant (element roles) and contrast textSize clippe
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(items)` → `{name: true}` for the names that more than one folder has, from projects or build history entries (`{name, path}`; many builds of one app don't count). The Projects card, Projects › Recent builds, Home's projects and Logs › Build logs then show the folder; `tildePath(path, home)` → "~/Projects/App"; `greeting()`; `keyAction(event)`; `PAGES`,
+`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(items)` → `{name: true}` for the names that more than one folder has, from projects or build history entries (`{name, path}`; many builds of one app don't count). The Projects card, Projects › Recent builds, Home's projects and Logs › Build logs then show the folder; `tildePath(path, home)` → "~/Projects/App"; `installProgressText(event)` (the Run bar's line for a Wi-Fi install's `installProgress`: the daemon's waiting `message` instead of the percent while it lasts) and `installWaitMessage(event)` (that message, or ""); `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 Run presets (mirroring `helper/iosstudio/features/run_presets.py`, so the editor can preview and validate as you type; the helper
@@ -1111,7 +1111,8 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       (10 to 20 s) the form stays visible but disabled, Esc, the scrim and × don't close it (`dismissible: false`),
       Cancel is disabled, and a ProgressTrack on the content edges shows the step: "Waiting for iOS to save
       X's settings…" (until 10 s after the app stopped, from DeviceAppDataView's `waitLeft()`), "Writing…", then
-      "Reinstalling X…". The bar moves (indeterminate) and the right caption counts seconds until an
+      "Reinstalling X…" (or the event's waiting `message`, `Model.installWaitMessage`, while the iPhone's installer
+      is silent). The bar moves (indeterminate) and the right caption counts seconds until an
       `installProgress` event brings a percent above 0 (over Wi-Fi none comes), then it shows the percent. A faint two-line note says the change
       reinstalls the same build and the data stays. Dictionaries and arrays are sent as `type: "json"`; a value
       shortened for display is fetched whole before the sheet opens.
@@ -1136,7 +1137,7 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
       button goes under the text). Each opens a Sheet that runs the dry run (`confirm: false`), lists what goes
       (count, files, size, the capped item list), then a danger button runs it with `confirm: true, stopApp: true`
       and toasts the result; while it runs a ProgressTrack shows "Deleting N items…" and then the install from
-      `installProgress` (a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
+      `installProgress` (its waiting `message` while the installer is silent; a wipe reinstalls the same build; a warn toast when `refreshed` is false or there's a
       `warning`). Signal `done()`: the other panes reload on their next show.
 - **DeviceInfoView / DeviceProfilesView / DeviceLocationView**: the iPhone page's Info tab (every detail,
   copyable; no copy button on an empty "—" value), Profiles tab (read-only, expired ones behind `showExpired`; a `StateView` on

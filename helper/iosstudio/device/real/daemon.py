@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import sys
-import threading
 import time
 import traceback
 
@@ -55,7 +54,6 @@ SERVICE_OPEN_S = 30    # Session.open_service: an open that takes longer reads a
 SERVICE_CLOSE_S = 5    # ... and a close that takes longer is left behind
 INFO_FRESH_S = 10      # a `fresh` device.info joins a refresh started this recently instead of a new one
 DISCOVERY_WAIT_S = 10  # a request right after start waits this long at most for the first discovery pass
-EXIT_GRACE_S = 5       # after the main coroutine: leftover tasks get this long to finish cancelling
 NO_DEVICE_CMDS = frozenset({"daemon.ping", "daemon.shutdown", "daemon.features"})   # never wait for discovery
 
 
@@ -1000,35 +998,9 @@ async def serve() -> int:
     return await broker.run(make)
 
 
-def run_bounded(coro, grace: float = EXIT_GRACE_S, hard_exit=os._exit) -> int:
-    """asyncio.run(coro) with a bounded teardown. asyncio.run cancels leftover tasks and then waits for them
-    and for the default executor's threads without a limit, so one task that won't end (a pymobiledevice3
-    connection mid-read, a to_thread call stuck in I/O) kept a stopped daemon alive after "bye", deaf to
-    SIGTERM. Here leftovers get `grace` seconds after cancelling; the executor isn't waited for (main()
-    exits with os._exit right after). If even that wait hangs (a callback blocking the loop), a timer
-    calls hard_exit(code)."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    code = 1
-    try:
-        code = loop.run_until_complete(coro)
-        return code
-    finally:
-        backstop = threading.Timer(grace + 2, hard_exit, (code,))
-        backstop.daemon = True
-        backstop.start()
-        try:
-            left = [t for t in asyncio.all_tasks(loop) if not t.done()]
-            for t in left:
-                t.cancel()
-            if left:
-                _, late = loop.run_until_complete(asyncio.wait(left, timeout=grace))
-                if late:
-                    dlog(f"exiting with {len(late)} task(s) that didn't stop: "
-                         + ", ".join(sorted(t.get_name() for t in late))[:300])
-        finally:
-            backstop.cancel()
-        asyncio.set_event_loop(None)
+def run_bounded(coro, grace: float = device_broker.EXIT_GRACE_S, hard_exit=os._exit) -> int:
+    """asyncio.run(coro) with a bounded teardown (device_broker.run_bounded), logged through dlog."""
+    return device_broker.run_bounded(coro, grace, hard_exit, log=lambda text: dlog(text))
 
 
 def main() -> int:

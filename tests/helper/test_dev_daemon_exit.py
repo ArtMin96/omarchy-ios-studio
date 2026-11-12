@@ -1,4 +1,4 @@
-"""real/daemon.py main(): the process exits soon after its main coroutine ends (a real-iPhone run: after
+"""real/daemon.py and demo/daemon.py main(): the process exits soon after its main coroutine ends (a real-iPhone run: after
 `daemon.shutdown {"all": true}` the daemon logged "bye" and never exited, ignoring SIGTERM; asyncio.run waited
 without a limit for a task that wouldn't cancel and for the executor's threads).
 
@@ -102,6 +102,31 @@ class BoundedExit(unittest.TestCase):
         self.assertEqual(code, 5, err)
         self.assertLess(took, 10, err)
         self.assertNotIn("not reached", err)
+
+    def test_the_demo_daemon_uses_the_same_bounded_exit(self):
+        demo = (HELPER / "iosstudio/device/demo/daemon.py").read_text()
+        self.assertIn("device_broker.run_bounded(serve())", demo)
+        code, took, err = run("""
+            from iosstudio.device import broker
+
+            async def stubborn():
+                while True:
+                    try:
+                        await asyncio.sleep(3600)
+                    except asyncio.CancelledError:
+                        pass
+
+            async def main():
+                asyncio.ensure_future(stubborn()).set_name("stubborn")
+                await asyncio.sleep(0.05)
+                return 4
+
+            code = broker.run_bounded(main(), grace=0.3)
+            os._exit(code)
+        """)
+        self.assertEqual(code, 4, err)
+        self.assertLess(took, 8, err)
+        self.assertIn("broker: exiting with 1 task(s) that didn't stop: stubborn", err)
 
 
 if __name__ == "__main__":

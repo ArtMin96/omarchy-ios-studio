@@ -449,7 +449,7 @@ async def _run_and_capture(state: AppState, job: Job, r: RunRequest) -> RunCaptu
         job.report(0.02, "Installing")
 
         def prog(pct: float, status: str) -> None:
-            job.report((0.1 + 0.3 * pct / 100) / total, f"Installing {pct:.0f}%")
+            job.report((0.1 + 0.3 * pct / 100) / total, status if " " in status else f"Installing {pct:.0f}%")
         res = await install_ipa(state, udid, r.pkg, prog)
         installed = AppInstallStatus(installed=True, state="succeeded", bundle_id=res.get("bundleId"),
                                      package_bundle_id=res.get("packageBundleId"), path=helper.tilde(r.pkg),

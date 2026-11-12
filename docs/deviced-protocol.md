@@ -105,6 +105,16 @@ worker falls behind (64 batches queued), whole batches are dropped and counted i
 `dropped`. The phone stream starts with the first subscriber and stops when the last one stops or
 disconnects.
 
+**Requests of a client that leaves.** When a client disconnects (or sends `daemon.shutdown` without `all`),
+its requests still running are cancelled: nobody is left to read their replies. A cancelled request closes
+its phone connections and cleans up (an install removes its staged package); the broker waits up to 15 s for
+that, then releases the client's held resources (below). A client that stops waiting for a reply (a timeout)
+but stays connected doesn't cancel anything. So whoever starts long work keeps its connection open until the
+reply: the GUI's bridge, the MCP server and a hot reload session do; a `--once` process that is killed (a
+cancelled build, watch mode's step timeout, a renewal's 600 s) ends its install. Requests still running at
+shutdown are cancelled the same way. Background work gets 3 s to finish and is then cancelled; a task that
+ignores its cancel is left behind after 15 s (logged), and the process exits at most 5 s after its last step.
+
 **Held resources.** Features that keep something running on the phone for a client hold it as a
 reference-counted resource: the mirror (`mirror`), a recording (`record`), the network condition
 (`condition`), a packet capture (`pcap`), a debugger port forward (`debug:<bundleId>`), a debug
@@ -248,7 +258,7 @@ the tunnel is up.
 | `pair` | Pair (below) | pairing flow progress |
 | `apps` | `{udid, system, apps: [App…]}` | a background refresh after a `stale` `apps.list` found the list (or, after a reply sent while the tunnel was coming up, the running apps) changed; also after every `app.launch` (with a pid) and `app.kill`, from any client, with the cached user app list (`system: false`) and the new `running`/`pid` (no phone round trip; not sent when no user list is cached or the app isn't in it) |
 | `appIcons` | `{udid, icons: {bundleId: path}}` | icons fetched in the background after `apps.list`, batched (at most every 250 ms or 10 icons) |
-| `installProgress` | `{path, percent, status, message?}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing` (percent 0 once the upload is done), `done` (100); `message` only while the installer waits for the app to close (see [Installing apps](#installing-apps-appinstall)) |
+| `installProgress` | `{path, percent, status, message?}` | during `app.install`; `status` ∈ `uploading` (percent 0), `installing` (percent 0 once the upload is done), `done` (100); `message` once the installer has been silent for 20 s (see [Installing apps](#installing-apps-appinstall)); the app's Run bar, the app data sheets, the hot reload bar and the MCP install jobs show it instead of the percent |
 | `appSizes` | `{udid, sizes: {bundleId: bytes}}` | ~9 s after `apps.list {sizes: true}` (sizes are slow to compute) |
 | `condition` | Condition + `reason` (see [Network conditions](#network-conditions)) | a condition was set or switched off |
 | `pcap` | Capture (see [Packet capture](#packet-capture)) | about once a second while capturing, and when it stops |
@@ -378,18 +388,19 @@ helper/iosstudio/device/link.py uses; ~7 s for a 45 MB app over Wi-Fi). The repl
 "Complete".
 
 The package goes up over AFC to `/PublicStaging/pymobiledevice3/` in 1 MiB chunks, then installation_proxy
-installs it. Before the installer runs, the installed copy of the app is closed if it's running (what `app.kill`
-does, best effort). Xcode does the same: iOS won't end an app in the foreground for an update ("termination
+installs it. Before the installer runs, the installed copy the package replaces is closed if it's running (what
+`app.kill` does, best effort): the app with the package's bundle ID, or its one free-team `XTL-<TEAM>.` copy; when
+several teams' copies are installed none is closed, and a fresh install closes nothing. Xcode does the same: iOS won't end an app in the foreground for an update ("termination
 resistance"), and its installer then sends nothing until the app leaves the screen. Each step is bounded. An
 upload chunk gets 60 s. The installer gets 120 s between two messages: after 20 s of silence an
-`installProgress` event with a `message` ("Waiting for <App> to close on your iPhone") is sent once, and at
+`installProgress` event with a `message` is sent once: "Waiting for your iPhone. If <App> is open on it, close
+it" when the app was running (or closing it failed), else "Waiting for your iPhone to finish installing <App>". At
 120 s the request fails with `install-stalled`. The AFC and installation_proxy connections are opened per
 request and closed on every way out, including cancellation. The staged package is removed (10 s at most) and
 the tunnel is kept.
 
-A request whose client disconnects is cancelled, `app.install` included, because nobody is left to read its
-reply. Its connections close and the staged file is removed. The same happens to requests still running
-when the daemon shuts down.
+A request whose client disconnects is cancelled, `app.install` included (see [Broker](#broker)). Its connections
+close and the staged file is removed.
 
 Error codes besides the common ones:
 

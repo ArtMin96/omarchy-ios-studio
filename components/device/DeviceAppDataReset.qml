@@ -50,6 +50,7 @@ ColumnLayout {
   // (a wipe installs the same build again so iOS drops its cached settings; a reinstall installs it fresh)
   property string step: ""                    // delete | install
   property real installPercent: -1
+  property string installMessage: ""         // the installer waits for the iPhone (installProgress `message`)
   property real startedAt: 0
   property int elapsed: 0
   Timer { interval: 1000; repeat: true; running: root.phase === "running"; onTriggered: root.elapsed = Math.round((Date.now() - root.startedAt) / 1000) }
@@ -58,6 +59,7 @@ ColumnLayout {
     function onDaemonEvent(name, data) {
       if (name !== "installProgress" || root.phase !== "running" || !data) return
       root.step = "install"
+      root.installMessage = Model.installWaitMessage(data)
       // over Wi-Fi the install reports no numbers (or only 0): keep the bar moving until real ones arrive
       var pct = Number(data.percent)
       if (isFinite(pct) && pct > 0) root.installPercent = pct
@@ -69,6 +71,7 @@ ColumnLayout {
     root.phase = "running"
     root.step = "delete"
     root.installPercent = -1
+    root.installMessage = ""
     root.startedAt = Date.now()
     root.elapsed = 0
     // a running app is stopped first (stopApp), so it can't write new files while they're deleted
@@ -189,7 +192,7 @@ ColumnLayout {
         indeterminate: root.step !== "install" || root.installPercent <= 0
         value: Math.max(0, root.installPercent) / 100
         label: root.step === "install"
-               ? (root.mode === "reinstall" ? "Installing " + root.appName + " again…" : "Reinstalling " + root.appName + " so iOS forgets its old settings…")
+               ? root.installMessage || (root.mode === "reinstall" ? "Installing " + root.appName + " again…" : "Reinstalling " + root.appName + " so iOS forgets its old settings…")
                : "Deleting " + (root.plan ? Model.plural(root.plan.count, "item") : "the app's data") + "…"
         // a percent once the install reports one, else the seconds so far
         trailing: root.step === "install" && root.installPercent > 0 ? Math.round(root.installPercent) + "%" : Model.formatDuration(root.elapsed)
