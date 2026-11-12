@@ -30,6 +30,8 @@ Item {
   readonly property var shown: svc.items.filter(function(p) {
     return Model.matches((p.name || "") + " " + (p.bundleId || "") + " " + (p.displayPath || ""), page.query)
   })
+  // Names two listed apps share (a copy of an app in another folder): their build rows name the folder too.
+  readonly property var sharedNames: Model.sharedNames(svc.items)
   readonly property var expiring: svc.items.filter(function(p) {
     return p.signing && p.signing.daysLeft !== null && p.signing.daysLeft !== undefined && p.signing.daysLeft < 2
   }).sort(function(a, b) { return a.signing.daysLeft - b.signing.daysLeft })
@@ -312,6 +314,7 @@ Item {
         required property int index
         Layout.fillWidth: true
         project: modelData
+        sameName: page.sharedNames[modelData.name] === true
         svc: page.svc
         watchSvc: page.app.watch
         hasCursor: page.cursor === index
@@ -382,9 +385,10 @@ Item {
         title: modelData.name + " · " + (Model.isWatchBuild(modelData) && modelData.kind === "compile" ? "Compile on save"
                                          : Model.isWatchBuild(modelData) && modelData.kind === "run" ? "Run on save"
                                          : ({ run: "Run", ipa: ".ipa", renew: "Re-sign", install: "Reinstall", compile: "Build" }[modelData.kind] || modelData.kind))
-        subtitle: modelData.result === "ok"
-                  ? "Finished in " + Model.formatDuration(modelData.duration) + (modelData.warnings ? " · " + Model.plural(modelData.warnings, "warning") : "")
-                  : (modelData.errorMessage || "Failed")
+        subtitle: (page.sharedNames[modelData.name] === true ? Model.tildePath(modelData.path, page.app.home) + " · " : "")
+                  + (modelData.result === "ok"
+                     ? "Finished in " + Model.formatDuration(modelData.duration) + (modelData.warnings ? " · " + Model.plural(modelData.warnings, "warning") : "")
+                     : (modelData.errorMessage || "Failed"))
         meta: Model.relativeTime(modelData.time)
         trailing: [ IconButton { glyph: Model.Glyph.file; tooltip: "Open this build's log"; visible: !!modelData.logFile; onClicked: page.svc.openBuildLog(modelData.logFile) } ]
       }

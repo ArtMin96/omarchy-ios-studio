@@ -215,7 +215,7 @@ header tab list element linkVariant (element roles) and contrast textSize clippe
 Functions: `formatBytes(n)` → "1.2 GB"; `relativeTime(isoOrEpoch)` → "5 minutes ago" / "in 3 days";
 `formatDuration(sec)` → "12 min"; `expiryStatus(iso)` → `{level, text: "expires in 3 days", days}`;
 `level(x)` normalises to `ok|warn|error|info|busy`; `levelGlyph(level)`; `errorMessage(err)`;
-`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `greeting()`; `keyAction(event)`; `PAGES`,
+`plural(n, word)`; `isWatchBuild(entry)` (a build history entry from watch mode: `trigger: "watch"`, or a `w-` buildId); `clamp(v, lo, hi)`; `matches(text, query)`; `sharedNames(projects)` → `{name: true}` for the names more than one listed project has (the Projects page then shows their folder more clearly); `tildePath(path, home)` → "~/Projects/App"; `greeting()`; `keyAction(event)`; `PAGES`,
 `pageIndex(key)`, `pageByKey(key)`, `resolvePage(name)`, `parseDeepLink(link)`, `SHORTCUTS`, `shortcutGroups()`.
 
 Run presets (mirroring `helper/iosstudio/features/run_presets.py`, so the editor can preview and validate as you type; the helper
@@ -667,7 +667,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
 - **AccountRevokeWarning**: explains why one Apple ID on two computers revokes the other's certificate.
   Props: `compact`, `expanded`.
 - **ProjectCard**: one project on the Projects page. Props: `project`, `svc` (`app.projects`), `hasCursor`,
-  `expanded`; read-only `narrow`. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
+  `expanded`, `sameName` (another listed project has this name, from `Model.sharedNames`: the folder line, always
+  on the card as `displayPath` elided in the middle, then reads dim instead of faint); read-only `narrow`. The folder
+  keeps up to 220 px before it elides; the editor hint after it gives way first. Run is the main action, the rest sit behind More. Signals `run()`, `buildIpa()`,
   `checkBuild()`, `renew()`, `openEditor()`, `openFolder()`, `removeFromList()`, `toggleAutoRenew()`,
   `openBuildSettings()`, `editPresets()` (Edit presets… in Run's menu, or More › Run presets), `showBuild()`,
   `hovered(bool)`; read-only `blocked` (a generated project its build settings don't allow yet) and `runPreset` (the
