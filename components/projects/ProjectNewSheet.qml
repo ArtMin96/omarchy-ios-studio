@@ -39,7 +39,7 @@ Sheet {
   readonly property string suggestedBundle: (svc ? svc.bundlePrefix : "com.example") + "." + cleanName.replace(/_/g, "-")
 
   function templateGlyph(g) {
-    return { phone: Model.Glyph.phone, tabs: Model.Glyph.apps, list: Model.Glyph.logs }[g] || Model.Glyph.sparkles
+    return { phone: Model.Glyph.phone, tabs: Model.Glyph.apps, list: Model.Glyph.logs, testTube: Model.Glyph.testTube }[g] || Model.Glyph.sparkles
   }
 
   function reset() {

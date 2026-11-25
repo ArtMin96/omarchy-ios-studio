@@ -17,6 +17,9 @@ import "../../lib/Model.js" as Model
 // "Style" header; they never change the build's result, its banner or the tab's colour, and Hide keeps
 // them out (remembered). After "Lint project" on another project's card (svc.lintFocus), the drawer
 // shows only that project's style warnings until a build starts or "Show build" is pressed.
+// A finished unit test run (app.tests; build.kind "test", ProjectService.showTestRun) shows here like a finished
+// Build when tests failed or didn't compile: the failing tests in Problems (a click opens the file at the line),
+// the run's log tail in Log; Try again runs the tests again.
 //   BuildPanel { app: page.app; svc: page.app.projects; opened: page.panelOpen; onCloseRequested: … }
 Item {
   id: root
@@ -65,7 +68,7 @@ Item {
 
   function kindLabel(k) {
     if (root.b.watch) return "Compiled on save"
-    return { run: "Run on iPhone", ipa: "Build .ipa", renew: "Re-sign & reinstall", install: "Reinstall", compile: "Build" }[k] || "Build"
+    return { run: "Run on iPhone", ipa: "Build .ipa", renew: "Re-sign & reinstall", install: "Reinstall", compile: "Build", test: "Unit tests" }[k] || "Build"
   }
 
   // The project's name goes on the subtitle line (lintSubtitle), so a long name never elides the count.
@@ -92,9 +95,11 @@ Item {
       if (b.kind === "renew") return b.name + " is good for another week"
       if (b.kind === "ipa") return b.name + ".ipa is ready"
       if (b.kind === "install") return b.name + " was reinstalled"
+      if (b.kind === "test") return b.name + " passes its tests"
       return b.name + (b.watch ? " compiles" : " built")
     }
     if (result.error && result.error.code === "cancelled") return "Build cancelled"
+    if (result.error && result.error.code === "tests-failed") return Model.plural(result.error.failed || root.errorCount || 1, "test") + " failed in " + b.name
     if (result.error && result.error.code === "compile-errors") return Model.plural(root.errorCount || 1, "error") + " in " + b.name
     return "Couldn't finish " + b.name
   }
@@ -112,6 +117,11 @@ Item {
     function onBuildStarted() { logView.clear(); root.tab = "log" }
     function onBuildLog(text, level) { logView.append(text, level || undefined) }
     function onBuildFinished(ok) { if (!ok && root.errorCount > 0) root.tab = "problems" }
+    function onTestRunShown(ok) {
+      logView.clear()
+      logView.appendMany(root.svc.logBuffer.map(function(l) { return l.text }))
+      if (!ok && root.errorCount > 0) root.tab = "problems"
+    }
     function onWatchBuildShown(ok) {
       logView.clear()
       if (!ok && root.errorCount > 0) root.tab = "problems"
@@ -256,6 +266,8 @@ Item {
               if (root.b.kind === "run") return "Installed and opened on your iPhone" + (root.b.preset ? " with the run preset “" + root.b.preset + "”" : "") + ". "
                                                 + (root.warningCount ? root.warningsText() + " to look at." : "")
               if (root.b.kind === "renew") return "Re-signed and reinstalled. It keeps opening for another 7 days."
+              if (root.b.kind === "test") return "All " + Model.plural((root.b.testCounts || {}).passed || 0, "test") + " passed"
+                                                 + ((root.b.testCounts || {}).skipped ? ", " + root.b.testCounts.skipped + " skipped" : "") + "."
               if (root.b.kind === "ipa") return "Saved to " + String(d.ipa || "").replace(app ? app.home : "", "~")
               if (root.b.kind === "compile") return "Your code compiles for iPhone." + (root.warningCount ? " " + root.warningsText() + "." : "")
                                                     + (root.b.watch ? " It compiles again when you save." : "")

@@ -46,6 +46,10 @@ import "../lib/Model.js" as Model
 //   app icon (`projects icon`, `projects pick-file`): pickImage(onDone(path|"")) · previewIcon(p, {image, background,
 //     fit}, onDone, onFail) (dry run: a preview PNG in the cache) · setIcon(p, opts, onDone, onFail) (writes it, toasts,
 //     refreshes the list and re-checks the card). ProjectIconSheet runs them.
+//   unit tests (app.tests, TestService): showTestRun({path, name, ok, code, message, counts, duration, diagnostics, log,
+//     logFile, filter}) shows a finished `test run` in the build panel (build.kind "test"): its failing tests and compile
+//     errors in Problems, its log tail in Log; skipped while a build runs. Emits testRunShown(ok). runAgain() on it
+//     runs the tests again.
 //   signals: buildLog(string text, string level) · buildStarted() · buildFinished(bool ok) · diagnosticAdded(d)
 Item {
   id: root
@@ -134,6 +138,7 @@ Item {
   signal buildFinished(bool ok)
   signal diagnosticAdded(var d)
   signal watchBuildShown(bool ok)
+  signal testRunShown(bool ok)
 
   // A refresh while a list load runs gets one more load after it (Resource.load(true) queues it).
   function refresh() {
@@ -191,7 +196,12 @@ Item {
   function compile(p) { _start(p, "compile") }
   function renew(p) { _start(p, "renew") }
   function reinstall(p) { _start(p, "install") }
-  function runAgain() { if (root.build.path) _start(projectByPath(root.build.path) || { path: root.build.path, name: root.build.name }, root.build.kind) }
+  function runAgain() {
+    if (!root.build.path) return
+    var p = projectByPath(root.build.path) || { path: root.build.path, name: root.build.name }
+    if (root.build.kind === "test") { if (app.tests) app.tests.start(p, root.build.filter || ""); return }
+    _start(p, root.build.kind)
+  }
 
   function _needsDevice(kind) { return kind === "run" || kind === "renew" || kind === "install" }
 
@@ -533,6 +543,32 @@ Item {
     root.watchBuildShown(!!w.ok)
     loadHistory()
     if (w.ok) editorStatus({ path: w.path })
+  }
+
+  // ------------------------------------------------------------ unit tests (services/TestService.qml)
+  // A finished test run with failing tests or compile errors (or a passing one replacing a test run shown here):
+  // show it like a finished Build, so its problems open in the editor at their line.
+  function showTestRun(t) {
+    if (!t || !t.path || root.building) return
+    _clearDiagnostics()
+    var diags = t.diagnostics || []
+    for (var i = 0; i < diags.length; i++) if (diags[i]) _addDiagnostic(diags[i])
+    var located = diags.some(function(d) { return d && !!d.file })
+    var compile = t.code === "build_failed"
+    var c = t.counts || {}
+    var err = t.ok ? null : { code: compile ? "compile-errors" : "tests-failed", failed: c.failed || 0,
+                              message: compile ? "Fix the errors and run the tests again." : "Click one to open it in your editor.",
+                              fix: located ? { label: compile ? "Open the first error" : "Open the first failure", action: "open-diagnostic" } : null }
+    var pr = projectByPath(t.path)
+    root.lintFocus = ""
+    root.logBuffer = (t.log || []).map(function(l) { return { text: l, level: "" } })
+    root.build = {
+      active: false, kind: "test", path: t.path, name: t.name || (pr ? pr.name : ""), bundleId: pr ? pr.bundleId || "" : "",
+      steps: [], current: "", fraction: t.ok ? 1 : 0, detail: t.ok ? "Done" : err.message, eta: null,
+      started: Date.now() - (t.duration || 0) * 1000, logFile: t.logFile || "", udid: "", preset: "", filter: t.filter || "",
+      testCounts: c, result: { ok: !!t.ok, data: {}, error: err, duration: t.duration || 0 }
+    }
+    root.testRunShown(!!t.ok)
   }
 
   // ------------------------------------------------------------ project actions
