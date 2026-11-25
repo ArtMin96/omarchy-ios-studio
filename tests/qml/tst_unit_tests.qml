@@ -35,21 +35,34 @@ TestCase {
     compare(Model.testProgressText(null), "")
   }
 
-  function test_failedFilterEscapesAndAnchors() {
+  function test_failedFilterMatchesRealIds() {
+    // the ids real swift test reports: XCTest "Suite/test" (no module), Swift Testing "Module.Suite/name()" with
+    // parameters ("addZero(n:)"); swift test matches XCTest as "Module.Suite/test" and Swift Testing as the id
+    // with its source location behind it ("…/add()/GreetingTests.swift:5:6")
     var f = Model.testFailedFilter([
-      { id: "HabitCoreTests.StreakCalculatorTests/testStreakResetsAfterMissedDay" },
-      { id: "HabitCoreSwiftTests.ReminderScheduleTests/weekendRemindersSkipSaturday()" },
-      { id: "HabitCoreTests.StreakCalculatorTests/testStreakResetsAfterMissedDay" },   // repeated: once
-      { name: "no id" }
+      { id: "MathTests/testAdd", library: "xctest" },
+      { id: "AppCoreSwiftTests.GreetingTests/greet()", name: "Greeting trims spaces", library: "swift-testing" },
+      { id: "AppCoreSwiftTests.GreetingTests/addZero(n:)", library: "swift-testing" },
+      { id: "MathTests/testAdd", library: "xctest" },                    // repeated: once
+      { name: "no id", library: "xctest" }
     ])
-    compare(f, "^(?:HabitCoreTests\\.StreakCalculatorTests/testStreakResetsAfterMissedDay"
-               + "|HabitCoreSwiftTests\\.ReminderScheduleTests/weekendRemindersSkipSaturday\\(\\))(?:/|$)")
+    compare(f, "(?:(?:^|\\.)MathTests/testAdd$|(?:^|\\.)AppCoreSwiftTests\\.GreetingTests/greet\\(\\)"
+               + "|(?:^|\\.)AppCoreSwiftTests\\.GreetingTests/addZero\\(n:\\))")
     var rx = new RegExp(f)
-    verify(rx.test("HabitCoreTests.StreakCalculatorTests/testStreakResetsAfterMissedDay"))
-    verify(rx.test("HabitCoreSwiftTests.ReminderScheduleTests/weekendRemindersSkipSaturday()"))
-    verify(!rx.test("HabitCoreTests.StreakCalculatorTests/testStreakResetsAfterMissedDayTwice"))
-    verify(!rx.test("HabitCoreTests.StreakCalculatorTests/testCountsConsecutiveDays"))
-    verify(!rx.test("XHabitCoreTests.StreakCalculatorTests/testStreakResetsAfterMissedDay"))
+    verify(rx.test("AppCoreTests.MathTests/testAdd"))
+    verify(rx.test("MathTests/testAdd"))
+    verify(rx.test("AppCoreSwiftTests.GreetingTests/greet()/GreetingTests.swift:6:6"))
+    verify(rx.test("AppCoreSwiftTests.GreetingTests/addZero(n:)/GreetingTests.swift:7:6"))
+    verify(!rx.test("AppCoreTests.MathTests/testAddTwice"))
+    verify(!rx.test("AppCoreTests.OtherMathTests/testAdd"))
+    verify(!rx.test("AppCoreTests.MathTests/testClamp"))
+    verify(!rx.test("AppCoreSwiftTests.GreetingTests/greetTwice()/GreetingTests.swift:9:6"))
+    verify(!rx.test("AppCoreSwiftTests.GreetingTests/add()/GreetingTests.swift:5:6"))
+    verify(!rx.test("XAppCoreSwiftTests.GreetingTests/greet()/GreetingTests.swift:6:6"))
+    // one test: no group around it
+    compare(Model.testFailedFilter([{ id: "MathTests/testAdd", library: "xctest" }]), "(?:^|\\.)MathTests/testAdd$")
+    compare(Model.testFailedFilter([{ id: "AppCoreSwiftTests.GreetingTests/add()", library: "swift-testing" }]),
+            "(?:^|\\.)AppCoreSwiftTests\\.GreetingTests/add\\(\\)")
     compare(Model.testFailedFilter([]), "")
     compare(Model.testFailedFilter(null), "")
     compare(Model.regexEscape("a.b*c+d?e^f$g{h}i(j)k|l[m]n\\o"), "a\\.b\\*c\\+d\\?e\\^f\\$g\\{h\\}i\\(j\\)k\\|l\\[m\\]n\\\\o")

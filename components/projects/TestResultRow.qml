@@ -9,7 +9,7 @@ import "../../lib/Model.js" as Model
 // One row of the unit tests sheet's results (ProjectTestsSheet; projects slice). kind:
 //   failed       error glyph · test name · suite (· library when the project uses both) · the assertion's message ·
 //                file:line (relative to the project); a click opens the file at the line
-//   skipped      a quiet minus · name · suite
+//   skipped      a quiet minus · name · suite · "skipped", the reason under it (muted) when the test gave one
 //   passedGroup  "12 passed" with a chevron: a click shows or hides the passed tests below it
 //   passed       indented under the group: check · name · suite, its time on the right
 // Insets, glyph column and gap are BuildDiagnosticRow's, so these rows line up with the compile problems and the
@@ -103,11 +103,13 @@ CursorSurface {
         }
         Item { Layout.fillWidth: true }
       }
+      // a failure's assertion, a skipped test's reason (XCTSkip's message, Swift Testing's .disabled comment)
       AppText {
         Layout.fillWidth: true
-        visible: root.failed && text !== ""
+        visible: (root.failed || root.kind === "skipped") && text !== ""
         text: String(root.test.message || "")
-        tone: "dim"; size: "small"; wrapMode: Text.Wrap; maximumLineCount: 4; elide: Text.ElideRight
+        tone: root.failed ? "dim" : "faint"; size: "small"; wrapMode: Text.Wrap; maximumLineCount: root.failed ? 4 : 2
+        elide: Text.ElideRight
       }
       AppText {
         Layout.fillWidth: true
