@@ -85,7 +85,7 @@ PageFrame {
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
 | `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
-| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug`, `app.hotReload` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService; `app.hotReload`: hot reload, see HotReloadService) |
+| `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug`, `app.hotReload`, `app.tests` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService; `app.hotReload`: hot reload, see HotReloadService; `app.tests`: unit tests, see TestService) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
 | `app.home`, `app.helperPath`, `app.devicedPath`, `app.repoPath`, `app.configDir`, `app.stateDir`, `app.cacheDir`, `app.demoDir` | Paths. `configDir`/`stateDir`/`cacheDir` follow `$XDG_CONFIG_HOME`/`$XDG_STATE_HOME`/`$XDG_CACHE_HOME` like the helper (`core/appdirs.py`; unset or empty = the default), so the app reads the daemon's `device.json` and the helper's `builds.json` where they were written; `app.xdgConfigHome`/`xdgStateHome`/`xdgCacheHome` are the base folders |
@@ -228,6 +228,12 @@ pt-BR, nl, ru, ja, ko, zh-Hans, ar, he), `PRESET_MAX_NAME` (40), `PRESET_LANGUAG
 `presetTag(value, sep)` → the helper's spelling (`"de-de"` → `"de-DE"` with `"-"`, `"de_DE"` with `"_"`);
 `presetResolve(p)` → `{args, env}` as the launch gets them (own args, then `-AppleLanguages (…)`, `-AppleLocale …`,
 `-UITestMode YES`); `presetSummary(p)` → "German · de_DE · 2 arguments · UI test mode"; `presetNames(project)`.
+
+Unit tests (tested in `tests/qml/tst_unit_tests.qml`): `testDuration(sec)` ("5 ms", "4.2 s", "3 min"),
+`testSummary(counts, duration)` → "12 passed · 2 failed · 1 skipped · 4.2 s", `testProgressText(counts)` → "8 finished ·
+1 failed", `regexEscape(s)`, `testFailedFilter(failures)` (a `--filter` matching exactly those ids),
+`testLibraryLabel(lib)` ("XCTest", "Swift Testing"), `testRows(results, expanded)` (failures, skipped, then a passed
+group) and `testSheetState(run, infoStatus, info)` (what the Unit tests sheet shows).
 
 ---
 
@@ -693,6 +699,9 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   (`svc.lintFor(project)`): Lint project spins while it runs, and `lintTip` adds the last count and when.
   `F` / `L` on the page do the same for the highlighted card. Packages: More has Packages… (after Lint project);
   signal `managePackages()` (the page opens ProjectPackagesSheet). `P` on the page does the same.
+  Unit tests: More has Run tests (after Check build); signal `runTests()` (the page opens ProjectTestsSheet and starts
+  a run). Read-only `testsSvc` (`svc.app.tests`), `testsRunning` and `testsTip`; disabled, with the reason, while this
+  project builds. `T` on the page does the same.
   App icon: More has Set icon…; signal `setIcon()` (the page opens ProjectIconSheet). The card's icon loads with
   `cache: false`, so a new icon at the same path shows after the refresh.
   Debug in editor: prop `debugSvc` (defaults to `svc.app.editorDebug`), read-only `debugEntry`, `debugLive`,
@@ -778,6 +787,33 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   menu's background swallows the rest, so a click never also reaches what lies under the (non-modal) menu: a
   TapHandler only grabs passively. ToastHost dismisses toasts the same way. These two rows close the menu and call
   `watchSvc.toggle(project)` / `watchSvc.setAutoRun(project, on)`; the cursor opens on the preset rows, never on them.
+- **TestService** (`app.tests`, `services/TestService.qml`): unit tests on this computer (helper `test`,
+  `helper/iosstudio/features/testing/`). One `test run --project P [--filter F]` Stream per project, so several projects
+  can test at once; a run keeps going when the sheet closes. `forProject(p)` → the run entry or null (`{path, name,
+  state: "running" | "done", filter, steps, step, counts: {finished, passed, failed, skipped}, ok, error, result,
+  startedAt, endedAt, cancelling, rev}`), `isRunning(p)`, `results(p)` → `{failed, skipped, passed, passedTotal,
+  libraries, diagnostics, log}`, `logTail(p)`, `start(p, filter)`, `cancel(p)` (`{"cancel": true}`, then the process
+  is stopped after 3 s), `forget(p)`. `info` is a Resource with `test info` for `infoPath`; `loadInfo(p)` asks it (the
+  sheet does when it opens, and a run asks again when it ends), nothing loads by itself. `viewing` is the project the
+  sheet shows: its runs don't toast, other runs toast their outcome. Signal `finished(path, ok)`. A run that ends with
+  failing tests or compile errors goes to `app.projects.showTestRun`. Bounded: 2,000 result rows (failures first),
+  200 log lines and 200 problems per run, the newest 8 finished runs; live counts reach the UI at most every 120 ms.
+  See [features/unit-tests.md](features/unit-tests.md).
+- **ProjectTestsSheet** (components/projects/): the Unit tests sheet ("Unit tests · <name>"). Props: `app`, `svc`
+  (`app.projects`); `openFor(project, startRun)` (`true` starts a run unless one runs); signal
+  `showProblems(project)` (the page opens the build panel on Problems). `view` is `Model.testSheetState(run,
+  infoStatus, info)`: `loading`, `idle`, `running` (the three steps, pending ones faint, with the finished count),
+  `passed`, `failed`, `no_match`, `build_failed` (the compile problems as BuildDiagnosticRows), `no_tests`
+  (EmptyState with Open in editor and Check again), `host_unsupported` (an amber box and the imports as rows),
+  `cancelled`, `toolchain`, `error`, `info_error` (ErrorState). The filter field (Enter runs) hides in the states
+  where it can't help. Results are a ListView of TestResultRows that takes what the window leaves (space(160)–space(420)).
+  Footer: Close, Run failed only (`Model.testFailedFilter`), Run tests / Run again, Cancel while running. Blocks start
+  at the header glyph's ink (`inkInset`), as in ProjectFormatSheet. Also opened by the page param `{action: "test", path}`.
+- **TestResultRow** (components/projects/): one row of the sheet's results, with BuildDiagnosticRow's insets, glyph
+  column and gap. `kind`: `failed` (error glyph, name, suite, the library when `showLibrary`, the message, `file:line`
+  relative to `projectPath`; a click opens the editor at the line), `skipped`, `passedGroup` ("12 passed" with a
+  chevron; `count`, `open`) and `passed` (indented, with its time). Props: `kind`, `test`, `count`, `open`,
+  `projectPath`, `showLibrary`, `hasCursor`; signals `clicked()`, `hovered(h)`.
 - **WatchStateLabel**: watch mode's state on a project card: a glyph and small text in the quiet StatusPill style
   (level colour, `Theme.dim` for info, spinner glyph for busy) that elides and is clickable (underlined on hover,
   `PanelToolTip` with the detail). Props: `info` (`{level, glyph, text, tip}` from `app.watch.label(w)`); signal
@@ -945,6 +981,12 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   error), never the error colour. Short of room, the location line first middle-elides the folder, hiding it once
   fewer than about 6 of its characters would show, then elides the lead ("Style · line_leng… · "); the file
   name:line:col stays whole unless it alone is wider than the row.
+- **ProjectService test runs** (`app.projects`): `showTestRun({path, name, ok, code, message, counts, duration,
+  diagnostics, log, logFile, filter})` shows a finished unit test run in the build panel like a finished build
+  (`build.kind: "test"`): failing tests and compile errors in `diagnostics`, the log tail in Log, then emits
+  `testRunShown(ok)`. It does nothing while a build runs. `runAgain()` on a test entry starts the tests again
+  (`app.tests.start`). BuildPanel labels it "Unit tests" ("2 tests failed in HabitTracker", "HabitTracker passes its
+  tests").
 - **ProjectService watch builds** (`app.projects`): `showWatchBuild({path, name, ok, errors, warnings, duration,
   logFile, buildId, diagnostics, errorMessage, errorCode})` puts a finished compile on save into `build` (`kind:
   "compile"`, `watch: true`, not active) and `diagnostics`, then emits `watchBuildShown(ok)`. It does nothing while a
