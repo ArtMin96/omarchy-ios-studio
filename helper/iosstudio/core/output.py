@@ -66,7 +66,7 @@ def fail(code: str, message: str, fix: dict | None = None, detail: str | None = 
     return 1
 
 
-def event(name: str, **fields: Any) -> None:
+def event(name: str, /, **fields: Any) -> None:
     _write({"event": name, **fields})
 
 

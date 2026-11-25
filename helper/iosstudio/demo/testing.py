@@ -330,7 +330,7 @@ def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
             ev.update(file=f"{path}/{f}", line=line, message=msg)
             output.event("diagnostic", severity="error", message=f"{c.name}: {msg}", category="test",
                          file=f"{path}/{f}", line=line, col=col)
-        output._write({"event": "test", **ev})   # event(name, **fields) can't take a "name" field
+        output.event("test", **ev)
         done.append((c, status))
     failed = sum(1 for _c, s in done if s == "failed")
     r.log(f"Executed {len(done)} tests, with {failed} failures in {sc.duration - 2.1:.3f} seconds")
