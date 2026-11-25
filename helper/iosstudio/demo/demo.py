@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from pathlib import Path
 
 from iosstudio.core import appdirs, output, subproc
 from iosstudio.core.output import ok
@@ -463,6 +464,11 @@ def _parsed_failure(fail: str, kind: str, path: str, name: str, bundle: str, ste
 
 def _fake_log(flags: dict) -> dict:
     f = str(flags.get("file") or "")
+    if "/test-runs/" in f and f.endswith(".log"):   # demo test runs write a real (small) log there
+        try:
+            return {"text": Path(f).read_text(errors="replace")[-200_000:], "file": f, "truncated": False}
+        except OSError:
+            pass
     failed = "habits" in f
     text = "\n".join([
         "$ xtool dev build --triple arm64-apple-ios",
