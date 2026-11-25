@@ -163,6 +163,7 @@ Item {
     var t = { id: String(ev.id || ""), name: String(ev.name || ev.id || ""), suite: String(ev.suite || ""),
               library: String(ev.library || ""), status: status, duration: ev.duration }
     if (status === "failed") { t.file = ev.file || ""; t.line = ev.line || 0; t.message = String(ev.message || "") }
+    else if (status === "skipped" && ev.message) t.message = String(ev.message)
     if (t.library) r.libraries[t.library] = true
     e.counts.finished++
     e.counts[status]++
