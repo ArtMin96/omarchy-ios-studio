@@ -14,17 +14,20 @@ learns how to build and test through iOS Studio before it wastes turns on tools 
 The text says:
 
 - There's no Mac, no Simulator, no `xcodebuild` and no on-device XCTest. UIKit and SwiftUI don't build
-  for the Linux host, so `swift build` on the computer isn't a check.
+  for the Linux host, so `swift build` and `swift test` on the computer aren't a check.
+- Logic in a library target that imports only Foundation can have unit tests (XCTest or Swift Testing),
+  which `ios_test_run` runs on the computer; UI code is checked on the iPhone. See
+  [unit-tests.md](unit-tests.md).
 - How to check a change with iOS Studio's tools: `ios_project_check` → `ios_build_start(action='compile')`
-  → `ios_build_diagnostics` → `ios_run` → `ios_app_run_and_capture` or `ios_app_console_read` →
-  `ios_screenshot`, `ios_ui_tree`, `ios_a11y_audit`.
+  → `ios_build_diagnostics` → `ios_test_run` when there are tests → `ios_run` → `ios_app_run_and_capture`
+  or `ios_app_console_read` → `ios_screenshot`, `ios_ui_tree`, `ios_a11y_audit`.
 - How long jobs answer (`state="running"`, `job_id`, `needs_input`) and which steps only you can do
   (sign-in, Trust, Developer Mode).
 - What a free Apple ID allows: 3 apps per iPhone, re-signing every 7 days, 10 new app IDs a week.
 
 ## When
 
-- **New app.** Every template (SwiftUI app, tabs app, list and detail) gets both files.
+- **New app.** Every template (SwiftUI app, tabs app, list and detail, app with unit tests) gets both files.
 - **Make it an app.** Converting a plain Swift package adds them too, when they're missing. The confirm
   dialog says so.
 

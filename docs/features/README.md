@@ -21,6 +21,7 @@ see [guide.md](../guide.md).
 | [run-presets.md](run-presets.md) | Saved launch arguments, environment, language and region per project |
 | [screenshot-compare.md](screenshot-compare.md) | Screenshot baselines, visual diffs and screenshot matrices |
 | [ui-inspect.md](ui-inspect.md) | The screen as data, pressing elements, Apple's accessibility audit |
+| [unit-tests.md](unit-tests.md) | Unit tests of Foundation logic on the computer with `swift test`, the "App with unit tests" template |
 | [watch-mode.md](watch-mode.md) | Compile on save |
 
 Related pages outside this folder: [camera-testing.md](../camera-testing.md) (feeding camera code test images),

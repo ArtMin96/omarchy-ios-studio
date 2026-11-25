@@ -16,12 +16,13 @@ core/                  non-visual QML plumbing
   CommandCheck.qml       cached `command -v` (singleton)
   ThemeWatcher.qml       follows the Omarchy theme
 lib/Model.js           pure helpers: glyphs, PAGES, SHORTCUTS, formatting, run preset rules
-services/              one service per area: Account, Device, Log, Project, Setup, Toolchain, Watch (+ PathResults)
+services/              one service per area: Account, Device, EditorDebug, HotReload, Log, Project, Setup, Test,
+                       Toolchain, Watch (+ PathResults)
 pages/                 one page per sidebar entry
 components/            UI building blocks, one folder per area (APIs in components.md)
   common/                shared widgets: Card, ListRow, Sheet, StateView, Theme, LogView, …
   device/                the iPhone page: hero, tabs (Device*View), app data, debug, perf chart, screenshot compare
-  projects/              the Projects page: cards, build panel, sheets (new, packages, format, presets, build settings)
+  projects/              the Projects page: cards, build panel, sheets (new, packages, format, presets, build settings, unit tests)
   logs/                  the Logs page: device/console/build log tabs, crash browser
   account/               the Apple ID page: sign-in sheet, revoke warning
   settings/              Settings parts: AI agents, editor setup
@@ -51,6 +52,8 @@ helper/
                              demo_mode.py, commands.py
       hotreload/             group `hotreload` (hot reload on the iPhone): project_setup.py (the Package.swift block), session.py,
                              state.py (runtime files), buildinfo.py (baseline), patch.py, checks.py, macho.py, signing.py, commands.py
+      testing/               group `test` (unit tests on the computer): project.py (package facts, import scan), runner.py
+                             (build and run), xctest.py, events.py (output parsers), results.py, store.py (logs, last.json), commands.py
       editor_setup/          group `editor`: editors.py (once per machine), project.py (per project), actions.py, env.py, demo.py
       agents/                group `agents` (connect the MCP server to AI tools): clients.py, writers.py, server.py, rpc.py, demo.py
       account.py             group `account` (xtool)
@@ -67,7 +70,8 @@ helper/
       crash_symbols.py       keeps each build's binary + dSYM, resolves crash frames to file:line
       config_files.py        edits other programs' config files without losing anything
       xip_version.py         the Xcode version inside a .xip, without unpacking it
-    demo/                  the helper's demo mode: demo.py (router + made-up answers), demo_art.py, debugger_demo.py, hot_reload.py
+    demo/                  the helper's demo mode: demo.py (router + made-up answers), demo_art.py, debugger_demo.py, hot_reload.py,
+                           testing.py
     device/                the device daemon, its broker and client
       protocol.py            the wire format (JSON lines, errors)
       backend.py             the Backend base class: what the broker calls on a daemon
@@ -86,11 +90,12 @@ mcp/
     core/                  registry.py (@tool, slim_schemas), jobs.py (JobManager), job_status.py, deadline.py (25 s),
                            budget.py, params.py, errors.py
     backends/              device.py, projects.py, builds.py, console.py, crashes.py
-    tools/                 one module per area (101 tools), listed in tools/__init__.py MODULES
+    tools/                 one module per area (111 tools), listed in tools/__init__.py MODULES
   pyproject.toml         its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                   ios-studio (launcher), iosstudio-helper, iosstudio-deviced, iosstudio-mcp
-templates/             Swift app templates used by New app; agent-instructions/ holds AGENTS.md and CLAUDE.md for new projects;
+templates/             Swift app templates used by New app (app-with-tests/ adds Package.swift.template, Sources/AppCore/, Tests/);
+                       agent-instructions/ holds AGENTS.md and CLAUDE.md for new projects;
                        hot-reload/ is the runtime package hot reload copies into a project (bump version.txt when it changes)
 tests/                 helper/, cli/, mcp/, qml/, e2e/, support/ (shared fakes), fixtures/<area>/
 pyproject.toml         dev tools only (pytest and ruff config, the dev dependency group); not a package
@@ -129,7 +134,7 @@ Theme changes reach the window two ways: `ThemeWatcher.qml` watches the theme it
 bin/iosstudio-helper <group> <action> [--flag value ...]
 ```
 
-Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py; its `editor*` actions in editor_debug.py and editor_debug_bridge.py, see [features/editor-debugging.md](features/editor-debugging.md)), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/), `packages` (features/packages/) and `hotreload` (features/hotreload/, see [features/hot-reload.md](features/hot-reload.md)). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
+Groups and their modules are in `MODULES` in `helper/iosstudio/cli.py`: `setup`, `toolchain` (features/setup/), `account`, `projects`, `build` (features/projects/), `app` (appconfig.py), `agents` (features/agents/, see [mcp.md](mcp.md)), `debug` (debugger.py; its `editor*` actions in editor_debug.py and editor_debug_bridge.py, see [features/editor-debugging.md](features/editor-debugging.md)), `screenshots`, `editor` (features/editor_setup/), `watch` (features/watch/), `packages` (features/packages/), `hotreload` (features/hotreload/, see [features/hot-reload.md](features/hot-reload.md)) and `test` (features/testing/: `test info` and `test run`, see [features/unit-tests.md](features/unit-tests.md)). `format` and `format-lint` are short for `projects format` / `projects format-lint`. Each feature's commands and flags are in its page under [features/](features/README.md). `cli.py` imports modules lazily, so one broken module doesn't take the others down. With `IOSSTUDIO_DEMO` set, every command goes to `demo/demo.py` instead.
 
 A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled error) or 2 (bad usage):
 
@@ -269,6 +274,8 @@ an iPhone or your home folder; tests that use Swift, `swift-format` or `llvm-sym
 
 Hot reload's tests (listed in [features/hot-reload.md](features/hot-reload.md#tests)) use these hooks: `IOSSTUDIO_HOT_RELOAD_TEMPLATES` replaces `templates/hot-reload/` (stand-in runtime packages), `IOSSTUDIO_XTOOL_DATA` replaces xtool's data folder `~/.config/xtool/data` (a throwaway signing identity made with openssl, never yours), `IOSSTUDIO_RCODESIGN` is the rcodesign to run (a fake), and `IOSSTUDIO_SWIFT` the `swift` that checks `Package.swift` (shared with the packages feature). `IOSSTUDIO_E2E_CRASHLAB` points `tests/helper/test_hot_reload_e2e.py` at an already built copy of CrashLab, which it edits in place, to skip the first build of about 4 minutes.
 
+Unit tests (the `test` group, [features/unit-tests.md](features/unit-tests.md)) run against a fake `swift`: `IOSSTUDIO_SWIFT` points at `tests/support/fake_swift_tests.py`, which answers `dump-package`, `build` and `test` from real Swift 6.4.2 output in `tests/fixtures/swift-test/` (XCTest consoles, Swift Testing event streams, a crash, a compile error, filters). `FAKE_SWIFT_SCENARIO` picks the outcome (`pass`, `fail`, `crash`, `compile`, `nomodule`, `noproduct`, `notests`, `nonative`, `nofound`, `slow`, `hang`), and `IOSSTUDIO_TEST_BUILD_TIMEOUT` / `IOSSTUDIO_TEST_RUN_TIMEOUT` shorten the 20 and 10 minute limits. `tests/helper/test_template_app_with_tests.py` also builds the App with unit tests template and runs its tests with the real `/usr/bin/swift` when it's installed.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `main` and by hand (Actions › CI › Run workflow). A newer push to the same branch cancels the older run. It has three jobs:
@@ -323,6 +330,9 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Swift packages: manifest descriptions, product lists and SwiftPM scratch folders (the newest 100 of each), full `Package.swift` diffs that didn't fit (the newest 10) | `~/.cache/ios-studio/packages/` |
 | One lock per project so two package changes never run at once | `~/.local/state/ios-studio/packages/` |
 | Build logs (the newest 300 builds' logs are kept) | `~/.local/state/ios-studio/build-logs/` |
+| Unit test runs: one log per run (the newest 20, 50 MB in all), each project's last run (`last.json`, 100 projects) and a lock per project (`locks/`) | `~/.local/state/ios-studio/test-runs/` |
+| Unit tests: package facts from `swift package dump-package` (200 projects) and which build system each Swift accepts | `~/.cache/ios-studio/test-packages.json` |
+| Unit tests: the test build, apart from xtool's | `<project>/.build/host-tests/` |
 | Cache (screenshots, crash files, account lists, each iPhone's app list `apps-<udid>.json`) | `~/.cache/ios-studio/` |
 | Large MCP results saved to a file | `~/.cache/ios-studio/mcp/` |
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |

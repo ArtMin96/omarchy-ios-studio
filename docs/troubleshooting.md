@@ -338,6 +338,28 @@ The error says which rule it breaks: a name longer than 40 characters or already
 
 Look at the diff image: the pink pixels are what changed. Usual causes are an animation or a spinner caught mid-move, a blinking cursor, a date or time inside the app (only the status bar is ignored), or content that loads late. Wait for the screen to settle before comparing, raise the threshold a little, or ignore a busy area (`--mask` for the helper). `size-mismatch` means the screenshot comes from another iPhone model or orientation than the baseline: save a baseline for that phone. Without Pillow a full-size compare takes a second or two; see [features/screenshot-compare.md](features/screenshot-compare.md#speed-and-pillow).
 
+## Unit tests
+
+### "No unit tests yet"
+
+The project has no test target. Tests live in a `.testTarget` in `Tests/<Name>Tests/` that depends on a library target with your app's logic. The easiest start is a new app from the App with unit tests template, which has one; or move the logic of an existing app into a library target that only imports Foundation and add a test target for it. Press Check again in the sheet after you change `Package.swift`.
+
+### "This code can't run on the computer" (UIKit or SwiftUI in tested code)
+
+The tests and the code they test are built for Linux, where UIKit, SwiftUI and the other Apple-only frameworks (SwiftData, Combine, Core Location and so on) don't exist. The sheet lists each such import with its file and line. Move the logic you want to test into a target that only imports Foundation, and keep the screens in the app target, which imports it. An import inside `#if canImport(UIKit)` is fine. Press Check again when you're done.
+
+### The first test run is slow
+
+The first run builds the tests and everything they depend on, from nothing, in `.build/host-tests` (about 45 seconds on a small app, longer with many packages). It reuses the packages xtool already downloaded, so it doesn't fetch them again. After that a run takes a few seconds. Deleting the project's `.build` folder (`ios_build_clean`) makes the next run slow again.
+
+### "No test matches the filter"
+
+The filter is a regular expression matched against each test's `Target.Suite/test` id, for example `AppCoreTests.TipCalculatorTests/testTipAndTotal`. A part of it is enough: the suite (`TipCalculatorTests`) or the test's name (`testTipAndTotal`). Characters like `(`, `[` and `.` mean something in a regular expression; "The filter isn't a valid pattern" means it couldn't be read. Clear the filter, or press Run all tests, to run every test.
+
+### A test crashed and the others didn't run
+
+A crash (a force unwrap of `nil`, `fatalError`, an index out of range) ends the test process, so the tests after it don't run. The crashed test is listed as failed, with the crash message and its line. Fix it, then run again.
+
 ## Hot reload
 
 ### I saved, but the change didn't show up
