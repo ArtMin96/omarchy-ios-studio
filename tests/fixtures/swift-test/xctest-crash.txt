@@ -1,0 +1,76 @@
+[0/1] Planning build
+error: Process '/home/user/Projects/CrashLab/.build/host-nb/x86_64-unknown-linux-gnu/debug/CrashLabPackageTests.xctest' exited with unexpected signal code 4
+Test Suite 'All tests' started at 2026-11-25 22:05:57.965
+Test Suite 'debug.xctest' started at 2026-11-25 22:05:57.968
+Test Suite 'CrashTests' started at 2026-11-25 22:05:57.968
+Test Case 'CrashTests.testForceUnwrapCrash' started at 2026-11-25 22:05:57.968
+AppCoreTests/CrashTests.swift:7: Fatal error: Unexpectedly found nil while unwrapping an Optional value
+Current stack trace:
+0    libswiftCore.so                    0x00007f2b6fd62c90 swift_reportError + 33
+1    libswiftCore.so                    0x00007f2b7011a950 _swift_stdlib_reportFatalErrorInFile + 109
+2    libswiftCore.so                    0x00007f2b6fd7490b <unavailable> + 1526027
+3    libswiftCore.so                    0x00007f2b6ff0b8d0 _assertionFailure(_:_:file:line:flags:) + 284
+4    CrashLabPackageTests.xctest        0x0000563d31c0ade9 <unavailable> + 60905
+5    CrashLabPackageTests.xctest        0x0000563d31c0ae34 <unavailable> + 60980
+6    libXCTest.so                       0x00007f2b6f9ab04c <unavailable> + 233548
+7    libXCTest.so                       0x00007f2b6f9ac3de <unavailable> + 238558
+8    libXCTest.so                       0x00007f2b6f9ad040 XCTAssertEqual<A>(_:_:_:file:line:) + 66
+9    CrashLabPackageTests.xctest        0x0000563d31c0afa6 <unavailable> + 61350
+10   CrashLabPackageTests.xctest        0x0000563d31c0b7ab <unavailable> + 63403
+11   CrashLabPackageTests.xctest        0x0000563d31c0b88c <unavailable> + 63628
+12   libXCTest.so                       0x00007f2b6f9a52bc <unavailable> + 209596
+13   libXCTest.so                       0x00007f2b6f9a4b35 <unavailable> + 207669
+14   libXCTest.so                       0x00007f2b6f9a52a2 <unavailable> + 209570
+15   libXCTest.so                       0x00007f2b6f9a527f <unavailable> + 209535
+16   libXCTest.so                       0x00007f2b6f9a380a <unavailable> + 202762
+17   libXCTest.so                       0x00007f2b6f9a59d0 XCTestCase.invokeTest() + 418
+18   libXCTest.so                       0x00007f2b6f9a57e0 XCTestCase.perform(_:) + 104
+19   libXCTest.so                       0x00007f2b6f9a8300 XCTest.run() + 144
+20   libXCTest.so                       0x00007f2b6f9a69c0 XCTestSuite.perform(_:) + 149
+21   libXCTest.so                       0x00007f2b6f9a8300 XCTest.run() + 144
+22   libXCTest.so                       0x00007f2b6f9a69c0 XCTestSuite.perform(_:) + 149
+23   libXCTest.so                       0x00007f2b6f9a8300 XCTest.run() + 144
+24   libXCTest.so                       0x00007f2b6f9a69c0 XCTestSuite.perform(_:) + 149
+25   libXCTest.so                       0x00007f2b6f9a8300 XCTest.run() + 144
+26   libXCTest.so                       0x00007f2b6f9a3880 XCTMain(_:arguments:observers:) + 289
+27   libXCTest.so                       0x00007f2b6f9a3a10 XCTMain(_:) + 28
+28   CrashLabPackageTests.xctest        0x0000563d31c358b1 <unavailable> + 235697
+29   CrashLabPackageTests.xctest        0x0000563d31c358c9 <unavailable> + 235721
+30   CrashLabPackageTests.xctest        0x0000563d31c358e9 <unavailable> + 235753
+31   libc.so.6                          0x00007f2b6e227781 <unavailable> + 161665
+32   libc.so.6                          0x00007f2b6e227830 __libc_start_main + 137
+33   CrashLabPackageTests.xctest        0x0000563d31c06c15 <unavailable> + 44053
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test fatalCrash() started.
+◇ Suite GreetingTests started.
+◇ Test "Greeting trims spaces" started.
+◇ Test addZero(n:) started.
+◇ Test add() started.
+AppCoreSwiftTests/CrashSwiftTests.swift:5: Fatal error: boom from swift-testing
+Current stack trace:
+◇ Test case passing 1 argument n → 1 to addZero(n:) started.
+0    libswiftCore.so                    0x00007f8b53762c90 swift_reportError + 33
+✔ Test "Greeting trims spaces" passed after 0.001 seconds.
+◇ Test case passing 1 argument n → 2 to addZero(n:) started.
+✔ Test add() passed after 0.001 seconds.
+◇ Test case passing 1 argument n → 0 to addZero(n:) started.
+1    libswiftCore.so                    0x00007f8b53b1a950 _swift_stdlib_reporterror: Process '/home/user/Projects/CrashLab/.build/host-nb/x86_64-unknown-linux-gnu/debug/CrashLabPackageTests.xctest --build-system native --scratch-path .build/host-nb --skip-build --experimental-event-stream-output /home/user/Projects/CrashLab/.build/host-nb/events-crash.jsonl --testing-library swift-testing' exited with unexpected signal code 4
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+FatalErrorInFile + 109
+2    libswiftCore.so                    0x00007f8b53774c01 <unavailable> + 1526785
+3    libswiftCore.so                    0x00007f8b5390b5b0 _assertionFailure(_:_:file:line:flags:) + 299
+4    CrashLabPackageTests.xctest        0x00005593917a2952 <unavailable> + 47442
+5    CrashLabPackageTests.xctest        0x00005593917a24a1 <unavailable> + 46241
+6    libswift_Concurrency.so            0x00007f8b535ca7d0 <unavailable> + 468944
+✔ Test addZero(n:) with 3 test cases passed after 0.002 seconds.
+7    libswift_Concurrency.so            0x00007f8b535cb440 swift_job_run + 149
+8    libdispatch.so                     0x00007f8b53d790b8 <unavailable> + 180408
+9    libdispatch.so                     0x00007f8b53d78ee4 <unavailable> + 179940
+10   libdispatch.so                     0x00007f8b53d821b5 <unavailable> + 217525
+11   libc.so.6                          0x00007f8b51c98042 <unavailable> + 622658
+12   libc.so.6                          0x00007f8b51d2072c <unavailable> + 1181484
+Note: Some test targets reported failures:
+  - CrashLabPackageTests (XCTest)
+  - CrashLabPackageTests (Swift Testing)

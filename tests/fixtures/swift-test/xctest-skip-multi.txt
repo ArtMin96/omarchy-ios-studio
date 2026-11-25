@@ -1,0 +1,69 @@
+[0/1] Planning build
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+Test Suite 'All tests' started at 2026-11-25 22:19:34.236
+Test Suite 'debug.xctest' started at 2026-11-25 22:19:34.240
+Test Suite 'ExtraTests' started at 2026-11-25 22:19:34.240
+Test Case 'ExtraTests.testPasses' started at 2026-11-25 22:19:34.240
+Test Case 'ExtraTests.testPasses' passed (0.001 seconds)
+Test Case 'ExtraTests.testSkipped' started at 2026-11-25 22:19:34.241
+/home/user/Projects/CrashLab/Tests/AppCoreTests/ExtraTests.swift:5: ExtraTests.testSkipped : Test skipped - needs a network
+Test Case 'ExtraTests.testSkipped' skipped (0.0 seconds)
+Test Case 'ExtraTests.testTwoFailures' started at 2026-11-25 22:19:34.241
+/home/user/Projects/CrashLab/Tests/AppCoreTests/ExtraTests.swift:7: error: ExtraTests.testTwoFailures : XCTAssertEqual failed: ("2") is not equal to ("3") - first
+/home/user/Projects/CrashLab/Tests/AppCoreTests/ExtraTests.swift:8: error: ExtraTests.testTwoFailures : XCTAssertEqual failed: ("4") is not equal to ("5") - second
+/home/user/Projects/CrashLab/Tests/AppCoreTests/ExtraTests.swift:9: error: ExtraTests.testTwoFailures : XCTAssertTrue failed - third
+Test Case 'ExtraTests.testTwoFailures' failed (0.0 seconds)
+Test Suite 'ExtraTests' failed at 2026-11-25 22:19:34.241
+	 Executed 3 tests, with 1 test skipped and 3 failures (0 unexpected) in 0.002 (0.002) seconds
+Test Suite 'MathTests' started at 2026-11-25 22:19:34.242
+Test Case 'MathTests.testAdd' started at 2026-11-25 22:19:34.242
+Test Case 'MathTests.testAdd' passed (0.0 seconds)
+Test Case 'MathTests.testClamp' started at 2026-11-25 22:19:34.242
+Test Case 'MathTests.testClamp' passed (0.0 seconds)
+Test Case 'MathTests.testGreeting' started at 2026-11-25 22:19:34.242
+Test Case 'MathTests.testGreeting' passed (0.0 seconds)
+Test Suite 'MathTests' passed at 2026-11-25 22:19:34.242
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'debug.xctest' failed at 2026-11-25 22:19:34.242
+	 Executed 6 tests, with 1 test skipped and 3 failures (0 unexpected) in 0.002 (0.002) seconds
+Test Suite 'All tests' failed at 2026-11-25 22:19:34.242
+	 Executed 6 tests, with 1 test skipped and 3 failures (0 unexpected) in 0.002 (0.002) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Outer started.
+◇ Suite GreetingTests started.
+◇ Suite Inner started.
+◇ Test addZero(n:) started.
+➜ Test disabledTest() skipped: "not ready"
+◇ Test add() started.
+◇ Test "Greeting trims spaces" started.
+◇ Test oneCaseFails(n:) started.
+◇ Test knownIssue() started.
+◇ Test deep() started.
+◇ Test case passing 1 argument n → 0 to addZero(n:) started.
+◇ Test case passing 1 argument n → 2 to addZero(n:) started.
+◇ Test case passing 1 argument n → 1 to addZero(n:) started.
+✔ Test add() passed after 0.001 seconds.
+✔ Test deep() passed after 0.001 seconds.
+✔ Test "Greeting trims spaces" passed after 0.001 seconds.
+✔ Suite Inner passed after 0.001 seconds.
+◇ Test case passing 1 argument n → 1 to oneCaseFails(n:) started.
+◇ Test case passing 1 argument n → 2 to oneCaseFails(n:) started.
+◇ Test case passing 1 argument n → 3 to oneCaseFails(n:) started.
+✔ Test addZero(n:) with 3 test cases passed after 0.001 seconds.
+✔ Suite GreetingTests passed after 0.003 seconds.
+━ Test knownIssue() recorded a known issue at ExtraSwiftTests.swift:9:63: Expectation failed: Math.add(1, 1) == 3
+↳ tracked bug
+↳ Math.add(1, 1) == 3 → false
+↳   Math.add(1, 1) → 2
+✘ Test oneCaseFails(n:) recorded an issue with 1 argument n → 2 at ExtraSwiftTests.swift:10:61: Expectation failed: n != 2
+↳ n != 2 → false
+↳   n → 2
+━ Test knownIssue() passed after 0.004 seconds with 1 known issue.
+✘ Test oneCaseFails(n:) with 3 test cases failed after 0.004 seconds with 1 issue.
+✘ Suite Outer failed after 0.005 seconds with 2 issues (including 1 known issue).
+✘ Test run with 7 tests in 3 suites failed after 0.006 seconds with 2 issues (including 1 known issue).
+Note: Some test targets reported failures:
+  - CrashLabPackageTests (XCTest)
+  - CrashLabPackageTests (Swift Testing)
