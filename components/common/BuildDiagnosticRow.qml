@@ -32,7 +32,7 @@ CursorSurface {
   readonly property bool hasFile: !!diag.file
   readonly property string category: diag.category || (hasFile ? "compiler" : "")
   readonly property var categoryLabels: ({ linker: "Linker", package: "Swift packages", signing: "Signing",
-                                           device: "iPhone", toolchain: "Toolchain", config: "Project settings", style: "Style",
+                                           device: "iPhone", toolchain: "Toolchain", config: "Project settings", style: "Style", test: "Unit test",
                                            other: "Build" })
   readonly property string relFile: {
     var f = String(diag.file || "")

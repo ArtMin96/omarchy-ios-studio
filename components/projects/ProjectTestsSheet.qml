@@ -17,9 +17,13 @@ import "../../lib/Model.js" as Model
 //   filter    a regular expression for --filter (Enter runs); "Run failed only" after a failing run
 //   running   the steps (Checking the test targets → Building the tests → Running the tests) with the number of
 //             finished tests; failures show as they come
+//   hint      one quiet line over passed / failed / didn't-compile results ("Click a failure to open it at its line.")
+//             with "Show in Problems"; the header's summary already counts them, so there's no headline to repeat it
 //   results   failures first (name, suite, library when both XCTest and Swift Testing are used, the message, file:line
-//             that opens the editor), then skipped, then the passed ones in one row that expands; scrollable
-//   states    no test target, tested code that imports UIKit/SwiftUI (with the imports' file:line), didn't compile
+//             that opens the editor), then skipped (with the reason), then the passed ones in one row that expands;
+//             scrollable. "Run failed only" filters by their ids (Model.testFailedFilter)
+//   states    no test target and tested code that imports UIKit/SwiftUI (with the imports' file:line) both offer
+//             "Check again" and disable Run until the project changes; didn't compile
 //             (the compile problems; they're in Problems too), filter matched nothing, cancelled, no toolchain
 //             (the helper's fix opens Settings), other errors with Try again
 // Failing tests and compile errors also go to the build panel's Problems when the run ends ("Show in Problems").
@@ -61,7 +65,10 @@ Sheet {
   }
   readonly property string failedFilter: root.view === "failed" && root.res ? Model.testFailedFilter(root.res.failed) : ""
 
-  readonly property string runBlocker: root.view === "no_tests" ? "Add a test target first, then check again" : ""
+  // Run can't help until the project changes: the state's own "Check again" looks after that.
+  readonly property string runBlocker: root.view === "no_tests" ? "Add a test target first, then check again"
+                                       : root.view === "host_unsupported" ? "Move the UIKit / SwiftUI code out of the tested targets first, then check again"
+                                       : ""
 
   title: "Unit tests" + (project && project.name ? " · " + project.name : "")
   subtitle: root.summaryLine()
@@ -140,13 +147,11 @@ Sheet {
     return (t.length === 1 ? "Test target: " : "Test targets: ") + t.map(function(x) { return x.name }).join(", ")
   }
 
-  // Why the run ended the way it did, for the summary row.
+  // A headline with a glyph for the states the header's summary doesn't explain. Passed, failed and didn't
+  // compile (with its errors listed) have none: the summary already counts them, so they get hintLine() instead.
   function headline() {
-    var c = root.counts
     switch (root.view) {
-    case "passed": return c.skipped ? "All tests passed, " + c.skipped + " skipped" : (c.passed === 1 ? "The test passed" : "All " + c.passed + " tests passed")
-    case "failed": return c.failed + " of " + Model.plural(c.finished || c.failed, "test") + " failed"
-    case "build_failed": return "The tests didn't compile"
+    case "build_failed": return root.compileProblems.length ? "" : "The tests didn't compile"
     case "cancelled": return "Test run cancelled"
     case "idle": return root.targetsLine()
     }
@@ -155,18 +160,24 @@ Sheet {
   function headDetail() {
     var r = root.run
     switch (root.view) {
-    case "passed":
-      return r && r.filter ? "Only the tests matching the filter ran." : ""
-    case "failed":
-      return (r && r.filter ? "Only the tests matching the filter ran. " : "") + "Click one to open it at its line."
     case "idle":
       return root.info && root.info.tested_targets && root.info.tested_targets.length
              ? "They test " + root.info.tested_targets.join(", ") + ". The first run builds them, which takes longest." : ""
     case "build_failed":
-      return root.compileProblems.length ? "Fix " + (root.compileProblems.length === 1 ? "it" : "them") + " and run again. They're in Problems too."
-                                         : Model.errorMessage(r ? r.error : null)
+      return Model.errorMessage(r ? r.error : null)
     case "cancelled":
       return root.counts.finished > 0 ? "These finished before it stopped." : "It stopped before any test ran."
+    }
+    return ""
+  }
+  // One quiet line above the results: what the list is and what a click does (and "Show in Problems" beside it).
+  function hintLine() {
+    var filtered = !!root.run && !!root.run.filter
+    switch (root.view) {
+    case "passed": return filtered ? "Only the tests matching the filter ran." : ""
+    case "failed": return (filtered ? "Only the tests matching the filter ran. " : "") + "Click a failure to open it at its line."
+    case "build_failed":
+      return root.compileProblems.length ? "The tests didn't compile. Click an error to open it at its line." : ""
     }
     return ""
   }
@@ -270,6 +281,21 @@ Sheet {
       spacing: Style.spacing.xxs
       AppText { id: headText; Layout.fillWidth: true; text: root.headline(); strong: root.view !== "idle"; elide: Text.ElideRight }
       AppText { Layout.fillWidth: true; visible: text !== ""; text: root.headDetail(); tone: "dim"; size: "small"; wrapMode: Text.Wrap }
+    }
+  }
+
+  // ---------------------------------------------------------------- hint: what a click does, "Show in Problems"
+  RowLayout {
+    Layout.fillWidth: true
+    Layout.leftMargin: root.inkInset
+    visible: hintText.text !== ""
+    spacing: Style.spacing.lg
+    AppText {
+      id: hintText
+      Layout.fillWidth: true
+      Layout.alignment: Qt.AlignVCenter
+      text: root.hintLine()
+      tone: "dim"; size: "small"; wrapMode: Text.Wrap
     }
     ActionButton {
       Layout.alignment: Qt.AlignVCenter
@@ -496,12 +522,16 @@ Sheet {
     Layout.fillWidth: true
     visible: root.view === "toolchain" || root.view === "error" || root.view === "info_error"
     compact: true
-    app: root.app
     title: root.view === "toolchain" ? "Swift isn't ready for tests" : root.view === "info_error" ? "Couldn't read the test targets" : "The tests didn't run"
     error: root.view === "info_error" ? (root.tests ? root.tests.info.error : null) : (root.run ? root.run.error : null)
     showRetry: root.view !== "toolchain"
     onRetry: root.view === "info_error" ? root.checkAgain() : root.start()
-    onFixed: root.close()             // the fix opens another page
+    // "Open in editor" ({page: "projects", action: "open"}) is this sheet's to do: navigating to Projects with it
+    // would do nothing. Any other fix opens a page (Settings, or Projects' {action: "test", path}, which opens
+    // this sheet again), so the sheet closes first.
+    readonly property bool localFix: !!fix && fix.action === "open" && !fix.url
+    app: localFix ? null : root.app
+    onFixed: function(f) { if (localFix) root.useFix(f); else root.close() }
   }
 
   // ---------------------------------------------------------------- footnote
@@ -559,7 +589,7 @@ Sheet {
     },
     ActionButton {
       visible: !root.running
-      text: root.run && root.run.state === "done" ? "Run again" : "Run tests"
+      text: root.run && root.run.state === "done" && root.runBlocker === "" ? "Run again" : "Run tests"
       glyph: Model.Glyph.play
       kind: "primary"
       disabled: root.runBlocker !== ""
