@@ -1,0 +1,6 @@
+{
+  "id": "app-with-tests",
+  "title": "App with unit tests",
+  "description": "A tip calculator whose logic lives in AppCore and is tested on the computer, no iPhone needed.",
+  "glyph": "testTube"
+}

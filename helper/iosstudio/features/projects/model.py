@@ -232,7 +232,11 @@ def scan() -> tuple[list[Path], list[dict]]:
 # ================================================================ templates and new apps
 
 def templates() -> list[dict]:
-    """The app templates in templates/ (template.json + Sources/), default first. `_dir` is internal."""
+    """The app templates in templates/ (template.json + Sources/), default first. `_dir` is internal.
+
+    A template is Sources/*.swift (copied flat into Sources/<name>/, App.swift as <name>App.swift), and optionally
+    Package.swift.template (replaces the generated manifest), Sources/<Target>/** (extra targets) and Tests/**.
+    {{NAME}} in the manifest and in .swift files becomes the app's name."""
     out = []
     if TEMPLATES.is_dir():
         for d in sorted(TEMPLATES.iterdir()):
@@ -254,6 +258,24 @@ def template_dir(tmpl_id: Any) -> Path:
             return meta["_dir"]
     ids = ", ".join(str(m.get("id")) for m in listed)
     raise HelperError("bad-template", f"That template isn't available. Choose one of: {ids}.")
+
+
+def template_targets(tmpl: Path) -> set[str]:
+    """Target folders a template brings itself (Sources/<Dir>, Tests/<Dir>): an app can't take one of these names."""
+    return {d.name for sub in ("Sources", "Tests") if (tmpl / sub).is_dir() for d in (tmpl / sub).iterdir() if d.is_dir()}
+
+
+def _copy_template_tree(src: Path, dst: Path, name: str) -> None:
+    """src/** to dst/**, with {{NAME}} replaced in .swift files (other files copied as they are)."""
+    for f in sorted(src.rglob("*")):
+        if not f.is_file():
+            continue
+        out = dst / f.relative_to(src)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if f.suffix == ".swift":
+            out.write_text(f.read_text().replace("{{NAME}}", name))
+        else:
+            shutil.copyfile(f, out)
 
 
 def _fallback_skeleton(dest: Path, name: str) -> None:
@@ -297,6 +319,8 @@ def create_app(flags: dict) -> tuple[Path, str, bool, list[str]]:
         raise HelperError("bad-name", "App names start with a letter and use only letters, numbers and _ (no spaces).")
     tmpl_id = flags.get("template") or "swiftui-app"
     tmpl = template_dir(tmpl_id)
+    if name in template_targets(tmpl):
+        raise HelperError("bad-name", f"This template already has a part named {name}. Pick another app name.")
     parent = Path(os.path.expanduser(str(flags.get("dir") or appdirs.new_app_dir())))
     parent.mkdir(parents=True, exist_ok=True)
     dest = parent / name
@@ -327,6 +351,13 @@ def create_app(flags: dict) -> tuple[Path, str, bool, list[str]]:
             continue
         target = f"{name}App.swift" if f.name == "App.swift" else f.name
         (src_dir / target).write_text(f.read_text().replace("{{NAME}}", name))
+    for d in sorted(p for p in (tmpl / "Sources").iterdir() if p.is_dir()):
+        _copy_template_tree(d, dest / "Sources" / d.name, name)
+    if (tmpl / "Tests").is_dir():
+        _copy_template_tree(tmpl / "Tests", dest / "Tests", name)
+    manifest = tmpl / "Package.swift.template"
+    if manifest.is_file():
+        (dest / "Package.swift").write_text(manifest.read_text().replace("{{NAME}}", name))
     yml = dest / "xtool.yml"
     yml.write_text(xtool_yml.set_key(yml.read_text() if yml.exists() else "version: 1\n", "bundleID", bundle))
     # before the first commit, so they're in it
