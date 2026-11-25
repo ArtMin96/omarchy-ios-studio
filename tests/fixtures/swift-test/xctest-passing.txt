@@ -1,0 +1,32 @@
+[0/1] Planning build
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+Test Suite 'All tests' started at 2026-11-25 21:59:18.074
+Test Suite 'debug.xctest' started at 2026-11-25 21:59:18.078
+Test Suite 'MathTests' started at 2026-11-25 21:59:18.078
+Test Case 'MathTests.testAdd' started at 2026-11-25 21:59:18.078
+Test Case 'MathTests.testAdd' passed (0.007 seconds)
+Test Case 'MathTests.testClamp' started at 2026-11-25 21:59:18.086
+Test Case 'MathTests.testClamp' passed (0.0 seconds)
+Test Case 'MathTests.testGreeting' started at 2026-11-25 21:59:18.086
+Test Case 'MathTests.testGreeting' passed (0.001 seconds)
+Test Suite 'MathTests' passed at 2026-11-25 21:59:18.087
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.008 (0.008) seconds
+Test Suite 'debug.xctest' passed at 2026-11-25 21:59:18.087
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.008 (0.008) seconds
+Test Suite 'All tests' passed at 2026-11-25 21:59:18.087
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.008 (0.008) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite GreetingTests started.
+◇ Test add() started.
+✔ Test add() passed after 0.001 seconds.
+◇ Test addZero(n:) started.
+◇ Test case passing 1 argument n → 0 to addZero(n:) started.
+◇ Test "Greeting trims spaces" started.
+◇ Test case passing 1 argument n → 2 to addZero(n:) started.
+◇ Test case passing 1 argument n → 1 to addZero(n:) started.
+✔ Test addZero(n:) with 3 test cases passed after 0.001 seconds.
+✔ Test "Greeting trims spaces" passed after 0.001 seconds.
+✔ Suite GreetingTests passed after 0.006 seconds.
+✔ Test run with 3 tests in 1 suite passed after 0.007 seconds.

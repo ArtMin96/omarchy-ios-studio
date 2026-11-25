@@ -1,0 +1,9 @@
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+Test Suite 'Selected tests' started at 2026-11-25 22:05:18.699
+Test Suite 'MathTests' started at 2026-11-25 22:05:18.703
+Test Case 'MathTests.testAdd' started at 2026-11-25 22:05:18.703
+Test Case 'MathTests.testAdd' passed (0.003 seconds)
+Test Suite 'MathTests' passed at 2026-11-25 22:05:18.706
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.003 (0.003) seconds
+Test Suite 'Selected tests' passed at 2026-11-25 22:05:18.706
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.003 (0.003) seconds

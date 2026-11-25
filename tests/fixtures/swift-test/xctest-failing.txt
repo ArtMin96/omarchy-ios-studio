@@ -1,0 +1,53 @@
+[0/1] Planning build
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+Test Suite 'All tests' started at 2026-11-25 22:04:19.476
+Test Suite 'debug.xctest' started at 2026-11-25 22:04:19.480
+Test Suite 'FailingTests' started at 2026-11-25 22:04:19.480
+Test Case 'FailingTests.testAddIsWrong' started at 2026-11-25 22:04:19.480
+/home/user/Projects/CrashLab/Tests/AppCoreTests/FailingTests.swift:6: error: FailingTests.testAddIsWrong : XCTAssertEqual failed: ("4") is not equal to ("5") - two plus two
+Test Case 'FailingTests.testAddIsWrong' failed (0.003 seconds)
+Test Case 'FailingTests.testNilUnwrap' started at 2026-11-25 22:04:19.483
+/home/user/Projects/CrashLab/Tests/AppCoreTests/FailingTests.swift:10: error: FailingTests.testNilUnwrap : XCTUnwrap failed: expected non-nil value of type "Int" - 
+Test Case 'FailingTests.testNilUnwrap' failed (0.0 seconds)
+Test Suite 'FailingTests' failed at 2026-11-25 22:04:19.484
+	 Executed 2 tests, with 2 failures (0 unexpected) in 0.003 (0.003) seconds
+Test Suite 'MathTests' started at 2026-11-25 22:04:19.484
+Test Case 'MathTests.testAdd' started at 2026-11-25 22:04:19.484
+Test Case 'MathTests.testAdd' passed (0.1 seconds)
+Test Case 'MathTests.testClamp' started at 2026-11-25 22:04:19.584
+Test Case 'MathTests.testClamp' passed (0.0 seconds)
+Test Case 'MathTests.testGreeting' started at 2026-11-25 22:04:19.584
+Test Case 'MathTests.testGreeting' passed (0.001 seconds)
+Test Suite 'MathTests' passed at 2026-11-25 22:04:19.585
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'debug.xctest' failed at 2026-11-25 22:04:19.585
+	 Executed 5 tests, with 2 failures (0 unexpected) in 0.104 (0.104) seconds
+Test Suite 'All tests' failed at 2026-11-25 22:04:19.585
+	 Executed 5 tests, with 2 failures (0 unexpected) in 0.104 (0.104) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite GreetingTests started.
+◇ Test greetingIsWrong() started.
+◇ Test requireFails() started.
+◇ Test "Greeting trims spaces" started.
+◇ Test addZero(n:) started.
+◇ Test case passing 1 argument n → 1 to addZero(n:) started.
+◇ Test case passing 1 argument n → 0 to addZero(n:) started.
+◇ Test case passing 1 argument n → 2 to addZero(n:) started.
+✔ Test "Greeting trims spaces" passed after 0.001 seconds.
+✔ Test addZero(n:) with 3 test cases passed after 0.001 seconds.
+◇ Test add() started.
+✔ Test add() passed after 0.001 seconds.
+✔ Suite GreetingTests passed after 0.002 seconds.
+✘ Test requireFails() recorded an issue at FailingSwiftTests.swift:10:13: Expectation failed: v
+↳ v → nil
+✘ Test greetingIsWrong() recorded an issue at FailingSwiftTests.swift:5:5: Expectation failed: greeting(for: "Bob") == "Hi, Bob!"
+↳ greeting(for: "Bob") == "Hi, Bob!" → false
+↳   greeting(for: "Bob") → "Hello, Bob!"
+✘ Test greetingIsWrong() failed after 0.004 seconds with 1 issue.
+✘ Test requireFails() failed after 0.004 seconds with 1 issue.
+✘ Test run with 5 tests in 1 suite failed after 0.006 seconds with 2 issues.
+Note: Some test targets reported failures:
+  - CrashLabPackageTests (XCTest)
+  - CrashLabPackageTests (Swift Testing)

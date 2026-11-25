@@ -1,0 +1,9 @@
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite GreetingTests started.
+◇ Test add() started.
+✔ Test add() passed after 0.001 seconds.
+✔ Suite GreetingTests passed after 0.002 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.003 seconds.
