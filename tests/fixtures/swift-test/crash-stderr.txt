@@ -1,0 +1,4 @@
+[0/1] Planning build
+error: Process '/home/user/Projects/CrashLab/.build/host-tests/x86_64-unknown-linux-gnu/debug/CrashLabPackageTests.xctest' exited with unexpected signal code 4
+error: Process '/home/user/Projects/CrashLab/.build/host-tests/x86_64-unknown-linux-gnu/debug/CrashLabPackageTests.xctest --scratch-path .build/host-tests --skip-build --build-system native --experimental-event-stream-version 0 --experimental-event-stream-output /home/user/Projects/CrashLab/.build/host-tests/events.jsonl --testing-library swift-testing' exited with unexpected signal code 4
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.

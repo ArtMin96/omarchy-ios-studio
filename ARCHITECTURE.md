@@ -42,7 +42,7 @@ data with no side effects, on a separate socket (`ios-studio-demo/`).
 | Layer | Folder | What's in it |
 |---|---|---|
 | Helper core | `helper/iosstudio/core/` | `output` (the JSON protocol), `subproc` (`Runner`, `tool_env`), `appdirs` (XDG paths), `fileio` (locks, atomic writes), `flags`, `jsonc`, `xtool_yml` |
-| Helper features | `helper/iosstudio/features/` | one module or package per helper group (`projects/`, `setup/`, `watch/`, `packages/`, `hotreload/`, `editor_setup/`, `agents/`, `format.py`, `account.py`, …). `cli.py` maps a group to its module and imports it lazily. |
+| Helper features | `helper/iosstudio/features/` | one module or package per helper group (`projects/`, `setup/`, `watch/`, `packages/`, `hotreload/`, `testing/`, `editor_setup/`, `agents/`, `format.py`, `account.py`, …). `cli.py` maps a group to its module and imports it lazily. |
 | Helper demo | `helper/iosstudio/demo/` | the made-up answers for demo mode |
 | In-app runtime | `templates/hot-reload/` | the only iOS Studio code that runs inside the user's app: the Swift package hot reload copies into a project (`full/`: C loader + Swift API; `stub/`: the same API as no-ops). See [docs/features/hot-reload.md](docs/features/hot-reload.md) |
 | Device daemon | `helper/iosstudio/device/` | `protocol.py` (wire format), `backend.py` (what the broker calls), `kit.py` (feature registry, `Resources`, `CursorRing`), `broker.py` (socket, clients, idle exit), `client.py` (asyncio client, loadable by path), `real/` (the pymobiledevice3 daemon), `demo/` (the made-up iPhone) |
@@ -50,7 +50,7 @@ data with no side effects, on a separate socket (`ios-studio-demo/`).
 | MCP | `mcp/iosstudio_mcp/` | `core/` (the rules: `registry.py` with `@tool`, `jobs.py`, `deadline.py`, `budget.py`, `params.py`, `errors.py`), `backends/` (device, projects, builds, console, crashes), `tools/` (one module per area) |
 | QML plumbing | `core/` | `Cli.qml`, `Stream.qml` (helper calls), `Resource.qml`, `Host.qml`, `CommandCheck.qml`, `ThemeWatcher.qml` |
 | QML helpers | `lib/Model.js` | glyphs, pages, shortcuts, formatters |
-| QML data | `services/` | one service per area (Device, Project, Log, Account, Setup, Toolchain, Watch) |
+| QML data | `services/` | one service per area (Device, Project, Log, Account, Setup, Toolchain, Watch, Test, EditorDebug, HotReload) |
 | QML screens | `pages/`, `components/<area>/` | one page per sidebar entry; widgets in `common/`, `device/`, `projects/`, `logs/`, `account/`, `settings/` |
 
 Dependencies point down: pages → components → services → `core/` → helper/daemon. A device feature never
@@ -99,9 +99,10 @@ module imports only `core/` and `backends/`, never another tool module.
 | What | Where |
 |---|---|
 | Settings | `~/.config/ios-studio/settings.json` |
-| Projects, build history and logs, device state, setup progress | `~/.local/state/ios-studio/` |
+| Projects, build history and logs, unit test logs, device state, setup progress | `~/.local/state/ios-studio/` |
 | Caches (screenshots, crash files, app index, symbols, MCP overflow files, hot reload baselines and patches) | `~/.cache/ios-studio/` |
 | Hot reload's runtime package in a project (git-ignored) | `<project>/.iosstudio/hot-reload/` |
+| Unit tests' build in a project, apart from xtool's | `<project>/.build/host-tests/` |
 | pymobiledevice3 venv, MCP venv | `~/.local/share/ios-studio/venv`, `…/mcp-venv` |
 | Daemon socket, lock and log; watch mode; hot reload sessions | `$XDG_RUNTIME_DIR/ios-studio/` (`ios-studio-demo/` in demo mode; `IOSSTUDIO_RUNTIME_DIR` overrides the base) |
 | UI state (current page, toasts, overlays) | in memory, on `AppState` and the services |

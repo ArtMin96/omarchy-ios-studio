@@ -287,7 +287,7 @@ class JobStatus(Out):
     job_id: str
     kind: str = Field(description="build | toolchain-install | renew | packages | debug | install | transfer | "
                                   "cameratest | app-defaults | app-reset | launch-profile | memory-leaks | matrix | "
-                                  "recording | pcap | project-create")
+                                  "recording | pcap | project-create | test")
     action: str
     title: str | None = None
     project: str | None = None

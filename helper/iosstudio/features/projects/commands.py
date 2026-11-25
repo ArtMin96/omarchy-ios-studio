@@ -407,7 +407,10 @@ def cmd_build_log(flags: dict) -> int:
             raise HelperError("not-found", "No builds yet.")
         f = h[-1].get("logFile")
     p = Path(f).resolve()
-    if store.BUILD_LOGS.resolve() not in p.parents or not p.is_file():
+    from iosstudio.features.testing import store as test_store  # test-run logs open in the same Log tab
+    allowed = store.BUILD_LOGS.resolve() in p.parents or (
+        test_store.runs_dir().resolve() in p.parents and p.suffix == ".log")
+    if not allowed or not p.is_file():
         raise HelperError("not-found", "That build log is gone.")
     text = p.read_text(errors="replace")
     return output.ok({"file": str(p), "text": text[-400000:], "truncated": len(text) > 400000})

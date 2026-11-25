@@ -14,7 +14,8 @@ import "../lib/Model.js" as Model
 // Problems), Swift packages (More › Packages…, `P`: ProjectPackagesSheet), the app icon (More › Set icon…:
 // ProjectIconSheet; deep link {action: "icon", path}), hot reload (each card's switch, `H` for the highlighted one;
 // app.hotReload; deep links {action: "hot-reload-start" | "hot-reload-stop" | "hot-reload-restart" |
-// "hot-reload-enable", path}) and the build drawer.
+// "hot-reload-enable", path}), unit tests (More › Run tests, `T` for the highlighted one: ProjectTestsSheet; deep link
+// {action: "test", path}) and the build drawer.
 Item {
   id: page
   required property var app
@@ -68,6 +69,10 @@ Item {
       if (!hp) { const ks = Object.keys(app.hotReload.entries); if (ks.length === 1) hp = svc.projectByPath(ks[0]) }
       if (hp) app.hotReload.runFix(hp, { action: p.action })
     }
+    else if (p.action === "test" && p.path) {
+      const tp = svc.projectByPath(p.path)
+      if (tp) Qt.callLater(function() { testsSheet.openFor(tp, false) })
+    }
     else if (p.action === "remove" && p.path) {
       var gone = svc.projectByPath(p.path) || { path: p.path, name: p.path.split("/").pop(), displayPath: p.path.replace(app.home, "~") }
       svc.remove(gone)
@@ -107,6 +112,7 @@ Item {
     if (event.text === "P" && cur) { packagesSheet.openFor(cur); return true }
     if (event.text === "D" && cur) { app.editorDebug.toggle(cur); return true }
     if (event.text === "H" && cur) { app.hotReload.toggle(cur); return true }
+    if (event.text === "T" && cur) { page.runTests(cur); return true }
     return false
   }
 
@@ -127,6 +133,16 @@ Item {
   function showWatchProblems(p) {
     var w = app.watch.forProject(p)
     if (w && w.last && !svc.building && !(svc.build.watch && svc.build.path === p.path)) app.watch.showLast()
+    panel.tab = "problems"
+    page.panelOpen = true
+  }
+
+  // Unit tests: the sheet, with a run started (unless this project's build runs: the tests build the same code).
+  function runTests(p) {
+    if (svc.building && svc.build.path === p.path) { app.toast("Wait for " + p.name + "'s build to finish, then run its tests.", "warn"); return }
+    testsSheet.openFor(p, true)
+  }
+  function showTestProblems() {
     panel.tab = "problems"
     page.panelOpen = true
   }
@@ -322,6 +338,7 @@ Item {
         onRun: page.runProject(modelData)
         onBuildIpa: page.startKind(modelData, "ipa")
         onCheckBuild: page.startKind(modelData, "compile")
+        onRunTests: page.runTests(modelData)
         onRenew: page.startKind(modelData, "renew")
         onOpenEditor: page.svc.openInEditor(modelData)
         onOpenFolder: page.svc.reveal(modelData)
@@ -429,6 +446,13 @@ Item {
     svc: page.svc
     // Check build after adding: a compile-only build through the usual build flow, in the build panel.
     onCheckBuild: function(p) { page.startKind(p, "compile") }
+  }
+
+  ProjectTestsSheet {
+    id: testsSheet
+    app: page.app
+    svc: page.svc
+    onShowProblems: function(p) { page.showTestProblems() }
   }
 
   ProjectIconSheet {
