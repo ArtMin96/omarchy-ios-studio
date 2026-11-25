@@ -91,7 +91,9 @@ class TestingDemoCli(unittest.TestCase):
         self.assertEqual(len(tests), 12)
         self.assertEqual({t["library"] for t in tests}, {"xctest", "swift-testing"})
         self.assertTrue(all(t["status"] == "passed" and "file" not in t for t in tests))
-        self.assertEqual(tests[0]["id"], "WeatherCoreTests.ForecastParserTests/testParsesHourly")
+        self.assertEqual(tests[0]["id"], "ForecastParserTests/testParsesHourly")        # XCTest on Linux: no module
+        swift_testing = next(t for t in tests if t["library"] == "swift-testing")
+        self.assertEqual(swift_testing["id"], "WeatherCoreSwiftTests.ConditionTests/symbolForEveryCondition()")
         data = done["data"]
         self.assert_result(data)
         self.assertEqual(data["counts"], {"total": 12, "passed": 12, "failed": 0, "skipped": 0})
@@ -123,7 +125,7 @@ class TestingDemoCli(unittest.TestCase):
         self.assertEqual(len(diags), 2)
         for d, f in zip(diags, (fx, fs)):
             self.assertEqual((d["category"], d["severity"], d["file"], d["line"]), ("test", "error", f["file"], f["line"]))
-            self.assertTrue(d["message"].startswith(f["name"] + ": "))
+            self.assertTrue(d["message"].startswith(f"{f['suite']}.{f['name']}: "))     # results.py failure_diagnostic
         failed = [e for e in events if e["event"] == "test" and e["status"] == "failed"]
         self.assertEqual([(t["file"], t["line"]) for t in failed], [(fx["file"], 24), (fs["file"], 17)])
         self.assertIn(("run", "failed"), [(e["id"], e["state"]) for e in events if e["event"] == "step"])
@@ -134,7 +136,8 @@ class TestingDemoCli(unittest.TestCase):
         self.assertFalse(done["ok"])
         self.assertEqual(done["error"]["code"], "no_tests")
         self.assertIn("App with unit tests", done["error"]["message"])
-        self.assertIn("fix", done["error"])
+        self.assertEqual(done["error"]["fix"], {"label": "Show tests", "page": "projects", "action": "test",
+                                                "path": project("RecipeBox")})
         self.assertFalse([e for e in events if e["event"] == "test"])
 
     def test_host_unsupported(self):
@@ -142,6 +145,8 @@ class TestingDemoCli(unittest.TestCase):
         self.assertEqual(done["error"]["code"], "host_unsupported")
         self.assertIn("SwiftUI", done["error"]["message"])
         self.assertIn("CanvasModel.swift:2", done["error"]["detail"])
+        self.assertEqual(done["error"]["fix"], {"label": "Open the project folder", "page": "projects",
+                                                "action": "reveal", "path": project("SketchPad")})
         forced = {**self.env, "IOSSTUDIO_DEMO_TESTS": "host"}
         out = self.helper("test", "run", "--project", project("WeatherGlance"), env=forced)[-1]
         self.assertEqual(out["error"]["code"], "host_unsupported")
@@ -158,6 +163,13 @@ class TestingDemoCli(unittest.TestCase):
         self.assertTrue(done["data"]["no_tests_matched"])
         self.assertEqual(done["data"]["counts"], {"total": 0, "passed": 0, "failed": 0, "skipped": 0})
         self.assertEqual(self.info("HabitTracker")["last_run"]["filter"], "NoSuchTest")
+        events, done = self.run_tests("WeatherGlance", "--filter", "ForecastParserTests/testParsesHourly$")
+        self.assertEqual([e["id"] for e in events if e["event"] == "test"], ["ForecastParserTests/testParsesHourly"])
+        _events, done = self.run_tests("WeatherGlance", "--filter", "WeatherCoreTests\\.Unit")   # module-qualified
+        self.assertEqual(done["data"]["counts"]["total"], 3)
+        _events, done = self.run_tests("WeatherGlance", "--filter", "Forecast(")
+        self.assertEqual(done["error"]["code"], "bad_filter")
+        self.assertFalse(done["ok"])
 
     def cancel_run(self, how: str) -> list[dict]:
         env = {**self.env, "IOSSTUDIO_DEMO_DELAY": "1"}

@@ -226,13 +226,13 @@ def _locked(r: Run, swift: str) -> int:
         return output.done(False, error=HelperError(
             "no_tests", f"{facts.name} has no unit tests yet. Add a test target in a Tests/ folder (for example "
             f"Tests/{facts.name}Tests) that depends on a library target with your app's logic. New projects made "
-            "with the \"App with unit tests\" template already have one.", project.open_fix()))
+            "with the \"App with unit tests\" template already have one.", tests_fix(r.root)))
     blockers = project.host_blockers(r.root, facts)
     if blockers:
         r.end("failed")
         for b in blockers:
             r.diagnostic(_blocker_diag(b))
-        return output.done(False, error=_host_unsupported(blockers))
+        return output.done(False, error=_host_unsupported(r.root, blockers))
     scratch = r.root / SCRATCH
     seeded = seed(r.root, scratch)
     r.end()
@@ -264,6 +264,15 @@ def _locked(r: Run, swift: str) -> int:
 
 # ================================================================ prepare
 
+def tests_fix(root: Path) -> dict:
+    """Opens this project's Run tests sheet (ProjectsPage deep link {action: "test", path})."""
+    return {**output.fix("Show tests", "projects", action="test"), "path": str(root)}
+
+
+def folder_fix(root: Path) -> dict:
+    """Opens the project folder (ProjectsPage deep link {action: "reveal", path})."""
+    return {**output.fix("Open the project folder", "projects", action="reveal"), "path": str(root)}
+
 def _blocker_diag(b: dict) -> dict:
     return {"severity": "error", "category": "compiler", "file": b["file"], "line": b["line"], "col": 0,
             "message": f"import {b['module']}: {b['module']} only exists on Apple platforms, so this code can't be "
@@ -271,7 +280,7 @@ def _blocker_diag(b: dict) -> dict:
             "hint": "Move the logic you want to test into a library target that only imports Foundation."}
 
 
-def _host_unsupported(blockers: list[dict]) -> HelperError:
+def _host_unsupported(root: Path, blockers: list[dict]) -> HelperError:
     targets = list(dict.fromkeys(b["target"] for b in blockers))
     mods = list(dict.fromkeys(b["module"] for b in blockers))
     names = " and ".join(mods[:3]) + (" …" if len(mods) > 3 else "")
@@ -280,7 +289,7 @@ def _host_unsupported(blockers: list[dict]) -> HelperError:
     return HelperError(
         "host_unsupported", f"{who} {'imports' if len(targets) == 1 else 'import'} {names}, and UIKit or SwiftUI code "
         "can't run on the computer. Move the logic you want to test into a library target that only imports "
-        "Foundation, and test that instead.", project.open_fix(), where)
+        "Foundation, and test that instead.", folder_fix(root), where)
 
 
 def seed(root: Path, scratch: Path) -> str | None:
@@ -379,11 +388,11 @@ def _build_failed(r: Run, facts: project.PackageFacts, b: BuildOutput) -> int:
         return r.finish(False, HelperError(
             "host_unsupported", f"The tests need {' and '.join(mods[:3])}, and UIKit or SwiftUI code can't run on the "
             "computer. Move the logic you want to test into a library target that only imports Foundation, and test "
-            "that instead.", project.open_fix(), where or None))
+            "that instead.", folder_fix(r.root), where or None))
     if b.no_product:
         return r.finish(False, HelperError(
             "no_tests", f"Swift found no tests to build in {facts.name}. Add a test target in a Tests/ folder that "
-            "depends on a library target with your app's logic.", project.open_fix()))
+            "depends on a library target with your app's logic.", tests_fix(r.root)))
     d = b.first_error
     if d:
         where = f"{Path(d['file']).name}:{d.get('line')}: " if d.get("file") else ""
@@ -462,7 +471,7 @@ def _test(r: Run, swift: str, native: bool) -> int:
     r.end("failed")
     if no_tests_found:
         return r.finish(False, HelperError("no_tests", "Swift found no tests in this project's test targets.",
-                                           project.open_fix()))
+                                           tests_fix(r.root)))
     tail = next((ln.strip() for ln in reversed(r.runner.tail) if ln.strip().startswith("error:")), "")
     return r.finish(False, HelperError("tests_failed", "The test run failed before any test reported a result."
                                        + (f" {clip(tail, 200)}" if tail else "")))

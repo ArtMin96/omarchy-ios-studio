@@ -2,7 +2,8 @@
 that streams `test run` events in the shape of the helper contract: start, running, followed by job_id to the end;
 failing tests capped and cut to the budget; compile errors grouped; no_tests / host_unsupported with next steps; a
 crashed test; a second call while a run is going returns that run; --filter passed through; and a huge run
-(thousands of test events and failures) kept under the budget without storing per-test events in the job.
+(thousands of test events and failures) kept under the budget without storing per-test events in the job;
+bad_filter's next step; ios_job_status on a finished test job shows the test summary, not an empty build result.
 
     python -m pytest tests/mcp/test_mcp_testing.py
 """
@@ -11,7 +12,9 @@ from __future__ import annotations
 from mcp.server.mcpserver.exceptions import ToolError
 
 from iosstudio_mcp.core import budget as B
+from iosstudio_mcp.core import job_status as JS
 from iosstudio_mcp.core import jobs as J
+from iosstudio_mcp.tools import jobs as JOBS
 from iosstudio_mcp.tools import testing as M
 from support.mcp_harness import FakeHelper, ToolCase, size_of
 
@@ -28,13 +31,13 @@ def result(**over) -> dict:
 
 
 def failure(i: int, message: str = "XCTAssertEqual failed: (\"4\") is not equal to (\"5\")") -> dict:
-    return {"id": f"AppCoreTests.MathTests/testAdd{i}", "name": f"testAdd{i}", "suite": "MathTests",
+    return {"id": f"MathTests/testAdd{i}", "name": f"testAdd{i}", "suite": "MathTests",
             "library": "xctest", "file": f"{PROJ}/Tests/AppCoreTests/MathTests.swift", "line": 6 + i,
             "message": message}
 
 
 def tev(i: int, status: str = "passed") -> dict:
-    return {"event": "test", "id": f"AppCoreTests.MathTests/test{i}", "name": f"test{i}", "suite": "MathTests",
+    return {"event": "test", "id": f"MathTests/test{i}", "name": f"test{i}", "suite": "MathTests",
             "library": "xctest", "status": status, "duration": 0.001}
 
 
@@ -87,6 +90,49 @@ class TestRunTool(ToolCase):
         self.assertTrue(d["no_tests_matched"])
         self.assertEqual(d["filter"], "Nope")
         self.assertIn("matched no test", d["next_steps"][0])
+        self.assertIn("'MathTests/testAdd' (XCTest)", d["next_steps"][0])
+
+    async def test_a_bad_filter_says_how_to_write_one(self):
+        self.helper.stream("test", "run", [failed("bad_filter", "The filter isn't a valid pattern.")])
+        d = await self.data(M, "ios_test_run", project_path="CrashLab", filter="add(", wait_seconds=3)
+        self.assertEqual(d["error"]["code"], "bad_filter")
+        self.assertIn("'GreetingTests/add'", d["next_steps"][0])
+        self.assertIn("without filter", d["next_steps"][0])
+
+    async def test_job_status_of_a_finished_test_job_shows_the_test_summary(self):
+        fails = [failure(i) for i in range(12)]
+        self.helper.stream("test", "run", STEPS + [failed("tests_failed", "12 of 17 tests failed.", result(
+            counts={"total": 17, "passed": 5, "failed": 12, "skipped": 0}, failures=fails, crashed=fails[0]["id"]))])
+        run = await self.data(M, "ios_test_run", project_path="CrashLab", wait_seconds=3)
+        st = await self.data(JOBS, "ios_job_status", job_id=run["job_id"], wait_seconds=0)
+        self.assertEqual((st["kind"], st["state"], st["error"]["code"]), ("test", "failed", "tests_failed"))
+        self.assertNotIn("result", st)                       # not an empty build result
+        det = st["detail"]
+        self.assertEqual(det["counts"], {"total": 17, "passed": 5, "failed": 12, "skipped": 0})
+        self.assertEqual(det["failures_total"], 12)
+        self.assertEqual(len(det["failures"]), JS.TEST_FAILURES)
+        self.assertTrue(det["failures"][0].startswith("MathTests/testAdd0 — Tests/AppCoreTests/MathTests.swift:6 — "))
+        self.assertEqual(det["crashed"], "MathTests/testAdd0")
+        self.assertTrue(det["full_output_path"].endswith("20261125-CrashLab.log"))
+        self.assertEqual(det["more"], f"ios_test_run(job_id='{run['job_id']}')")
+        self.assertEqual(st["next_steps"], [f"ios_test_run(job_id='{run['job_id']}') shows the full result: failing "
+                                            "tests (file:line), compile errors and what to do next."])
+        huge = [failure(i, "XCTAssertEqual failed: " + "x" * 5000) for i in range(200)]
+        self.helper.stream("test", "run", [failed("tests_failed", "200 failed.", result(
+            counts={"total": 200, "passed": 0, "failed": 200, "skipped": 0}, failures=huge))])
+        run = await self.data(M, "ios_test_run", project_path="CrashLab", wait_seconds=3)
+        res = await self.call(JOBS, "ios_job_status", job_id=run["job_id"], wait_seconds=0)
+        self.assertLessEqual(size_of(res), 4000)            # bounded: 5 failures, messages cut
+        self.helper.stream("test", "run", [{"event": "done", "ok": True, "data": result()}])
+        run = await self.data(M, "ios_test_run", project_path="CrashLab", wait_seconds=3)
+        st = await self.data(JOBS, "ios_job_status", job_id=run["job_id"], wait_seconds=0)
+        self.assertEqual(st["detail"]["counts"]["passed"], 5)
+        self.assertNotIn("failures", st["detail"])
+        self.helper.stream("test", "run", [failed("no_tests", "CrashLab has no test target.")])
+        run = await self.data(M, "ios_test_run", project_path="CrashLab", wait_seconds=3)
+        st = await self.data(JOBS, "ios_job_status", job_id=run["job_id"], wait_seconds=0)
+        self.assertNotIn("detail", st)
+        self.assertEqual(st["error"]["code"], "no_tests")
 
     async def test_failing_tests_are_listed_capped_with_a_note(self):
         fails = [failure(i) for i in range(30)]
@@ -97,7 +143,7 @@ class TestRunTool(ToolCase):
         self.assertEqual(d["error"]["code"], "tests_failed")
         self.assertEqual(d["failures_total"], 30)
         self.assertLessEqual(len(d["failures"]), M.FAILURES_CAP)
-        self.assertEqual(d["failures"][0], "AppCoreTests.MathTests/testAdd0 — Tests/AppCoreTests/MathTests.swift:6 — "
+        self.assertEqual(d["failures"][0], "MathTests/testAdd0 — Tests/AppCoreTests/MathTests.swift:6 — "
                                            "XCTAssertEqual failed: (\"4\") is not equal to (\"5\")")
         self.assertTrue(d["truncated"])
         self.assertIn("of 30 failing tests", d["note"])
