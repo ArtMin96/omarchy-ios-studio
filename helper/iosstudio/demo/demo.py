@@ -524,6 +524,9 @@ def run(group: str, action: str, flags: dict) -> int:
     if group == "hotreload":
         from iosstudio.demo import hot_reload
         return hot_reload.run(action, flags)
+    if group == "test":
+        from iosstudio.demo import testing
+        return testing.demo(action, flags)
     if key == "setup check":
         return ok(_setup_check(flags))
     if key == "toolchain info":
