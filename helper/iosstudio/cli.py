@@ -28,6 +28,7 @@ MODULES = {
     "watch": "watch",
     "packages": "packages",
     "hotreload": "hotreload",
+    "test": "testing",
 }
 # one-word commands -> group + action
 ALIASES = {"format": ["projects", "format"], "format-lint": ["projects", "format-lint"]}

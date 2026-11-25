@@ -1,0 +1,23 @@
+[0/1] Planning build
+Building for debugging...
+[0/12] Write sources
+[2/12] Write swift-version-65100FF0E23E9218.txt
+[4/16] Compiling AppCoreTests MathTests.swift
+[5/16] Emitting module AppCoreTests
+[6/16] Compiling AppCoreTests BrokenTests.swift
+/home/user/Projects/CrashLab/Tests/AppCoreTests/BrokenTests.swift:6:22: error: cannot convert value of type 'String' to specified type 'Int'
+ 4 | final class BrokenTests: XCTestCase {
+ 5 |     func testBroken() {
+ 6 |         let n: Int = "not a number"
+   |                      `- error: cannot convert value of type 'String' to specified type 'Int'
+ 7 |         XCTAssertEqual(Math.nope(1), n)
+ 8 |     }
+
+/home/user/Projects/CrashLab/Tests/AppCoreTests/BrokenTests.swift:7:29: error: type 'Math' has no member 'nope'
+ 5 |     func testBroken() {
+ 6 |         let n: Int = "not a number"
+ 7 |         XCTAssertEqual(Math.nope(1), n)
+   |                             `- error: type 'Math' has no member 'nope'
+ 8 |     }
+ 9 | }
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
