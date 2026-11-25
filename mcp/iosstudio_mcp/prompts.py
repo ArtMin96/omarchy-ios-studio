@@ -69,7 +69,7 @@ def register(mcp: MCPServer) -> None:
 {what_changed}
 </what_changed>
 
-This is Linux, not a Mac: no Simulator, no xcodebuild, no on-device XCTest, and UIKit/SwiftUI don't exist on the host, so don't run `swift build` or `swift test` for app code. Use these tools.
+This is Linux, not a Mac: no Simulator, no xcodebuild, no on-device XCTest, and UIKit/SwiftUI don't exist on the host, so UI code can't run here; don't run `swift build` or `swift test` yourself. Use these tools; if the project has a test target with Foundation-only logic, run its unit tests with ios_test_run(project_path="{project}").
 
 1. ios_project_check(project_path="{project}"): fix any finding the change caused.
 2. ios_build_start(project_path="{project}", action="compile"), then poll ios_job_status(job_id, wait_seconds=20) until it finishes. If it failed: ios_build_diagnostics(job_id), fix the root cause at each file:line, and compile again until it succeeds with 0 errors (and no new warnings).

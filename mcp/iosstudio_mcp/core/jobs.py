@@ -53,6 +53,7 @@ FINISHED_LINES = 2_000       # a finished job keeps only its newest lines in mem
 CANCEL_SETTLE = 15.0         # seconds cancel() waits for the helper and finisher to stop
 SHUTDOWN_SETTLE = 10.0       # seconds shutdown() gives coroutine jobs to clean up (e.g. put an app back)
 TERMINAL = ("succeeded", "failed", "cancelled")
+TEST_STATUSES = ("passed", "failed", "skipped")   # "test" events, tallied in job.data["tests"]
 
 Finisher = Callable[["Job"], Awaitable[None]]
 JobFn = Callable[["Job"], Awaitable[Any]]
@@ -423,6 +424,13 @@ class JobManager:
             job.add_line(f"[prompt {ev.get('id')}] {ev.get('title') or ''} {ev.get('message', '')}".strip())
         elif name == "renew-plan":
             job.info.setdefault("renewPlan", ev.get("projects"))
+        elif name == "test":
+            # One finished unit test (helper `test run`): counted for live progress, never stored, since a
+            # run can have thousands; failures also come as diagnostics and in the final result.
+            status = ev.get("status")
+            if status in TEST_STATUSES:
+                tally = job.data.setdefault("tests", {})
+                tally[status] = tally.get(status, 0) + 1
         elif name == "done":
             job.pending_prompt = None
             if ev.get("ok"):
@@ -444,6 +452,8 @@ class JobManager:
                     for d in diags if isinstance(diags, list) else []:
                         if isinstance(d, dict) and d not in job.diagnostics and len(job.diagnostics) < MAX_DIAGNOSTICS:
                             job.diagnostics.append(d)
+                elif isinstance(ev.get("data"), dict):    # what a failed run still reports (failing tests, …)
+                    job.result = ev["data"]
                 refusal = _refusal_diag(job, err)
                 if refusal:
                     job.diagnostics.append(refusal)
