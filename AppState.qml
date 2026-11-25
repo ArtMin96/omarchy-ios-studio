@@ -233,6 +233,7 @@ Item {
   property WatchService watch: WatchService { app: root }     // compile on save (one project machine-wide)
   property EditorDebugService editorDebug: EditorDebugService { app: root }   // VS Code / Zed debugger bridges (one per project)
   property HotReloadService hotReload: HotReloadService { app: root }         // hot reload on the iPhone (one session per project)
+  property TestService tests: TestService { app: root }                       // unit tests on this computer, swift test (one run per project)
 
   // First run / something essential missing → open Setup once, unless the
   // user (or a deep link) already went somewhere.
