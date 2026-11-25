@@ -29,6 +29,7 @@ from iosstudio.core.output import HelperError
 LOG_KEEP, LOG_MAX_BYTES = 20, 50 * 1024 * 1024
 LAST_MAX = 100          # projects remembered in demo-last.json
 FAILURES_MAX = 50
+FILTER_MAX = 200        # as features/testing/runner.py
 TEST_PAUSE = 0.12       # seconds per test (IOSSTUDIO_DEMO_DELAY scales it)
 SLICE = 0.05            # cancel is checked at least this often while pausing
 
@@ -45,6 +46,13 @@ class Case:
 
     @property
     def id(self) -> str:
+        """As the real parsers report it: "MathTests/testAdd" (XCTest on Linux prints no module),
+        "AppCoreSwiftTests.GreetingTests/add()" (swift-testing)."""
+        return f"{self.suite}/{self.name}" if self.library == "xctest" else self.filter_id
+
+    @property
+    def filter_id(self) -> str:
+        """What `swift test --filter` matches for both libraries: "<Module>.<Suite>/<name>"."""
         return f"{self.target}.{self.suite}/{self.name}"
 
 
@@ -233,11 +241,24 @@ def _failure(c: Case, path: str) -> dict:
 def _matcher(filt: str | None):
     if not filt:
         return lambda _id: True
-    try:
-        rx = re.compile(filt)
-    except re.error:
-        rx = re.compile(re.escape(filt))
+    rx = re.compile(filt)
     return lambda test_id: rx.search(test_id) is not None
+
+
+def _parse_filter(flags: dict) -> str | None:
+    """--filter as the real runner reads it (features/testing/runner.py parse_filter): "bad_filter" when unusable."""
+    v = flags.get("filter")
+    if v in (None, True) or not str(v).strip():
+        return None
+    filt = str(v).strip()
+    if len(filt) > FILTER_MAX:
+        raise HelperError("bad_filter", f"The filter is too long (at most {FILTER_MAX} characters).")
+    try:
+        re.compile(filt)
+    except re.error as exc:
+        raise HelperError("bad_filter", f"The filter isn't a valid pattern ({exc}). Use a suite or test name, "
+                                        "like MathTests or MathTests/testAdd.") from None
+    return filt
 
 
 def _console(c: Case, status: str, path: str) -> list[str]:
@@ -259,10 +280,9 @@ def _console(c: Case, status: str, path: str) -> list[str]:
 def run(flags: dict) -> int:
     try:
         name, path, key = _project(flags)
+        filt = _parse_filter(flags)
     except HelperError as exc:
         return output.done(False, error=exc)
-    filt = flags.get("filter")
-    filt = str(filt) if filt not in (None, True, "") else None
     sc = _scenario(key, name)
     with subproc.Runner(watch_stdin=True) as runner:
         r = _Run(runner, name)
@@ -277,7 +297,8 @@ def run(flags: dict) -> int:
 
 
 def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
-    open_fix = output.fix("Open in editor", "projects", action="open")
+    tests_fix = {**output.fix("Show tests", "projects", action="test"), "path": path}
+    folder_fix = {**output.fix("Open the project folder", "projects", action="reveal"), "path": path}
     r.begin("prepare", "Checking the test targets")
     r.pause(0.2)
     if not sc.tests:
@@ -285,7 +306,7 @@ def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
         return output.done(False, error=HelperError(
             "no_tests", f"{name} has no unit tests yet. Add a test target in a Tests/ folder (for example "
             f"Tests/{name}Tests) that depends on a library target with your app's logic. New projects made with the "
-            "\"App with unit tests\" template already have one.", open_fix))
+            "\"App with unit tests\" template already have one.", tests_fix))
     if sc.blockers:
         r.end("failed")
         mods = sorted({m for _f, _l, m in sc.blockers})
@@ -293,7 +314,7 @@ def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
         return output.done(False, error=HelperError(
             "host_unsupported", f"{sc.core} imports {' and '.join(mods)}, and UIKit or SwiftUI code can't run on the "
             f"computer. Move the logic you want to test into a library target that only imports Foundation, and "
-            f"test that instead.", open_fix, where))
+            f"test that instead.", folder_fix, where))
     r.end()
 
     r.begin("build", "Building the tests")
@@ -309,7 +330,7 @@ def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
 
     r.begin("run", "Running the tests")
     match = _matcher(filt)
-    todo = [c for c in sc.tests if match(c.id)]
+    todo = [c for c in sc.tests if match(c.filter_id)]
     if not todo:
         r.pause(0.2)
         r.log("warning: No matching test cases were run")
@@ -328,7 +349,7 @@ def _play(r: _Run, sc: Scenario, path: str, name: str, filt: str | None) -> int:
         if c.fails:
             f, line, col, msg = c.fails
             ev.update(file=f"{path}/{f}", line=line, message=msg)
-            output.event("diagnostic", severity="error", message=f"{c.name}: {msg}", category="test",
+            output.event("diagnostic", severity="error", message=f"{c.suite}.{c.name}: {msg}", category="test",
                          file=f"{path}/{f}", line=line, col=col)
         output.event("test", **ev)
         done.append((c, status))

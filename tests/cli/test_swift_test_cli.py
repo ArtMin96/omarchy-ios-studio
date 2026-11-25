@@ -207,13 +207,16 @@ class SwiftTestCli(unittest.TestCase):
         events, done = self.run_tests(FAKE_SWIFT_SCENARIO="notests")
         self.assertEqual(done["error"]["code"], "no_tests")
         self.assertIn("App with unit tests", done["error"]["message"])
-        self.assertEqual(done["error"]["fix"]["page"], "projects")
+        self.assertEqual(done["error"]["fix"], {"label": "Show tests", "page": "projects", "action": "test",
+                                                "path": str(self.root)})
         self.assertEqual(self.calls_of("build"), [])
         self.assertFalse(self.info(FAKE_SWIFT_SCENARIO="notests")["data"]["has_tests"])
         _, done = self.run_tests(FAKE_SWIFT_SCENARIO="noproduct")
         self.assertEqual(done["error"]["code"], "no_tests")
+        self.assertEqual(done["error"]["fix"]["action"], "test")
         _, done = self.run_tests(FAKE_SWIFT_SCENARIO="nofound")
         self.assertEqual(done["error"]["code"], "no_tests")
+        self.assertEqual(done["error"]["fix"]["action"], "test")
 
     def test_host_unsupported_before_building(self):
         (self.root / "Sources/AppCore/Shapes.swift").write_text("// shapes\nimport Foundation\nimport SwiftUI\n")
@@ -225,6 +228,8 @@ class SwiftTestCli(unittest.TestCase):
         self.assertEqual(done["error"]["code"], "host_unsupported")
         self.assertIn("AppCore imports SwiftUI", done["error"]["message"])
         self.assertIn("Shapes.swift:3: import SwiftUI", done["error"]["detail"])
+        self.assertEqual(done["error"]["fix"], {"label": "Open the project folder", "page": "projects",
+                                                "action": "reveal", "path": str(self.root)})
         self.assertNotIn("data", done)
         d, = self.of(events, "diagnostic")
         self.assertEqual((d["file"], d["line"]), (blockers[0]["file"], 3))
@@ -235,6 +240,7 @@ class SwiftTestCli(unittest.TestCase):
         self.assertEqual(done["error"]["code"], "host_unsupported")
         self.assertIn("SwiftUI", done["error"]["message"])
         self.assertIn("Shapes.swift:1: no such module 'SwiftUI'", done["error"]["detail"])
+        self.assertEqual((done["error"]["fix"]["action"], done["error"]["fix"]["path"]), ("reveal", str(self.root)))
         self.assertTrue(any(d.get("line") == 1 for d in self.of(events, "diagnostic")))
 
     def test_busy(self):

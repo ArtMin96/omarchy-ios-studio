@@ -49,7 +49,7 @@ def _prompt_model(p: dict | None) -> PendingPrompt | None:
 
 def _result_model(job: Job) -> BuildResult | None:
     r = job.result
-    if r is None or not job.stream or not isinstance(r, dict):
+    if r is None or not job.stream or not isinstance(r, dict) or job.kind == TEST_KIND:
         return None
     prof = r.get("profile") or {}
     return BuildResult(ipa=r.get("ipa"), app=r.get("app"), bundle_id=r.get("bundleId"), udid=r.get("udid"),
@@ -92,6 +92,9 @@ def job_next_steps(job: Job) -> list[str]:
                    "user the message and options, ask them, then call ios_job_respond(job_id, prompt_id, value).")
         if any(o.get("destructive") for o in p.get("options") or [] if isinstance(o, dict)):
             out.append("One option is destructive: never pick it unless the user explicitly chose it.")
+    elif job.kind == TEST_KIND and job.state in ("succeeded", "failed"):
+        out.append(f"{job.tool or 'ios_test_run'}(job_id='{bid}') shows the full result: failing tests (file:line), "
+                   "compile errors and what to do next.")
     elif not job.stream:
         out.extend(job.next_steps)
         if job.state == "failed" and not job.next_steps:
@@ -174,10 +177,43 @@ def job_status(job: Job, verbose: bool = False) -> JobStatus:
 
 
 DETAIL_BYTES = 2000     # a feature job's result inside a JobStatus; its own tool returns all of it
+TEST_KIND = "test"      # unit tests on the computer (tools/testing.py); a stream job with a test RESULT, not a build
+TEST_FAILURES = 5       # failing tests in a test job's detail
+
+
+def _test_detail(job: Job) -> dict | None:
+    """A unit-test run's RESULT (helper `test run`) in short: counts, the first failing tests, crash, log."""
+    r = job.result
+    if not isinstance(r, dict) or not r:
+        return None
+    counts = r.get("counts") if isinstance(r.get("counts"), dict) else {}
+    failures = [f for f in r.get("failures") or [] if isinstance(f, dict)]
+    failed = counts.get("failed")
+    out: dict = {"counts": {k: counts.get(k, 0) for k in ("total", "passed", "failed", "skipped")},
+                 "duration_seconds": r.get("duration") if isinstance(r.get("duration"), (int, float)) else None,
+                 "failures_total": max(len(failures), failed if isinstance(failed, int) else 0)}
+    lines = []
+    for f in failures[:TEST_FAILURES]:
+        where = B.rel_path(str(f["file"]), job.project_path) + (f":{f['line']}" if f.get("line") else "") \
+            if f.get("file") else None
+        msg = B.clip(" ".join(str(f.get("message") or "failed").split()), 160)
+        lines.append(" — ".join(x for x in (B.clip(str(f.get("id") or f.get("name") or "?"), 160), where, msg) if x))
+    if lines:
+        out["failures"] = lines
+    for key in ("crashed", "filter", "no_tests_matched"):
+        if r.get(key):
+            out[key] = B.clip(r[key], 200) if isinstance(r[key], str) else r[key]
+    if r.get("log_path"):
+        out["full_output_path"] = helper.tilde(str(r["log_path"]))
+    out["more"] = f"{job.tool or 'ios_test_run'}(job_id='{job.id}')"
+    return out
 
 
 def _detail(job: Job) -> dict | None:
-    """A coroutine job's result as a small dict: whole when it is small, else its scalar fields."""
+    """A coroutine job's result as a small dict: whole when it is small, else its scalar fields. A unit-test
+    run's summary for a test job."""
+    if job.kind == TEST_KIND:
+        return _test_detail(job)
     r = job.result
     if job.stream or not isinstance(r, dict):
         return None

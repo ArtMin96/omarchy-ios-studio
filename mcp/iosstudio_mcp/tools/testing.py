@@ -31,8 +31,9 @@ MESSAGE_CUT = 200           # characters of a failure message
 DIAGS_CAP = 20              # grouped compile diagnostics in a result
 FILTER_MAX = 200
 
-Filter = Annotated[str | None, Field(max_length=FILTER_MAX, description="Regex over test ids, e.g. 'MathTests' or "
-                                                                        "'AppCoreTests.MathTests/testAdd'")]
+Filter = Annotated[str | None, Field(max_length=FILTER_MAX, description="Regex over test ids, e.g. 'MathTests', "
+                                                                        "'MathTests/testAdd' (XCTest) or "
+                                                                        "'GreetingTests/add' (swift-testing)")]
 
 
 class TestCounts(Out):
@@ -89,6 +90,8 @@ ERROR_STEPS = {
     "host_unsupported": "The tested code imports UIKit/SwiftUI, which don't exist on this computer. Move the logic "
                         "into a Foundation-only library target (like AppCore in the 'App with unit tests' template), "
                         "test that, and check UI code on the iPhone (ios_run, ios_ui_tree).",
+    "bad_filter": "filter isn't a usable regex (at most 200 characters): pass a suite or test name like 'MathTests' "
+                  "or 'GreetingTests/add', escape ( ) [ ] with \\, or call ios_test_run without filter.",
     "toolchain": "No Swift toolchain for this computer: call ios_status, which names the setup step that installs it.",
     "busy": "A test run of this project started in the iOS Studio app is still going: wait for it, then call "
             "ios_test_run again.",
@@ -169,8 +172,8 @@ def _next_steps(job: Job, out: TestRun, code: str | None, err: dict) -> list[str
             (f", filter='{out.filter}'" if out.filter else "") + ")"
     if job.state == "succeeded":
         if out.no_tests_matched:
-            return [f"filter '{out.filter}' matched no test. It is a regex over ids like "
-                    "'AppCoreTests.MathTests/testAdd': try the suite name, or call without filter."]
+            return [f"filter '{out.filter}' matched no test. It is a regex over ids like 'MathTests/testAdd' "
+                    "(XCTest) or 'GreetingTests/add()' (swift-testing): try the suite name, or call without filter."]
         n = out.counts.total if out.counts else 0
         return [f"All {n} test{'s' if n != 1 else ''} passed. UI code isn't covered here: check it on the iPhone "
                 "(ios_run, ios_ui_tree)."]
