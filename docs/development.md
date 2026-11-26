@@ -59,6 +59,7 @@ helper/
       account.py             group `account` (xtool)
       appconfig.py           group `app`: launcher keybinding, window rule, opacity, about
       debugger.py            group `debug` (LLDB on your own apps); lldb_driver.py runs inside lldb's Python
+      lldb_shadow.py         the shadow toolchain lldb runs from, so Swift expressions work for iOS (ensure, for_lldb)
       editor_debug*.py       `debug editor-config` / `editor` / `editor-status`: Debug in editor (VS Code, Zed via lldb-dap)
       screenshots.py         group `screenshots`: baselines and visual diffs
       format.py              `projects format` / `format-lint`: swift-format and SwiftLint
@@ -338,6 +339,7 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
+| The debugger's shadow toolchain (lldb, lldb-dap and liblldb as hard links, reflinks or copies, with the iOS SDK's Swift resource dir; `.stamp` decides reuse; one tree per toolchain, the newest 2 kept; `.build.*`/`.old.*` leftovers removed by the next build) | `~/.cache/ios-studio/lldb-ios/<hash>/` |
 | Debug in editor: each app's attach file (`<bundle id>.lldb`), its running bridge (`<bundle id>.json`) and the lldb commands they load (the newest 20 apps) | `~/.local/state/ios-studio/editor-debug/` |
 | Hot reload: each project's baseline (build commands, sources and objects as built, the app's executable) and its signed patches (the newest 10); 300 MB in all, the oldest projects go first, never one with a running session; staging folders (`.<key>-…`) go after 6 hours | `~/.cache/ios-studio/hot-reload/<key>/` (key: the first 12 hex digits of the SHA-1 of the project path) |
 | Hot reload in a project: the runtime package (or its no-op stub) and a `.gitignore` of `*`; the managed block at the end of `Package.swift` | `<project>/.iosstudio/hot-reload/` |

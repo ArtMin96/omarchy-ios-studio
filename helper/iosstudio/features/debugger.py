@@ -14,10 +14,14 @@
   (editor_debug.py, editor_debug_bridge.py; docs/features/editor-debugging.md)
 
 How it works: the device daemon forwards the phone's debugserver to a loopback port over its own
-tunnel (`debug.start`), and helper/iosstudio/features/lldb_driver.py runs the toolchain's lldb against that port
+tunnel (`debug.start`), and helper/iosstudio/features/lldb_driver.py runs lldb against that port
 through lldb's Python API, under the Python lldb links (python3.12 for Swift 6.4; Setup's
-"Debugger support" step installs it). This process relays the driver's JSON events to stdout and
-stdin commands to the driver, and releases the forward (`debug.stop`) however the session ends.
+"Debugger support" step installs it). The lldb is the toolchain's, seen through a shadow toolchain
+(lldb_shadow.py) whose Swift resource dir is the darwin SDK's, with target.sdk-path set to the
+iPhoneOS SDK, so Swift expressions (p, po) work; without the SDK it is the plain toolchain lldb and
+the session carries a `notice` (id lldb-plain) that expressions may fail. This process relays the
+driver's JSON events to stdout and stdin commands to the driver, and releases the forward
+(`debug.stop`) however the session ends.
 
 Stream events (besides step/notice/log/done): `debug {mode, bundleId}`, `started {port, pid,
 launched, ...}`, then the driver's `console {text}`, `attached`, `backtrace`, `breakpoints`,
@@ -43,6 +47,7 @@ from pathlib import Path
 
 from iosstudio.core import appdirs, fileio, output
 from iosstudio.core.output import HelperError, fix
+from iosstudio.features import lldb_shadow
 
 DRIVER = Path(__file__).resolve().parent / "lldb_driver.py"
 SETUP_SWIFT = fix("Install Swift", "setup", step="swift")
@@ -135,6 +140,28 @@ def _toolchain() -> Toolchain:
     except (OSError, subprocess.TimeoutExpired):
         version = ""
     return Toolchain(str(lldb), version, str(python), pypath, _env(str(lldb)))
+
+
+@dataclass
+class SessionLldb:
+    """What a session's driver runs under: the shadow lldb's Python package and libraries, or the plain ones."""
+    python: str
+    pythonpath: str
+    env: dict
+    sdk: str | None             # for `settings set target.sdk-path`; None with the plain toolchain lldb
+    note: str = ""              # why Swift expressions may fail ("" = they should work)
+    shadow: lldb_shadow.Shadow | None = None
+
+
+def session_lldb(tc: Toolchain) -> SessionLldb:
+    """The shadow lldb for this toolchain and the installed iOS SDK (built once, then a stat check), else the
+    toolchain's own lldb with a plain-language note."""
+    sh, why = lldb_shadow.for_lldb(tc.lldb, tc.pythonpath)
+    if sh is None or not sh.pythonpath:
+        why = why or "The debugger couldn't be prepared for iOS."
+        return SessionLldb(tc.python, tc.pythonpath, tc.env, None, note="Swift expressions (p, po) may not work in this "
+                           f"session: {why[0].lower() + why[1:]} Variables still show.")
+    return SessionLldb(tc.python, sh.pythonpath, _env(str(sh.lldb)), str(sh.sdk), shadow=sh)
 
 
 # ---------------------------------------------------------------- projects and local builds
@@ -289,11 +316,15 @@ def swift_sources(path: Path) -> list[dict]:
 # ---------------------------------------------------------------- commands
 
 def cmd_check(flags: dict) -> int:
+    """Also builds the shadow lldb the first time (so a session start only checks its stamp)."""
     try:
         tc = toolchain()
     except HelperError as exc:
         return output.ok({"ready": False, "error": exc.to_json()})
-    return output.ok({"ready": True, "lldb": tc.lldb, "lldbVersion": tc.version, "python": tc.python})
+    sl = session_lldb(tc)
+    return output.ok({"ready": True, "lldb": tc.lldb, "lldbVersion": tc.version, "python": tc.python,
+                      "swiftExpressions": not sl.note, "expressionsNote": sl.note or None,
+                      "shadowLldb": str(sl.shadow.lldb) if sl.shadow else None})
 
 
 def cmd_sources(flags: dict) -> int:
@@ -338,11 +369,14 @@ def _stream(mode: str, flags: dict) -> int:
         output.event("debug", mode=mode, bundleId=bid)
         output.step("lldb", "Checking the debugger", "running")
         tc = toolchain()
+        sl = session_lldb(tc)
         output.step("lldb", "Checking the debugger", "done", detail=tc.version)
     except HelperError as exc:
         output.step("lldb", "Checking the debugger", "failed", error=exc.to_json())
         return output.done(False, error=exc)
-    return asyncio.run(_run(mode, bid, flags, tc, bps, cmds))
+    if sl.note and mode == "session":
+        output.event("notice", id="lldb-plain", level="info", message=sl.note)
+    return asyncio.run(_run(mode, bid, flags, sl, bps, cmds))
 
 
 def _write(line: str) -> None:
@@ -367,7 +401,7 @@ async def _stdin_reader() -> asyncio.StreamReader | None:
     return reader
 
 
-async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds: list) -> int:
+async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmds: list) -> int:
     from iosstudio.device.client import DeviceClient, DeviceError
 
     output.step("project", "Finding the app's build on this computer", "running")
@@ -392,7 +426,7 @@ async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds:
         output.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
         output.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable",
                                                         "ios", "build", "symbolsReady")},
-                     localBuild=exe, project=(info or {}).get("name"))
+                     localBuild=exe, project=(info or {}).get("name"), swiftExpressions=not sl.note)
         if not st.get("symbolsReady"):
             output.event("notice", id="no-symbols", level="info",
                          message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
@@ -402,8 +436,8 @@ async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds:
             output.event("notice", id="symbols-update", level="warn",
                          message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
                                  "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
-        cfg = {"mode": mode, "lldbPythonPath": tc.pythonpath, "port": st.get("port"), "host": st.get("host"),
-               "pid": st.get("pid"), "remotePath": st.get("remotePath"), "localExe": exe,
+        cfg = {"mode": mode, "lldbPythonPath": sl.pythonpath, "sdkPath": sl.sdk, "port": st.get("port"),
+               "host": st.get("host"), "pid": st.get("pid"), "remotePath": st.get("remotePath"), "localExe": exe,
                "sysroot": st.get("sysroot") if st.get("symbolsReady") else None, "breakpoints": bps,
                "commands": cmds, "stopAtAttach": bool(flags.get("stop_at_attach")),
                "maxFrames": 128, "stopFrames": 40, "localsDepth": 1,
@@ -413,8 +447,8 @@ async def _run(mode: str, bid: str, flags: dict, tc: Toolchain, bps: list, cmds:
         attached = asyncio.Event()
         try:
             proc = await asyncio.create_subprocess_exec(
-                tc.python, "-I", str(DRIVER), json.dumps(cfg), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=tc.env, limit=16 << 20)
+                sl.python, "-I", str(DRIVER), json.dumps(cfg), stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=sl.env, limit=16 << 20)
         except OSError as exc:
             await _stop(dev, bid, st, kill=bool(st.get("launched")))
             return output.done(False, error=HelperError("needs-python", "The debugger's Python didn't start.",
