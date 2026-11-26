@@ -155,7 +155,7 @@ def test_prefetch_swift_sources_uses_srcinfo_sums(tmp_path, monkeypatch):
 def test_pins_are_well_formed():
     for sha in [*pins.RCODESIGN_SHA.values(), *(v[1] for v in pins.IPSW_SHA.values())]:
         assert len(sha) == 64 and int(sha, 16) >= 0
-    for c in (pins.APPLE_DEV_COMMIT, pins.DEFAULT_XTOOL_SHA, pins.XTOOL_FIX_SHA, pins.SWIFT_AUR_COMMIT):
+    for c in (pins.APPLE_DEV_COMMIT, pins.DEFAULT_XTOOL_SHA, pins.SWIFT_AUR_COMMIT):
         assert len(c) == 40
     assert "{v}" in pins.DIRECT_XIP and "{v}" in pins.DOWNLOAD_PAGE
     for rec, major, size in pins.XCODE_FOR_SWIFT.values():

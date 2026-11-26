@@ -17,6 +17,7 @@ from . import runtime as rt
 from .downloads import aur_fetch, download, prefetch_swift_sources, srcinfo, strip_ver
 from .facts import arch, is_omarchy, sdk_ios_versions, swift_hold_hook_present
 from .pins import (
+    APPLE_DEV_COMMIT,
     HOOK_SRC,
     IPSW_SHA,
     IPSW_VERSION,
@@ -45,7 +46,7 @@ from .runtime import (
     run_root,
     run_stream,
 )
-from .sources import i_apple_dev, i_xtool
+from .sources import apple_dev_checkout, i_apple_dev, i_xtool
 from .steps import Ctx, summarize
 from .xip import xip_quick, xip_read_version
 
@@ -212,7 +213,7 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
         if ctx.state(dep) != "done" and not rt.DRY:
             t = ctx.by_id[dep]["title"]
             raise HelperError("needs-step", f"Install “{t}” first.", fix(f"Install {t}", "setup", step=dep))
-    ad = ctx.c.get("apple_dev") or i_apple_dev(ctx, step_id)
+    ad = apple_dev_checkout(ctx, step_id)
     major = ctx.c["xcode_major"]
     cache = ctx.c.get("good_cache")
     xip_path = ctx.flags.get("xip")
@@ -314,6 +315,8 @@ INSTALLERS = {
 
 ORDER = ["packages", "usbmuxd", "swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesign", "pymobiledevice3",
          "ipsw", "debugger", "sdk", "uxplay", "wireshark", "app-integration"]
+# What a new omarchy-apple-dev commit can leave outdated: they're rebuilt right after it, only if it changed them.
+FOLLOW_UPS = {"apple-dev": ("xtool", "sdk")}
 ROOT_STEPS = {"packages", "usbmuxd", "swift", "swift-hold", "xcspec", "uxplay", "wireshark", "debugger"}
 OPTIONAL_IN_ALL = {"ipsw", "debugger", "uxplay", "wireshark"}
 
@@ -331,6 +334,30 @@ def _run_one(ctx: Ctx, sid: str) -> None:
     output.step(sid, title, "done", elapsed=round(time.time() - t0))
 
 
+def _run_chain(ctx: Ctx, sid: str) -> list[str]:
+    """Run one step, then the FOLLOW_UPS it turned from done to broken (an omarchy-apple-dev update that moved
+    the xtool pin or the SDK's build tools), so one Update redoes exactly what changed. Returns the ids run."""
+    deps = FOLLOW_UPS.get(sid, ())
+    was = {d: ctx.state(d) for d in deps}
+    _run_one(ctx, sid)
+    ran = [sid]
+    if rt.DRY:
+        if deps:
+            log(sid, "would then rebuild what the update changed: " + ", ".join(deps))
+        return ran
+    ctx.refresh()
+    for d in deps:
+        if was[d] != "done" or ctx.state(d) != "broken":
+            continue
+        if not ctx.by_id[d]["canAutoInstall"]:
+            log(sid, f"“{ctx.by_id[d]['title']}” needs a repair too: {ctx.by_id[d]['detail']}")
+            continue
+        _run_one(ctx, d)
+        ctx.refresh()
+        ran.append(d)
+    return ran
+
+
 def install(flags: dict) -> int:
     """`setup install --step ID | --all`: run the installers, streaming step/log/progress events."""
     ctx = Ctx(flags)
@@ -342,7 +369,8 @@ def install(flags: dict) -> int:
                 (sid not in OPTIONAL_IN_ALL or flags.get("include_optional"))]
         if not todo:
             return output.done(True, {"installed": [], "summary": summarize(ctx.steps), "message": "Nothing to install."})
-        big = [ctx.by_id[s]["title"] for s in todo if s in ("swift", "xtool", "sdk")]
+        big = [ctx.by_id[s]["title"] for s in todo if s in ("swift", "xtool", "sdk")
+               or (s == "apple-dev" and ctx.c.get("apple_dev_outdated"))]
         if big:
             confirm("Install " + ", ".join(ctx.by_id[s]["title"] for s in todo) + "? This downloads up to about "
                     f"{'2' if 'swift' in todo else '1'} GB and takes {'30–45' if 'sdk' in todo else '15–25'} minutes. "
@@ -366,11 +394,12 @@ def install(flags: dict) -> int:
                 ctx.refresh()
         installed = list(root_ids)
         for sid in [s for s in todo if s not in ROOT_STEPS]:
+            if sid in installed:          # already run as another step's follow-up
+                continue
             if sid == "sdk" and not rt.DRY and not ctx.by_id["sdk"]["canAutoInstall"]:
                 output.step(sid, ctx.by_id[sid]["title"], "skipped", reason="needs the Xcode download")
                 continue
-            _run_one(ctx, sid)
-            installed.append(sid)
+            installed += _run_chain(ctx, sid)
             if not rt.DRY:
                 ctx.refresh()
         return output.done(True, {"installed": installed, "summary": summarize(ctx.steps), "dryRun": rt.DRY})
@@ -389,7 +418,12 @@ def install(flags: dict) -> int:
     if sid in ("swift", "xtool"):
         s = ctx.by_id[sid]
         confirm(f"Install {s['title']}? It needs {s['size']} and takes {s['time']}.", "Install", flags)
-    _run_one(ctx, sid)
+    if sid == "apple-dev" and ctx.c.get("apple_dev_outdated"):
+        confirm(f"Update the iOS build scripts to the tested version {APPLE_DEV_COMMIT[:7]}? iOS Studio then rebuilds "
+                f"only what changed: xtool if its version moved ({ctx.by_id['xtool']['time']}) and the iOS SDK's "
+                "build tools (a few minutes). The SDK is rebuilt from Xcode only if the new scripts need that.",
+                "Update", flags)
+    ran = _run_chain(ctx, sid)
     if not rt.DRY:
         ctx.refresh()
-    return output.done(True, {"installed": [sid], "step": ctx.by_id.get(sid), "summary": summarize(ctx.steps), "dryRun": rt.DRY})
+    return output.done(True, {"installed": ran, "step": ctx.by_id.get(sid), "summary": summarize(ctx.steps), "dryRun": rt.DRY})

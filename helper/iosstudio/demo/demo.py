@@ -250,9 +250,26 @@ FRESH_MISSING = {"swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesi
                  "xcode", "sdk", "apple-id", "iphone", "developer-mode", "uxplay", "wireshark"}
 
 
+def _tested() -> dict[str, dict]:
+    """The pieces whose pins Setup moves with omarchy-apple-dev, at the tested versions: ready/expiring show these
+    whatever this machine has (its own checkout, an older xtool build, an older ipsw). `row` is the Setup detail,
+    `path` the Toolchain page's."""
+    from iosstudio.features.setup import pins
+    ad, xt = pins.APPLE_DEV_COMMIT[:7], pins.DEFAULT_XTOOL_SHA[:7]
+    return {"apple-dev": {"version": ad, "row": f"At the tested version {ad} (~/.local/share/omarchy-apple-dev)",
+                          "path": "~/.local/share/omarchy-apple-dev"},
+            "xtool": {"version": xt, "row": f"Build {xt} · has the Apple sign-in fix",
+                      "path": f"~/.local/lib/omarchy-apple-dev/xtool-{pins.DEFAULT_XTOOL_SHA}/xtool"},
+            "ipsw": {"version": pins.IPSW_VERSION, "row": f"ipsw {pins.IPSW_VERSION}"}}
+
+
 def _setup_check(flags: dict) -> dict:
     d = scrub(_real("setup", "setup", "check", flags) or {"steps": [], "groups": ["System", "Toolchain", "Apple", "iPhone"]})
+    tested = {} if FRESH else _tested()
     for s in d.get("steps", []):
+        if s["id"] in tested:
+            s.update(state="done", detail=tested[s["id"]]["row"], canAutoInstall=False,
+                     action={"kind": "install", "label": "Install"})
         if s["id"] == "apple-id":
             s["detail"] = f"Signed in as {APPLE_ID}"
         if s["id"] == "iphone":
@@ -269,14 +286,23 @@ def _setup_check(flags: dict) -> dict:
                         "ready": False, "essentialMissing": miss, "level": "warn", "title": f"{len(miss)} steps left", "badge": str(len(miss))}
         if isinstance(d.get("xcode"), dict):
             d["xcode"]["file"] = None
+    elif tested and d.get("steps"):
+        from iosstudio.features.setup.steps import summarize
+        d["summary"] = summarize(d["steps"])
     return d
 
 
 def _toolchain_info(flags: dict) -> dict:
     d = scrub(_real("setup", "toolchain", "info", flags) or {"items": [], "sdks": {}})
+    tested = {} if FRESH else _tested()
     for it in d.get("items", []):
         if it.get("id") == "apple-dev" and it.get("detail"):   # a personal checkout path: show the standard one
             it["detail"] = "~/.local/share/omarchy-apple-dev"
+        t = tested.get(it.get("id"))
+        if t:
+            it.update(version=t["version"], status="ok", **({"detail": t["path"]} if "path" in t else {}))
+            if it["id"] == "xtool":
+                it["hasFix"] = True
     if FRESH:
         for it in d.get("items", []):
             if it["id"] not in ("apple-dev",):

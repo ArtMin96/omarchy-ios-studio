@@ -65,7 +65,7 @@ def info() -> dict:
     pkgv = re.search(r"^Version\s*:\s*(\S+)", qi, re.M)
     items = [
         item("xtool", "xtool", xv.split()[-1][:7] if xv else None, appdirs.tilde(xt_real) if xt_real else "Not installed",
-             st_of("xtool"), hasFix=F["xtool_old_ua"] is False, step="xtool"),
+             st_of("xtool"), hasFix=F["xtool_old_ua"] is False, pinned=F["pins"]["XTOOL_SHA"][:7], step="xtool"),
         item("swift", "Swift", swift_ver, f"swift-bin {pkgv.group(1)}" if pkgv else "Not installed", st_of("swift"),
              held="swift-bin" in F["ignore"][1].split(), step="swift"),
         item("sdk", "iOS SDK", (sdk_ios_versions(c["bundle"]) or [None])[-1] if c.get("bundle") else None,
@@ -137,9 +137,11 @@ def disk_items() -> list[dict]:
     old_caches += _stale_pid_dirs() + [p for p in SDK_CACHE.glob(".build.*")]
     sdk_ok_now = bool(bundle and sdk_stamp(bundle) == stamp and reg_vers)
     xips = find_xips()
+    # Builds other than the active one, either layout (xtool-<sha>, the older xtool-<sha7>-gsa406), and their
+    # source trees (same naming: lib/xtool-X <-> cache/xtool-X), orphaned ones included.
     superseded_libs = [p for p in APPLE_DEV_LIB.glob("xtool-*") if p.is_dir() and p != active_lib]
-    # source trees of superseded builds (same naming: lib/xtool-X <-> cache/xtool-X)
-    superseded_src = [APPLE_DEV_CACHE / p.name for p in superseded_libs if (APPLE_DEV_CACHE / p.name).is_dir()]
+    superseded_src = [p for p in APPLE_DEV_CACHE.glob("xtool-*")
+                      if p.is_dir() and not (active_lib and p.name == active_lib.name)]
     build_trees = [p / ".build" for p in APPLE_DEV_CACHE.glob("*") if (p / ".build").is_dir() and p not in superseded_src]
     if ad and (ad / "tools/darwin-tools/.build").is_dir():
         build_trees.append(ad / "tools/darwin-tools/.build")
