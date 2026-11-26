@@ -14,8 +14,8 @@ In a narrow window, such as tiled next to your editor, the sidebar shrinks to ic
 
 From top to bottom:
 
-- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. While a build runs, the card shows its progress.
-- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone.
+- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. When Setup has only an update left (a newer tested version of the iOS build scripts), the card says an update is ready and its Update button opens that step in Setup; everything keeps working meanwhile, and iOS Studio doesn't open Setup by itself for it. While a build runs, the card shows its progress.
+- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone. Toolchain shows a download arrow instead of a check while an update waits.
 - Quick actions: New app, Open Setup, Mirror screen and Connect AI agents.
 - The iPhone card shows the name, model, iOS version, connection, battery and Developer Mode, with a fix button when something needs you.
 - The Apple ID card shows your account, whether it's free or paid, and how many days are left until your apps need re-signing, with Renew.

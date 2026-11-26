@@ -10,8 +10,12 @@ import "../lib/Model.js" as Model
 //
 //   app.setup.steps            [{id, title, description, group, state, detail, size, time, needsRoot,
 //                                interactive, canAutoInstall, essential, optional, action, ...}]
-//   app.setup.summary          {title, detail, level, badge, done, total, ready, essentialMissing}
-//   app.setup.essentialMissing ids; non-empty -> status "needs-setup" (AppState opens Setup on first run)
+//   app.setup.summary          {title, detail, level, badge, done, total, ready, essentialMissing, updates, blocking}
+//   app.setup.essentialMissing ids of essential steps left to do, updates included (Setup lists them all)
+//   app.setup.updates          ids of those that are updates (Model.isSetupUpdate): they work as they are
+//   app.setup.blocking         essentialMissing minus updates; non-empty -> status "needs-setup" (AppState opens
+//                              Setup on first run). An update alone leaves status "ready": builds, runs and
+//                              debugging carry on, and Home and Setup offer the update calmly.
 //   app.setup.install(id) / installAll() / cancel()
 //   app.setup.runs[id]         {state: running|done|failed, fraction, detail, eta, error}
 //   app.setup.logLines(id)     [lines] so far (last 400); new ones arrive as stepLog(id, text),
@@ -45,6 +49,8 @@ Item {
   readonly property var raw: check.data                  // last check data
   readonly property var xcode: raw && raw.xcode ? raw.xcode : ({})   // {needed, major, swift, expectedSize, downloadUrl, pageUrl, file}
   property var essentialMissing: []
+  property var updates: []
+  property var blocking: []
   readonly property bool checking: check.busy
   readonly property double checkedAt: check.loadedAt
   readonly property bool loaded: check.loaded
@@ -112,9 +118,13 @@ Item {
       }
       if (s.essential && (s.state === "missing" || s.state === "broken")) missing.push(s.id)
     }
+    var missingSteps = missing.map(function(id) { return root.step(id) })
+    var blocking = Model.setupBlocking(missingSteps).map(function(s) { return s.id })
     root.essentialMissing = missing
+    root.updates = missingSteps.filter(Model.isSetupUpdate).map(function(s) { return s.id })
+    root.blocking = blocking
     var broken = missing.filter(function(id) { var s = root.step(id); return s && s.state === "broken" && !Model.isSetupUpdate(s) })
-    var updatesOnly = Model.setupUpdatesOnly(missing.map(function(id) { return root.step(id) }))
+    var updatesOnly = Model.setupUpdatesOnly(missingSteps)
     var level = missing.length === 0 ? "ok" : (broken.length ? "error" : (updatesOnly ? "info" : "warn"))
     root.summary = {
       title: missing.length === 0 ? "Ready to build"
@@ -124,22 +134,24 @@ Item {
       level: level,
       badge: missing.length ? String(missing.length) : "",
       done: done, total: counted, ready: missing.length === 0, essentialMissing: missing,
+      updates: root.updates, blocking: blocking,
       next: root.nextStep() ? root.nextStep().id : ""
     }
-    if (root.status !== "needs-setup" && missing.length > 0) root.status = "needs-setup"
-    else if (missing.length === 0) root.status = "ready"
+    // only what blocks counts as unfinished: an update-only setup is ready (with an update)
+    root.status = blocking.length > 0 ? "needs-setup" : "ready"
   }
 
-  // The first step a person should look at: broken essentials, then missing ones in order.
+  // The first step a person should look at: broken essentials, then missing ones in order, then updates.
   function nextStep() {
-    var firstMissing = null
+    var firstMissing = null, firstUpdate = null
     for (var i = 0; i < root.steps.length; i++) {
       var s = root.steps[i]
       if (!s.essential) continue
+      if (Model.isSetupUpdate(s)) { if (!firstUpdate) firstUpdate = s; continue }
       if (s.state === "broken") return s
       if (s.state === "missing" && !firstMissing) firstMissing = s
     }
-    return firstMissing
+    return firstMissing || firstUpdate
   }
 
   readonly property int autoCount: {
@@ -328,8 +340,8 @@ Item {
   readonly property int recheckInterval: 60000
   Timer {
     interval: root.recheckInterval; repeat: true
-    // Once everything is ready, only while Setup is on screen: focusing the window still re-checks.
-    running: !root.installing && root.app.windowFocused && (!root.summary.ready || root.app.page === "setup")
+    // Once nothing blocks (an update alone doesn't), only while Setup is on screen: focusing the window still re-checks.
+    running: !root.installing && root.app.windowFocused && (root.blocking.length > 0 || root.app.page === "setup")
     onTriggered: root.refresh()
   }
   Connections {
