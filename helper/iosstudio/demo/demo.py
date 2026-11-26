@@ -275,10 +275,9 @@ def apple_dev_outdated() -> bool:
 
 def outdated_apple_dev_row(row: dict, head: str = OLD_APPLE_DEV, pinned: str | None = None) -> dict:
     """The iOS build scripts row as steps.build_steps words it when Setup's own checkout is at `head`, not the pin."""
-    from iosstudio.features.setup import pins
-    pinned = pinned or pins.APPLE_DEV_COMMIT
+    from iosstudio.features.setup.steps import apple_dev_update_detail
     return {**row, "state": "broken", "canAutoInstall": True, "action": {"kind": "install", "label": "Update"},
-            "detail": f"At {head[:7]}, not the tested {pinned[:7]}. Updating downloads it and rebuilds only what changed"}
+            "update": True, "detail": apple_dev_update_detail(head, pinned)}
 
 
 def _setup_check(flags: dict) -> dict:
@@ -287,7 +286,7 @@ def _setup_check(flags: dict) -> dict:
     for s in d.get("steps", []):
         if s["id"] in tested:
             s.update(state="done", detail=tested[s["id"]]["row"], canAutoInstall=False,
-                     action={"kind": "install", "label": "Install"})
+                     action={"kind": "install", "label": "Install"}, **({"update": False} if "update" in s else {}))
         if s["id"] == "apple-dev" and apple_dev_outdated():
             s.update(outdated_apple_dev_row(s))
         if s["id"] == "apple-id":
@@ -324,7 +323,7 @@ def _toolchain_info(flags: dict) -> dict:
             if it["id"] == "xtool":
                 it["hasFix"] = True
         if it.get("id") == "apple-dev" and apple_dev_outdated():
-            it.update(version=OLD_APPLE_DEV[:7], status="error")
+            it.update(version=OLD_APPLE_DEV[:7], status="update")
     if FRESH:
         for it in d.get("items", []):
             if it["id"] not in ("apple-dev",):

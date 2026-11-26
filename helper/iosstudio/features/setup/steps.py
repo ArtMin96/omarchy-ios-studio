@@ -55,6 +55,13 @@ def _row(id_: str, title: str, group: str, description: str, state: str, detail:
     return d
 
 
+def apple_dev_update_detail(head: str, pinned: str | None = None) -> str:
+    """The iOS build scripts row's detail when our own checkout is at `head`, not the pin: an update, not a fault."""
+    pinned = pinned or APPLE_DEV_COMMIT
+    return (f"You have {head[:7]}; iOS Studio is tested with {pinned[:7]}. Updating downloads it and rebuilds only "
+            "what changed.")
+
+
 def build_steps(F: dict) -> tuple[list[dict], dict]:
     """The Setup steps from gather()'s facts, plus a context dict the installers use (missing packages, xip…)."""
     steps: list[dict] = []
@@ -154,16 +161,16 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     elif head == APPLE_DEV_COMMIT:
         st, det = "done", f"At the tested version {head[:7]} ({appdirs.tilde(ad)})"
     elif outdated:
-        st, det = "broken", (f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]}. Updating downloads it and "
-                             "rebuilds only what changed")
+        # state "broken" so every install path repairs it as before; update=True tells people (UI, MCP) it's an update
+        st, det = "broken", apple_dev_update_detail(head)
         action = {"kind": "install", "label": "Update"}
     else:
         st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} (your copy at {appdirs.tilde(ad)})"
     if ad and F["ad_dirty"][0] == 0 and F["ad_dirty"][1].strip():
-        det += " · has local changes"
+        det += " It has local changes." if det.endswith(".") else " · has local changes"
     steps.append(_row("apple-dev", "iOS build scripts", "Toolchain",
                    "omarchy-apple-dev: the open-source scripts that turn Xcode's iOS SDK into something Linux can build with.",
-                   st, det, size="a few MB", time_="seconds", essential=True, action=action))
+                   st, det, size="a few MB", time_="seconds", essential=True, action=action, update=outdated))
 
     # 8 xtool
     xt = F["xtool"]
@@ -402,17 +409,23 @@ def summarize(steps: list[dict]) -> dict:
     counted = [s for s in steps if not s.get("optional") and s["state"] != "optional" and s["id"] != "platform"]
     done_n = sum(1 for s in counted if s["state"] == "done")
     essential_missing = [s["id"] for s in steps if s.get("essential") and s["state"] in ("missing", "broken")]
-    broken = [s["id"] for s in steps if s["state"] == "broken"]
+    # an update (broken + update) still counts as left to do, but isn't a fault: its own list and calmer wording
+    updates = [s["id"] for s in steps if s["state"] == "broken" and s.get("update")]
+    broken = [s["id"] for s in steps if s["state"] == "broken" and s["id"] not in updates]
     auto = [s["id"] for s in steps if s["canAutoInstall"] and s["state"] in ("missing", "broken")]
     ready = not essential_missing
     if ready:
         level, title = "ok", "Everything is ready"
     elif broken and any(b in essential_missing for b in broken):
         level, title = "error", "Something needs repair"
+    elif all(i in updates for i in essential_missing):
+        n = len(essential_missing)
+        level, title = "info", f"{n} update{'s' if n != 1 else ''} ready"
     else:
         level, title = "warn", f"{len(essential_missing)} step{'s' if len(essential_missing) != 1 else ''} left"
     return {"total": len(counted), "done": done_n, "readiness": f"{done_n} of {len(counted)} ready",
-            "ready": ready, "essentialMissing": essential_missing, "broken": broken, "autoInstallable": auto,
+            "ready": ready, "essentialMissing": essential_missing, "broken": broken, "updates": updates,
+            "autoInstallable": auto,
             "level": level, "title": title, "badge": "" if ready else str(len(essential_missing))}
 
 

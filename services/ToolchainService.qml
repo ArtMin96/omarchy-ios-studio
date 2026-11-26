@@ -39,10 +39,14 @@ Item {
     if (infoRes.error) return { title: "Toolchain", detail: Model.errorMessage(infoRes.error), level: "error", badge: "" }
     if (!infoRes.loaded) return { title: "Toolchain", detail: "Not checked yet", level: "info", badge: "" }
     var bad = root._bad
+    // "update" (an older iOS build scripts checkout) works as it is: named, but no warning dot
+    var updates = bad.filter(function(i) { return i.status === "update" }).length
     return {
       title: "Toolchain",
-      detail: bad.length ? bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention" : "All pieces installed",
-      level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length ? "warn" : "ok"),
+      detail: !bad.length ? "All pieces installed"
+            : updates === bad.length ? (updates === 1 ? "1 update ready" : updates + " updates ready")
+            : bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention",
+      level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length > updates ? "warn" : "ok"),
       badge: ""
     }
   }

@@ -57,6 +57,8 @@ def info() -> dict:
         return d
 
     def st_of(sid: str) -> str:
+        if by[sid].get("update") and by[sid]["state"] == "broken":
+            return "update"     # works; the tested version is a download away (Setup's Update)
         return {"done": "ok", "missing": "missing", "broken": "error", "optional": "missing", "unknown": "warn"}[by[sid]["state"]]
     xv = (F["xtool_ver"][1].strip().splitlines() or [""])[0]
     xt_real = os.path.realpath(F["xtool"]) if F["xtool"] else None

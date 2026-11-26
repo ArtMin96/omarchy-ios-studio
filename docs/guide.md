@@ -14,8 +14,8 @@ In a narrow window, such as tiled next to your editor, the sidebar shrinks to ic
 
 From top to bottom:
 
-- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. While a build runs, the card shows its progress.
-- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone.
+- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. When Setup has only an update left (a newer tested version of the iOS build scripts), the card says an update is ready and its Update button opens that step in Setup; everything keeps working meanwhile, and iOS Studio doesn't open Setup by itself for it. While a build runs, the card shows its progress.
+- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone. Toolchain shows a download arrow instead of a check while an update waits.
 - Quick actions: New app, Open Setup, Mirror screen and Connect AI agents.
 - The iPhone card shows the name, model, iOS version, connection, battery and Developer Mode, with a fix button when something needs you.
 - The Apple ID card shows your account, whether it's free or paid, and how many days are left until your apps need re-signing, with Renew.
@@ -28,7 +28,7 @@ On a fresh machine, Home shows what Setup will do instead.
 
 ![Setup](screenshots/setup.png)
 
-Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button.
+Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button. When iOS Studio moves to a newer tested version of the iOS build scripts, that row shows an Update button instead: your copy keeps working until you press it, and Update downloads the new version and rebuilds only what changed.
 
 - Install everything runs every missing step in order. You type your password once, for the system packages and Swift. Everything else goes into your home folder.
 - You can stop an install. Finished steps stay installed.
@@ -160,7 +160,7 @@ Four tabs:
 
 ![Toolchain](screenshots/toolchain.png)
 
-Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair. Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
+Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair (or Update, with "update available", when the iOS build scripts have a newer tested version). Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
 
 ### Settings
 

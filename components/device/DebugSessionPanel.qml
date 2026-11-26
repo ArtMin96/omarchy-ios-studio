@@ -244,10 +244,13 @@ ColumnLayout {
     spacing: Style.spacing.md
     visible: root.phase === "running" || root.phase === "stopped"
     StatusPill {
+      // as tall as the buttons beside it, so the row reads as one band
+      Layout.preferredHeight: continueBtn.implicitHeight
       level: root.phase === "stopped" ? "warn" : (root.waiting ? "busy" : "ok")
       text: root.phase === "stopped" ? "Paused" : (root.waiting ? "Stepping…" : "Running")
     }
     ActionButton {
+      id: continueBtn
       text: "Continue"; glyph: Model.Glyph.play; kind: "primary"; compact: true
       enabled: root.phase === "stopped" && !root.waiting
       onClicked: root.send("continue")
@@ -443,7 +446,8 @@ ColumnLayout {
             ? (r.description !== undefined ? r.description
                : root.evalResult.expr + " = " + (r.value !== undefined ? r.value : "(" + (r.type || "no value") + ")"))
             : (root.evalResult.message || r.error || "Couldn't evaluate that."))
-      mono: true; size: "small"; tone: root.evalResult && root.evalResult.ok ? "primary" : "warn"; wrapMode: Text.WrapAnywhere
+      // words wrap whole; only a token longer than the line (a long po value) breaks inside
+      mono: true; size: "small"; tone: root.evalResult && root.evalResult.ok ? "primary" : "warn"; wrapMode: Text.Wrap
     }
   }
 

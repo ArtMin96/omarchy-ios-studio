@@ -88,6 +88,7 @@ PageFrame {
     var r = page.run(s.id)
     if (r && r.state === "running" && page.svc.installing) return "running"
     if (r && r.state === "failed" && s.state !== "done") return "failed"
+    if (Model.isSetupUpdate(s)) return "update"      // works as it is; the tested version is a download away
     if (s.state === "broken") return "failed"
     if (s.state === "unknown") return "pending"
     return s.state
@@ -108,7 +109,7 @@ PageFrame {
   function actionGlyph(s) {
     var a = s.action || {}
     if (a.kind === "page") return a.page === "account" ? Model.Glyph.apple : Model.Glyph.phone
-    if (s.state === "broken") return a.label === "Update" ? Model.Glyph.download : Model.Glyph.wrench
+    if (s.state === "broken") return Model.isSetupUpdate(s) ? Model.Glyph.download : Model.Glyph.wrench
     return Model.Glyph.download
   }
 
@@ -162,6 +163,8 @@ PageFrame {
   readonly property var counted: page.svc.steps.filter(function(s) { return s.id !== "platform" && !s.optional && s.state !== "optional" })
   readonly property int doneCount: page.counted.filter(function(s) { return s.state === "done" }).length
   readonly property var autoSteps: page.svc.steps.filter(function(s) { return s.canAutoInstall && !s.optional })
+  // everything left is an update (an older iOS build scripts checkout): the hero words it as one
+  readonly property bool updatesOnly: Model.setupUpdatesOnly(page.svc.steps.filter(function(s) { return s.essential && (s.state === "missing" || s.state === "broken") }))
   readonly property string autoTime: {
     var ids = page.autoSteps.map(function(s) { return s.id })
     if (ids.indexOf("sdk") >= 0) return "about 30–45 minutes"
@@ -221,6 +224,7 @@ PageFrame {
             wrapMode: Text.Wrap
             text: page.svc.runningAll ? "Setting things up…"
                 : page.ready ? "Ready to build for iPhone"
+                : page.updatesOnly ? (page.autoSteps.length > 1 ? page.autoSteps.length + " updates are ready" : "An update is ready")
                 : page.doneCount * 2 < page.counted.length ? "Let's get your computer ready"
                 : "Almost there"
           }
@@ -231,7 +235,7 @@ PageFrame {
               if (page.svc.runningAll) return "You can keep using your computer. iOS Studio will tell you if it needs anything."
               if (page.ready) return "Swift, xtool and the iOS SDK are installed and you're signed in. Build an app and run it on your iPhone from Projects."
               var parts = []
-              if (page.autoSteps.length) parts.push((page.autoSteps.length === 1 ? "1 piece installs by itself" : page.autoSteps.length + " pieces install by themselves") + " (" + page.autoTime + ", mostly waiting)")
+              if (page.autoSteps.length) parts.push(Model.setupAutoText(page.autoSteps, page.autoTime))
               var manual = page.manualSteps.map(function(s) { return s.id === "xcode" ? "download Xcode" : s.id === "apple-id" ? "sign in to Apple" : s.id === "iphone" ? "pair your iPhone" : s.title.toLowerCase() })
               if (manual.length) parts.push("a few things need you: " + manual.join(", "))
               return parts.length ? parts.join("; ") + "." : "A few optional extras are left."
@@ -268,6 +272,7 @@ PageFrame {
             radius: Style.cornerRadius > 0 ? height / 2 : 0
             color: vs === "done" ? Theme.success
                  : vs === "running" ? Commons.Color.accent
+                 : vs === "update" ? Util.alpha(Commons.Color.accent, 0.5)    // works; not at the tested version yet
                  : vs === "failed" ? Commons.Color.urgent
                  : Util.alpha(Commons.Color.foreground, 0.12)
             Behavior on color { ColorAnimation { duration: 220 } }
@@ -303,10 +308,10 @@ PageFrame {
 
         ActionButton {
           visible: !page.svc.installing && page.autoSteps.length > 0
-          text: "Install everything"
+          text: !page.updatesOnly ? "Install everything" : page.autoSteps.length > 1 ? "Update all" : "Update"
           glyph: Model.Glyph.download
           kind: "primary"
-          tooltip: "Installs " + page.autoSteps.map(function(s) { return s.title }).join(", ") + " (i)"
+          tooltip: (page.updatesOnly ? "Updates " : "Installs ") + page.autoSteps.map(function(s) { return s.title }).join(", ") + " (i)"
           onClicked: page.installAll()
         }
         ActionButton {
@@ -438,7 +443,7 @@ PageFrame {
               visible: row.s.state !== "done" && row.vs !== "failed" && row.s.detail !== "" && row.s.id !== "xcode" && row.s.id !== "iphone"
               text: page.blockedText(row.s, row.blocked)
               size: "small"
-              tone: row.s.state === "unknown" || row.s.state === "optional" ? "faint" : "warn"
+              tone: row.s.state === "unknown" || row.s.state === "optional" ? "faint" : row.vs === "update" ? "dim" : "warn"
               wrapMode: Text.Wrap
             },
             Loader {

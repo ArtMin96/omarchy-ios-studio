@@ -416,7 +416,7 @@ class SetupStep(Out):
     id: str
     title: str
     group: str | None = None
-    state: str = Field(description="done | missing | broken | optional | unknown")
+    state: str = Field(description="done | missing | broken | update (works; a tested update is ready) | optional | unknown")
     detail: str | None = None
     essential: bool = False
     can_auto_install: bool = False

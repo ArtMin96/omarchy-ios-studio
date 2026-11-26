@@ -236,7 +236,8 @@ Item {
   property TestService tests: TestService { app: root }                       // unit tests on this computer, swift test (one run per project)
 
   // First run / something essential missing → open Setup once, unless the
-  // user (or a deep link) already went somewhere.
+  // user (or a deep link) already went somewhere. An update alone (Model.isSetupUpdate) leaves setup
+  // "ready", so it never takes over: Home offers it.
   Connections {
     target: root.setup
     function onStatusChanged() {
