@@ -658,7 +658,7 @@ def register(mcp: MCPServer) -> None:
         """Step, continue or inspect a paused debug session; run commands return at the next stop or after
         wait_seconds, frame_variables and evaluate answer in `result`. evaluate runs Swift expressions
         (p/po/expression) unless the session has an expressions_note; the first one loads the app's modules
-        (up to ~40 s)."""
+        (up to 40 s)."""
         state = get_state(ctx)
         s = _get(state, session_id)
         if s.ended:
@@ -677,7 +677,7 @@ def register(mcp: MCPServer) -> None:
             ev = await s.request(msg, lambda: rid in s.results or s.ended, min(wait_seconds or 15, MAX_WAIT))
             if ev is None:
                 raise ToolError("The debugger didn't answer in time (memory reads are slow over Wi-Fi"
-                                + ("; the first expression of a session loads the app's Swift modules, up to ~40 s"
+                                + ("; the first expression of a session loads the app's Swift modules, up to 40 s"
                                    if command == "evaluate" else "") + "). Try again.")
             return session_view(s, _clip_result(ev))
         seen = int((s.stop or {}).get("stopId") or 0)

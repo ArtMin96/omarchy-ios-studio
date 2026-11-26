@@ -336,7 +336,7 @@ def bridge_view(job: Job, message: str | None = None) -> EditorBridge:
                    "variables and stepping. You can't see or drive that session from here.")
         if r.get("swiftExpressions"):
             nxt.append("At a breakpoint the user can type p <expr> / po <expr> in the editor's Debug Console; the "
-                       "first one loads the app's Swift modules (20-40 s).")
+                       "first one loads the app's Swift modules (up to 40 s).")
     else:
         if b.editor == "detached":
             nxt.append("The editor detached; the app runs on. Pressing F5 again re-attaches while the bridge runs.")
