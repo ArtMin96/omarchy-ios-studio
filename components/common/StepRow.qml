@@ -10,7 +10,7 @@ import "../../lib/Model.js" as Model
 // expandable live log.
 //   StepRow {
 //     number: 2; title: "Swift toolchain"; description: "Compiles your app."
-//     stepState: "missing"        // done | missing | running | failed | pending | optional | skipped
+//     stepState: "missing"        // done | missing | running | failed | update | pending | optional | skipped
 //     meta: "≈ 900 MB · 3 min"
 //     actionText: "Install"; actionGlyph: Model.Glyph.download; onAction: svc.install("swift")
 //     progress: 0.42; progressText: "Downloading 380 / 900 MB"; progressTrailing: "1 min left"   (-1 = hidden)
@@ -64,7 +64,8 @@ BorderSurface {
   readonly property bool _done: stepState === "done"
   readonly property bool _running: stepState === "running"
   readonly property bool _failed: stepState === "failed"
-  readonly property color _tint: _done ? Theme.success : (_failed ? Commons.Color.urgent : (_running ? Commons.Color.accent : Theme.dim))
+  readonly property bool _update: stepState === "update"       // works as it is; a newer tested version is ready
+  readonly property color _tint: _done ? Theme.success : (_failed ? Commons.Color.urgent : (_running || _update ? Commons.Color.accent : Theme.dim))
 
   radius: Style.cornerRadius
   color: hasCursor ? Theme.surfaceRaised : (_running ? Util.alpha(Commons.Color.accent, 0.05) : Theme.surface)
@@ -92,17 +93,18 @@ BorderSurface {
         implicitWidth: Style.font.heading * 1.9
         implicitHeight: implicitWidth
         radius: Style.cornerRadius > 0 ? width / 2 : 0
-        color: root._done ? Util.alpha(Theme.success, 0.15) : (root._failed ? Util.alpha(Commons.Color.urgent, 0.15) : "transparent")
+        color: root._done ? Util.alpha(Theme.success, 0.15) : (root._failed ? Util.alpha(Commons.Color.urgent, 0.15) : (root._update ? Util.alpha(Commons.Color.accent, 0.12) : "transparent"))
         border.width: Style.normalBorderWidth
-        border.color: Util.alpha(root._tint, root._done || root._failed || root._running ? 0.6 : 0.35)
+        border.color: Util.alpha(root._tint, root._done || root._failed || root._running || root._update ? 0.6 : 0.35)
         AppText {
           anchors.centerIn: parent
-          visible: !root._done && !root._failed && !root._running
+          visible: !root._done && !root._failed && !root._running && !root._update
           text: root.number > 0 ? String(root.number) : ""
           size: "subtitle"; strong: true; tone: "dim"
         }
         Icon { anchors.centerIn: parent; visible: root._done; glyph: Model.Glyph.check; color: Theme.success; size: Style.font.title }
         Icon { anchors.centerIn: parent; visible: root._failed; glyph: Model.Glyph.close; color: Commons.Color.urgent; size: Style.font.title }
+        Icon { anchors.centerIn: parent; visible: root._update; glyph: Model.Glyph.download; color: Commons.Color.accent; size: Style.font.title }
         Spinner { anchors.centerIn: parent; running: root._running; size: parent.width * 0.62 }
       }
 

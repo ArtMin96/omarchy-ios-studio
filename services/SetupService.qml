@@ -113,10 +113,13 @@ Item {
       if (s.essential && (s.state === "missing" || s.state === "broken")) missing.push(s.id)
     }
     root.essentialMissing = missing
-    var broken = missing.filter(function(id) { var s = root.step(id); return s && s.state === "broken" })
-    var level = missing.length === 0 ? "ok" : (broken.length ? "error" : "warn")
+    var broken = missing.filter(function(id) { var s = root.step(id); return s && s.state === "broken" && !Model.isSetupUpdate(s) })
+    var updatesOnly = Model.setupUpdatesOnly(missing.map(function(id) { return root.step(id) }))
+    var level = missing.length === 0 ? "ok" : (broken.length ? "error" : (updatesOnly ? "info" : "warn"))
     root.summary = {
-      title: missing.length === 0 ? "Ready to build" : (missing.length === 1 ? "1 step left" : missing.length + " steps left"),
+      title: missing.length === 0 ? "Ready to build"
+           : updatesOnly ? (missing.length === 1 ? "1 update ready" : missing.length + " updates ready")
+           : (missing.length === 1 ? "1 step left" : missing.length + " steps left"),
       detail: done + " of " + counted + " ready",
       level: level,
       badge: missing.length ? String(missing.length) : "",
