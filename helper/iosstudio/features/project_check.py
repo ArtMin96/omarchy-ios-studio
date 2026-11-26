@@ -34,7 +34,7 @@ from iosstudio.core.xtool_yml import XtoolYml
 CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
 DEFAULT_CACHE = Path.home() / ".cache/omarchy-apple-dev"
 
-# xtool's PackSchemaBase (Sources/PackLib/PackSchema.swift at the pinned commit f300489), used when the
+# xtool's PackSchemaBase (Sources/PackLib/PackSchema.swift at the pinned commit 7cc56c3), used when the
 # cached xtool source isn't there. The cache wins when present, so a newer xtool's keys are picked up.
 BUILTIN_KEYS = ["version", "orgID", "bundleID", "product", "infoPath", "entitlementsPath", "iconPath",
                 "resources", "extensions", "skipLSP"]

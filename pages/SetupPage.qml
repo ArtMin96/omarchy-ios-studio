@@ -99,7 +99,7 @@ PageFrame {
     if (a.kind === "none") return ""
     if (s.state === "done") return ""
     if (s.state === "unknown") return a.kind === "page" ? (a.label || "Open") : ""
-    if (s.state === "broken") return "Repair"
+    if (s.state === "broken") return a.label || "Repair"   // "Update" for an outdated iOS build scripts checkout
     var r = page.run(s.id)
     if (r && r.state === "failed") return "Try again"
     return a.label || "Install"
@@ -108,7 +108,7 @@ PageFrame {
   function actionGlyph(s) {
     var a = s.action || {}
     if (a.kind === "page") return a.page === "account" ? Model.Glyph.apple : Model.Glyph.phone
-    if (s.state === "broken") return Model.Glyph.wrench
+    if (s.state === "broken") return a.label === "Update" ? Model.Glyph.download : Model.Glyph.wrench
     return Model.Glyph.download
   }
 
