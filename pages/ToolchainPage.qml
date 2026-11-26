@@ -42,7 +42,8 @@ PageFrame {
     if (a === "activate" && page.cursor >= 0) {
       if (page.cursor < page.svc.items.length) {
         var it = page.svc.items[page.cursor]
-        if (it.status !== "ok") page.app.openSetupStep(it.step)
+        if (it.status === "update") page.update(it)
+        else if (it.status !== "ok") page.app.openSetupStep(it.step)
       } else {
         var d = page.diskRows[page.cursor - page.svc.items.length]
         if (d && d.cleanable) page.askClean(d)
@@ -52,11 +53,20 @@ PageFrame {
     return false
   }
 
-  function levelOf(status) { return status === "ok" ? "ok" : status === "error" ? "error" : status === "warn" ? "warn" : "info" }
+  // "update": works as it is, a tested version is ready (an older iOS build scripts checkout): accent, not an error
+  function levelOf(status) { return status === "ok" ? "ok" : status === "error" ? "error" : status === "warn" ? "warn" : status === "update" ? "busy" : "info" }
   function statusText(i) {
     if (i.status === "ok") return i.version ? i.version : "installed"
+    if (i.status === "update") return (i.version ? i.version + " · " : "") + "update available"
     if (i.status === "error") return "needs repair"
     return i.optional ? "not installed" : "missing"
+  }
+
+  // the same install Setup's Update button runs; Setup shows its progress and log
+  function update(i) {
+    if (page.app.setup.installing) { page.app.toast("Wait for the current step to finish.", "warn"); return }
+    page.app.setup.install(i.step)
+    page.app.openSetupStep(i.step)
   }
 
   function askClean(d) {
@@ -86,7 +96,7 @@ PageFrame {
     SectionHeader {
       Layout.fillWidth: true
       text: "Installed"
-      detail: page.svc.items.filter(function(i) { return i.status === "ok" }).length + " of " + page.svc.items.length
+      detail: page.svc.items.filter(function(i) { return i.status === "ok" || i.status === "update" }).length + " of " + page.svc.items.length
     }
 
     Repeater {
@@ -98,13 +108,13 @@ PageFrame {
         glyph: modelData.id === "sdk" ? Model.Glyph.apple : modelData.id === "swift" ? Model.Glyph.swift
              : modelData.id === "pymobiledevice3" ? Model.Glyph.phone : modelData.id === "xtool" ? Model.Glyph.hammer
              : modelData.id === "apple-dev" ? Model.Glyph.folder : Model.Glyph.wrench
-        glyphColor: modelData.status === "ok" ? Theme.dim : Theme.levelColor(page.levelOf(modelData.status))
+        glyphColor: modelData.status === "ok" || modelData.status === "update" ? Theme.dim : Theme.levelColor(page.levelOf(modelData.status))
         title: modelData.name
         subtitle: {
           var s = modelData.detail || ""
           if (modelData.id === "swift" && modelData.held) s += " · held at this version"
           if (modelData.id === "xtool" && modelData.hasFix) s += " · Apple sign-in fix included"
-          if (modelData.pinned && modelData.version && modelData.pinned !== modelData.version && modelData.status === "ok") s += " · tested: " + modelData.pinned
+          if (modelData.pinned && modelData.version && modelData.pinned !== modelData.version && (modelData.status === "ok" || modelData.status === "update")) s += " · tested: " + modelData.pinned
           return s
         }
         hasCursor: page.cursor === index
@@ -114,14 +124,20 @@ PageFrame {
           Row {
             anchors.verticalCenter: parent ? parent.verticalCenter : undefined
             spacing: Style.spacing.md
-            StatusPill { anchors.verticalCenter: parent.verticalCenter; level: page.levelOf(modelData.status); text: page.statusText(modelData); quiet: modelData.status === "ok" }
+            StatusPill {
+              anchors.verticalCenter: parent.verticalCenter
+              level: page.levelOf(modelData.status); text: page.statusText(modelData)
+              quiet: modelData.status === "ok" || modelData.status === "update"
+              glyph: modelData.status === "update" ? Model.Glyph.download : ""   // a fixed glyph: "busy" would spin
+            }
             ActionButton {
               anchors.verticalCenter: parent.verticalCenter
               visible: modelData.status !== "ok"
               compact: true
-              text: modelData.status === "error" ? "Repair" : "Install"
+              text: modelData.status === "update" ? "Update" : modelData.status === "error" ? "Repair" : "Install"
               glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download
-              onClicked: page.app.openSetupStep(modelData.step)
+              busy: modelData.status === "update" && page.app.setup.runningStep === modelData.step
+              onClicked: modelData.status === "update" ? page.update(modelData) : page.app.openSetupStep(modelData.step)
             }
           }
         ]

@@ -129,7 +129,7 @@ def test_old_pin_shows_one_update_on_the_scripts_row(machine):
     s = rows(steps.gather())
     ad = s["apple-dev"]
     assert ad["state"] == "broken" and ad["action"]["label"] == "Update" and ad["canAutoInstall"]
-    assert f"not the tested {machine.ad_new[:7]}" in ad["detail"]
+    assert ad["update"] is True and f"iOS Studio is tested with {machine.ad_new[:7]}." in ad["detail"]
     assert s["xtool"]["state"] == "done"              # the -gsa406 build is what the old scripts pin
     assert s["sdk"]["state"] == "done"                # the old checkout's tools are what's installed
 

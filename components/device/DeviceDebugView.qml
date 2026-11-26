@@ -362,13 +362,11 @@ ColumnLayout {
       }
     ]
 
-    // The body hangs under the title text like the subtitle does (the glyph keeps its own column),
-    // so every line of the card starts at one left edge.
+    // The body starts on the card's content edge, like the subtitle (Card), so every line below the title
+    // shares one left edge.
     ColumnLayout {
       Layout.fillWidth: true
-      Layout.leftMargin: symGlyph.implicitWidth + Style.spacing.lg
       spacing: symCard.contentSpacing
-      Icon { id: symGlyph; visible: false; glyph: symCard.glyph }   // measures the header glyph's column
 
       // what this state means
       AppText {

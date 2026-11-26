@@ -28,7 +28,7 @@ On a fresh machine, Home shows what Setup will do instead.
 
 ![Setup](screenshots/setup.png)
 
-Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button.
+Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button. When iOS Studio moves to a newer tested version of the iOS build scripts, that row shows an Update button instead: your copy keeps working until you press it, and Update downloads the new version and rebuilds only what changed.
 
 - Install everything runs every missing step in order. You type your password once, for the system packages and Swift. Everything else goes into your home folder.
 - You can stop an install. Finished steps stay installed.
@@ -160,7 +160,7 @@ Four tabs:
 
 ![Toolchain](screenshots/toolchain.png)
 
-Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair. Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
+Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair (or Update, with "update available", when the iOS build scripts have a newer tested version). Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
 
 ### Settings
 

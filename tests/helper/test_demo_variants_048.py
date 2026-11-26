@@ -165,7 +165,8 @@ def test_outdated_variant_in_setup_check(monkeypatch):
     out = d._setup_check({})
     ad = out["steps"][0]
     assert ad["state"] == "broken" and ad["action"] == {"kind": "install", "label": "Update"} and ad["canAutoInstall"]
-    assert ad["detail"].startswith(f"At {d.OLD_APPLE_DEV[:7]}, not the tested {pins.APPLE_DEV_COMMIT[:7]}.")
-    assert out["summary"]["ready"] is False and out["summary"]["broken"] == ["apple-dev"]
+    assert ad["update"] is True      # an update, not a fault: Setup shows it calmly
+    assert ad["detail"].startswith(f"You have {d.OLD_APPLE_DEV[:7]}; iOS Studio is tested with {pins.APPLE_DEV_COMMIT[:7]}.")
+    assert out["summary"]["ready"] is False and out["summary"]["broken"] == [] and out["summary"]["updates"] == ["apple-dev"]
     monkeypatch.setattr(d, "FRESH", True)                    # a fresh machine has no checkout to be outdated
     assert d._setup_check({})["steps"][0]["action"]["label"] != "Update"
