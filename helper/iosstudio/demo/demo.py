@@ -13,6 +13,9 @@ Scenarios:
 Builds: HabitTracker always fails with two compiler errors. IOSSTUDIO_DEMO_FAIL=linker or =package makes
 every other project's build fail too, with an undefined-symbol link error or a package version conflict;
 that output goes through the real parser (diagnostics.py), so its categories and hints are the real ones.
+
+Setup: IOSSTUDIO_DEMO_APPLE_DEV=outdated (ready/expiring) puts our omarchy-apple-dev checkout at an older commit, so
+the iOS build scripts row offers Update as the real steps.py does when the pin moved.
 """
 from __future__ import annotations
 
@@ -263,6 +266,21 @@ def _tested() -> dict[str, dict]:
             "ipsw": {"version": pins.IPSW_VERSION, "row": f"ipsw {pins.IPSW_VERSION}"}}
 
 
+OLD_APPLE_DEV = "79bda716"     # the pin before v0.4.8: what IOSSTUDIO_DEMO_APPLE_DEV=outdated pretends is checked out
+
+
+def apple_dev_outdated() -> bool:
+    return not FRESH and os.environ.get("IOSSTUDIO_DEMO_APPLE_DEV", "").strip().lower() == "outdated"
+
+
+def outdated_apple_dev_row(row: dict, head: str = OLD_APPLE_DEV, pinned: str | None = None) -> dict:
+    """The iOS build scripts row as steps.build_steps words it when Setup's own checkout is at `head`, not the pin."""
+    from iosstudio.features.setup import pins
+    pinned = pinned or pins.APPLE_DEV_COMMIT
+    return {**row, "state": "broken", "canAutoInstall": True, "action": {"kind": "install", "label": "Update"},
+            "detail": f"At {head[:7]}, not the tested {pinned[:7]}. Updating downloads it and rebuilds only what changed"}
+
+
 def _setup_check(flags: dict) -> dict:
     d = scrub(_real("setup", "setup", "check", flags) or {"steps": [], "groups": ["System", "Toolchain", "Apple", "iPhone"]})
     tested = {} if FRESH else _tested()
@@ -270,6 +288,8 @@ def _setup_check(flags: dict) -> dict:
         if s["id"] in tested:
             s.update(state="done", detail=tested[s["id"]]["row"], canAutoInstall=False,
                      action={"kind": "install", "label": "Install"})
+        if s["id"] == "apple-dev" and apple_dev_outdated():
+            s.update(outdated_apple_dev_row(s))
         if s["id"] == "apple-id":
             s["detail"] = f"Signed in as {APPLE_ID}"
         if s["id"] == "iphone":
@@ -303,6 +323,8 @@ def _toolchain_info(flags: dict) -> dict:
             it.update(version=t["version"], status="ok", **({"detail": t["path"]} if "path" in t else {}))
             if it["id"] == "xtool":
                 it["hasFix"] = True
+        if it.get("id") == "apple-dev" and apple_dev_outdated():
+            it.update(version=OLD_APPLE_DEV[:7], status="error")
     if FRESH:
         for it in d.get("items", []):
             if it["id"] not in ("apple-dev",):

@@ -45,7 +45,7 @@ states come from `Model.editorDebugEvent` in `lib/Model.js` (`tests/qml/tst_edit
 
 ## Swift expressions (p, po)
 
-At a breakpoint, type `p items.count`, `po user` or `expression -- name.uppercased()` in the editor's Debug Console (VS Code: the Debug Console's input; Zed: the debug panel's console). The first expression of a session takes about 20 to 40 seconds while lldb loads the app's Swift modules from the iOS SDK; later ones answer in a moment. The Variables view works from the start.
+At a breakpoint, type `p items.count`, `po user` or `expression -- name.uppercased()` in the editor's Debug Console (VS Code: the Debug Console's input; Zed: the debug panel's console). The first expression of a session can take up to 40 seconds while lldb loads the app's Swift modules from the iOS SDK; later ones answer in a moment. The Variables view works from the start.
 
 The Swift toolchain's own lldb can't do this for an iPhone app on Linux: it finds no Xcode, falls back to the toolchain's Linux Swift modules and fails with "missing required module 'SwiftShims'". So the editors run iOS Studio's lldb-dap: `~/.cache/ios-studio/lldb-ios/lldb-dap`, a small launcher at a path that stays the same when Swift or the iOS SDK changes. It runs `lldb-dap` from a shadow copy of the toolchain whose Swift resource folder is the iOS SDK's (`helper/iosstudio/features/lldb_shadow.py`, shared with iPhone › Debug). The shadow is built once, within seconds (hard links or reflinks where the disk allows, else a ~230 MB copy), and checked with a few `stat` calls on every start. Debug in editor and setting the editor up in Settings › Code editor (re)build it and rewrite the launcher, so a new Swift or SDK is picked up by itself.
 
@@ -144,7 +144,7 @@ The agent can't press F5 for you: it tells you which configuration to start in t
 - Breakpoints in your code need a build of the app on this computer (iOS Studio uses the newest one: `xtool/<App>.app`, `.build/<config>/<Product>-App` or the `.ipa`). Build and run the app from iOS Studio first.
 - Stopping the bridge while the editor is attached ends the editor's session.
 - The bridge needs the Debugger support step in Setup: the attach file's commands run in lldb's Python.
-- Swift expressions need the iOS SDK (Setup). The first one in a session takes 20 to 40 seconds.
+- Swift expressions need the iOS SDK (Setup). The first one in a session can take up to 40 seconds.
 - If `XDG_STATE_HOME` points outside your home folder, the configuration names the attach file by its absolute path.
 
 ## Helper commands (group `debug`)

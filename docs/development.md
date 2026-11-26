@@ -252,7 +252,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use.
+`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use. Two variants for screenshots of fallback states: `IOSSTUDIO_DEMO_DEBUG=plain` debugs as if lldb couldn't be prepared for iOS (no iOS SDK), so `debug check` and sessions report `swiftExpressions` false with the real `expressionsNote` / `lldb-plain` notice and Swift expressions fail as they do in real mode; `IOSSTUDIO_DEMO_APPLE_DEV=outdated` (ready and expiring) puts our omarchy-apple-dev checkout at the previous pin, so Setup's iOS build scripts row offers Update, worded as the real `steps.py` words it.
 
 ## Tests
 

@@ -431,7 +431,7 @@ ColumnLayout {
     AppText {
       Layout.fillWidth: true
       visible: root.evaluating
-      text: "Evaluating… the first expression loads the app's Swift modules, which can take half a minute."
+      text: "Evaluating… the first expression loads the app's Swift modules, which can take up to 40 seconds."
       size: "small"; tone: "faint"; wrapMode: Text.Wrap
     }
     AppText {
