@@ -21,6 +21,7 @@ from .env import (
     flatpak_installed,
     lldb_dap_for_settings,
     load_settings,
+    old_lldb_dap,
     preferred,
     sourcekit,
     sourcekit_for_settings,
@@ -36,8 +37,10 @@ NVIM_PLUGIN_REL = "lua/plugins/ios-studio-swift.lua"
 DOCS = "docs/features/editor-setup.md"
 NVIM_PLUGIN_DETAIL = "Turns on Swift completion (sourcekit-lsp) for every project. Delete the file to undo."
 SOURCEKIT_PATH_DETAIL = "Tells the editor where sourcekit-lsp is (it isn't on PATH)."
-LLDB_DAP_PATH_DETAIL = "Tells Zed where lldb-dap is, for Debug in editor (it isn't on PATH)."
-BOTH_PATHS_DETAIL = "Tells Zed where sourcekit-lsp and lldb-dap (Debug in editor) are (they aren't on PATH)."
+LLDB_DAP_PATH_DETAIL = ("Points Zed's Swift debugger at iOS Studio's lldb-dap, for Debug in editor with Swift "
+                        "expressions (p, po).")
+BOTH_PATHS_DETAIL = ("Tells Zed where sourcekit-lsp is (it isn't on PATH) and points its Swift debugger at iOS "
+                     "Studio's lldb-dap (Debug in editor).")
 
 NVIM_SCAN_FILES = 300        # lua files read when looking for a sourcekit setup
 NVIM_SCAN_BYTES = 256 * 1024
@@ -56,10 +59,14 @@ def vscode_installed(env: Env) -> str | None:
     return None
 
 
+def vscode_extension_dirs(env: Env) -> list[Path]:
+    return [env.home / ".vscode/extensions", env.home / ".vscode-oss/extensions",
+            env.home / ".var/app/com.visualstudio.code/data/vscode/extensions",
+            env.home / ".var/app/com.vscodium.codium/data/codium/extensions"]
+
+
 def vscode_extension(env: Env) -> str | None:
-    for d in (env.home / ".vscode/extensions", env.home / ".vscode-oss/extensions",
-              env.home / ".var/app/com.visualstudio.code/data/vscode/extensions",
-              env.home / ".var/app/com.vscodium.codium/data/codium/extensions"):
+    for d in vscode_extension_dirs(env):
         for prefix in (VSCODE_EXT, VSCODE_OLD_EXT):
             try:
                 hit = next(iter(sorted(d.glob(prefix + "-*"))), None)
@@ -122,7 +129,8 @@ def vscode_machine_actions(env: Env) -> list[dict]:
 # ================================================================ Zed
 # Zed needs no project file: its Swift extension starts the sourcekit-lsp it finds on PATH (else
 # lsp.sourcekit-lsp.binary.path), and sourcekit-lsp finds .bsp/xtool.json in the opened folder itself.
-# For Debug in editor it finds lldb-dap only through swiftly, xcrun or PATH (else dap.Swift.binary).
+# For Debug in editor it runs dap.Swift.binary (else lldb-dap through swiftly, xcrun or PATH): iOS Studio's
+# launcher, which runs the toolchain's lldb-dap set up for iOS (editor_debug.prepare_dap).
 
 def zed_installed(env: Env) -> str | None:
     for b in ("zeditor", "zed", "zedit", "zed-editor"):
@@ -141,7 +149,8 @@ def zed_extension(env: Env) -> str | None:
 
 
 def zed_machine_actions(env: Env) -> list[dict]:
-    """The toolchain paths Zed's user settings need: only those that aren't on PATH."""
+    """What Zed's user settings need: sourcekit-lsp's path when it isn't on PATH, and the lldb-dap launcher
+    (replacing the toolchain's own lldb-dap that setup wrote before; a path of the user's own stays)."""
     sk, dap = sourcekit_for_settings(env), lldb_dap_for_settings(env)
     want: dict[str, Any] = {}
     if sk:
@@ -151,7 +160,8 @@ def zed_machine_actions(env: Env) -> list[dict]:
     if not want:
         return []
     what = BOTH_PATHS_DETAIL if sk and dap else SOURCEKIT_PATH_DETAIL if sk else LLDB_DAP_PATH_DETAIL
-    return user_json_actions(env.config / "zed/settings.json", want, what)
+    replace = {("dap", "Swift", "binary"): lambda v: old_lldb_dap(v, env)} if dap else None
+    return user_json_actions(env.config / "zed/settings.json", want, what, replace)
 
 
 # ================================================================ Neovim
@@ -372,8 +382,11 @@ def machine_setup(editor: str, confirm: bool = False, env: Env | None = None, pr
     if editor not in EDITORS:
         raise HelperError("usage", EDITOR_USAGE)
     acts = machine_actions(editor, env) + ([_preference_action(editor, env)] if prefer else [])
+    debug_note = ""
     if confirm:
         apply_or_fail(acts, env)
+        if editor in ("vscode", "zed") and lldb_dap_for_settings(env):
+            debug_note = prepare_debugger()
     info = editor_info(editor, env, None if confirm else [a for a in acts if "_setting" not in a])
     pending = any(is_pending(a) for a in acts)
     if not confirm and pending:
@@ -384,4 +397,15 @@ def machine_setup(editor: str, confirm: bool = False, env: Env | None = None, pr
         nxt = next_step(editor)
     return {"editor": editor, "name": EDITORS[editor], "dryRun": not confirm,
             "actions": [public(a) for a in acts], "applied": any(a.get("done") for a in acts),
-            "state": info["state"], "next": nxt, "notes": info["notes"]}
+            "state": info["state"], "next": nxt, "notes": info["notes"] + ([debug_note] if debug_note else [])}
+
+
+def prepare_debugger() -> str:
+    """Debug in editor, ahead of its first start: the iOS-ready lldb and the launcher the editors run
+    (editor_debug.prepare_dap). -> the plain note when Swift expressions won't work there, else ""; nothing
+    when the debugger itself isn't ready (Setup's Debugger support), which Debug in editor reports."""
+    from iosstudio.features import debugger, editor_debug
+    try:
+        return editor_debug.prepare_dap(debugger.toolchain()).note
+    except (HelperError, OSError):
+        return ""

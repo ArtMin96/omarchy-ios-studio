@@ -73,10 +73,14 @@ EDITOR = textwrap.dedent("""\
         out("notice", id="no-symbols", level="info", message="This iPhone's debug symbols aren't downloaded. " * 20)
         if launched:
             out("notice", id="waiting", level="info", message="Weather waits for the debugger.")
+        plain = proj.endswith("Plain")
+        if plain:
+            out("notice", id="lldb-plain", level="info", message="Swift expressions (p, po) may not work when "
+                "debugging from your editor: the iOS SDK isn't installed (Setup installs it).")
         out("ready", bundleId=INSTALLED, appName="Weather", port=52917, host="127.0.0.1", pid=913, launched=launched,
             scriptPath=HOME + "/.local/state/ios-studio/editor-debug/com.example.weather.lldb",
             editors=[] if "--no-config" in flags or not proj else ["vscode"], configName=CFG, symbolsReady=False,
-            localBuild=PROJ + "/xtool/Weather.app/Weather" if proj else None)
+            localBuild=PROJ + "/xtool/Weather.app/Weather" if proj else None, swiftExpressions=not plain)
         stop = []
         signal.signal(signal.SIGTERM, lambda *a: stop.append("term"))
         attached = moved = False
@@ -110,7 +114,7 @@ class EditorCase(ToolCase):
         await super().asyncSetUp()
         self.daemon.replies["apps.list"] = (0, APPS)
         self.helper.reply("projects", "list", {"projects": [
-            {"name": n, "path": f"{HOME}/Developer/{n}"} for n in ("Weather", "Slow", "Missing", "Busy")]})
+            {"name": n, "path": f"{HOME}/Developer/{n}"} for n in ("Weather", "Slow", "Missing", "Busy", "Plain")]})
         self.helper.reply("debug", "editor-status", {"bridges": [], "checkedAt": 1})
         script = FAKE_HELPER.replace(
             'key = " ".join(sys.argv[1:3])\n',
@@ -260,6 +264,22 @@ class Bridge(EditorCase):
         out = await self.data(ED, "ios_debug_editor_stop")
         self.assertTrue(out["done"])
         self.assertIn("No Debug in editor bridge", out["message"])
+
+    async def test_swift_expressions_or_the_plain_note(self):
+        d = await self.data(ED, "ios_debug_editor_start", project_path="Weather")
+        self.assertEqual((d["swift_expressions"], d.get("expressions_note")), (True, None))
+        self.flag_file("attach")
+        d = await self.data(ED, "ios_debug_editor_start", job_id=d["job_id"], wait_seconds=3)
+        if d["editor"] != "attached":
+            d = await self.data(ED, "ios_debug_editor_start", job_id=d["job_id"], wait_seconds=3)
+        self.assertTrue(any("po <expr>" in s for s in d["next_steps"]))
+        await self.data(ED, "ios_debug_editor_stop", job_id=d["job_id"])
+        p = await self.data(ED, "ios_debug_editor_start", project_path="Plain")
+        self.assertFalse(p["swift_expressions"])
+        self.assertIn("may not work", p["expressions_note"])
+        self.assertFalse(any("may not work" in n for n in p["notices"]))     # once, not twice
+        self.assertFalse(any("po <expr>" in s for s in p["next_steps"]))
+        await self.data(ED, "ios_debug_editor_stop", job_id=p["job_id"])
 
     async def test_slow_start_is_a_job_polled_with_job_id(self):
         d = await self.data(ED, "ios_debug_editor_start", project_path="Slow", launch="suspended",
