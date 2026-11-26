@@ -6,24 +6,22 @@ from pathlib import Path
 
 from iosstudio.core.appdirs import CACHE_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR
 
-# omarchy-apple-dev: the commit proven on the author's machine (2026-10-31): xtool fork pin f300489.
+# omarchy-apple-dev v0.4.8 (2026-11-23). Its install-toolchain.sh pins xtool 7cc56c3 (xtool main after 1.24.0,
+# which already carries the Apple sign-in fix xtool-org/xtool#406 and the release-build fix #432, plus the
+# fork's packaging fixes) and darwin-tools on AssetKit d797d6e (Icon Composer gradients, 1x single-scale bitmaps).
 APPLE_DEV_REPO = "https://github.com/joshuaswarren/omarchy-apple-dev"
-APPLE_DEV_COMMIT = "79bda716bf207924efc25bce923bda261dc67837"
+APPLE_DEV_COMMIT = "9f8352fc353d9d4f4112a454a81eb5769812387a"
 # Where a fresh machine gets it: the same path as Omarchy PR #14255 (Install > Development > iOS).
 APPLE_DEV_HOME = HOME / ".local/share/omarchy-apple-dev"
 
 # Fallbacks when no checkout is present yet (the values at APPLE_DEV_COMMIT).
 DEFAULT_XTOOL_REPO = "https://github.com/joshuaswarren/xtool"
-DEFAULT_XTOOL_SHA = "f300489f3a3fddbd9fb598ba6cf69eb24a494527"
+DEFAULT_XTOOL_SHA = "7cc56c391a67652e86d164eddbbd62065a26599f"
 DEFAULT_SDK_STAMP = "epoch=4,darwinTools=1.1.0,oam=1.4.1"
 
-# xtool-org/xtool PR #406 (GSA user agent). Without it `xtool auth` gets HTTP 503 (#404). A binary that
-# still contains the old user agent string lacks the fix.
-XTOOL_FIX_REPO = "https://github.com/xtool-org/xtool"
-XTOOL_FIX_SHA = "70e1568fdfcb20b560774057cd783f02361293b9"
+# An xtool binary that still contains the old GSA user agent lacks xtool-org/xtool#406: `xtool auth` gets
+# HTTP 503 (#404). Every pin since omarchy-apple-dev v0.4.8 contains the fix; this check verifies the build.
 XTOOL_OLD_UA = b"akd/1.0 CFNetwork/808.1.4"
-XTOOL_KNOWN_BASE = "f300489f3a3fddbd9fb598ba6cf69eb24a494527"
-XTOOL_KNOWN_TREE = "bb93e00eaa35bca365d8625749b912648d665fae"
 
 # swift-bin from the AUR, pinned to a commit (6.4.2-2), built as the user.
 SWIFT_AUR_COMMIT = "f78c5ec6f5be1052fa6ffd3bf78ee44b3fb607a0"
@@ -37,10 +35,10 @@ RCODESIGN_SHA = {
     "aarch64": "4af92c87ddf52f5f2d1258a3b4e56c7dcb8f1b2468df744976c5f139e031961f",
     "x86_64": "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002",
 }
-IPSW_VERSION = "3.1.731"
+IPSW_VERSION = "3.1.743"   # the same pin and checksums as install-toolchain.sh at APPLE_DEV_COMMIT
 IPSW_SHA = {
-    "aarch64": ("arm64", "a8d373966d79d24537aa17ec8b9a61bbc73964e6200383f7708c53400ad9f42a"),
-    "x86_64": ("x86_64", "98e5b127641be3511242a5ba9c5872ef34010e5171318b616e5aa80a607749ff"),
+    "aarch64": ("arm64", "c7976f40d648ede62bc2d8bb80b5e57ab6365d5ba531a917a3515466a753c21e"),
+    "x86_64": ("x86_64", "56e9ba754781dfeaa3b84f733ad25e63ef8e2683214a321e06b31a0d85f95e4c"),
 }
 
 PACKAGES = ["usbmuxd", "zip", "base-devel", "git", "libimobiledevice", "openssl", "poppler", "libheif",

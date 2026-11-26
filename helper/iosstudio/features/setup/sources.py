@@ -1,11 +1,9 @@
-"""Source checkouts Setup builds from: omarchy-apple-dev at its pin, and xtool with the Apple sign-in fix."""
+"""Source checkouts Setup builds from: omarchy-apple-dev at its pin, and the xtool that checkout pins."""
 from __future__ import annotations
 
 import os
 import re
 import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
 from iosstudio.core import appdirs, subproc
@@ -20,15 +18,11 @@ from .pins import (
     APPLE_DEV_HOME,
     APPLE_DEV_LIB,
     APPLE_DEV_REPO,
-    XTOOL_FIX_REPO,
-    XTOOL_FIX_SHA,
-    XTOOL_KNOWN_BASE,
-    XTOOL_KNOWN_TREE,
 )
-from .runtime import do_mkdir, do_symlink, log, must, need_space, probe, progress, run_stream
+from .runtime import do_mkdir, do_rmtree, do_symlink, log, must, need_space, probe, progress, run_stream
 from .steps import Ctx
 
-GIT_TIMEOUT = 60
+SWIFT = Path("/usr/bin/swift")   # swift-bin's driver; xtool is built with the toolchain it points to
 
 
 def git(args: list, step_id: str, cwd: str | Path | None = None, mutating: bool = True, tail: list | None = None) -> int:
@@ -38,9 +32,10 @@ def git(args: list, step_id: str, cwd: str | Path | None = None, mutating: bool 
 
 
 def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
-    """Check out omarchy-apple-dev at the pinned commit (kept as is unless --force)."""
+    """Check out omarchy-apple-dev at the pinned commit. A checkout found elsewhere (appleDevDir) or already at the
+    pin is kept as is unless --force; our own checkout at an older commit is moved to the pin."""
     ad = ctx.c.get("apple_dev")
-    if ad and not ctx.flags.get("force"):
+    if ad and not ctx.c.get("apple_dev_outdated") and not ctx.flags.get("force"):
         return ad
     d = APPLE_DEV_HOME
     if d.exists() and not (d / ".git").is_dir():
@@ -60,79 +55,62 @@ def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
         rc, out, _ = probe(["git", "-C", d, "rev-parse", "HEAD"])
         if out.strip() != APPLE_DEV_COMMIT:
             raise HelperError("git", "The iOS build scripts aren't at the expected version after download.", detail=out)
+        ctx.c["apple_dev"], ctx.c["apple_dev_outdated"] = d, False
     return d
 
 
+def apple_dev_checkout(ctx: Ctx, step_id: str) -> Path:
+    """The checkout to build from: downloaded, or moved to the pin, first when it needs that (never re-fetched)."""
+    ad = ctx.c.get("apple_dev")
+    return ad if ad and not ctx.c.get("apple_dev_outdated") else i_apple_dev(ctx, step_id)
+
+
 def i_xtool(ctx: Ctx, step_id: str) -> None:
-    """Build the pinned xtool with the Apple sign-in fix (PR #406) and install it with its Swift runtime."""
+    """Build the xtool omarchy-apple-dev pins, as its install-toolchain.sh does (same folders), and install it
+    with its Swift runtime. Every pin since v0.4.8 has the Apple sign-in fix; the binary is checked for it."""
     for dep in ("packages", "swift"):
         if ctx.state(dep) not in ("done",) and not rt.DRY:
             t = ctx.by_id[dep]["title"]
             raise HelperError("needs-step", f"Install “{t}” first.", fix(f"Install {t}", "setup", step=dep))
-    ad = ctx.c.get("apple_dev") or i_apple_dev(ctx, step_id)
+    ad = apple_dev_checkout(ctx, step_id)
     pins = apple_dev_pins(ad if ad and ad.exists() else None)
     sha, repo = pins["XTOOL_SHA"], pins["XTOOL_REPO"]
-    fix_dir = APPLE_DEV_LIB / f"xtool-{sha[:7]}-gsa406"
-    pin_dir = APPLE_DEV_LIB / f"xtool-{sha}"
-    src = APPLE_DEV_CACHE / f"xtool-{sha[:7]}-gsa406"
-    link = LOCAL_BIN / "xtool"
+    name = f"xtool-{sha}"
+    dest, src, link = APPLE_DEV_LIB / name, APPLE_DEV_CACHE / name, LOCAL_BIN / "xtool"
 
     def complete(d: Path) -> bool:
         return os.access(d / "xtool", os.X_OK) and (d / "libswiftCore.so").exists()
 
-    for cand in (pin_dir, fix_dir):
-        if complete(cand) and binary_has_old_ua(cand / "xtool") is False and not ctx.flags.get("force"):
-            rc, _, _ = probe([cand / "xtool", "--version"])
-            if rc == 0:
-                log(step_id, f"A working xtool with the sign-in fix is already built: {appdirs.tilde(cand)}")
-                do_symlink(cand / "xtool", link, step_id)
-                return
+    if complete(dest) and binary_has_old_ua(dest / "xtool") is False and not ctx.flags.get("force"):
+        rc, _, _ = probe([dest / "xtool", "--version"])
+        if rc == 0:
+            log(step_id, f"xtool {sha[:7]} is already built: {appdirs.tilde(dest)}")
+            do_symlink(dest / "xtool", link, step_id)
+            prune_old_xtool(name, step_id)
+            return
     need_space(APPLE_DEV_CACHE, 3_000_000_000, "building xtool")
     progress(step_id, 0.02, "Downloading xtool's source code")
     do_mkdir(src, step_id)
     tail: list = []
     if not (src / ".git").is_dir():
         must(git(["init", "-q", str(src)], step_id), "git", "Couldn't prepare xtool's source folder.", step_id)
-
-    def have(c: str) -> bool:
-        return not rt.DRY and probe(["git", "-C", src, "cat-file", "-e", f"{c}^{{commit}}"])[0] == 0
-    if not have(sha):
+    if rt.DRY or probe(["git", "-C", src, "cat-file", "-e", f"{sha}^{{commit}}"])[0] != 0:
         must(git(["-C", str(src), "fetch", "-q", "--depth", "1", repo, sha], step_id, tail=tail), "network",
              "Couldn't download xtool's source code. Check your internet connection, then try again.", step_id, tail)
-    if not have(XTOOL_FIX_SHA + "^"):
-        must(git(["-C", str(src), "fetch", "-q", "--depth", "2", XTOOL_FIX_REPO, XTOOL_FIX_SHA], step_id, tail=tail), "network",
-             "Couldn't download the xtool sign-in fix. Check your internet connection, then try again.", step_id, tail)
-    progress(step_id, 0.05, "Applying the Apple sign-in fix")
-    build_commit = sha
-    dest = fix_dir
-    if not rt.DRY:
-        if base_has_fix(src, sha):
-            log(step_id, f"xtool {sha[:7]} already contains the sign-in fix; building it as is")
-            dest = pin_dir
-            must(git(["-C", str(src), "checkout", "-q", "-f", "--detach", sha], step_id), "git", "Couldn't prepare xtool's source.", step_id)
-        elif not fix_source_ok(src, sha):
-            must(git(["-C", str(src), "checkout", "-q", "-f", "--detach", sha], step_id), "git", "Couldn't prepare xtool's source.", step_id)
-            rc, date, _ = probe(["git", "-C", src, "log", "-1", "--format=%aI", XTOOL_FIX_SHA])
-            env = subproc.tool_env("setup", {"GIT_COMMITTER_NAME": "iOS Studio", "GIT_COMMITTER_EMAIL": "setup@ios-studio.invalid",
-                            "GIT_COMMITTER_DATE": date.strip()})
-            rc = run_stream(["git", "-C", str(src), "-c", "commit.gpgsign=false", "cherry-pick", XTOOL_FIX_SHA], step_id, env=env, tail=tail)
-            must(rc, "git", "Couldn't apply the xtool sign-in fix.", step_id, tail)
-            if not fix_source_ok(src, sha):
-                raise HelperError("git", "xtool's source doesn't match the expected fix after applying it.")
-        build_commit = probe(["git", "-C", src, "rev-parse", "HEAD"])[1].strip()
-    else:
-        log(step_id, f"would cherry-pick xtool-org/xtool {XTOOL_FIX_SHA[:7]} onto {sha[:7]} in {src}")
+    must(git(["-C", str(src), "checkout", "-q", "-f", "--detach", sha], step_id, tail=tail), "git",
+         "Couldn't prepare xtool's source.", step_id, tail)
     ncpu = os.cpu_count() or 4
     est = max(300, min(1500, 7 * 60 * 16 / ncpu))
-    swift_real = os.path.realpath("/usr/bin/swift") if Path("/usr/bin/swift").exists() else "/usr/bin/swift"
+    swift_real = os.path.realpath(SWIFT) if SWIFT.exists() else str(SWIFT)
     benv = subproc.tool_env("setup", {"PATH": f"{os.path.dirname(swift_real)}:/usr/bin:{LOCAL_BIN}:/bin"})
     tail = []
     rc = run_stream(["swift", "build", "-c", "release", "--product", "xtool", "-Xswiftc", "-no-toolchain-stdlib-rpath"],
-                    step_id, label="Compiling xtool", estimate=est, env=benv, cwd=src, frac_range=(0.08, 0.92), tail=tail)
+                    step_id, label="Compiling xtool", estimate=est, env=benv, cwd=src, frac_range=(0.05, 0.92), tail=tail)
     must(rc, "build-failed", "xtool didn't compile. This usually means Swift and xtool versions don't match; "
          "repairing Swift first can help.", step_id, tail)
     if rt.DRY:
-        log(step_id, f"would install the built xtool and its Swift runtime into {dest}, then link {link}")
+        log(step_id, f"would install the built xtool and its Swift runtime into {dest}, link {link}, "
+                     "then delete older xtool builds")
         return
     progress(step_id, 0.94, "Installing xtool")
     rc, binp, _ = probe(["swift", "build", "-c", "release", "--show-bin-path"], env=benv, cwd=src, timeout=120)
@@ -144,60 +122,33 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     stage.mkdir(parents=True)
     shutil.copy2(binp / "xtool", stage / "xtool")
     os.chmod(stage / "xtool", 0o755)
-    rc, ldd, _ = probe(["ldd", stage / "xtool"], env=subproc.tool_env("setup", {"LD_LIBRARY_PATH": str(runtime)}))
+    rc, ldd, _ = probe(["ldd", stage / "xtool"], env={**benv, "LD_LIBRARY_PATH": str(runtime)})
     for line in ldd.splitlines():
         m = re.search(r"=>\s*(\S+)", line)
         if m and m.group(1).startswith(str(runtime) + "/"):
             shutil.copy2(m.group(1), stage / Path(m.group(1)).name)
             os.chmod(stage / Path(m.group(1)).name, 0o644)
-    if not complete(stage) or binary_has_old_ua(stage / "xtool") is not False:
-        raise HelperError("build-failed", "The new xtool build is incomplete or still lacks the sign-in fix.")
+    if not complete(stage):
+        shutil.rmtree(stage, ignore_errors=True)
+        raise HelperError("build-failed", "The new xtool build is incomplete (its Swift runtime is missing).")
+    if binary_has_old_ua(stage / "xtool") is not False:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise HelperError("xtool-no-fix", f"xtool {sha[:7]}, the version the iOS build scripts ask for, can't sign in "
+                          "to Apple (it predates the fix for HTTP 503). Update the iOS build scripts, then try again.",
+                          fix("Update the iOS build scripts", "setup", step="apple-dev"))
     shutil.rmtree(dest, ignore_errors=True)
     os.replace(stage, dest)
     do_symlink(dest / "xtool", link, step_id)
     rc, out, _ = probe([link, "--version"])
     must(rc, "build-failed", "The new xtool doesn't start.", step_id, [out])
-    log(step_id, f"Installed {appdirs.tilde(dest)} ({out.strip()}, built from {build_commit[:7]})")
+    log(step_id, f"Installed {appdirs.tilde(dest)} ({out.strip()}, built from {sha[:7]})")
+    prune_old_xtool(name, step_id)
 
 
-def git_capture(src: Path, *args: str, input: bytes | None = None,
-                env: dict | None = None) -> subprocess.CompletedProcess:
-    """A local git command on the xtool checkout, bounded (a locked or huge repo can't hang setup)."""
-    try:
-        return subprocess.run(["git", "-C", str(src), *args], input=input, env=env, capture_output=True,
-                              timeout=GIT_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        raise HelperError("timeout", f"git {args[0]} took longer than {GIT_TIMEOUT} s in {appdirs.tilde(src)}.",
-                          fix("Try again", "setup", step="xtool"))
-
-
-def base_has_fix(src: Path, sha: str) -> bool:
-    """Does xtool at `sha` already contain the sign-in fix (its diff reverse-applies cleanly)?"""
-    fd, index = tempfile.mkstemp()
-    os.close(fd)
-    try:
-        env = subproc.tool_env("setup", {"GIT_INDEX_FILE": index})
-        if git_capture(src, "read-tree", sha, env=env).returncode != 0:
-            return False
-        diff = git_capture(src, "diff", f"{XTOOL_FIX_SHA}^", XTOOL_FIX_SHA).stdout
-        r = git_capture(src, "apply", "--cached", "--reverse", "--check", input=diff, env=env)
-        return r.returncode == 0
-    finally:
-        os.unlink(index)
-
-
-def git_patch_id(src: Path, a: str, b: str) -> str:
-    diff = git_capture(src, "diff", a, b).stdout
-    r = git_capture(src, "patch-id", "--stable", input=diff)
-    return (r.stdout.decode().split() or [""])[0]
-
-
-def fix_source_ok(src: Path, sha: str) -> bool:
-    """Is the checkout exactly `sha` plus the sign-in fix, with nothing else changed?"""
-    if probe(["git", "-C", src, "rev-parse", "-q", "--verify", "HEAD^"])[1].strip() != sha:
-        return False
-    if probe(["git", "-C", src, "diff", "--quiet", "HEAD"])[0] != 0:
-        return False
-    if sha == XTOOL_KNOWN_BASE and probe(["git", "-C", src, "rev-parse", "HEAD^{tree}"])[1].strip() != XTOOL_KNOWN_TREE:
-        return False
-    return git_patch_id(src, sha, "HEAD") == git_patch_id(src, f"{XTOOL_FIX_SHA}^", XTOOL_FIX_SHA)
+def prune_old_xtool(keep: str, step_id: str) -> None:
+    """Once the xtool in `keep` works: delete every other build and source tree, either layout (xtool-<sha> and
+    the older xtool-<sha7>-gsa406), so an update doesn't leave 2 GB behind."""
+    for root in (APPLE_DEV_LIB, APPLE_DEV_CACHE):
+        for p in sorted(root.glob("xtool-*")):
+            if p.name != keep and p.is_dir() and not p.is_symlink():
+                do_rmtree(p, step_id)

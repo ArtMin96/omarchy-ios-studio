@@ -15,6 +15,7 @@ from iosstudio.core.appdirs import LOCAL_BIN, STATE_DIR, VENV_DIR
 from . import runtime as rt
 from .pins import (
     APPLE_DEV_HOME,
+    APPLE_DEV_LIB,
     DEFAULT_SDK_STAMP,
     DEFAULT_XTOOL_REPO,
     DEFAULT_XTOOL_SHA,
@@ -67,6 +68,43 @@ def binary_has_old_ua(path: Path) -> bool | None:
             return mm.find(XTOOL_OLD_UA) != -1
     except (OSError, ValueError):
         return None
+
+
+def xtool_built_from(real: Path) -> str | None:
+    """The commit a Setup-made xtool build is from, by its folder in ~/.local/lib/omarchy-apple-dev: the full
+    SHA for `xtool-<sha>` (built as pinned, as install-toolchain.sh names it) or the short one for the older
+    `xtool-<sha7>-gsa406` (the pin with the sign-in fix applied on top). None for an xtool from elsewhere."""
+    if real.parent.parent != Path(os.path.realpath(APPLE_DEV_LIB)):
+        return None
+    m = re.fullmatch(r"xtool-(?:([0-9a-f]{40})|([0-9a-f]{7,40})-gsa406)", real.parent.name)
+    return (m.group(1) or m.group(2)) if m else None
+
+
+# What install_darwin_tools (install-toolchain.sh) builds or copies into the SDK, relative to the checkout.
+DARWIN_TOOLS_INPUTS = ("tools/darwin-tools/Package.swift", "tools/darwin-tools/Package.resolved",
+                       "tools/darwin-tools/Sources", "tools/ibtool", "tools/ibmac.py", "tools/xcstringstool",
+                       "tools/xcstrings_symbols.py", "tools/momc", "tools/nibarchive.py", "tools/keyorder.py")
+ACTOOL_IN_SDK = "Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/actool"
+
+
+def darwin_tools_stale(ad: Path, bundle: Path) -> bool:
+    """Did the build scripts' darwin-tools (actool and friends) change after they were installed into the SDK?
+    install_darwin_tools gives the installed actool a fresh mtime and git rewrites only the files a new commit
+    changes, so an input newer than that actool means the SDK still has the old tools. Stats only (~20 files)."""
+    try:
+        installed = (bundle / ACTOOL_IN_SDK).stat().st_mtime
+    except OSError:
+        return False                              # missing tools: sdk_extras_missing reports them
+    for rel in DARWIN_TOOLS_INPUTS:
+        p = ad / rel
+        paths = [Path(d, f) for d, _, fs in os.walk(p) for f in fs] if p.is_dir() else [p]
+        for f in paths:
+            try:
+                if f.stat().st_mtime > installed:
+                    return True
+            except OSError:
+                pass
+    return False
 
 
 def find_apple_dev() -> Path | None:
