@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import select
 import time
 
@@ -176,7 +177,8 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
     output.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
     exe = f"{path}/xtool/{name}.app/{name}"
     output.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable", "ios",
-                                                    "build", "symbolsReady")}, localBuild=exe, project=name)
+                                                    "build", "symbolsReady")}, localBuild=exe, project=name,
+                 swiftExpressions=True)
     if not st.get("symbolsReady"):
         output.event("notice", id="no-symbols", level="info",
                      message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may read "
@@ -187,6 +189,8 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
                              "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
     output.step("connect", "Connecting to the debugger on your iPhone", "running")
     _console("(lldb) settings set target.memory-module-load-level minimal")
+    _console('(lldb) settings set target.sdk-path "~/.config/swiftpm/swift-sdks/darwin.artifactbundle/Developer/'
+             'Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"')
     _console("(lldb) platform select remote-ios --sysroot \"~/.cache/ios-studio/DeviceSupport/27.2 (24B115)\"\n"
              "  Platform: remote-ios\n Connected: no\n  SDK Path: \"~/.cache/ios-studio/DeviceSupport/27.2 (24B115)\"")
     _console(f"(lldb) process connect connect://127.0.0.1:{st.get('port')}")
@@ -353,12 +357,15 @@ def session(flags: dict) -> int:
                            if f.get("inApp") else [], "more": False}
                 output.event("variables", requestId=rid, **loc)
             elif cmd == "evaluate":
-                expr = str(m.get("expr") or "").strip()
+                text = str(m.get("expr") or "").strip()
+                expr, po = _parse_expr(text)
                 known = {v["name"]: v for v in states[idx]["locals"]["variables"]}
-                if expr in known:
-                    output.event("evaluated", requestId=rid, expr=expr, ok=True, result=dict(known[expr], name="$R0"))
-                elif expr in ("days.count", "self.days.count", "count"):
-                    output.event("evaluated", requestId=rid, expr=expr, ok=True, result=V("$R0", "Int", "7"))
+                res = (dict(known[expr], name="$R0") if expr in known else
+                       V("$R0", "Int", "7") if expr in ("days.count", "self.days.count", "count") else None)
+                if res is not None:
+                    if po:
+                        res["description"] = _description(res)
+                    output.event("evaluated", requestId=rid, expr=text, ok=True, result=res)
                 else:
                     output.event("evaluated", requestId=rid, expr=expr, ok=False,
                                  result=V("$R0", "", None) | {"error": f"error: cannot find '{expr[:40]}' in scope"})
@@ -371,9 +378,29 @@ def session(flags: dict) -> int:
                              message=f"Unknown debugger command '{cmd[:40]}'.")
 
 
+def _parse_expr(text: str) -> tuple[str, bool]:
+    """(the Swift expression, whether `po` asked for its description), as lldb_driver.parse_expr."""
+    m = re.match(r"^(po|p|print|e|expr|expression)\s+(-O\s+)?(?:--\s+)?", text)
+    if not m:
+        return text, False
+    return text[m.end():].strip(), m.group(1) == "po" or bool(m.group(2))
+
+
+def _description(v: dict, indent: str = "") -> str:
+    """What `po` prints for a demo value: Swift's dump() layout."""
+    kids = v.get("children") or []
+    if not kids:
+        return f"{indent}{v.get('value') or v.get('type')}"
+    lines = [f"{indent}▿ {v.get('type')}"]
+    for c in kids:
+        lines.append(f"{indent}  - {c['name']} : {c.get('value') or c.get('type')}")
+    return "\n".join(lines)
+
+
 def check(flags: dict) -> int:
     return output.ok({"ready": True, "lldb": "/usr/lib/swift/usr/bin/lldb", "lldbVersion": "lldb version 21.0.0 (demo)",
-                      "python": "/usr/bin/python3.12"})
+                      "python": "/usr/bin/python3.12", "swiftExpressions": True, "expressionsNote": None,
+                      "shadowLldb": f"{HOME}/.cache/ios-studio/lldb-ios/0123456789ab/usr/bin/lldb"})
 
 
 def sources(flags: dict) -> int:
@@ -457,7 +484,8 @@ def editor(flags: dict) -> int:
                  pid=st.get("pid"), launched=bool(st.get("launched")),
                  scriptPath=f"{HOME}/.local/state/ios-studio/editor-debug/{plain}.lldb",
                  editors=[] if flags.get("no_config") else ["vscode"], configName=cfg,
-                 symbolsReady=bool(st.get("symbolsReady")), localBuild=f"{path}/xtool/{name}.app/{name}")
+                 symbolsReady=bool(st.get("symbolsReady")), localBuild=f"{path}/xtool/{name}.app/{name}",
+                 swiftExpressions=True)
     attach_at = time.time() + subproc.demo_delay(3.0)
     attached = False
     inp = Stdin()

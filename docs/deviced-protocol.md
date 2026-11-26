@@ -1384,31 +1384,39 @@ afterwards). The demo daemon keeps a made-up set whose starting state follows th
 
 | action | what it does |
 |---|---|
-| `debug check` | one-shot: `{ready, lldb, lldbVersion, python, error?}`. lldb is `<toolchain>/usr/bin/lldb` (the Swift toolchain Setup installs); it links `libpython3.12`, so without Setup's "Debugger support" step (`python312`) the error's fix opens that step |
+| `debug check` | one-shot: `{ready, lldb, lldbVersion, python, swiftExpressions, expressionsNote, shadowLldb}`, or `{ready: false, error}`. lldb is `<toolchain>/usr/bin/lldb` (the Swift toolchain Setup installs); it links `libpython3.12`, so without Setup's "Debugger support" step (`python312`) the error's fix opens that step. It also builds the shadow lldb the first time (`helper/iosstudio/features/lldb_shadow.py`), so a session start only checks its stamp: `shadowLldb` is its `usr/bin/lldb`, `swiftExpressions` false (and `expressionsNote` the plain reason, e.g. no iOS SDK) when it couldn't be built |
 | `debug sources --bundle-id B` | one-shot: `{project, files: [{path, rel, name, lines}], localBuild}` for the project whose bundle id `B` is (`XTL-<TEAM>.<id>` matches `<id>`) |
 | `debug backtrace --bundle-id B` | stream: `debug.start` (attach), attach, read every thread, detach, `debug.stop`. `done.data` = `{threads, crashedThread, selectedThread, pid, localBuild, symbolsReady, ended}` |
 | `debug session --bundle-id B [--launch auto\|attach\|suspended] [--breakpoints '<json>'] [--commands '<json>'] [--stop-at-attach]` | stream: an interactive session |
+| `debug editor-config`, `debug editor`, `debug editor-status` | Debug in editor ([docs/features/editor-debugging.md](features/editor-debugging.md)): the editors run the shadow's lldb-dap through a stable launcher, `~/.cache/ios-studio/lldb-ios/lldb-dap`; `debug editor` emits the same `lldb-plain` notice and has `swiftExpressions` on `ready` |
 
 The stream emits `step`, `notice` and `done` like other helper streams, plus `started {port, pid,
-launched, ...}`, `console {text}` (lldb's own output), `attached`, `breakpoints {items: [{id, spec,
+launched, ..., swiftExpressions}`, `console {text}` (lldb's own output), `attached`, `breakpoints {items: [{id, spec,
 locations, resolved, hits}]}`, `running`, `stopped {stopId, reason, description, thread: {index,
 frames}, threads, breakpoint?, locals: {frame, function, variables}}`, `variables`, `evaluated`,
 `backtrace`, `ack {cmd, ok, message?}` and `exited`. A frame is `{index, function, module, pc,
 offset?, file?, line?, column?, inApp}`; a variable is `{name, type, value?, error?, childCount,
 children?}` (one level deep, 20 children at most). `reason` is `breakpoint`, `step`, `exception`,
-`signal`, `paused` or `watchpoint`.
+`signal`, `paused` or `watchpoint`. A session without the shadow lldb emits `notice {id: "lldb-plain"}`
+(Swift expressions may not work, with the reason) before `started`, whose `swiftExpressions` is then false.
+`evaluated {requestId, expr, ok, result, code?, message?}`: `result` is a variable; for `po` it also has
+`description` (the object's description, up to 2000 characters). When lldb couldn't load the iOS Swift
+modules (SwiftShims, HostInfoError, a corrupted precompiled module), `code` is `swift-modules` and `message`
+says so in plain words.
 
 Commands go to the session's stdin as JSON lines: `{"cmd": "continue"}` and `next` (step over),
 `step` (step in), `finish` (step out), `pause`, `detach`, `kill`, `frame_variables {frame?, depth?}`,
-`select_frame {frame}`, `evaluate {expr}`, `backtrace`, `breakpoint_add {spec}`,
+`select_frame {frame}`, `evaluate {expr}` (Swift, or lldb's `p x`, `po x`, `expression [-O] [--] x`), `backtrace`, `breakpoint_add {spec}`,
 `breakpoint_delete {id}`, `status`. An optional `requestId` comes back on the answer.
 `{"cancel": true}`, SIGTERM and the end of stdin all detach. A breakpoint `spec` is `File.swift:42`
 or a function name. Whatever ends the session, the app is detached (or killed with `kill`) before
 the helper releases the forward.
 
 lldb runs through its Python API (`helper/iosstudio/features/lldb_driver.py` under `/usr/bin/python3.12` with the path
-from `lldb -P`), using the steps omarchy-ios-kit uses for a userspace tunnel:
-`target.memory-module-load-level minimal`, `platform select remote-ios --sysroot <DeviceSupport>`, a
+from `lldb -P`, mirrored into the shadow lldb when there is one, so Swift expressions work), using the steps
+omarchy-ios-kit uses for a userspace tunnel: `target.memory-module-load-level minimal`,
+`settings set target.sdk-path "<iPhoneOS.sdk>"` (with the shadow lldb only, before the target exists),
+`platform select remote-ios --sysroot <DeviceSupport>`, a
 target for the local `xtool/<App>.app/<exe>` with its platform path set to `remotePath`, an
 asynchronous `process connect connect://127.0.0.1:<port>` (a synchronous one waits forever), then
 `process attach --pid <pid>`. With no local build it attaches with only system symbols and says so.

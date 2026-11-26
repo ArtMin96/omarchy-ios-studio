@@ -26,8 +26,13 @@ Leftovers of a killed build are removed by the next build; only the newest KEEP 
 Port of omarchy-apple-dev v0.4.8 tools/lldb-ios-shadow.sh. Then lldb needs
 `settings set target.sdk-path <Shadow.sdk>` (lldb_driver.py does it from the `sdkPath` config key).
 
+Editors ("Debug in editor") can't follow the <hash> path, so they run `<cache>/lldb-ios/lldb-dap`, a small
+launcher that execs the shadow's lldb-dap when it's there and the toolchain's own otherwise. write_launcher()
+rewrites it (only when its text changes) each time the debugger is prepared for an editor.
+
   ensure(usr, bundle, pythonpath) -> Shadow     raises Unavailable(plain reason)
   for_lldb(lldb, pythonpath)      -> (Shadow | None, reason)   finds the SDK bundle itself; never raises
+  launcher_path() / write_launcher(plain_dap, shadow) -> Path    the stable lldb-dap path for editors
 """
 from __future__ import annotations
 
@@ -37,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -171,6 +177,35 @@ def for_lldb(lldb: str | Path, pythonpath: str | None = None) -> tuple[Shadow | 
         return ensure(Path(lldb).parent.parent, bundle, pythonpath), ""
     except Unavailable as exc:
         return None, str(exc)
+
+
+# ---------------------------------------------------------------- the editors' stable lldb-dap
+
+def launcher_path() -> Path:
+    return cache_root() / "lldb-dap"
+
+
+def launcher_text(plain_dap: Path | str, shadow: Shadow | None) -> str:
+    lines = ["#!/bin/sh",
+             "# iOS Studio: the lldb-dap that VS Code and Zed run for \"Debug in editor\". It runs the debugger's",
+             "# iOS-ready copy (Swift expressions work there) and the Swift toolchain's own lldb-dap when that copy",
+             "# isn't there. iOS Studio rewrites this file; changes here are lost."]
+    if shadow is not None and shadow.lldb_dap is not None:
+        lines += [f"shadow={shlex.quote(str(shadow.lldb_dap))}", '[ -x "$shadow" ] && exec "$shadow" "$@"']
+    lines.append(f'exec {shlex.quote(str(plain_dap))} "$@"')
+    return "\n".join(lines) + "\n"
+
+
+def write_launcher(plain_dap: Path | str, shadow: Shadow | None) -> Path:
+    """The launcher for this toolchain's lldb-dap and its shadow (None: the plain one only); written only when
+    its text changes. Raises OSError."""
+    path, text = launcher_path(), launcher_text(plain_dap, shadow)
+    with contextlib.suppress(OSError):
+        if path.read_text() == text and os.access(path, os.X_OK):
+            return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fileio.atomic_write(path, text, mode=0o755)
+    return path
 
 
 # ---------------------------------------------------------------- building

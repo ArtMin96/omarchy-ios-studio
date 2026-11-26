@@ -89,7 +89,8 @@ class Base(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.env = {**os.environ, "HOME": str(self.home), "XDG_STATE_HOME": str(self.home / ".local/state"),
-                    "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_DATA_HOME": str(self.home / ".local/share")}
+                    "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_DATA_HOME": str(self.home / ".local/share"),
+                    "XDG_CACHE_HOME": str(self.home / ".cache")}
         self.env.pop("IOSSTUDIO_DEMO", None)
         # a runtime dir of our own, short enough for the socket
         self.run_dir = Path(tempfile.mkdtemp(prefix="ied-", dir="/tmp"))
@@ -126,7 +127,8 @@ class Demo(Base):
             self.addCleanup(s.close)
             ready = s.event("ready")
             self.assertEqual(set(ready) - {"event"}, {"bundleId", "appName", "port", "host", "pid", "launched",
-                                                      "scriptPath", "editors", "configName", "symbolsReady", "localBuild"})
+                                                      "scriptPath", "editors", "configName", "symbolsReady", "localBuild",
+                                                      "swiftExpressions"})
             s.event("editor", state="attached")
             s.cancel()
             done = s.event("done")
@@ -151,8 +153,12 @@ class Real(Base):
         self.assertEqual(d["editors"][0]["action"]["kind"], "write")
         doc = jsonc.load((proj / ".vscode/launch.json").read_text())
         cfg = doc["configurations"][0]
-        self.assertEqual((cfg["name"], cfg["type"], cfg["request"]), (d["configName"], "swift", "attach"))
+        self.assertEqual((cfg["name"], cfg["type"], cfg["request"]), (d["configName"], "lldb-dap", "attach"))
+        self.assertEqual(cfg["debugAdapterExecutable"], "${userHome}/.cache/ios-studio/lldb-ios/lldb-dap")
         self.assertIn("'~/.local/state/ios-studio/editor-debug/com.example.target.lldb'", cfg["attachCommands"][0])
+        if TOOLCHAIN_BIN.joinpath("lldb-dap").is_file():   # the launcher is there before the first bridge
+            launcher = self.home / ".cache/ios-studio/lldb-ios/lldb-dap"
+            self.assertIn(str(TOOLCHAIN_BIN / "lldb-dap"), launcher.read_text())
         self.assertNotIn(str(self.home), (proj / ".vscode/launch.json").read_text())   # no machine path in the project
         self.assertEqual(sorted(p.name for p in proj.rglob("*") if p.is_file()),
                          ["Package.swift", "launch.json", "xtool.yml"])   # writes only launch.json
@@ -247,17 +253,29 @@ class EndToEnd(Base):
             "processes.list": [{"pid": pid, "name": "Target", "isApp": True}],
         }
         env = {**self.env, "IOSSTUDIO_DEBUG_PLATFORM": "remote-linux"}
+        # IOSSTUDIO_TEST_DARWIN_SDK=<darwin.artifactbundle>: run it with the shadow lldb (built from that SDK into
+        # this test's cache), so the editor's lldb-dap is the launcher's shadow and the attach file sets the SDK
+        sdk = os.environ.get("IOSSTUDIO_TEST_DARWIN_SDK")
+        if sdk:
+            link = self.home / ".config/swiftpm/swift-sdks/darwin.artifactbundle"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(sdk)
         with FakeDeviced(self.run_dir, replies) as daemon:
             bridge = Stream(["debug", "editor", "--project", str(proj), "--editor", "vscode"], env)
             self.addCleanup(bridge.close)
             ready = bridge.event("ready", timeout=120)
             self.assertEqual((ready["bundleId"], ready["port"], ready["pid"]), (installed, port, pid))
+            # without an iOS SDK the launcher runs the toolchain's lldb-dap, and the bridge says so
+            self.assertEqual(ready["swiftExpressions"], bool(sdk))
+            self.assertEqual(any(e.get("id") == "lldb-plain" for e in bridge.lines), not sdk)
             self.assertEqual(ready["editors"], ["vscode"])
             self.assertEqual(ready["localBuild"], str(exe))
             self.assertEqual(daemon.sent("debug.start")[0]["bundleId"], installed)
             cfg = jsonc.load((proj / ".vscode/launch.json").read_text())["configurations"][0]
+            launcher = cfg["debugAdapterExecutable"].replace("${userHome}", str(self.home))   # what VS Code runs
+            self.assertEqual("iosstudio-sdk-path" in Path(ready["scriptPath"]).read_text(), bool(sdk))
 
-            dap = self.attach(tools["dap"], cfg, env)
+            dap = self.attach(launcher, cfg, env)
             r = dap.request("setBreakpoints", {"source": {"path": str(src)}, "breakpoints": [{"line": line}]})
             self.assertTrue(r["body"]["breakpoints"][0]["verified"], r)
             self.assertTrue(dap.request("configurationDone")["success"])
@@ -269,6 +287,11 @@ class EndToEnd(Base):
             names = [v["name"] for v in dap.request("variables", {"variablesReference": scope["variablesReference"]})
                      ["body"]["variables"]]
             self.assertIn("n", names)
+            if sdk:   # the shadow's liblldb: the SDK was set, no "another lldb-dap" warning
+                self.assertNotIn("another lldb-dap", "".join(dap.output))
+                maps = Path(f"/proc/{dap.p.pid}/maps").read_text()
+                self.assertIn("/lldb-ios/", maps)
+                self.assertNotIn(str(TOOLCHAIN_BIN.parent / "lib/liblldb"), maps)
             bridge.event("editor", state="attached")
             self.assertTrue(dap.request("disconnect", {"terminateDebuggee": False})["success"])
             dap.close()
@@ -284,7 +307,7 @@ class EndToEnd(Base):
         # after the bridge: the same config now fails with the readable message instead of connecting
         script = Path(ready["scriptPath"])
         self.assertIn("iosstudio-fail", script.read_text())
-        dap = DapClient([tools["dap"]], env=env)
+        dap = DapClient([launcher], env=env)
         try:
             dap.request("initialize", {"adapterID": "lldb-dap", "clientID": "test", "pathFormat": "path"})
             r = dap.request("attach", {k: v for k, v in cfg.items() if k not in ("name", "type")}, timeout=120)

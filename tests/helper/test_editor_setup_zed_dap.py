@@ -1,5 +1,6 @@
-"""Zed's machine-wide setup and Debug in editor: when lldb-dap isn't on PATH, setup adds the toolchain's
-lldb-dap (next to the real swift) as dap.Swift.binary in Zed's user settings, keeping a value already there.
+"""Zed's machine-wide setup and Debug in editor: when the toolchain has lldb-dap (next to the real swift), setup
+points dap.Swift.binary in Zed's user settings at iOS Studio's lldb-dap launcher (lldb_shadow.launcher_path()),
+keeping a value of the user's own (migrating one setup wrote before: tests/helper/test_editor_debug_shadow.py).
 
 Every test runs on a fake home folder, PATH and toolchain in a temp dir (Env), never the real ~/.config.
 """
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from iosstudio.core import jsonc
 from iosstudio.features import editor_setup as E
+from iosstudio.features import lldb_shadow
 
 
 class ZedDap(unittest.TestCase):
@@ -41,10 +43,11 @@ class ZedDap(unittest.TestCase):
                      path=str(self.bin), state=self.home / ".local/state/ios-studio", swift_version=(6, 4),
                      probe_swift=False)
 
-    def test_on_path_no_action(self):
-        self.exe(self.bin, "lldb-dap")
-        self.assertEqual(E.zed_machine_actions(self.env()), [])
-        self.assertEqual(E.editor_info("zed", self.env())["state"], "ready")
+    def test_on_path_still_points_at_the_launcher(self):
+        self.exe(self.bin, "lldb-dap")             # a plain lldb-dap on PATH can't evaluate Swift for an iPhone app
+        acts = E.zed_machine_actions(self.env())
+        self.assertEqual([a["kind"] for a in acts], ["write"])
+        self.assertEqual(E.editor_info("zed", self.env())["state"], "needs-setup")
 
     def test_missing_adds_merge_action(self):
         self.zs.parent.mkdir(parents=True)
@@ -58,7 +61,7 @@ class ZedDap(unittest.TestCase):
         self.assertTrue(text.startswith("// Zed settings"))
         v = jsonc.parse(text).value
         self.assertEqual(v["theme"], "Omazed")
-        self.assertEqual(v["dap"]["Swift"]["binary"], str(self.tc / "lldb-dap"))
+        self.assertEqual(v["dap"]["Swift"]["binary"], str(lldb_shadow.launcher_path()))
         self.assertNotIn("lsp", v)                               # sourcekit-lsp is on PATH
         self.assertEqual(E.editor_info("zed", self.env())["state"], "ready")
 
@@ -70,16 +73,19 @@ class ZedDap(unittest.TestCase):
         self.assertIn("lldb-dap", acts[0]["detail"])
         E.apply_actions(acts, self.env())
         v = jsonc.parse(self.zs.read_text()).value
-        self.assertEqual(v["dap"]["Swift"]["binary"], str(self.tc / "lldb-dap"))
+        self.assertEqual(v["dap"]["Swift"]["binary"], str(lldb_shadow.launcher_path()))
         self.assertEqual(v["lsp"]["sourcekit-lsp"]["binary"]["path"], str(self.tc / "sourcekit-lsp"))
 
     def test_existing_user_value_kept(self):
         self.zs.parent.mkdir(parents=True)
-        self.zs.write_text('{"dap": {"Swift": {"binary": "/opt/my/lldb-dap"}}}\n')
+        mine = self.tmp / "opt/my"
+        mine.mkdir(parents=True)
+        self.exe(mine, "lldb-dap")                 # an lldb-dap of the user's own (another toolchain)
+        self.zs.write_text('{"dap": {"Swift": {"binary": "%s"}}}\n' % (mine / "lldb-dap"))
         acts = E.zed_machine_actions(self.env())
         self.assertEqual([a["kind"] for a in acts], ["skip"])
         self.assertTrue(acts[0]["configured"])
-        self.assertEqual(acts[0]["kept"][0]["yours"], "/opt/my/lldb-dap")
+        self.assertEqual(acts[0]["kept"][0]["yours"], str(mine / "lldb-dap"))
         self.assertEqual(E.editor_info("zed", self.env())["state"], "ready")
 
     def test_no_toolchain_lldb_dap(self):

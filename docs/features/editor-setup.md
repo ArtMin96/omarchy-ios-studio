@@ -27,7 +27,19 @@ Zed needs no `.zed/settings.json`. The Swift extension starts the `sourcekit-lsp
 }
 ```
 
-For [Debug in editor](editor-debugging.md), Zed's Swift extension finds `lldb-dap` only through swiftly, xcrun or PATH, and the Swift toolchain keeps it next to `swift` and `lldb` instead. So when `lldb-dap` isn't on PATH, setup also adds `"dap": {"Swift": {"binary": "<toolchain>/usr/bin/lldb-dap"}}` to the same user settings, and Zed shows as needing setup until it's there. A `dap.Swift.binary` you set yourself is kept.
+For [Debug in editor](editor-debugging.md), Zed's Swift extension runs the `lldb-dap` named in `dap.Swift.binary`, else one it finds through swiftly, xcrun or PATH. The toolchain's own `lldb-dap` can't evaluate Swift expressions (`p`, `po`) in an iPhone app, so whenever the toolchain has one, setup points Zed at iOS Studio's lldb-dap instead:
+
+```json
+{
+  "dap": {
+    "Swift": { "binary": "/home/you/.cache/ios-studio/lldb-ios/lldb-dap" }
+  }
+}
+```
+
+That path doesn't change when Swift or the iOS SDK is updated. It's a small launcher that runs the toolchain's lldb-dap set up for iOS, or the plain one while that isn't possible (see [Swift expressions](editor-debugging.md#swift-expressions-p-po)). Setup also prepares that debugger, so the first Debug in editor starts quickly. Zed shows as needing setup until the setting is there.
+
+A `dap.Swift.binary` that setup wrote before (the toolchain's `/usr/lib/swift/usr/bin/lldb-dap`), one whose file is gone, or a launcher from another cache folder is replaced by **Set up**, after a backup. Comments and the rest of the file stay byte for byte. An `lldb-dap` of your own (from another toolchain, say) is kept and listed. Debug in editor then notes that Swift expressions may not work.
 
 The first time you open a folder, Zed asks whether to trust it ("Unrecognized Project"). Until you click **Trust and Continue**, the window is in Restricted Mode: no language servers, so no completion or errors.
 
@@ -97,6 +109,8 @@ Setup counts Swift as done when your config already enables it: the `lang.swift`
 3. Install the Swift extension when VS Code offers it.
 
 When `sourcekit-lsp` isn't on PATH, setup adds `swift.sourcekit-lsp.serverPath` to your VS Code user settings (`~/.config/Code/User/settings.json`; Code - OSS and VSCodium have their own folders), after a backup.
+
+Debug in editor needs nothing in VS Code's user settings: its configuration in `.vscode/launch.json` names iOS Studio's lldb-dap itself (`debugAdapterExecutable`, see [Debug in editor](editor-debugging.md#vs-code)). Setting VS Code up prepares that debugger too, so the first start is quick.
 
 The template's `.gitignore` ignores `/.bsp`: xtool and iOS Studio write it on every machine. `.vscode/` and `.zed/` aren't ignored, so shared editor settings can be committed.
 

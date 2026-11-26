@@ -4,6 +4,10 @@ file loads it with `command script import`.
 
   iosstudio-check <pid> <starttime>   fails unless that iOS Studio bridge process is still running, so a
                                       stale attach file never connects to an old port
+  iosstudio-sdk-path <sdk> <lib>      settings set target.sdk-path <sdk> (Swift expressions find the SDK's
+                                      modules), when this lldb-dap's liblldb is the one in <lib>, iOS
+                                      Studio's iOS-ready copy (lldb_shadow.py); with another lldb that
+                                      setting breaks them, so it's left out and the console says why
   iosstudio-remote-file <path>        the target's executable lives at <path> on the iPhone
   iosstudio-connect <url> [timeout]   `process connect` the way lldb_driver.py does it: asynchronously (a
                                       synchronous connect to a debugserver without a process fails), with
@@ -15,12 +19,16 @@ it in the editor's Debug Console.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import time
 
 import lldb
 
 NOT_RUNNING = "iOS Studio isn't debugging this app right now. Start 'Debug in editor' in iOS Studio first, then attach again."
+PLAIN_LLDB = ("iOS Studio: Swift expressions (p, po) may not work, because this editor runs another lldb-dap than "
+              "iOS Studio's. Set the editor up again in iOS Studio › Settings › Code editor. Breakpoints and "
+              "variables work.")
 
 
 def _args(command: str) -> list[str]:
@@ -41,6 +49,22 @@ def check(debugger, command, result, _internal):
             ok = False
     if not ok:
         result.SetError(NOT_RUNNING)
+
+
+def sdk_path(debugger, command, result, _internal):
+    a = _args(command)
+    if len(a) != 2:
+        result.SetError("iosstudio-sdk-path needs the iOS SDK and lldb's library folder.")
+        return
+    here = lldb.SBHostOS.GetLLDBPath(lldb.ePathTypeLLDBShlibDir).fullpath or ""
+    if os.path.realpath(here) != os.path.realpath(a[1]):
+        result.AppendWarning(PLAIN_LLDB)
+        return
+    sdk = '"' + a[0].replace("\\", "\\\\").replace('"', '\\"') + '"'
+    r = lldb.SBCommandReturnObject()
+    debugger.GetCommandInterpreter().HandleCommand("settings set target.sdk-path " + sdk, r)
+    if not r.Succeeded():
+        result.AppendWarning("iOS Studio couldn't set the iOS SDK for Swift expressions: " + (r.GetError() or "").strip())
 
 
 def remote_file(debugger, command, result, _internal):
@@ -87,5 +111,6 @@ def fail(debugger, command, result, _internal):
 
 
 def __lldb_init_module(debugger, _internal):
-    for name, fn in (("check", check), ("remote-file", remote_file), ("connect", connect), ("fail", fail)):
+    for name, fn in (("check", check), ("sdk-path", sdk_path), ("remote-file", remote_file), ("connect", connect),
+                     ("fail", fail)):
         debugger.HandleCommand(f"command script add -o -f {__name__}.{fn.__name__} iosstudio-{name}")

@@ -8,8 +8,10 @@ iPhone (arm64-apple-ios) instead of for Linux. Two parts:
    `lang.swift` extra in lazyvim.json when the installed LazyVim has one (backed up first), else a new plugin
    file `lua/plugins/ios-studio-swift.lua`; other Neovim configs get a snippet (docs/features/editor-setup.md).
    Zed and VS Code: their Swift extension (a step you do; status says whether it's there), plus
-   sourcekit-lsp's path in the editor's user settings only when it isn't on PATH. Also remembers the editor
-   in iOS Studio's settings.json (`editorSetup`).
+   sourcekit-lsp's path in the editor's user settings only when it isn't on PATH, and for Zed
+   `dap.Swift.binary`: iOS Studio's lldb-dap launcher for Debug in editor (replacing the toolchain's own
+   lldb-dap that setup wrote before). Setting up Zed or VS Code also prepares that debugger
+   (editors.prepare_debugger). Also remembers the editor in iOS Studio's settings.json (`editorSetup`).
 2. Per project, automatic (auto_project, called after a successful build and on create / add / convert):
    writes `.bsp/xtool.json` when it's missing (the same file xtool writes on its first build) and, when the
    preferred editor is VS Code and iOS Studio created the project from a template, merges

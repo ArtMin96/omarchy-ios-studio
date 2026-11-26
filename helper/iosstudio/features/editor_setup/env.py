@@ -114,10 +114,27 @@ def sourcekit_for_settings(env: Env) -> str | None:
     return None if sourcekit(env) else sourcekit_next_to_swift(env)
 
 
+def plain_lldb_dap(env: Env) -> str | None:
+    """The toolchain's own lldb-dap, next to the real swift binary."""
+    return _next_to_swift(env, "lldb-dap")
+
+
 def lldb_dap_for_settings(env: Env) -> str | None:
-    """The toolchain's lldb-dap (next to swift and lldb) when it isn't on PATH, for "Debug in editor": Zed's
-    Swift extension finds lldb-dap only through swiftly, xcrun or PATH."""
-    return None if env.which("lldb-dap") else _next_to_swift(env, "lldb-dap")
+    """The lldb-dap Zed's settings name for "Debug in editor" when the toolchain has one: iOS Studio's launcher
+    (lldb_shadow.launcher_path(), a stable path), which runs the toolchain's lldb-dap set up for iOS so Swift
+    expressions work. Also when lldb-dap is on PATH: that one can't evaluate Swift for an iPhone app."""
+    from iosstudio.features import lldb_shadow
+    return str(lldb_shadow.launcher_path()) if plain_lldb_dap(env) else None
+
+
+def old_lldb_dap(value: object, env: Env) -> bool:
+    """A dap.Swift.binary iOS Studio wrote before (the toolchain's own lldb-dap, a launcher from another cache
+    folder) or one that's gone: setup replaces it with the launcher. Anything else is the user's and stays."""
+    if not isinstance(value, str) or Path(value).name != "lldb-dap" or value == lldb_dap_for_settings(env):
+        return False
+    plain = plain_lldb_dap(env)
+    return (not os.path.exists(value) or Path(value).parent.name == "lldb-ios"
+            or bool(plain) and os.path.realpath(value) == os.path.realpath(plain))  # type: ignore[arg-type]
 
 
 # ================================================================ settings: the preferred editor
