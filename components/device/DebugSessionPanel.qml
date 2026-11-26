@@ -33,12 +33,13 @@ ColumnLayout {
   property var notices: []
   property string launchMode: appRunning ? "attach" : "suspended"
   property var evalResult: null
+  property bool evaluating: false           // an expression was sent, no answer yet
   property bool waiting: false              // a step/continue was sent, no answer yet
   property var summary: null                // done data
 
   function reset() {
     root.bps = []; root.stop = null; root.locals = null; root.frameIndex = 0; root.error = null
-    root.notices = []; root.evalResult = null; root.waiting = false; root.summary = null; root.stepTitle = ""
+    root.notices = []; root.evalResult = null; root.evaluating = false; root.waiting = false; root.summary = null; root.stepTitle = ""
   }
 
   function addSpec(spec) {
@@ -65,6 +66,7 @@ ColumnLayout {
     if (!stream.running) return
     var m = Object.assign({ cmd: cmd }, extra || {})
     if (["continue", "next", "step", "finish"].indexOf(cmd) >= 0) root.waiting = true
+    if (cmd === "evaluate") { root.evaluating = true; root.evalResult = null }
     stream.write(m)
   }
   function end(kill) {
@@ -98,15 +100,19 @@ ColumnLayout {
       else if (e === "running") { root.phase = "running"; root.waiting = false }
       else if (e === "stopped") {
         root.phase = "stopped"; root.waiting = false
-        root.stop = ev; root.locals = ev.locals || null; root.frameIndex = 0; root.evalResult = null
+        root.stop = ev; root.locals = ev.locals || null; root.frameIndex = 0; root.evalResult = null; root.evaluating = false
       }
       else if (e === "variables") { root.locals = ev; root.frameIndex = ev.frame || 0 }
-      else if (e === "evaluated") root.evalResult = ev
-      else if (e === "ack" && ev.ok === false) { root.waiting = false; root.app.toast(ev.message || "The debugger refused that.", "warn") }
+      else if (e === "evaluated") { root.evalResult = ev; root.evaluating = false }
+      else if (e === "ack" && ev.ok === false) {
+        root.waiting = false
+        if (ev.cmd === "evaluate") root.evaluating = false
+        root.app.toast(ev.message || "The debugger refused that.", "warn")
+      }
       else if (e === "exited") root.notices = root.notices.concat([{ level: "info", message: root.appName + " exited." }])
     }
     onFinished: function(ok, data, error) {
-      root.waiting = false
+      root.waiting = false; root.evaluating = false
       root.summary = data
       if (ok) { root.phase = "ended"; root.error = null }
       else { root.phase = "failed"; root.error = error }
@@ -255,13 +261,35 @@ ColumnLayout {
     IconButton { glyph: Model.Glyph.stop; tooltip: "Quit the app"; danger: true; onClicked: root.end(true) }
   }
 
+  // the helper's notices (no local build, symbols, Swift expressions unavailable): a quiet glyph + text line
   Repeater {
     model: root.live ? root.notices : []
-    delegate: AppText {
+    delegate: RowLayout {
+      id: noteRow
       required property var modelData
+      readonly property bool warn: modelData.level === "warn"
       Layout.fillWidth: true
-      text: modelData.message
-      size: "small"; tone: modelData.level === "warn" ? "warn" : "dim"; wrapMode: Text.Wrap
+      spacing: Style.spacing.md
+      FontMetrics { id: noteFm; font: noteText.font }
+      Item {
+        // centred on the text's first line when it wraps
+        Layout.alignment: Qt.AlignTop
+        Layout.preferredWidth: Style.font.bodySmall
+        Layout.preferredHeight: noteFm.height
+        Icon {
+          anchors.centerIn: parent
+          glyph: Model.levelGlyph(noteRow.warn ? "warn" : "info")
+          size: Style.font.bodySmall
+          color: noteRow.warn ? Theme.warn : Theme.faint
+        }
+      }
+      AppText {
+        id: noteText
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignTop
+        text: noteRow.modelData.message || ""
+        size: "small"; tone: noteRow.warn ? "warn" : "dim"; wrapMode: Text.Wrap
+      }
     }
   }
 
@@ -390,22 +418,31 @@ ColumnLayout {
       TextField {
         id: exprField
         Layout.fillWidth: true
-        placeholderText: "Evaluate a Swift expression in this frame, e.g. days.count"
+        placeholderText: "Evaluate Swift in this frame, e.g. days.count or po forecast"
         onAccepted: evalBtn.clicked()
       }
       ActionButton {
         id: evalBtn
         text: "Evaluate"; glyph: Model.Glyph.terminal
-        enabled: exprField.text.trim() !== "" && !root.waiting
+        enabled: exprField.text.trim() !== "" && !root.waiting && !root.evaluating
         onClicked: root.send("evaluate", { expr: exprField.text.trim() })
       }
     }
     AppText {
       Layout.fillWidth: true
+      visible: root.evaluating
+      text: "Evaluating… the first expression loads the app's Swift modules, which can take half a minute."
+      size: "small"; tone: "faint"; wrapMode: Text.Wrap
+    }
+    AppText {
+      readonly property var r: root.evalResult ? (root.evalResult.result || {}) : ({})
+      Layout.fillWidth: true
       visible: !!root.evalResult
+      // po: the description; p: "expr = value"; a failure: the helper's plain message, else lldb's error
       text: !root.evalResult ? "" : (root.evalResult.ok
-            ? root.evalResult.expr + " = " + (root.evalResult.result.value !== undefined ? root.evalResult.result.value : "(" + (root.evalResult.result.type || "no value") + ")")
-            : (root.evalResult.result.error || "Couldn't evaluate that."))
+            ? (r.description !== undefined ? r.description
+               : root.evalResult.expr + " = " + (r.value !== undefined ? r.value : "(" + (r.type || "no value") + ")"))
+            : (root.evalResult.message || r.error || "Couldn't evaluate that."))
       mono: true; size: "small"; tone: root.evalResult && root.evalResult.ok ? "primary" : "warn"; wrapMode: Text.WrapAnywhere
     }
   }

@@ -388,3 +388,148 @@ def test_driver_main_always_reports_done(tmp_path, env, code, ended):
     else:   # connect() got as far as loading the target, then failed with lldb's own error text
         assert done["error"]["message"] == "lldb couldn't load the app's executable."
         assert any(e.get("event") == "console" and "memory-module-load-level minimal" in e["text"] for e in evs)
+
+
+# ================================================================ the shadow lldb (lldb_shadow.py) for sessions
+
+def fake_tc(tmp_path: Path) -> dbg.Toolchain:
+    return dbg.Toolchain(str(tmp_path / "tc/usr/bin/lldb"), "lldb 21", "/usr/bin/python3.12", "/tc/site-packages",
+                         {"LD_LIBRARY_PATH": "/tc/usr/lib"})
+
+
+def test_sessions_run_the_shadow_lldb(tmp_path, monkeypatch):
+    from iosstudio.features import lldb_shadow
+    root = tmp_path / "shadow"
+    (root / "usr/lib/swift/host/compiler").mkdir(parents=True)
+    sh = lldb_shadow.Shadow(root, root / "usr/bin/lldb", None, str(root / "usr/site-packages"), tmp_path / "iPhoneOS.sdk",
+                            "reflink")
+    seen = []
+    monkeypatch.setattr(lldb_shadow, "for_lldb", lambda lldb, py: seen.append((lldb, py)) or (sh, ""))
+    sl = dbg.session_lldb(fake_tc(tmp_path))
+    assert seen == [(str(tmp_path / "tc/usr/bin/lldb"), "/tc/site-packages")]
+    assert (sl.python, sl.pythonpath, sl.sdk, sl.note) == ("/usr/bin/python3.12", sh.pythonpath, str(sh.sdk), "")
+    # liblldb resolves from the shadow (LD_LIBRARY_PATH wins over RUNPATH), never the toolchain's
+    assert sl.env["LD_LIBRARY_PATH"].split(":")[:2] == [f"{root}/usr/lib/swift/host/compiler", f"{root}/usr/lib"]
+
+
+def test_without_a_shadow_sessions_fall_back_with_a_note(tmp_path, monkeypatch):
+    from iosstudio.features import lldb_shadow
+    monkeypatch.setattr(lldb_shadow, "for_lldb", lambda lldb, py: (None, "The iOS SDK isn't installed (Setup installs it)."))
+    tc = fake_tc(tmp_path)
+    sl = dbg.session_lldb(tc)
+    assert (sl.pythonpath, sl.env, sl.sdk) == (tc.pythonpath, tc.env, None)
+    assert sl.note == ("Swift expressions (p, po) may not work in this session: the iOS SDK isn't installed (Setup "
+                       "installs it). Variables still show.")
+
+
+def test_check_builds_the_shadow_and_reports_expressions(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(dbg, "toolchain", lambda: fake_tc(tmp_path))
+    monkeypatch.setattr(dbg, "session_lldb", lambda tc: dbg.SessionLldb(tc.python, tc.pythonpath, tc.env, None, "No SDK."))
+    assert dbg.cmd_check({}) == 0
+    d = events(capsys)[-1]["data"]
+    assert d["ready"] and d["swiftExpressions"] is False and d["expressionsNote"] == "No SDK." and d["shadowLldb"] is None
+
+
+def test_a_session_without_the_shadow_carries_the_note(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(dbg, "toolchain", lambda: fake_tc(tmp_path))
+    monkeypatch.setattr(dbg, "session_lldb", lambda tc: dbg.SessionLldb(tc.python, tc.pythonpath, tc.env, None, "No SDK."))
+    ran = []
+
+    async def fake_run(mode, bid, flags, sl, bps, cmds):
+        ran.append((mode, sl.note))
+        return 0
+    monkeypatch.setattr(dbg, "_run", fake_run)
+    assert dbg.cmd_session({"bundle_id": "com.x"}) == 0
+    assert {"event": "notice", "id": "lldb-plain", "level": "info", "message": "No SDK."} in events(capsys)
+    assert dbg.cmd_backtrace({"bundle_id": "com.x"}) == 0      # a backtrace evaluates nothing: no note
+    assert not [e for e in events(capsys) if e.get("event") == "notice"]
+    assert ran == [("session", "No SDK."), ("backtrace", "No SDK.")]
+
+
+def test_driver_sets_the_sdk_path_before_the_target(tmp_path):
+    lldb_dir = write_fake_lldb(tmp_path / "fake-lldb")
+    cfg = json.dumps({"lldbPythonPath": str(lldb_dir), "mode": "backtrace", "port": 1, "localExe": "/x/App",
+                      "sdkPath": "/sdk/iPhoneOS.sdk"})
+    r = subprocess.run([sys.executable, "-I", str(DRIVER), cfg], capture_output=True, text=True, timeout=30)
+    evs = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+    cmds = [e["text"].splitlines()[0] for e in evs if e.get("event") == "console"]
+    assert cmds[:3] == ["(lldb) settings set target.memory-module-load-level minimal",
+                        '(lldb) settings set target.sdk-path "/sdk/iPhoneOS.sdk"', "(lldb) platform select remote-ios"]
+    assert evs[-1]["error"]["message"] == "lldb couldn't load the app's executable."   # target creation came after
+
+
+EVAL_PROBE = r'''
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lldb_driver", sys.argv[2])
+d = importlib.util.module_from_spec(spec)
+sys.argv = [sys.argv[2], sys.argv[1]]
+spec.loader.exec_module(d)
+import lldb
+
+class Opts:
+    def SetTimeoutInMicroSeconds(self, n): pass
+    def SetTryAllThreads(self, v): pass
+lldb.SBExpressionOptions = Opts
+
+class Err:
+    def __init__(self, text): self.text = text
+    def Fail(self): return self.text is not None
+    def GetCString(self): return self.text
+
+class V:
+    def __init__(self, value=None, err=None, desc=None): self.value, self.err, self.desc = value, err, desc
+    def GetName(self): return "$R0"
+    def GetDisplayTypeName(self): return "String"
+    def GetTypeName(self): return "Swift.String"
+    def GetSummary(self): return self.value
+    def GetValue(self): return None
+    def GetError(self): return Err(self.err)
+    def GetNumChildren(self, cap): return 0
+    def GetObjectDescription(self): return self.desc
+
+ANSWERS = {"greeting": V('"Hello"', desc="Hello\n"), "launches * 2": V("84"), "big": V('"x"', desc="y" * 5000),
+           "broken": V(err="error: Error while searching for Xcode SDK: HostInfoError\nerror: missing required module 'SwiftShims'"),
+           "nope": V(err="error: cannot find 'nope' in scope")}
+class Frame:
+    def __init__(self): self.asked = []
+    def EvaluateExpression(self, expr, opts):
+        self.asked.append(expr)
+        return ANSWERS[expr]
+
+out = {"parse": [d.parse_expr(t) for t in ("po greeting", "p launches * 2", "expression -- greeting.uppercased()",
+                                            "expression -O -- self", "e -- x", "p + 1", "e * 2", "days.count",
+                                            "print(x)", "p.count", "  po   x ")]}
+drv = object.__new__(d.Driver)
+f = Frame()
+for sdk in ("/sdk", None):
+    drv.cfg = {"sdkPath": sdk}
+    out[str(sdk)] = [drv.evaluate(f, t) for t in ("po greeting", "p launches * 2", "po big", "broken", "nope")]
+out["asked"] = f.asked
+try:
+    drv.evaluate(f, "   ")
+except d.Fail as exc:
+    out["empty"] = exc.code
+d.emit("probe", **out)
+'''
+
+
+def test_driver_evaluates_swift_p_po_and_says_plainly_when_modules_fail(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text(EVAL_PROBE)
+    *evs, last = run_driver(tmp_path, [str(probe), "{cfg}", str(DRIVER)])
+    assert last["_rc"] == 0, last["_err"]
+    out = [e for e in evs if e["event"] == "probe"][0]
+    assert out["parse"] == [["greeting", True], ["launches * 2", False], ["greeting.uppercased()", False],
+                            ["self", True], ["x", False], ["p + 1", False], ["e * 2", False], ["days.count", False],
+                            ["print(x)", False], ["p.count", False], ["x", True]]
+    po, p, big, broken, nope = out["/sdk"]
+    assert po == {"expr": "po greeting", "ok": True, "result": {"name": "$R0", "type": "String", "value": '"Hello"',
+                                                                "childCount": 0, "description": "Hello"}}
+    assert p["ok"] and p["result"]["value"] == "84" and "description" not in p["result"]
+    assert len(big["result"]["description"]) == 2001                   # clipped
+    assert broken["ok"] is False and broken["code"] == "swift-modules" and "variables list still works" in broken["message"]
+    assert "SwiftShims" in broken["result"]["error"]                    # lldb's own text stays for the console reader
+    assert nope["ok"] is False and "message" not in nope                # a plain Swift error is shown as lldb says it
+    assert "couldn't be prepared for iOS" in out["None"][3]["message"]   # the plain lldb: points at the session note
+    assert out["asked"][:2] == ["greeting", "launches * 2"]
+    assert out["empty"] == "bad-args"

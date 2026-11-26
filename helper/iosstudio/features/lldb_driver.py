@@ -6,7 +6,9 @@ started by helper/iosstudio/features/debugger.py, never by the user.
 It drives lldb through its Python API (SBDebugger), with the steps omarchy-ios-kit / omarchy-apple-dev
 use for a phone reached over a userspace tunnel:
   1. settings set target.memory-module-load-level minimal   (otherwise every image not in the
-     sysroot is read from process memory in 512-byte reads, minutes over Wi-Fi)
+     sysroot is read from process memory in 512-byte reads, minutes over Wi-Fi), and
+     settings set target.sdk-path "<iPhoneOS.sdk>" when the helper runs the shadow lldb
+     (lldb_shadow.py), so Swift expressions find the SDK's modules (SwiftShims, CoreFoundation)
   2. platform select remote-ios --sysroot "<DeviceSupport/<ios> (<build)>"
   3. a target for the local .app's executable, its platform path set to the installed one
   4. `process connect connect://127.0.0.1:<port>` in ASYNC mode (synchronous, lldb waits forever
@@ -18,7 +20,10 @@ the helper shows as console text. Input: JSON lines on stdin, `{"cmd": "continue
 COMMANDS), `{"cancel": true}`, or a prompt answer `{"prompt": id, "value": "<cmd>"}`.
 Whatever happens, the app is detached from (or killed, when asked) before this exits.
 
-Config keys: mode ("backtrace" | "session"), lldbPythonPath, port, host, pid, remotePath,
+Evaluate takes Swift (`days.count`) or lldb's spelling of it: `p x`, `expression -- x`, and `po x` (or
+`expression -O -- x`) for the object's description, as on a Mac.
+
+Config keys: mode ("backtrace" | "session"), lldbPythonPath, sdkPath, port, host, pid, remotePath,
 localExe, sysroot, platform ("remote-ios"), loadLevel ("minimal"), breakpoints [spec], commands
 [lldb command], maxFrames, stopFrames, localsDepth, connectTimeout.
 """
@@ -47,6 +52,14 @@ COMMANDS = ("continue", "step", "next", "finish", "pause", "detach", "kill", "fr
 VALUE_CUT = 400
 CHILD_CAP = 20
 VAR_CAP = 40
+DESCRIPTION_CUT = 2000
+
+# `p x`, `po x`, `expression -O -- x`: lldb's commands around a Swift expression. Only followed by something that
+# starts an expression, so `p + 1` (a variable named p) stays Swift.
+_EXPR_CMD = re.compile(r"^(?P<cmd>po|p|print|e|expr|expression)\s+(?P<obj>-O\s+)?(?:--\s+)?(?=[\w$\"'(\[.@#\\])")
+# What lldb says when it can't load the iOS Swift modules (the toolchain's Linux ones shadow the SDK's).
+_MODULE_TROUBLE = re.compile(r"SwiftShims|HostInfoError|malformed or corrupted precompiled file|"
+                             r"Could not import Swift modules|failed to get module .* from AST context", re.I)
 
 _quit: str | None = None            # "detach" | "kill" once a signal or stdin EOF asks to end
 
@@ -68,6 +81,26 @@ def console(text: str) -> None:
 def clip(s, n: int = VALUE_CUT) -> str:
     s = "" if s is None else str(s)
     return s if len(s) <= n else s[:n] + "…"
+
+
+def parse_expr(text: str) -> tuple[str, bool]:
+    """(the Swift expression, whether to return its description as `po` does)."""
+    text = text.strip()
+    m = _EXPR_CMD.match(text)
+    if not m:
+        return text, False
+    return text[m.end():].strip(), m.group("cmd") == "po" or bool(m.group("obj"))
+
+
+def module_trouble(error: str, sdk: bool) -> str | None:
+    """A plain message when lldb failed to load the iOS Swift modules, else None."""
+    if not _MODULE_TROUBLE.search(error or ""):
+        return None
+    if sdk:
+        return ("lldb couldn't load the app's Swift modules for this expression. The variables list still works; "
+                "try again after the app has been built on this computer.")
+    return ("Swift expressions don't work in this session: the debugger couldn't be prepared for iOS (see the note "
+            "above). The variables list still works.")
 
 
 def _on_signal(signum, _frame):
@@ -115,6 +148,8 @@ class Driver:
         c = self.cfg
         emit("step", id="connect", title="Connecting to the debugger on your iPhone", state="running")
         self.run(f"settings set target.memory-module-load-level {c.get('loadLevel') or 'minimal'}")
+        if c.get("sdkPath"):     # before the target exists: its Swift context is set up from it
+            self.run(f'settings set target.sdk-path "{c["sdkPath"]}"')
         plat = c.get("platform") or "remote-ios"
         sysroot = c.get("sysroot")
         self.run(f'platform select {plat}' + (f' --sysroot "{sysroot}"' if sysroot else ""))
@@ -257,6 +292,28 @@ class Driver:
             out["children"] = [self.value_json(v.GetChildAtIndex(i), depth - 1) for i in range(min(n, CHILD_CAP))]
             if n > CHILD_CAP:
                 out["more"] = True
+        return out
+
+    def evaluate(self, frame, text: str) -> dict:
+        """Evaluate a Swift expression (or `p`/`po`/`expression` …) in `frame`: {expr, ok, result, message?}."""
+        expr, describe = parse_expr(text)
+        if not expr:
+            raise Fail("bad-args", "Nothing to evaluate.")
+        opts = lldb.SBExpressionOptions()
+        opts.SetTimeoutInMicroSeconds(10_000_000)
+        opts.SetTryAllThreads(False)
+        v = frame.EvaluateExpression(expr, opts)
+        res = self.value_json(v, 1)
+        ok = not v.GetError().Fail()
+        out = {"expr": clip(text.strip(), 300), "ok": ok, "result": res}
+        if ok and describe:
+            desc = v.GetObjectDescription()
+            if desc:
+                res["description"] = clip(desc.rstrip("\n"), DESCRIPTION_CUT)
+        if not ok:
+            plain = module_trouble(v.GetError().GetCString() or "", bool(self.cfg.get("sdkPath")))
+            if plain:
+                out.update(code="swift-modules", message=plain)
         return out
 
     def variables(self, frame_index: int | None = None, depth: int | None = None) -> dict:
@@ -490,15 +547,7 @@ def mode_session(drv: Driver) -> dict:
                     emit("backtrace", requestId=rid, **drv.backtrace(int(msg.get("maxFrames") or 64)))
                     continue
                 elif cmd == "evaluate":
-                    expr = str(msg.get("expr") or "").strip()
-                    if not expr:
-                        raise Fail("bad-args", "Nothing to evaluate.")
-                    opts = lldb.SBExpressionOptions()
-                    opts.SetTimeoutInMicroSeconds(10_000_000)
-                    opts.SetTryAllThreads(False)
-                    v = t.GetSelectedFrame().EvaluateExpression(expr, opts)
-                    res = drv.value_json(v, 1)
-                    emit("evaluated", requestId=rid, expr=clip(expr, 300), ok=not v.GetError().Fail(), result=res)
+                    emit("evaluated", requestId=rid, **drv.evaluate(t.GetSelectedFrame(), str(msg.get("expr") or "")))
                     continue
                 running = True
                 emit("running", cmd=cmd)

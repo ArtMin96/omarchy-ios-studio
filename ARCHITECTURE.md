@@ -100,7 +100,7 @@ module imports only `core/` and `backends/`, never another tool module.
 |---|---|
 | Settings | `~/.config/ios-studio/settings.json` |
 | Projects, build history and logs, unit test logs, device state, setup progress | `~/.local/state/ios-studio/` |
-| Caches (screenshots, crash files, app index, symbols, MCP overflow files, hot reload baselines and patches) | `~/.cache/ios-studio/` |
+| Caches (screenshots, crash files, app index, symbols, MCP overflow files, hot reload baselines and patches, the debugger's shadow toolchain `lldb-ios/`) | `~/.cache/ios-studio/` |
 | Hot reload's runtime package in a project (git-ignored) | `<project>/.iosstudio/hot-reload/` |
 | Unit tests' build in a project, apart from xtool's | `<project>/.build/host-tests/` |
 | pymobiledevice3 venv, MCP venv | `~/.local/share/ios-studio/venv`, `…/mcp-venv` |
