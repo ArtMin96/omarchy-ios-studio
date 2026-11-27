@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from iosstudio.core import jsonc
+from iosstudio.features.setup import toolchain_root
 from support import ROOT
 from support.dap_client import DapClient
 from support.fake_deviced import FakeDeviced
@@ -24,7 +25,9 @@ from support.lldb_ready import debugger_ready
 from support.lldb_target import BREAK_LINE, build, start_gdbserver, start_target
 
 HELPER = [sys.executable, str(ROOT / "helper/run.py"), "iosstudio"]
-TOOLCHAIN_BIN = Path(os.path.realpath(shutil.which("swift") or "/nonexistent")).parent
+# The helper's own lookup (the realpath of /usr/bin/swift, as Setup installs it), not PATH: CI's runner has a Swift on
+# PATH under /usr/share/swift that the helper never uses.
+TOOLCHAIN_BIN = (toolchain_root() or Path("/nonexistent")) / "usr/bin"
 
 
 class Stream:
@@ -179,9 +182,11 @@ class Real(Base):
         self.assertEqual((cfg["name"], cfg["type"], cfg["request"]), (d["configName"], "lldb-dap", "attach"))
         self.assertEqual(cfg["debugAdapterExecutable"], "${userHome}/.cache/ios-studio/lldb-ios/lldb-dap")
         self.assertIn("'~/.local/state/ios-studio/editor-debug/com.example.target.lldb'", cfg["attachCommands"][0])
+        launcher = self.home / ".cache/ios-studio/lldb-ios/lldb-dap"
         if TOOLCHAIN_BIN.joinpath("lldb-dap").is_file():   # the launcher is there before the first bridge
-            launcher = self.home / ".cache/ios-studio/lldb-ios/lldb-dap"
             self.assertIn(str(TOOLCHAIN_BIN / "lldb-dap"), launcher.read_text())
+        else:                                              # no toolchain lldb-dap: nothing to point it at yet
+            self.assertFalse(launcher.exists())
         self.assertNotIn(str(self.home), (proj / ".vscode/launch.json").read_text())   # no machine path in the project
         self.assertEqual(sorted(p.name for p in proj.rglob("*") if p.is_file()),
                          ["Package.swift", "launch.json", "xtool.yml"])   # writes only launch.json

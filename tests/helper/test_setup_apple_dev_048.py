@@ -105,6 +105,20 @@ def relocate(monkeypatch, m: Machine) -> None:
     monkeypatch.setattr(toolchain, "find_xips", lambda: [])
     monkeypatch.setattr(toolchain, "project_build_dirs", lambda: [])
     monkeypatch.setattr(toolchain.appdirs, "sdk_bundle", lambda: m.bundle)
+    # Setup's rows outside the toolchain as on a set-up Omarchy machine (pacman, a paired iPhone, the launcher
+    # entry), not as on the computer running the tests: CI has none of them, so "ready" was false there and
+    # `install all` ran the real install.sh.
+    real_which = steps.shutil.which
+    monkeypatch.setattr(steps.shutil, "which",
+                        lambda name, *a, **k: "/usr/bin/pacman" if name == "pacman" else real_which(name, *a, **k))
+    pairing = m.home / ".local/share/pymobiledevice3/remote_00008110-000A1B2C3D4E5F60.plist"
+    desktop, launcher = m.root / "applications/ios-studio.desktop", m.root / "bin/ios-studio"
+    for p in (pairing, desktop, launcher):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    monkeypatch.setattr(steps, "HOME", m.home)
+    monkeypatch.setattr(steps, "DESKTOP_FILE", desktop)
+    monkeypatch.setattr(steps, "LAUNCHER", launcher)
 
 
 @pytest.fixture
