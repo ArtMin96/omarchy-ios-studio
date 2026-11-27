@@ -257,12 +257,27 @@ def _parallel(jobs: dict[str, Callable]) -> dict:
     return {k: results[k] for k in jobs}
 
 
+def pymd3_venvs() -> list[Path]:
+    """The pymobiledevice3 venvs on this machine, in the order everything uses them (Setup, `toolchain info`,
+    `updates status`, subproc.pymd3_python, bin/iosstudio-deviced): ours (VENV_DIR), then ~/pymobile3-venv
+    (omarchy-apple-dev's path: our symlink, or a venv its own scripts made). Symlinks are followed; one that leads
+    to a venv already listed is left out. Stats only."""
+    out: list[Path] = []
+    seen: set[str] = set()
+    for v in (VENV_DIR, LEGACY_VENV):
+        real = os.path.realpath(v)
+        if real not in seen and v.is_dir():
+            seen.add(real)
+            out.append(v)
+    return out
+
+
 def gather() -> dict:
     """Every fact `build_steps` needs, probed in parallel (read-only; about half a second)."""
     xt = xtool_bin()
     ad = find_apple_dev()
     pins = apple_dev_pins(ad)
-    py_cands = [p for p in (VENV_DIR / "bin/python", LEGACY_VENV / "bin/python") if p.exists()]
+    py_cands = [v / "bin/python" for v in pymd3_venvs() if (v / "bin/python").exists()]
     pycode = ("import importlib.metadata as m, cryptography, pymobiledevice3, sys; "
               "print(m.version('pymobiledevice3')); print(sys.version.split()[0])")
     jobs = {

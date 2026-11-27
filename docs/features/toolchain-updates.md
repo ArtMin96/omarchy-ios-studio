@@ -94,6 +94,12 @@ daemon before the venv moves and again once the new venv is in place (a daemon t
 would run from the moved venv). The daemon starts again by itself when something needs the iPhone. The new
 venv is checked by importing pymobiledevice3 from it.
 
+The installed version is the one in the venv in use, found the way Setup finds it (`setup/facts.py`
+`pymd3_venvs()`, dist-info folder names only): ours (`~/.local/share/ios-studio/venv`) first, then
+`~/pymobile3-venv`, omarchy-apple-dev's path, symlinks followed. An update always installs ours. A
+`~/pymobile3-venv` that is a venv of its own (made by omarchy-apple-dev's scripts) stays as it is: ours takes over
+once it's installed, and a rollback that removes ours goes back to it.
+
 ## Commands (helper group `updates`)
 
 | Command | Output |

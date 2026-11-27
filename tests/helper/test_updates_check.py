@@ -45,6 +45,7 @@ def machine(tmp_path, monkeypatch) -> Machine:
     monkeypatch.setattr(appdirs, "SETTINGS_FILE", tmp_path / "config/settings.json")
     monkeypatch.setattr(facts, "SETUP_STATE", tmp_path / "state/setup.json")
     monkeypatch.setattr(channel, "VENV_DIR", tmp_path / "data/venv")
+    monkeypatch.setattr(facts, "VENV_DIR", tmp_path / "data/venv")
     monkeypatch.setattr(model, "PACMAN_LOCAL", tmp_path / "pacman")
     for mod in (channel, upstream):
         monkeypatch.setattr(mod, "arch", lambda: "x86_64")
