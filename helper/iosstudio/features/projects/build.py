@@ -13,7 +13,7 @@ from pathlib import Path
 from iosstudio.core import fileio, output, subproc
 from iosstudio.core.output import HelperError, fix
 from iosstudio.features import build_settings
-from iosstudio.features.projects import model, store
+from iosstudio.features.projects import model, modules, store
 from iosstudio.features.projects.runner import BuildRunner, classify_failure
 
 PRECHECK_BUDGET = 0.8    # seconds; the checks stop early and report what they have
@@ -184,12 +184,14 @@ def do_build(flags: dict, kind: str, interactive: bool = True) -> tuple[int, dic
                     product, bundle = info["product"], info["bundleId"]
                     runner.enter(plan[1])
                     precheck(runner, p)
+                    refresh_modules(runner, p, info, config)
                     rc = runner.run(argv, p)
                 else:
                     err = prebuild_failed(runner, prebuild, rc, p)
             else:
                 if kind != "install":
                     precheck(runner, p)
+                    refresh_modules(runner, p, info, config)
                 rc = runner.run(argv, p)
         except subproc.Cancelled:
             err = HelperError("cancelled", "Build cancelled.")
@@ -266,6 +268,17 @@ def precheck(runner: BuildRunner, p: Path) -> None:
             runner.add_diag(d)
     except Exception:  # noqa: BLE001  a check must never fail or block a build
         pass
+
+
+def refresh_modules(runner: BuildRunner, p: Path, info: dict, config: str) -> None:
+    """Bring back the precompiled module files the debugger needs when they were pruned (modules.py)."""
+    try:
+        n = modules.refresh(p, str(info.get("package") or info.get("product") or p.name), config)
+    except OSError:
+        return
+    if n:
+        runner.on_line("iOS Studio: the module files the debugger reads Swift types from were pruned; recompiling "
+                       f"the app's own code ({n} files) to bring them back.")
 
 
 def run_prebuild(runner: BuildRunner, cmd: str, p: Path) -> int:
