@@ -10,6 +10,8 @@ mistakes first:
   entitlements        entitlements a free Apple ID can't get (xtool drops them when signing)
   bundle-id           the bundle id is reverse-DNS with allowed characters
   version             CFBundleShortVersionString / CFBundleVersion format (when Info.plist sets them)
+  asset-catalogs      an .xcassets in an app target whose Package.swift entry lists no resources (xtool leaves
+                      the target's resource bundle out of the .app, so its colors and images are missing)
 
 An issue has the shape of a build diagnostic (helper/iosstudio/features/diagnostics.py) with category 'config':
 {severity: warning|note, category, check, message, file (relative to the project) | None, line | None, hint}
@@ -30,8 +32,9 @@ from pathlib import Path
 
 from iosstudio.core import xtool_yml
 from iosstudio.core.xtool_yml import XtoolYml
+from iosstudio.features.packages.manifest_edit import TARGET_CALLS, Code, LexError, string_value
 
-CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
+CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version", "asset-catalogs"]
 DEFAULT_CACHE = Path.home() / ".cache/omarchy-apple-dev"
 
 # xtool's PackSchemaBase (Sources/PackLib/PackSchema.swift at the pinned commit 7cc56c3), used when the
@@ -42,6 +45,9 @@ BUILTIN_EXTENSION_KEYS = ["product", "bundleID", "infoPath", "resources", "entit
 
 MAX_SOURCE_FILES = 3000
 MAX_SOURCE_BYTES = 1_000_000          # bigger .swift files are generated; skip them
+MAX_MANIFEST_BYTES = 512_000
+MAX_ASSET_DIRS = 5000                 # folders walked per project looking for .xcassets
+SOURCE_ROOTS = ("Sources", "Source", "src", "srcs")    # where SwiftPM looks for a target without path:
 
 # Privacy strings: (keys that satisfy it, the first is the one to add), what it is, source patterns.
 # Only APIs that really make iOS ask for permission: PhotosPicker, PHPickerViewController, CNContactPicker and
@@ -148,6 +154,9 @@ HINTS = {
     "short-version": "Use one to three numbers separated by dots, like 1.0 or 1.2.3.",
     "build-version": "Use one to three numbers separated by dots, like 1 or 1.0.7.",
     "build-var": "xtool doesn't fill in Xcode build variables like $(MARKETING_VERSION): write the value itself.",
+    "assets": "In Package.swift, give the {target} target resources: [{procs}] (after dependencies:, path: and "
+              "exclude:, before any settings). xtool only packs a target's resources into the app when Package.swift "
+              "lists some for it.",
 }
 
 
@@ -554,6 +563,106 @@ def _check_versions(info: dict | None, info_text: str, info_rel: str | None) -> 
     return out
 
 
+# ================================================================ asset catalogs
+
+def _inside_target(code: Code, si: int) -> bool:
+    """True when sig index si sits inside a `.target(…)`-like call (a `.target(name:)` dependency, not a target)."""
+    op = code.parent[si]
+    while op >= 0:
+        if code.s(op) == "(" and op >= 1 and code.s(op - 1) in TARGET_CALLS:
+            return True
+        op = code.parent[op]
+    return False
+
+
+def _string_list(code: Code, open_si: int, label: str) -> list[str] | None:
+    """The plain string items of an array argument (`exclude: ["a", "b"]`); [] when absent, None when it isn't a
+    literal array (a variable, a computed list)."""
+    for lab, a, b in code.args(open_si):
+        if lab != label:
+            continue
+        if code.s(a) != "[" or code.match.get(a) != b:
+            return None
+        return [(string_value(code.text, code.tok(x)) or "") if x == y and code.kind(x) == "string" else ""
+                for x, y, _c in code.items(a)]
+    return []
+
+
+def _resource_count(code: Code, open_si: int) -> int | None:
+    """Entries in a target's `resources:` array: 0 when there is none, None when it isn't a literal array."""
+    for lab, a, b in code.args(open_si):
+        if lab == "resources":
+            return len(code.items(a)) if code.s(a) == "[" and code.match.get(a) == b else None
+    return 0
+
+
+def _catalogs(target_dir: Path, exclude: list[str], budget: _Budget, seen: list[int]) -> list[str]:
+    """.xcassets folders under a target's folder (relative to it), skipping excluded paths and hidden folders."""
+    found: list[str] = []
+    for dirpath, dirnames, _files in os.walk(target_dir):
+        seen[0] += 1
+        if seen[0] > MAX_ASSET_DIRS or budget.over():
+            break
+        rel_dir = os.path.relpath(dirpath, target_dir)
+        keep = []
+        for d in sorted(dirnames):
+            rel = os.path.normpath(os.path.join(rel_dir, d))
+            if d.startswith(".") or any(rel == e or rel.startswith(e + "/") for e in exclude):
+                continue
+            if d.endswith(".xcassets"):
+                found.append(rel)                 # a catalog's insides are its own business
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+    return found
+
+
+def _check_assets(root: Path, budget: _Budget) -> list[dict]:
+    """An asset catalog in an app target whose Package.swift entry has no resources. SwiftPM compiles the catalog
+    anyway, but xtool's Planner only packs a target's `<Package>_<Target>.bundle` when the target lists resources,
+    so the colors and images are missing on the iPhone. Any listed resource is enough: SwiftPM then puts the
+    catalog in the same bundle. Test targets never reach the app; catalogs outside every target aren't built."""
+    manifest = root / "Package.swift"
+    try:
+        if manifest.stat().st_size > MAX_MANIFEST_BYTES:
+            return []
+        text = manifest.read_text(errors="replace")
+        code = Code.parse(text)
+    except (OSError, LexError):
+        return []
+    out: list[dict] = []
+    seen = [0]
+    for call in ("target", "executableTarget"):
+        for dot, op in code.calls(call):
+            if _inside_target(code, dot) or budget.over():
+                continue
+            name = code.arg_string(op, "name")
+            if not name or _resource_count(code, op) != 0:
+                continue                          # resources listed (or built in code we can't read)
+            path = code.arg_string(op, "path")
+            if path is not None:
+                tdir = _resolve(root, path)
+            else:
+                tdir = next((root / s / name for s in SOURCE_ROOTS if (root / s / name).is_dir()), root / "Sources" / name)
+            if not tdir.is_dir():
+                continue
+            exclude = [os.path.normpath(e) for e in (_string_list(code, op, "exclude") or []) if e]
+            cats = _catalogs(tdir, exclude, budget, seen)
+            if not cats:
+                continue
+            shown = ", ".join(cats[:3]) + (f" and {len(cats) - 3} more" if len(cats) > 3 else "")
+            one = len(cats) == 1
+            what, it, its = ("The asset catalog", "it", "its") if one else ("The asset catalogs", "them", "their")
+            procs = ", ".join(f'.process("{c}")' for c in cats[:5])
+            out.append(_issue("asset-catalogs",
+                              f"{what} {shown} in target {name} won't be in the app: Package.swift lists no resources "
+                              f"for {name}, so xtool leaves {it} out and {its} colors and images are missing on the "
+                              f"iPhone.",
+                              HINTS["assets"].format(target=name, procs=procs), "Package.swift",
+                              text.count("\n", 0, code.tok(dot).start) + 1))
+    return out
+
+
 # ================================================================ entry point
 
 def check(path: Path | str, deadline: float | None = None, cache_dir: Path | None = None) -> dict:
@@ -573,6 +682,7 @@ def check(path: Path | str, deadline: float | None = None, cache_dir: Path | Non
     steps = [
         lambda: _check_usage(root, info, info_text, shown_info, budget),
         lambda: _check_icon(root, yml),
+        lambda: _check_assets(root, budget),
         lambda: _check_entitlements(root, yml),
         lambda: _check_bundle(root, yml),
         lambda: _check_versions(info, info_text, shown_info),

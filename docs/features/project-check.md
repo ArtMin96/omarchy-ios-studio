@@ -19,6 +19,7 @@ never stops a build.
 | `entitlements` | Entitlements in the `entitlementsPath` file that a free Apple ID can't get (see below), and an entitlements file that isn't a valid property list. | xtool leaves them out when it signs for a free team, so the feature just doesn't work on the phone. |
 | `bundle-id` | The bundle id, from `bundleID` or from `orgID` plus the product name, is reverse-DNS: letters, numbers, dashes and dots, at least two parts, no empty part, no spaces or underscores. | |
 | `version` | `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` are text of one to three numbers separated by dots. An Xcode build variable like `$(MARKETING_VERSION)` gets its own message. Only checked when `Info.plist` sets them. | xtool doesn't fill in Xcode build variables. |
+| `asset-catalogs` | An `.xcassets` folder inside an app target (`.target` or `.executableTarget` in `Package.swift`) whose entry lists no `resources:` (see below). | SwiftPM still compiles the catalog, but xtool leaves the target's resource bundle out of the app, so its colors and images are missing on the iPhone. |
 
 The product name for an `orgID` bundle id is `product:` from `xtool.yml`, else the only `.library` in
 `Package.swift`, else the folder name.
@@ -58,6 +59,32 @@ APIs that don't make iOS ask for permission aren't listed: `PhotosPicker`, `PHPi
 
 The issue points at the first file and line that uses the feature. When the project has no
 `Info.plist` at all (no `infoPath`), the hint says to add one and point `infoPath` at it.
+
+### Asset catalogs
+
+xtool copies a target's resource bundle (`<Package>_<Target>.bundle`) into the app only when that target
+lists resources in `Package.swift` (`Planner.swift` in xtool's source). SwiftPM compiles an `.xcassets`
+into `Assets.car` either way, so the build succeeds and the catalog never reaches the iPhone:
+`Color("Brand")` and `Image("Logo")` come up empty.
+
+The check reads `Package.swift` with the Swift tokenizer that Packages uses for removing a package
+(`features/packages/manifest_edit.py`), so strings and comments don't confuse it. For each
+`.target(name:)` and `.executableTarget(name:)`:
+
+- The target's folder is its `path:`, else `Sources/<name>` (or `Source/`, `src/`, `srcs/`, which
+  SwiftPM also accepts).
+- The folder is searched for `.xcassets` folders. It skips hidden folders, paths in the target's
+  `exclude:` and the inside of a catalog, and walks at most 5000 folders per project.
+- It warns when the target has catalogs and no `resources:` or an empty `resources: []`. Any listed
+  resource is enough, whether it's `.process("Assets.xcassets")`, `.copy` of it, a parent folder like
+  `.process("Resources")` or an unrelated file. Once a target lists something, xtool packs the bundle, and
+  SwiftPM puts the catalog in it on its own. When `resources:` isn't a plain list (a variable, say), the
+  check says nothing.
+
+Test targets, `.target(name:)` dependencies inside other targets, and catalogs outside every target folder
+are left alone. The warning points at the target's line in `Package.swift`. The hint gives the line to
+add, e.g. `resources: [.process("Assets.xcassets")]` (Swift wants it after `dependencies:`, `path:` and
+`exclude:`, before any settings). It has no fix button: the check never edits `Package.swift`.
 
 ### Paid-only entitlements
 
@@ -134,7 +161,7 @@ The result's `keysSource` says which one was used: `xtool-cache` or `builtin`.
   "total": 1, "shown": 1, "truncated": false,
   "counts": {"error": 0, "warning": 1, "note": 0},
   "elapsedMs": 14, "keysSource": "xtool-cache",
-  "checks": ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
+  "checks": ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version", "asset-catalogs"]
 }
 ```
 
@@ -166,6 +193,9 @@ unknown `bundleId` key, the camera used without `NSCameraUsageDescription`, an i
 - Only the app's own `Info.plist` and `entitlementsPath` are read. Extensions' `infoPath` and
   `entitlementsPath` are checked for unknown keys only.
 - The usage-description triggers and the paid-only entitlement list are kept by hand.
+- The asset-catalog check reads only the project's own `Package.swift`, not local `.package(path:)`
+  dependencies, and only targets written as `.target(…)` / `.executableTarget(…)` calls. It doesn't
+  check that a target is part of the app's library product.
 - A pre-build run cut off by the 0.8 s budget skips the remaining checks rather than guessing; the
   project card's check has no budget and runs them all.
 
@@ -175,6 +205,8 @@ unknown `bundleId` key, the camera used without `NSCameraUsageDescription`, an i
 - That each trigger in the usage table makes iOS ask for permission on current iOS versions (and
   crash without the key), and that the listed picker APIs don't.
 - That an icon with transparency shows a black background on the home screen.
+- That a color from an asset catalog shows on the phone once the target lists `resources:`, and is
+  missing without it.
 
 ## Code
 
@@ -183,4 +215,5 @@ unknown `bundleId` key, the camera used without `NSCameraUsageDescription`, an i
 `mcp/iosstudio_mcp/tools/project_check.py`, `services/ProjectService.qml` (`check`, `checkSoon`,
 `checkAll`, `checkFor`, `configCount`), `components/projects/ProjectCheckView.qml`,
 `components/common/BuildDiagnosticRow.qml` (the chip). Tests: `tests/helper/test_project_check.py` and `tests/cli/test_project_check_cli.py` with one fixture
-project per case in `tests/fixtures/project-check/`, and `tests/mcp/test_mcp_project_check.py`.
+project per case in `tests/fixtures/project-check/`, `tests/helper/test_project_check_assets.py` (small packages written to a
+temp folder) and `tests/mcp/test_mcp_project_check.py`.

@@ -21,7 +21,7 @@ from iosstudio_mcp.tools import project_check as T
 from support.mcp_fakes import FakeMCP
 
 PROJ = "/home/u/Developer/Glance"
-CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
+CHECKS = ["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version", "asset-catalogs"]
 
 
 def issue(check: str, i: int = 0, severity: str = "warning", msg: str | None = None, file: str | None = None,
@@ -105,6 +105,21 @@ class ProjectCheckTool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sc["total"], 0)
         self.assertNotIn("issues", sc)
         self.assertIn("version check found nothing", sc["next_steps"][0])
+
+    async def test_asset_catalog_issue_flows_through(self):
+        # the helper's real wording: a long message and hint stay bounded, file stays relative
+        from iosstudio.features import project_check as C
+        hint = C.HINTS["assets"].format(target="Glance", procs=", ".join(f'.process("A{n}.xcassets")' for n in range(5)))
+        d = C._issue("asset-catalogs", "The asset catalog Assets.xcassets in target Glance won't be in the app: "
+                     "Package.swift lists no resources for Glance, so xtool leaves them out and their colors and "
+                     "images are missing on the iPhone.", hint, "Package.swift", 24)
+        sc, _ = await self.run_tool(payload([d, issue("icon", 1)]), check="asset-catalogs")
+        [got] = sc["issues"]
+        self.assertEqual((got["check"], got["file"], got["line"], got["severity"]),
+                         ("asset-catalogs", "Package.swift", 24, "warning"))
+        self.assertLessEqual(len(got["hint"]), T.HINT_CUT + 20)      # clipped, with a marker
+        self.assertIn('.process("A0.xcassets")', got["hint"])
+        self.assertEqual(sc["by_check"], {"asset-catalogs": 1, "icon": 1})
 
     async def test_max_issues_cut_has_a_note(self):
         data = payload([issue("xtool-keys" if i % 2 else "icon", i) for i in range(30)])
