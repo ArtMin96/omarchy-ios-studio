@@ -123,8 +123,9 @@ def test_plain_session_carries_the_notice_and_expressions_fail(monkeypatch, caps
     assert next(e for e in ev if e.get("event") == "started")["swiftExpressions"] is False
     (res,) = evaluated(ev)
     assert (res["expr"], res["ok"], res["code"]) == ("po day", False, "swift-modules")
-    trouble = from_driver("_MODULE_TROUBLE", "module_trouble")["module_trouble"]
-    assert res["message"] == trouble(res["result"]["error"], False)     # the driver's wording for this lldb error
+    trouble = from_driver("_MODULE_TROUBLE", "_STALE_TYPES", "_NO_JIT", "_HOSTINFO_LINE", "strip_noise", "run_fix",
+                          "module_trouble")["module_trouble"](res["result"]["error"], False)
+    assert (res["message"], res["fix"]) == (trouble["message"], trouble["fix"])   # the driver's wording for this error
 
 
 def test_plain_editor_debugging_has_the_editor_note(monkeypatch, capsys, real_notes):

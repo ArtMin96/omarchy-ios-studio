@@ -8,6 +8,7 @@ One-shot commands print one JSON object; build/renew commands stream JSON lines 
   store.py     the state files below (+ provisioning profiles read from built apps)
   runner.py    BuildRunner: one xtool child -> step/progress/log/diagnostic/prompt events
   build.py     the build flow (checks, lock, prebuild, xtool, history, signing record)
+  modules.py   the precompiled module files the debugger needs: a pruned build recompiles the app's own code
   renew.py     auto-renew of free 7-day signing (systemd user timer)
 
 State (all under ~/.local/state/ios-studio/):

@@ -122,6 +122,10 @@ class DebugStop(Out):
     frames_total: int = 0
     locals: list[DebugVar] = Field(default_factory=list)
     locals_more: bool = False
+    locals_pending: bool = Field(False, description="The locals are still being read (slow over Wi-Fi without the "
+                                                    "iPhone's debug symbols); they arrive with a later call")
+    locals_partial: bool = Field(False, description="Some locals weren't read in time (listed without a value); "
+                                                    "frame_variables reads them again")
 
 
 class DebugSession(B.Budgeted, Out):
@@ -273,7 +277,8 @@ def _var(v: dict) -> DebugVar:
         kids.append(f"… {int(v.get('childCount') or 0) - len(kids)} more")
     return DebugVar(name=str(v.get("name") or ""), type=B.clip(v.get("type"), 120) if v.get("type") else None,
                     value=B.clip(v.get("value"), VALUE_CUT) if v.get("value") is not None else
-                    (B.clip(v.get("error"), VALUE_CUT) if v.get("error") else None),
+                    (B.clip(v.get("error"), VALUE_CUT) if v.get("error") else
+                     "(not read in time)" if v.get("unread") else None),
                     children=kids, child_count=int(v.get("childCount") or 0))
 
 
@@ -282,6 +287,7 @@ def _stop(s: dict, root: str | None) -> DebugStop:
     frames = t.get("frames") or []
     f0 = frames[0] if frames else {}
     loc = (s.get("locals") or {}).get("variables") or []
+    pending = bool(s.get("localsPending")) and not s.get("locals")
     bp = s.get("breakpoint") or {}
     return DebugStop(stop_id=int(s.get("stopId") or 0), reason=str(s.get("reason") or "other"),
                      description=B.clip(s.get("description"), 200) if s.get("description") else None,
@@ -289,7 +295,8 @@ def _stop(s: dict, root: str | None) -> DebugStop:
                      function=B.clip(f0.get("function"), 200) if f0.get("function") else None,
                      breakpoint=bp.get("spec"), thread=t.get("index"),
                      frames=[_frame(f, root) for f in frames[:STOP_FRAMES]], frames_total=int(t.get("numFrames") or len(frames)),
-                     locals=[_var(v) for v in loc[:MAX_LOCALS]], locals_more=len(loc) > MAX_LOCALS or bool((s.get("locals") or {}).get("more")))
+                     locals=[_var(v) for v in loc[:MAX_LOCALS]], locals_more=len(loc) > MAX_LOCALS or bool((s.get("locals") or {}).get("more")),
+                     locals_pending=pending, locals_partial=bool((s.get("locals") or {}).get("partial")))
 
 
 # ------------------------------------------------------------------ sessions
@@ -346,6 +353,8 @@ class Session:
         elif name == "stopped":
             self.state = "stopped"
             self.stop = ev
+        elif name == "variables" and not ev.get("requestId") and self.stop and ev.get("stopId") == self.stop.get("stopId"):
+            self.stop = {**self.stop, "locals": ev}     # a stop's locals, read after the stop itself was reported
         elif name in ("variables", "evaluated", "backtrace") and ev.get("requestId"):
             if str(ev["requestId"]) in self.waiting:    # a late answer to a call that gave up is dropped
                 self.results[str(ev["requestId"])] = ev
@@ -496,6 +505,9 @@ def session_view(s: Session, result: dict | None = None) -> DebugSession:
     if s.state == "stopped":
         nxt.append(f"Paused. ios_debug_session_command(session_id='{sid}', command='next'|'step'|'finish'|'continue'), "
                    "or 'frame_variables' / 'evaluate' to look closer. End with ios_debug_session_end.")
+        if stop and stop.locals_pending:
+            nxt.append(f"The locals are still being read; ios_debug_session_command(session_id='{sid}', "
+                       "command='frame_variables') returns them when ready (wait_seconds up to 40 over Wi-Fi).")
     elif s.state == "running":
         nxt.append(f"The app is running. ios_debug_session_wait(session_id='{sid}', wait_seconds=20) returns at the next "
                    "breakpoint; ask the user to trigger the code path if needed.")

@@ -25,10 +25,15 @@ driver's JSON events to stdout and stdin commands to the driver, and releases th
 
 Stream events (besides step/notice/log/done): `debug {mode, bundleId}`, `started {port, pid,
 launched, ...}`, then the driver's `console {text}`, `attached`, `backtrace`, `breakpoints`,
-`running`, `stopped`, `variables`, `evaluated`, `ack`, `exited`. stdin: `{"cmd": "continue"}`
-(continue, step, next, finish, pause, detach, kill, frame_variables {frame?, depth?}, evaluate
-{expr}, select_frame {frame}, backtrace, breakpoint_add {spec}, breakpoint_delete {id}, status),
-or `{"cancel": true}` (= detach). Protocol: docs/deviced-protocol.md#debugging.
+`running`, `stopped` (`localsPending`: its locals follow as `variables {stopId}`), `variables`, `evaluated`,
+`ack`, `exited`. stdin: `{"cmd": "continue"}` (continue, step, next, finish, pause, detach, kill,
+frame_variables {frame?, depth?}, evaluate {expr}, select_frame {frame}, backtrace, breakpoint_add {spec},
+breakpoint_delete {id}, status), or `{"cancel": true}` (= detach). Protocol: docs/deviced-protocol.md#debugging.
+
+This process never hangs on the driver: it leads its own process group, and one that doesn't end DETACH_GRACE after
+being asked to gets SIGTERM, then SIGKILL for the group. lldb's console spam (HostInfoError, missing .pcm warnings) is
+summarized by ConsoleFilter; a build that lost its precompiled modules gets the "stale-modules" notice (Stale,
+projects/modules.py, which also makes the next build recompile).
 """
 from __future__ import annotations
 
@@ -48,12 +53,17 @@ from pathlib import Path
 from iosstudio.core import appdirs, fileio, output
 from iosstudio.core.output import HelperError, fix
 from iosstudio.features import lldb_shadow
+from iosstudio.features.projects import modules
 
 DRIVER = Path(__file__).resolve().parent / "lldb_driver.py"
 SETUP_SWIFT = fix("Install Swift", "setup", step="swift")
 SETUP_DEBUGGER = fix("Install debugger support", "setup", step="debugger")
 ATTACH_TIMEOUT = 240        # seconds until the driver must have attached (minimal load level: ~30 s on Wi-Fi)
-DETACH_GRACE = 10           # seconds the driver gets to detach after we ask it to end
+DETACH_GRACE = 10           # seconds the driver gets to detach after we ask it to end, then SIGTERM
+KILL_GRACE = 3              # seconds after SIGTERM before its whole process group gets SIGKILL
+PUMP_GRACE = 5              # seconds to drain the driver's output once it has exited
+SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
+STALE_NOTE = "Swift expressions need a fresh build: Run the app again (it rebuilds what's missing)."
 MAX_SOURCES = 400
 DEBUG_BUILDS = appdirs.CACHE_DIR / "debug-builds"   # executables unpacked from .ipa files, per project
 DEBUG_BUILDS_KEEP = 2
@@ -427,11 +437,14 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
         output.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable",
                                                         "ios", "build", "symbolsReady")},
                      localBuild=exe, project=(info or {}).get("name"), swiftExpressions=not sl.note)
+        stale = Stale(path)
+        if mode == "session" and path and await asyncio.to_thread(modules.pruned, path):
+            stale.notice()
         if not st.get("symbolsReady"):
             output.event("notice", id="no-symbols", level="info",
                          message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
                                  "read wrong and system frames show only library names. Download them once under "
-                                 "iPhone › Debug › Debug symbols.")
+                                 "iPhone › Debug › Debug symbols.", fix=SYMBOLS_FIX)
         elif (st.get("symbolsUpdate") or {}).get("needed"):
             output.event("notice", id="symbols-update", level="warn",
                          message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
@@ -441,14 +454,20 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
                "sysroot": st.get("sysroot") if st.get("symbolsReady") else None, "breakpoints": bps,
                "commands": cmds, "stopAtAttach": bool(flags.get("stop_at_attach")),
                "maxFrames": 128, "stopFrames": 40, "localsDepth": 1,
-               # tests drive a local lldb-server instead of a phone (IOSSTUDIO_DEBUG_PLATFORM=remote-linux)
-               "platform": os.environ.get("IOSSTUDIO_DEBUG_PLATFORM") or "remote-ios"}
+               "symbolsReady": bool(st.get("symbolsReady")), "projectPath": str(path) if path else None,
+               # tests drive a local lldb-server instead of a phone (IOSSTUDIO_DEBUG_PLATFORM=remote-linux), and
+               # IOSSTUDIO_DEBUG_QUICK_LOCALS=0 makes every stop's locals follow it as over a slow link
+               "platform": os.environ.get("IOSSTUDIO_DEBUG_PLATFORM") or "remote-ios",
+               "quickLocals": float(os.environ["IOSSTUDIO_DEBUG_QUICK_LOCALS"])
+               if os.environ.get("IOSSTUDIO_DEBUG_QUICK_LOCALS") else None}
         final: dict | None = None
         attached = asyncio.Event()
         try:
+            # its own process group, so a driver stuck inside lldb can be ended with everything it started
             proc = await asyncio.create_subprocess_exec(
                 sl.python, "-I", str(DRIVER), json.dumps(cfg), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=sl.env, limit=16 << 20)
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=sl.env, limit=16 << 20,
+                start_new_session=True)
         except OSError as exc:
             await _stop(dev, bid, st, kill=bool(st.get("launched")))
             return output.done(False, error=HelperError("needs-python", "The debugger's Python didn't start.",
@@ -460,17 +479,33 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
                     proc.stdin.write((json.dumps({"cmd": how}) + "\n").encode())
 
         async def stop_soon(how: str = "detach") -> None:
+            """Ask the driver to detach; one that doesn't end (lldb busy inside a call) gets SIGTERM, then SIGKILL."""
             ask_end(how)
-            try:
-                await asyncio.wait_for(proc.wait(), DETACH_GRACE)
-            except asyncio.TimeoutError:
-                with contextlib.suppress(ProcessLookupError):
-                    proc.terminate()
+            if await _exited(proc, DETACH_GRACE):
+                return
+            output.event("console", text="The debugger didn't stop in time; ending it.")
+            _signal_group(proc, signal.SIGTERM)
+            if not await _exited(proc, KILL_GRACE):
+                _signal_group(proc, signal.SIGKILL)
+
+        ending: list[asyncio.Task] = []
+
+        def end_soon(how: str = "detach") -> None:
+            if not ending:      # one escalation per session, whoever asks first (signal, stdin EOF, watchdog)
+                ending.append(asyncio.ensure_future(stop_soon(how)))
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             with contextlib.suppress(NotImplementedError, RuntimeError):
-                loop.add_signal_handler(sig, lambda: asyncio.ensure_future(stop_soon()))
+                loop.add_signal_handler(sig, end_soon)
+        lines = ConsoleFilter()
+
+        def show_console(text: str) -> None:
+            shown = lines.text(text)
+            if lines.missing_modules:
+                stale.notice(noted=True)
+            if shown:
+                output.event("console", text=shown[:4000])
 
         async def pump_out():
             nonlocal final
@@ -481,20 +516,23 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
                 try:
                     ev = json.loads(line)
                 except ValueError:
-                    output.event("console", text=line[:4000])
+                    show_console(line)
                     continue
                 if ev.get("event") == "done":
                     final = ev
                     continue
                 if ev.get("event") == "attached":
                     attached.set()
+                if ev.get("event") == "console":
+                    show_console(str(ev.get("text") or ""))
+                    continue
                 _write(line)
 
         async def pump_err():
             async for raw in proc.stderr:
                 text = raw.decode(errors="replace").rstrip()
                 if text:
-                    output.event("console", text=text[:4000])
+                    show_console(text)
 
         async def pump_in():
             reader = await _stdin_reader()
@@ -504,7 +542,7 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
                 raw = await reader.readline()
                 if not raw:
                     if mode == "session":   # the controller went away: let the app go
-                        await stop_soon()
+                        end_soon()
                     return
                 with contextlib.suppress(Exception):
                     proc.stdin.write(raw if raw.endswith(b"\n") else raw + b"\n")
@@ -516,13 +554,17 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
             except asyncio.TimeoutError:
                 output.event("notice", id="attach-timeout", level="warn",
                              message="Attaching took too long; giving up.")
-                await stop_soon()
+                end_soon()
 
         tasks = [asyncio.create_task(x()) for x in (pump_out, pump_err, pump_in, watchdog)]
         await proc.wait()
-        await asyncio.gather(tasks[0], tasks[1], return_exceptions=True)
-        for t in tasks[2:]:
+        _signal_group(proc, signal.SIGKILL)     # anything the driver left behind holding its pipes
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.gather(tasks[0], tasks[1], return_exceptions=True), PUMP_GRACE)
+        for t in tasks + ending:
             t.cancel()
+        if lines.summary():
+            output.event("console", text=lines.summary())
         ended = (final or {}).get("data", {}).get("ended") if (final or {}).get("ok") else (final or {}).get("ended")
         # A suspended launch that never got attached would stay frozen: end it.
         kill = bool(st.get("launched")) and ended in (None, "none", "detach-failed")
@@ -538,6 +580,89 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
                       e.get("detail"))
     output.event("done", ok=False, error=out.to_json(), data=base)
     return 1
+
+
+async def _exited(proc, seconds: float) -> bool:
+    try:
+        await asyncio.wait_for(proc.wait(), seconds)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+def _signal_group(proc, sig: int) -> None:
+    """Signal the driver's process group (it leads its own session)."""
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.killpg(proc.pid, sig)
+
+
+class Stale:
+    """The session's "stale-modules" notice (once): the app's build lost the module files Swift expressions need.
+    Seen at the start (modules.pruned, stat only) or in lldb's own warnings; the latter is noted for the next build."""
+
+    def __init__(self, path: Path | None):
+        self.path, self.shown, self.noted = path, False, False
+
+    def notice(self, noted: bool = False) -> None:
+        if noted and self.path and not self.noted:
+            self.noted = True
+            modules.note_missing(self.path)
+        if self.shown:
+            return
+        self.shown = True
+        fx = ({"label": "Run the app", "page": "projects", "action": "run", "path": str(self.path)} if self.path
+              else fix("Open Projects", "projects"))
+        output.event("notice", id="stale-modules", level="warn", message=STALE_NOTE, fix=fx)
+
+
+_HOSTINFO = re.compile(r"Error while searching for (?:Xcode )?SDK: HostInfoError")
+_MISSING_PCM = re.compile(r"'([^']+\.pcm)' does not exist")
+_MISSING_TYPES = re.compile(r"Unable to locate module needed for external types|"
+                            r"Debugging will be degraded due to missing types")
+
+
+class ConsoleFilter:
+    """lldb's repetitive console lines, each kind once as a plain summary and counted after that (summary()):
+    the Swift plugin looking for Xcode on Linux (HostInfoError, hundreds per session) and the missing precompiled
+    module warnings of a build whose .pcm files were pruned (two or three lines per object file). Every other line
+    passes unchanged."""
+
+    def __init__(self):
+        self.hidden: dict[str, int] = {}
+        self.missing_modules = False
+
+    def _summary(self, kind: str, line: str) -> str:
+        if kind == "hostinfo":
+            return ("lldb: “Error while searching for Xcode SDK: HostInfoError”. lldb looks for Xcode, which "
+                    "Linux doesn't have; on its own this is harmless (iOS Studio gives lldb the iOS SDK). Repeats are "
+                    "hidden.")
+        m = _MISSING_PCM.search(line)
+        example = f" (e.g. {os.path.basename(m.group(1))})" if m else ""
+        return (f"lldb: module files from the app's build are missing{example}, so some Swift types can't be shown "
+                "and expressions may fail. Run the app again to rebuild them. Repeats are hidden.")
+
+    def text(self, text: str) -> str | None:
+        """What to show of one console text (None: nothing)."""
+        keep = []
+        for ln in text.splitlines():
+            kind = "hostinfo" if _HOSTINFO.search(ln) else \
+                "modules" if (_MISSING_PCM.search(ln) or _MISSING_TYPES.search(ln)) else None
+            if kind is None:
+                keep.append(ln)
+                continue
+            if kind == "modules":
+                self.missing_modules = True
+            seen = self.hidden.get(kind, 0)
+            self.hidden[kind] = seen + 1
+            if not seen:
+                keep.append(self._summary(kind, ln))
+        out = "\n".join(keep).strip("\n")
+        return out or None
+
+    def summary(self) -> str | None:
+        label = {"hostinfo": "HostInfoError lines", "modules": "missing-module warnings"}
+        parts = [f"{n - 1} {label[k]}" for k, n in self.hidden.items() if n > 1]
+        return f"Hidden repeats of lldb messages: {', '.join(parts)}." if parts else None
 
 
 async def _stop(dev, bid: str, st: dict, kill: bool) -> dict | None:

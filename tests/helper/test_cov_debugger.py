@@ -453,7 +453,8 @@ def test_driver_sets_the_sdk_path_before_the_target(tmp_path):
     r = subprocess.run([sys.executable, "-I", str(DRIVER), cfg], capture_output=True, text=True, timeout=30)
     evs = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
     cmds = [e["text"].splitlines()[0] for e in evs if e.get("event") == "console"]
-    assert cmds[:3] == ["(lldb) settings set target.memory-module-load-level minimal",
+    assert cmds[:4] == ["(lldb) settings set target.memory-module-load-level minimal",
+                        "(lldb) settings set target.process.memory-cache-line-size 16384",
                         '(lldb) settings set target.sdk-path "/sdk/iPhoneOS.sdk"', "(lldb) platform select remote-ios"]
     assert evs[-1]["error"]["message"] == "lldb couldn't load the app's executable."   # target creation came after
 

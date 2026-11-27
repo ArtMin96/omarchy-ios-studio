@@ -6,6 +6,12 @@ same as in the real flow. Everything here is invented.
 IOSSTUDIO_DEMO_DEBUG=plain shows a machine where lldb couldn't be prepared for iOS (no iOS SDK): `debug check`
 reports swiftExpressions false with its expressionsNote, sessions carry the "lldb-plain" notice and
 swiftExpressions false, and every Swift expression fails the way it does in real mode.
+IOSSTUDIO_DEMO_DEBUG=stale shows an app whose build lost its precompiled module files: the "stale-modules" notice
+with its Run fix, lldb's summarized missing-module line, and expressions failing with code "stale-build".
+
+When the iPhone's debug symbols aren't ready (the demo daemon's debug.start says so), stops behave as real ones over
+a slow link: `stopped` comes with localsPending and no locals, the "slow-variables" notice once, then the locals as
+a `variables` event with the stop's stopId.
 """
 from __future__ import annotations
 
@@ -25,14 +31,32 @@ HOME = str(appdirs.HOME)
 # and editor_debug.expressions_note build from it; tests/helper/test_demo_variants_048.py compares them.
 PLAIN_WHY = "The iOS SDK isn't installed (Setup installs it)."
 PLAIN_NOTE = f"Swift expressions (p, po) may not work in this session: {PLAIN_WHY[0].lower() + PLAIN_WHY[1:]} Variables still show."
-# What lldb_driver.module_trouble says when expressions fail without the shadow.
+# What lldb_driver.module_trouble says when expressions fail without the shadow, or with a pruned build.
 PLAIN_EVAL = ("Swift expressions don't work in this session: the debugger couldn't be prepared for iOS (see the note "
               "above). The variables list still works.")
+PLAIN_FIX = {"label": "Set up the iOS SDK", "page": "setup", "step": "sdk"}
+STALE_EVAL = ("Swift expressions need a fresh build: lldb couldn't rebuild this frame's Swift types because files from "
+              "the app's last build are missing. Run the app again (it rebuilds what's missing), then debug again. The "
+              "variables list still works.")
+# debugger.STALE_NOTE, SYMBOLS_FIX and lldb_driver.SLOW_NOTE (tests compare them)
+STALE_NOTE = "Swift expressions need a fresh build: Run the app again (it rebuilds what's missing)."
+SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
+SLOW_NOTE = ("Variables are slow over Wi-Fi until the iPhone's debug symbols are downloaded (iPhone › Debug › Debug "
+             "symbols). The frames are shown already; the variables follow when lldb has read them.")
 
 
 def plain_lldb() -> bool:
     """IOSSTUDIO_DEMO_DEBUG=plain: the toolchain's own lldb, no Swift expressions (read per call, for tests)."""
     return os.environ.get("IOSSTUDIO_DEMO_DEBUG", "").strip().lower() == "plain"
+
+
+def stale_build() -> bool:
+    """IOSSTUDIO_DEMO_DEBUG=stale: the app's build lost its precompiled module files."""
+    return os.environ.get("IOSSTUDIO_DEMO_DEBUG", "").strip().lower() == "stale"
+
+
+def _run_fix(path: str) -> dict:
+    return {"label": "Run the app", "page": "projects", "action": "run", "path": path}
 
 
 def _proj(bid: str) -> tuple[str, str]:
@@ -141,13 +165,13 @@ def _states(name: str) -> list[dict]:
     return [
         {"reason": "breakpoint", "description": "breakpoint 1.1", "thread": T(view, "breakpoint", "breakpoint 1.1"),
          "threads": threads, "threadCount": 4, "breakpoint": {"id": 1, "spec": "ForecastView.swift:42"},
-         "locals": {"thread": 1, "frame": 0, "function": "ForecastView.body.getter", "variables": loc1, "more": False}},
+         "locals": {"thread": 1, "frame": 0, "function": "ForecastView.body.getter", "variables": loc1, "more": False, "partial": False, "elapsedMs": 180}},
         {"reason": "step", "description": "step over", "thread": T(view2, "step", "step over"), "threads": threads,
          "threadCount": 4,
-         "locals": {"thread": 1, "frame": 0, "function": "ForecastView.body.getter", "variables": loc2, "more": False}},
+         "locals": {"thread": 1, "frame": 0, "function": "ForecastView.body.getter", "variables": loc2, "more": False, "partial": False, "elapsedMs": 180}},
         {"reason": "step", "description": "step in", "thread": T(model, "step", "step in"), "threads": threads,
          "threadCount": 4,
-         "locals": {"thread": 1, "frame": 0, "function": "ForecastModel.dailyHigh(for:)", "variables": loc3, "more": False}},
+         "locals": {"thread": 1, "frame": 0, "function": "ForecastModel.dailyHigh(for:)", "variables": loc3, "more": False, "partial": False, "elapsedMs": 180}},
     ]
 
 
@@ -198,10 +222,13 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
     output.event("started", **{k: st.get(k) for k in ("port", "pid", "launched", "remotePath", "executable", "ios",
                                                     "build", "symbolsReady")}, localBuild=exe, project=name,
                  swiftExpressions=not plain_lldb())
+    if mode == "session" and stale_build():
+        output.event("notice", id="stale-modules", level="warn", message=STALE_NOTE, fix=_run_fix(path))
     if not st.get("symbolsReady"):
         output.event("notice", id="no-symbols", level="info",
                      message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may read "
-                             "wrong and system frames show only library names. Download them once under iPhone › Debug › Debug symbols.")
+                             "wrong and system frames show only library names. Download them once under iPhone › Debug › Debug symbols.",
+                     fix=SYMBOLS_FIX)
     elif (st.get("symbolsUpdate") or {}).get("needed"):
         output.event("notice", id="symbols-update", level="warn",
                      message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
@@ -222,6 +249,10 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
              f"    frame #0: 0x00000001a2b30000 libsystem_kernel.dylib`mach_msg2_trap + 8")
     output.step("attach", "Attaching to the app (it pauses)", "done")
     output.event("attached", pid=st.get("pid"), process=name, threads=7, appSymbols=True, module=name)
+    if stale_build():
+        _console("lldb: module files from the app's build are missing (e.g. SwiftUI-1LCSMZNVW2ECZP43VCK2BYRR3.pcm), so "
+                 "some Swift types can't be shown and expressions may fail. Run the app again to rebuild them. Repeats "
+                 "are hidden.")
     return st, name, path
 
 
@@ -287,9 +318,11 @@ def session(flags: dict) -> int:
         specs = json.loads(flags.get("breakpoints") or "[]") if isinstance(flags.get("breakpoints"), str) else []
     except ValueError:
         specs = []
-    st, name, _ = _start("session", flags)
+    st, name, path = _start("session", flags)
     if st is None:
         return 1
+    slow = not st.get("symbolsReady")       # real stops over a slow link: locals follow the stop
+    slow_noted = False
     specs = [str(s) for s in specs if str(s).strip()] or ["ForecastView.swift:42"]
     bps = [{"id": i + 1, "spec": s, "locations": 1, "resolved": 1, "hits": 0} for i, s in enumerate(specs)]
     output.event("breakpoints", items=bps)
@@ -305,7 +338,7 @@ def session(flags: dict) -> int:
     inp = Stdin()
 
     def stop(i: int, reason: str | None = None):
-        nonlocal stop_id, idx, running
+        nonlocal stop_id, idx, running, slow_noted
         stop_id += 1
         idx = i
         running = False
@@ -315,11 +348,22 @@ def session(flags: dict) -> int:
             s.pop("breakpoint", None)
         if i == 0 and reason != "paused":
             bps[0]["hits"] += 1
-        output.event("stopped", **s)
+        loc = s.pop("locals")
+        if slow:
+            output.event("stopped", localsPending=True, **s)
+        else:
+            output.event("stopped", localsPending=False, **s, locals=loc)
         f0 = s["thread"]["frames"][0]
         _console(f"Process {st.get('pid')} stopped\n* thread #1, queue = 'com.apple.main-thread', stop reason = "
                  f"{s['description']}\n    frame #0: {f0['pc']} {name}`{f0['function']} at "
                  f"{os.path.basename(f0.get('file') or '')}:{f0.get('line') or ''}")
+        if slow:
+            time.sleep(subproc.demo_delay(0.8))
+            if not slow_noted:
+                slow_noted = True
+                output.event("notice", id="slow-variables", level="info", message=SLOW_NOTE, fix=SYMBOLS_FIX)
+            time.sleep(subproc.demo_delay(1.2))
+            output.event("variables", stopId=stop_id, **loc)
     while True:
         if running and resume_at and time.time() >= resume_at:
             resume_at = 0
@@ -373,7 +417,7 @@ def session(flags: dict) -> int:
                     f = frames[min(fr, len(frames) - 1)]
                     loc = {"thread": 1, "frame": fr, "function": f["function"],
                            "variables": [V("self", "ForecastView", None, [V("unit", "TemperatureUnit", ".celsius")])]
-                           if f.get("inApp") else [], "more": False}
+                           if f.get("inApp") else [], "more": False, "partial": False, "elapsedMs": 90}
                 output.event("variables", requestId=rid, **loc)
             elif cmd == "evaluate":
                 text = str(m.get("expr") or "").strip()
@@ -385,13 +429,20 @@ def session(flags: dict) -> int:
                 known = {v["name"]: v for v in states[idx]["locals"]["variables"]}
                 res = (None if plain_lldb() else dict(known[expr], name="$R0") if expr in known else
                        V("$R0", "Int", "7") if expr in ("days.count", "self.days.count", "count") else None)
-                if res is not None:
+                if stale_build():
+                    output.event("evaluated", requestId=rid, expr=shown, ok=False, code="stale-build",
+                                 message=STALE_EVAL, fix=_run_fix(path), result=V("", "<invalid>", None) | {
+                                     "error": "type for self cannot be reconstructed: type for typename "
+                                              "\"$s13WeatherGlance12ForecastViewVD\" was not found (cached)\nerror: "
+                                              "Couldn't realize Swift AST type of self. Hint: using `v` to directly "
+                                              "inspect variable…"})
+                elif res is not None:
                     if po:
                         res["description"] = _description(res)
                     output.event("evaluated", requestId=rid, expr=shown, ok=True, result=res)
                 elif plain_lldb():
                     output.event("evaluated", requestId=rid, expr=shown, ok=False, code="swift-modules",
-                                 message=PLAIN_EVAL, result=V("$R0", "", None) | {
+                                 message=PLAIN_EVAL, fix=PLAIN_FIX, result=V("$R0", "", None) | {
                                      "error": "error: Could not import Swift modules: missing required module 'SwiftShims'"})
                 else:
                     output.event("evaluated", requestId=rid, expr=shown, ok=False,
