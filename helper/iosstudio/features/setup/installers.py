@@ -327,7 +327,8 @@ INSTALLERS = {
 
 ORDER = ["packages", "usbmuxd", "swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesign", "pymobiledevice3",
          "ipsw", "debugger", "sdk", "uxplay", "wireshark", "app-integration"]
-# What a new omarchy-apple-dev commit can leave outdated: they're rebuilt right after it, only if it changed them.
+# What a new omarchy-apple-dev commit can leave outdated: they're rebuilt right after it, only if it changed them
+# (plus whatever they depend on that isn't done), in ORDER.
 FOLLOW_UPS = {"apple-dev": ("xtool", "sdk")}
 ROOT_STEPS = {"packages", "usbmuxd", "swift", "swift-hold", "xcspec", "uxplay", "wireshark", "debugger"}
 OPTIONAL_IN_ALL = {"ipsw", "debugger", "uxplay", "wireshark"}
@@ -347,23 +348,47 @@ def run_one(ctx: Ctx, sid: str) -> None:
     output.step(sid, title, "done", elapsed=round(time.time() - t0))
 
 
+def follow_ups(ctx: Ctx, sid: str, was: dict[str, str]) -> list[str]:
+    """The FOLLOW_UPS of `sid` that its run turned from done to broken, plus the steps they depend on (the rows'
+    `depends`, transitively) that aren't done and that a follow-up may run (not root work, not `sid`), in ORDER:
+    xtool before the SDK repair that needs it, also when xtool was already outdated before (a fresh download
+    of the scripts next to an older xtool build)."""
+    todo: set[str] = set()
+
+    def need(d: str) -> None:
+        if d in todo or d == sid or d not in INSTALLERS or d in ROOT_STEPS:
+            return
+        todo.add(d)
+        for dep in ctx.by_id.get(d, {}).get("depends", []):
+            if ctx.state(dep) != "done":
+                need(dep)
+
+    for d in FOLLOW_UPS.get(sid, ()):
+        if was[d] == "done" and ctx.state(d) == "broken":
+            need(d)
+    return [d for d in ORDER if d in todo]
+
+
 def run_chain(ctx: Ctx, sid: str) -> list[str]:
-    """Run one step, then the FOLLOW_UPS it turned from done to broken (an omarchy-apple-dev update that moved
-    the xtool pin or the SDK's build tools), so one Update redoes exactly what changed. Returns the ids run."""
+    """Run one step, then its follow_ups() (an omarchy-apple-dev update that moved the xtool pin or the SDK's
+    build tools), so one Update redoes exactly what changed, in dependency order. Returns the ids run."""
     deps = FOLLOW_UPS.get(sid, ())
     was = {d: ctx.state(d) for d in deps}
     run_one(ctx, sid)
     ran = [sid]
     if rt.DRY:
         if deps:
-            log(sid, "would then rebuild what the update changed: " + ", ".join(deps))
+            log(sid, "would then rebuild what the update changed: " + ", ".join(d for d in ORDER if d in deps))
         return ran
     ctx.refresh()
-    for d in deps:
-        if was[d] != "done" or ctx.state(d) != "broken":
+    for d in follow_ups(ctx, sid, was):
+        s = ctx.by_id[d]
+        if s["state"] not in ("missing", "broken"):
             continue
-        if not ctx.by_id[d]["canAutoInstall"]:
-            log(sid, f"“{ctx.by_id[d]['title']}” needs a repair too: {ctx.by_id[d]['detail']}")
+        waiting = [ctx.by_id.get(x, {}).get("title", x) for x in s.get("depends", []) if ctx.state(x) != "done"]
+        if waiting or not s["canAutoInstall"]:
+            why = ("needs " + ", ".join(f"“{t}”" for t in waiting) + " first") if waiting else s["detail"]
+            log(sid, f"“{s['title']}” needs a repair too: {why}")
             continue
         run_one(ctx, d)
         ctx.refresh()
