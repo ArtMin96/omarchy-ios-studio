@@ -1,0 +1,13 @@
+{
+  "notInstalled": "Not installed",
+  "installing": "Installing…",
+  "failed": "Install failed",
+  "askInstall": "iOS Studio isn't installed yet. Install it now?",
+  "askDetail": "Adds iOS Studio to your app launcher. It then opens on its Setup page, which installs the iOS tools.",
+  "installingDetail": "Copying iOS Studio and adding it to the app launcher.",
+  "failedDetail": "iOS Studio couldn't be installed.",
+  "cancel": "Cancel",
+  "install": "Install",
+  "close": "Close",
+  "retry": "Try again"
+}

@@ -51,6 +51,7 @@ data with no side effects, on a separate socket (`ios-studio-demo/`).
 | QML plumbing | `core/` | `Cli.qml`, `Stream.qml` (helper calls), `Resource.qml`, `Host.qml`, `CommandCheck.qml`, `ThemeWatcher.qml` |
 | QML helpers | `lib/Model.js` | glyphs, pages, shortcuts, formatters |
 | QML data | `services/` | one service per area (Device, Project, Log, Account, Setup, Toolchain, Watch, Test, EditorDebug, HotReload) |
+| Omarchy plugin | `manifest.json`, `plugin/` | a bar button in the Omarchy shell that opens iOS Studio or installs it; separate from the app (see [docs/features/omarchy-plugin.md](docs/features/omarchy-plugin.md)) |
 | QML screens | `pages/`, `components/<area>/` | one page per sidebar entry; widgets in `common/`, `device/`, `projects/`, `logs/`, `account/`, `settings/`, `toolchain/` (`UpdatesSection.qml`) |
 
 Dependencies point down: pages → components → services → `core/` → helper/daemon. A device feature never

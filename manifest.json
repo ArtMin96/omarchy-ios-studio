@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.artmin96.ios-studio",
+  "name": "iOS Studio",
+  "version": "0.1.0",
+  "author": "Arthur Minasyan",
+  "license": "MIT",
+  "homepage": "https://github.com/ArtMin96/omarchy-ios-studio",
+  "description": "TODO-DESCRIPTION",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "plugin/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "iOS Studio",
+    "description": "Opens iOS Studio, or offers to install it.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
