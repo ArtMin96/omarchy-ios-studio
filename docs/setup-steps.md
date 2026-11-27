@@ -46,7 +46,11 @@ counting it against `toolchain_ready`.
 
 `setup install --step apple-dev` (the row's one **Update**, also part of `--all`) moves our checkout to the pin
 and then runs, in the same job, each of `xtool` and `sdk` that the move turned from `done` to `broken` and that
-can repair itself (`installed` lists what ran). So it redoes only what changed:
+can repair itself (`installed` lists what ran). Those follow-ups (`installers.follow_ups`) also take the steps they
+depend on (the rows' `depends`) that aren't done, except root steps, and run in Setup's step order: xtool is
+rebuilt before the SDK's darwin-tools repair that needs it, also when xtool was already outdated before (the scripts
+downloaded fresh next to an older xtool build). A follow-up whose dependency still isn't done is logged, not run.
+`--all` runs the same chain and skips what it already ran. So it redoes only what changed:
 
 - **xtool** when `XTOOL_SHA` moved (the folder name tells which commit a build is from, no hashing).
 - **The SDK's darwin tools** (actool, ibtool, momc, xcstringstool) when their inputs changed. `install-toolchain.sh`

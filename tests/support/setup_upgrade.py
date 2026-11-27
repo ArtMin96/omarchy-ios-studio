@@ -247,6 +247,15 @@ def relocate(monkeypatch, m: Machine) -> None:
     monkeypatch.setattr(steps, "LAUNCHER", launcher)
 
 
+def fresh_download_machine(root: Path, monkeypatch) -> Machine:
+    """setup_machine(root) without our omarchy-apple-dev checkout: the scripts are downloaded fresh (at the pin)
+    next to the xtool and SDK an older Setup installed, so the xtool row is already outdated before the download."""
+    import shutil
+    m = setup_machine(root, monkeypatch)
+    shutil.rmtree(m.apple_dev)
+    return m
+
+
 def setup_machine(root: Path, monkeypatch) -> Machine:
     """old_machine(root), relocated, with Setup's gather() running this machine's real probes (git, xtool, the SDK)
     and reporting the system packages as healthy."""
