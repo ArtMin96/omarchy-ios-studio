@@ -17,7 +17,7 @@ shows how it goes, also when the card is collapsed:
 - **VS Code detached · press F5 … to attach again** after the editor's session ends. The bridge keeps running.
 - **Stop** ends it (and the editor's session, if one is attached). The strip then says why it ended (stopped, the
   app exited, after 2 hours) and leaves the card after 20 seconds, or when you close it.
-- Notices from the helper show as quiet lines under it: no build of the app on this computer, Swift expressions may not work (the debugger couldn't be set up for iOS, for example because the iOS SDK isn't installed), or the iPhone's debug symbols. Without them the line says "This iPhone's debug symbols aren't downloaded yet. Until they are, system frames show only library names, some Swift values (String, Array) may read wrong, and variables are slow over Wi-Fi. Download them once under iPhone › Debug › Debug symbols." When they're out of date it says attaching may take minutes over Wi-Fi until they're updated. The strip shows these as text; the helper's event also carries the Download symbols (or Update symbols) fix.
+- Notices from the helper show as quiet lines under it: no build of the app on this computer, Swift expressions may not work (the debugger couldn't be set up for iOS, for example because the iOS SDK isn't installed), or the iPhone's debug symbols. Without them the line says "This iPhone's debug symbols aren't downloaded yet. Until they are, system frames show only library names, some Swift values (String, Array) may read wrong, and variables are slow over Wi-Fi. Download them once under iPhone › Debug › Debug symbols." When they're out of date it says attaching may take minutes over Wi-Fi until they're updated. That line has a small **Download symbols** (or **Update symbols**) button at its right: it opens iPhone › Debug and starts the download there (which asks first, like the Debug symbols card).
 - An error (the app isn't installed, another debugger is attached, the toolchain has no lldb-dap) shows its message
   with its fix button and Try again.
 
@@ -130,7 +130,7 @@ Use your app's bundle id from `xtool.yml` (without an `XTL-<TEAM>.` prefix) in t
 ## For AI agents (MCP)
 
 - `ios_debug_editor_config(project_path, editor?, confirm=false)` shows what it would add to `.vscode/launch.json` or `.zed/debug.json`; `confirm=true` writes it.
-- `ios_debug_editor_start(project_path | bundle_id, launch?, editor?, write_config?)` starts the bridge as a job and answers within 25 s with the port, the configuration's name and whether the editor is attached. `swift_expressions` says whether `p`/`po` work in the editor; when they may not, `expressions_note` says why. Call it again with `job_id` (and `wait_seconds`) to follow it.
+- `ios_debug_editor_start(project_path | bundle_id, launch?, editor?, write_config?)` starts the bridge as a job and answers within 25 s with the port, the configuration's name and whether the editor is attached. `swift_expressions` says whether `p`/`po` work in the editor; when they may not, `expressions_note` says why. Call it again with `job_id` (and `wait_seconds`) to follow it. A notice with a fix (no debug symbols: Download symbols) adds a next step that asks the user to press that button in iOS Studio, with `ios_open_app(page='device')` to open the page.
 - `ios_debug_editor_status(bundle_id?)` lists running bridges, also ones started from the app window.
 - `ios_debug_editor_stop(bundle_id | job_id)` ends one. `ios_job_cancel` and quitting the server do the same.
 
