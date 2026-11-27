@@ -100,6 +100,8 @@ PageFrame {
       else { page.tab = "apps"; page.appDetail = "" }
     }
     else if (p.tab === "apps" && (p.app || p.bundleId)) page.openApp(p.app || p.bundleId, p.section)
+    // an action on the Debug tab, e.g. a notice's "Download symbols" fix from another page ({tab: "debug", action: "symbols"})
+    else if (p.tab === "debug" && p.action) debugTab.withItem(function(v) { v.runAction(p.action) })
     // a fix from the daemon ("Stop the app", e.g. appdata's app-running): the app whose details are open
     else if (p.action === "stop-app") {
       var open = page.appDetail ? svc.apps.filter(function(x) { return x.bundleId === page.appDetail })[0] : null

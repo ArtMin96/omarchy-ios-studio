@@ -70,7 +70,6 @@ QUICK_LOCALS = 0.5
 LOCALS_BUDGET = 20.0
 READ_BUDGET = 40.0          # frame_variables / select_frame asked for explicitly
 SLOW_BUDGET = 120.0         # evaluate (the first one loads the app's Swift modules) and backtrace
-SLOW_LOCALS = 3.0           # locals slower than this without debug symbols: the slow-variables notice, once
 STUCK_AFTER = 2.0           # past its budget by this much, one SB call is stuck: ask lldb to interrupt it
 JOIN_WAIT = 5.0             # how long a step, continue or detach waits for a read it cancelled
 # lldb caches phone memory in lines of target.process.memory-cache-line-size bytes (default 512), one gdb-remote round
@@ -88,9 +87,6 @@ PAGE_SIZES = {"remote-ios": MEMORY_CACHE_LINE}   # arm64 iOS: 16 KB pages
 def cache_line(platform: str) -> int:
     """target.process.memory-cache-line-size for the platform: its page size (4 KB unless known otherwise)."""
     return PAGE_SIZES.get(platform, 4096)
-SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
-SLOW_NOTE = ("Variables are slow over Wi-Fi until the iPhone's debug symbols are downloaded (iPhone › Debug › Debug "
-             "symbols). The frames are shown already; the variables follow when lldb has read them.")
 
 # `p x`, `po x`, `expression -O -- x`: lldb's commands around a Swift expression. Only followed by something that
 # starts an expression, so `p + 1` (a variable named p) stays Swift.
@@ -246,7 +242,6 @@ class Reads:
         self.drv = drv
         self.job: Job | None = None
         self.queue: deque = deque()
-        self.slow_noted = False
 
     def busy(self) -> bool:
         return self.job is not None
@@ -294,10 +289,6 @@ class Reads:
         if j is None:
             return
         if not j.done.is_set():
-            waited = time.monotonic() - j.started
-            if j.kind == "locals" and not self.slow_noted and waited > SLOW_LOCALS and not self.drv.cfg.get("symbolsReady"):
-                self.slow_noted = True
-                emit("notice", id="slow-variables", level="info", message=SLOW_NOTE, fix=SYMBOLS_FIX)
             if time.monotonic() > j.budget.deadline + STUCK_AFTER:
                 self._interrupt(j)          # one SB call is stuck past the budget
             return

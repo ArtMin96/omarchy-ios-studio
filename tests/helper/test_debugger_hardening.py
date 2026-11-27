@@ -276,7 +276,7 @@ class Opts:
     def SetTryAllThreads(self, v): pass
 lldb.SBExpressionOptions = Opts
 
-d.QUICK_LOCALS, d.LOCALS_BUDGET, d.SLOW_LOCALS, d.STUCK_AFTER = 0.05, 0.7, 0.1, 0.2
+d.QUICK_LOCALS, d.LOCALS_BUDGET, d.STUCK_AFTER = 0.05, 0.7, 0.2
 drv = object.__new__(d.Driver)
 drv.cfg, drv.breakpoints, drv.app_module, drv.stop_id, drv.target = {"symbolsReady": False}, {1: "a.swift:3"}, "App", 0, None
 drv.process, drv.dbg = Proc(), Dbg()
@@ -339,9 +339,7 @@ def test_reads_send_the_stop_first_and_the_locals_after(tmp_path):
     stop = one[0]
     assert stop["event"] == "stopped" and stop["localsPending"] is True and "locals" not in stop
     assert stop["breakpoint"] == {"id": 1, "spec": "a.swift:3"} and stop["thread"]["frames"][0]["function"] == "tick"
-    notice = next(e for e in one if e["event"] == "notice")
-    assert (notice["id"], notice["fix"]) == ("slow-variables", {"label": "Download debug symbols", "page": "device",
-                                                                "tab": "debug"})
+    assert not [e for e in one if e["event"] == "notice"]   # slow locals: the helper's no-symbols notice says so
     late = [e for e in one if e["event"] == "variables"]
     assert [e.get("requestId") for e in late] == [None, "fv"] and all(e["stopId"] == 1 for e in late)
     vs = late[0]["variables"]
@@ -355,7 +353,7 @@ def test_reads_send_the_stop_first_and_the_locals_after(tmp_path):
     # 3
     assert three[0]["event"] == "stopped" and three[0]["localsPending"] is False
     assert three[0]["locals"]["variables"][0]["name"] == "n" and three[0]["stopId"] == 3
-    assert not [e for e in four if e["event"] == "notice"]          # the slow-variables notice comes once
+    assert not [e for e in three + four if e["event"] == "notice"]
     # 4
     calls = out["dbgCalls"]
     assert calls[-2:] == ["interrupt", "cancel"] and calls.count("interrupt") == calls.count("cancel")
@@ -420,9 +418,9 @@ def test_the_build_logs_why_it_recompiles(tmp_path, monkeypatch):
 # ================================================================ demo shapes = real
 
 def test_demo_strings_are_the_real_ones():
-    real = from_driver("SLOW_NOTE", "SYMBOLS_FIX")
-    assert (demo.SLOW_NOTE, demo.SYMBOLS_FIX) == (real["SLOW_NOTE"], real["SYMBOLS_FIX"])
-    assert demo.SYMBOLS_FIX == dbg.SYMBOLS_FIX and demo.STALE_NOTE == dbg.STALE_NOTE
+    assert (demo.SYMBOLS_FIX, demo.SYMBOLS_NOTE) == (dbg.SYMBOLS_FIX, dbg.SYMBOLS_NOTE)
+    assert (demo.SYMBOLS_UPDATE_FIX, demo.SYMBOLS_UPDATE_NOTE) == (dbg.SYMBOLS_UPDATE_FIX, dbg.SYMBOLS_UPDATE_NOTE)
+    assert demo.STALE_NOTE == dbg.STALE_NOTE
     t = from_driver(*TROUBLE)["module_trouble"]("error: Couldn't realize Swift AST type of self", True, "/p")
     assert demo.STALE_EVAL == t["message"]
 
@@ -447,7 +445,8 @@ def test_demo_without_symbols_sends_the_locals_after_the_stop(monkeypatch, capsy
     assert stop["localsPending"] is True and "locals" not in stop
     late = next(e for e in ev[ev.index(stop):] if e.get("event") == "variables")
     assert late["stopId"] == stop["stopId"] and late["partial"] is False and "requestId" not in late
-    assert [e["id"] for e in ev if e.get("event") == "notice"] == ["no-symbols", "slow-variables"]
+    assert [e["id"] for e in ev if e.get("event") == "notice"] == ["no-symbols"]       # one notice, one fix
+    assert next(e for e in ev if e.get("event") == "notice")["fix"] == dbg.SYMBOLS_FIX
 
 
 def test_demo_with_symbols_keeps_the_locals_in_the_stop(monkeypatch, capsys):
@@ -455,7 +454,7 @@ def test_demo_with_symbols_keeps_the_locals_in_the_stop(monkeypatch, capsys):
     ev = demo_session(monkeypatch, capsys, {**START, "symbolsReady": True})
     stop = next(e for e in ev if e.get("event") == "stopped")
     assert stop["localsPending"] is False and stop["locals"]["variables"]
-    assert not any(e.get("id") == "slow-variables" for e in ev)
+    assert not any(e.get("id") in ("no-symbols", "symbols-update", "slow-variables") for e in ev)
 
 
 def test_demo_stale_variant(monkeypatch, capsys):

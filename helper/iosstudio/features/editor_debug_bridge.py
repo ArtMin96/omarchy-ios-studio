@@ -181,6 +181,7 @@ class Bridge:
             self.stop.set()
 
     async def run(self) -> int:
+        from iosstudio.features import debugger
         st = self.st
         try:
             script = ed.write_attach(self.plain, self.app, **self.attach_kw())
@@ -190,14 +191,7 @@ class Bridge:
                                                         detail=str(exc)))
         self.save()
         ed.prune()
-        if not st.get("symbolsReady"):
-            output.event("notice", id="no-symbols", level="info",
-                         message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
-                                 "read wrong. Download them once under iPhone › Debug › Debug symbols.")
-        elif (st.get("symbolsUpdate") or {}).get("needed"):
-            output.event("notice", id="symbols-update", level="warn",
-                         message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
-                                 "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
+        debugger.symbols_notice(st)       # the same notice and fix (debugger.SYMBOLS_FIX) as a session's
         cfg = ed.config_name(self.app)
         if st.get("launched"):
             output.event("notice", id="waiting", level="info",

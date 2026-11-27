@@ -1405,15 +1405,16 @@ locals are read within half a second they ride along in `locals` (`localsPending
 elapsedMs}` with the stop's `stopId` and no `requestId` (or `variables {stopId, error}` when reading failed).
 Over Wi-Fi without the iPhone's debug symbols lldb reads the Swift runtime's metadata from phone memory, which took
 minutes for four locals in a CrashLab session; a stop's locals get 20 seconds, then the rest are listed by name and
-type with `unread: true` (`partial: true`), and `frame_variables` reads them again (40 seconds). When that happens
-without symbols, the session emits `notice {id: "slow-variables", fix}` once (the fix opens iPhone › Debug for the
-symbols download: `{page: "device", tab: "debug"}`). Reads (`frame_variables`, `select_frame`, `evaluate`,
+type with `unread: true` (`partial: true`), and `frame_variables` reads them again (40 seconds). A session without
+symbols says so once, at the start, in its `no-symbols` notice (below); the driver adds no notice of its own. Reads (`frame_variables`, `select_frame`, `evaluate`,
 `backtrace`) run one at a time on a worker thread in the driver, so the session keeps answering `detach`, `pause`,
 `status` (`reading` says whether a read runs) and signals meanwhile; a `frame_variables` for the frame whose locals
 are still being read is answered with them. `continue` and the steps cancel what is being read (queued requests get
 `ack {ok: false, code: "cancelled"}`); if lldb doesn't let go within 5 seconds the command is refused with
 `code: "busy"`. lldb reads phone memory in 16 KB lines (`target.process.memory-cache-line-size 16384`, the iPhone's
-page size; lldb's default 512 bytes cost one ~50 ms round trip each over Wi-Fi).
+page size; lldb's default 512 bytes cost one ~50 ms round trip each over Wi-Fi). A line is never more than the
+target's page size: lldb reads a line as a whole, and one reaching into an unmapped page fails even for its mapped
+bytes, so other platforms (the tests' local lldb-server) get 4 KB lines.
 
 A session without the shadow lldb emits `notice {id: "lldb-plain"}` (Swift expressions may not work, with the
 reason) before `started`, whose `swiftExpressions` is then false. `evaluated {requestId, expr, ok, result, code?,
@@ -1425,8 +1426,14 @@ Swift AST type", a missing `.pcm`: the app's build lost its precompiled module f
 `{page: "projects", action: "run", path}`) and `frame-no-swift` ("no JIT compiled function": main or a system
 frame). lldb's HostInfoError lines are dropped from `result.error` around a real error.
 
-Notices with a `fix` carry it as `{label, page, ...}`, like errors: `no-symbols` (the symbols download),
-`slow-variables`, and `stale-modules` ("Swift expressions need a fresh build: Run the app again (it rebuilds
+Notices with a `fix` carry it as `{label, page, ...}`, like errors. The iPhone's debug symbols get one notice
+per session, at the start (`debug.start`'s `symbolsReady` and `symbolsUpdate`): `no-symbols` (info: what's
+affected, system frames with library names only, some Swift values reading wrong, slow variables over Wi-Fi) or
+`symbols-update` (warn: attaching can take minutes until they're updated), with the fix
+`{label: "Download symbols" | "Update symbols", page: "device", tab: "debug", action: "symbols"}`; the iPhone page
+runs `action` on its Debug tab, which downloads, updates or unpacks them (asking first). `debug editor` sends the
+same notice. Before v0.4.8 a session also sent `slow-variables` for the same download; clients may still accept
+it. Then `stale-modules` ("Swift expressions need a fresh build: Run the app again (it rebuilds
 what's missing).", fix: Run the app). `stale-modules` comes once per session: at the start when the project's
 `.build/out/SDKExplicitPrecompiledModules` has lost its `.pcm` files (a stat check,
 `helper/iosstudio/features/projects/modules.py`), or when lldb reports missing ones, which is also noted in

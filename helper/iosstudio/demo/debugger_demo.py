@@ -9,9 +9,9 @@ swiftExpressions false, and every Swift expression fails the way it does in real
 IOSSTUDIO_DEMO_DEBUG=stale shows an app whose build lost its precompiled module files: the "stale-modules" notice
 with its Run fix, lldb's summarized missing-module line, and expressions failing with code "stale-build".
 
-When the iPhone's debug symbols aren't ready (the demo daemon's debug.start says so), stops behave as real ones over
-a slow link: `stopped` comes with localsPending and no locals, the "slow-variables" notice once, then the locals as
-a `variables` event with the stop's stopId.
+When the iPhone's debug symbols aren't ready (the demo daemon's debug.start says so), the session starts with the one
+"no-symbols" notice (its fix downloads them) and stops behave as real ones over a slow link: `stopped` comes with
+localsPending and no locals, then the locals as a `variables` event with the stop's stopId.
 """
 from __future__ import annotations
 
@@ -38,11 +38,23 @@ PLAIN_FIX = {"label": "Set up the iOS SDK", "page": "setup", "step": "sdk"}
 STALE_EVAL = ("Swift expressions need a fresh build: lldb couldn't rebuild this frame's Swift types because files from "
               "the app's last build are missing. Run the app again (it rebuilds what's missing), then debug again. The "
               "variables list still works.")
-# debugger.STALE_NOTE, SYMBOLS_FIX and lldb_driver.SLOW_NOTE (tests compare them)
+# debugger.STALE_NOTE, SYMBOLS_FIX, SYMBOLS_NOTE and their update twins (tests compare them)
 STALE_NOTE = "Swift expressions need a fresh build: Run the app again (it rebuilds what's missing)."
-SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
-SLOW_NOTE = ("Variables are slow over Wi-Fi until the iPhone's debug symbols are downloaded (iPhone › Debug › Debug "
-             "symbols). The frames are shown already; the variables follow when lldb has read them.")
+SYMBOLS_FIX = {"label": "Download symbols", "page": "device", "tab": "debug", "action": "symbols"}
+SYMBOLS_UPDATE_FIX = {**SYMBOLS_FIX, "label": "Update symbols"}
+SYMBOLS_NOTE = ("This iPhone's debug symbols aren't downloaded yet. Until they are, system frames show only library "
+                "names, some Swift values (String, Array) may read wrong, and variables are slow over Wi-Fi. Download "
+                "them once under iPhone › Debug › Debug symbols.")
+SYMBOLS_UPDATE_NOTE = ("Attaching may take minutes over Wi-Fi until the debug symbols are updated (iPhone › Debug › "
+                       "Debug symbols › Update). The app stays paused meanwhile.")
+
+
+def symbols_notice(st: dict) -> None:
+    """debugger.symbols_notice: one notice about the debug symbols, with its fix."""
+    if not st.get("symbolsReady"):
+        output.event("notice", id="no-symbols", level="info", message=SYMBOLS_NOTE, fix=SYMBOLS_FIX)
+    elif (st.get("symbolsUpdate") or {}).get("needed"):
+        output.event("notice", id="symbols-update", level="warn", message=SYMBOLS_UPDATE_NOTE, fix=SYMBOLS_UPDATE_FIX)
 
 
 def plain_lldb() -> bool:
@@ -224,15 +236,7 @@ def _start(mode: str, flags: dict) -> tuple[dict | None, str, str]:
                  swiftExpressions=not plain_lldb())
     if mode == "session" and stale_build():
         output.event("notice", id="stale-modules", level="warn", message=STALE_NOTE, fix=_run_fix(path))
-    if not st.get("symbolsReady"):
-        output.event("notice", id="no-symbols", level="info",
-                     message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may read "
-                             "wrong and system frames show only library names. Download them once under iPhone › Debug › Debug symbols.",
-                     fix=SYMBOLS_FIX)
-    elif (st.get("symbolsUpdate") or {}).get("needed"):
-        output.event("notice", id="symbols-update", level="warn",
-                     message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
-                             "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
+    symbols_notice(st)
     output.step("connect", "Connecting to the debugger on your iPhone", "running")
     _console("(lldb) settings set target.memory-module-load-level minimal")
     _console('(lldb) settings set target.sdk-path "~/.config/swiftpm/swift-sdks/darwin.artifactbundle/Developer/'
@@ -322,7 +326,6 @@ def session(flags: dict) -> int:
     if st is None:
         return 1
     slow = not st.get("symbolsReady")       # real stops over a slow link: locals follow the stop
-    slow_noted = False
     specs = [str(s) for s in specs if str(s).strip()] or ["ForecastView.swift:42"]
     bps = [{"id": i + 1, "spec": s, "locations": 1, "resolved": 1, "hits": 0} for i, s in enumerate(specs)]
     output.event("breakpoints", items=bps)
@@ -338,7 +341,7 @@ def session(flags: dict) -> int:
     inp = Stdin()
 
     def stop(i: int, reason: str | None = None):
-        nonlocal stop_id, idx, running, slow_noted
+        nonlocal stop_id, idx, running
         stop_id += 1
         idx = i
         running = False
@@ -358,11 +361,7 @@ def session(flags: dict) -> int:
                  f"{s['description']}\n    frame #0: {f0['pc']} {name}`{f0['function']} at "
                  f"{os.path.basename(f0.get('file') or '')}:{f0.get('line') or ''}")
         if slow:
-            time.sleep(subproc.demo_delay(0.8))
-            if not slow_noted:
-                slow_noted = True
-                output.event("notice", id="slow-variables", level="info", message=SLOW_NOTE, fix=SYMBOLS_FIX)
-            time.sleep(subproc.demo_delay(1.2))
+            time.sleep(subproc.demo_delay(2.0))
             output.event("variables", stopId=stop_id, **loc)
     while True:
         if running and resume_at and time.time() >= resume_at:
@@ -565,6 +564,7 @@ def editor(flags: dict) -> int:
     time.sleep(subproc.demo_delay(0.4))
     output.step("forward", "Starting the debugger on your iPhone", "done", detail=f"port {st.get('port')}")
     cfg = f"Attach to {name} on iPhone (iOS Studio)"
+    symbols_notice(st)
     if st.get("launched"):
         output.event("notice", id="waiting", level="info",
                      message=f"{name} is started and waits for the debugger: start “{cfg}” in your editor now.")
