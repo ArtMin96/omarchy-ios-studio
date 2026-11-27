@@ -47,6 +47,15 @@ Rectangle {
     else if (f.page) root.app.nav(f.page, f)
   }
 
+  // The notices the strip lists, each with the fix its button shows (Model.debugNoticeFix: once per label) as
+  // shownFix and runFix to run it, so the delegate needs nothing from outside its modelData.
+  readonly property var noticeRows: {
+    var l = root.entry && !root.isError ? (root.entry.notices || []) : []
+    return l.map(function(n, i) {
+      return Object.assign({}, n, { shownFix: Model.debugNoticeFix(l, i), runFix: root.runFix })
+    })
+  }
+
   readonly property bool stackButtons: isError && width < Style.space(600)
   readonly property real glyphColumn: Math.ceil(Style.font.body * 1.4)
 
@@ -171,12 +180,11 @@ Rectangle {
     // (Model.debugNoticeFix: once per label). With a button, the glyph and the text's first line sit on the
     // button's centre line; the text wraps at word boundaries in the width the button leaves.
     Repeater {
-      model: root.entry && !root.isError ? root.entry.notices : []
+      model: root.noticeRows
       delegate: RowLayout {
         id: note
         required property var modelData
-        required property int index
-        readonly property var fix: Model.debugNoticeFix(root.entry ? root.entry.notices : [], note.index)
+        readonly property var fix: note.modelData.shownFix
         readonly property real lift: noteFix.visible ? Math.max(0, Math.round((noteFix.implicitHeight - noteMetrics.height) / 2)) : 0
         Layout.fillWidth: true
         spacing: Style.spacing.lg
@@ -211,7 +219,7 @@ Rectangle {
           text: note.fix ? note.fix.label : ""
           kind: "ghost"
           compact: true
-          onClicked: root.runFix(note.fix)
+          onClicked: note.modelData.runFix(note.fix)
         }
       }
     }
