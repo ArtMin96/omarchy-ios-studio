@@ -18,7 +18,19 @@ from .pins import (
     APPLE_DEV_LIB,
     APPLE_DEV_REPO,
 )
-from .runtime import do_mkdir, do_rmtree, do_symlink, log, must, need_space, probe, progress, run_stream
+from .runtime import (
+    BUILD_FRAC,
+    SUBTASK,
+    do_mkdir,
+    do_rmtree,
+    do_symlink,
+    log,
+    must,
+    need_space,
+    probe,
+    progress,
+    run_stream,
+)
 from .steps import Ctx
 
 SWIFT = Path("/usr/bin/swift")   # swift-bin's driver; xtool is built with the toolchain it points to
@@ -106,7 +118,8 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     benv = subproc.tool_env("setup", {"PATH": f"{os.path.dirname(swift_real)}:/usr/bin:{LOCAL_BIN}:/bin"})
     tail = []
     rc = run_stream(["swift", "build", "-c", "release", "--product", "xtool", "-Xswiftc", "-no-toolchain-stdlib-rpath"],
-                    step_id, label="Compiling xtool", estimate=est, env=benv, cwd=src, frac_range=(0.05, 0.92), tail=tail)
+                    step_id, label="Compiling xtool", estimate=est, env=benv, cwd=src, parse=xtool_build_phase,
+                    frac_range=(0.05, 0.92), lead=XTOOL_FETCH_SHARE, tail=tail)
     must(rc, "build-failed", "xtool didn't compile. This usually means Swift and xtool versions don't match; "
          "repairing Swift first can help.", step_id, tail)
     if rt.DRY:
@@ -145,6 +158,21 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     log(step_id, f"Installed {appdirs.tilde(dest)} ({out.strip()}, built from {sha[:7]})")
     if not ctx.keep_previous:
         prune_old_xtool(name, step_id)
+
+
+XTOOL_FETCH_SHARE = 0.25   # of the build's bar: fetching packages and planning, before swift build counts tasks
+FETCH_LINES = ("Fetching ", "Fetched ", "Computing version for ", "Creating working copy ", "Working copy of ",
+               "Downloading ", "Downloaded ")
+
+
+def xtool_build_phase(line: str, st: dict) -> None:
+    """Name the phase of xtool's swift build in the progress detail; run_stream reads the numbers ([n / m] tasks)."""
+    if line.startswith(FETCH_LINES) or SUBTASK.match(line):
+        st["detail"] = "Downloading xtool's packages"
+    elif line.startswith(("Building for production", "[Computing dependencies", "[Planning", "[Constructing")):
+        st["detail"] = "Planning the build"
+    elif BUILD_FRAC.match(line):
+        st["detail"] = "Compiling xtool"
 
 
 def prune_old_xtool(keep: str, step_id: str) -> None:

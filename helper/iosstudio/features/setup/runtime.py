@@ -70,71 +70,105 @@ def _on_term(_signum, _frame) -> None:
     sys.exit(130)   # raised inside run_stream too: its Runner kills the running command on the way out
 
 
-BUILD_FRAC = re.compile(r"^\[(\d+)/(\d+)\]")
+BUILD_FRAC = re.compile(r"^\[(\d+)\s*/\s*(\d+)\]")    # [n/m] and swift-build's [n / m] (thin spaces)
+SUBTASK = re.compile(r"^\[\d+\s*/\s*\d+\]\s+(?:Fetching|Downloading)\s")   # SwiftPM's per-package counters
 PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s?%")
 EXIT_GRACE = 60          # seconds a command may linger after closing its output
+
+
+class StreamProgress:
+    """What run_stream shows for one command. Real numbers when the output has them: [n/m] build tasks, else NN %
+    lines (SwiftPM's per-package fetch and download counters are not the build's and are only drawn, never logged).
+    Before them, elapsed vs. estimate, up to `lead` (95 %). When real numbers start they fill what is left of the bar
+    from where the estimate got to, so it never jumps back, and the ETA follows their rate.
+
+    `st` is what a parse callback sees: it may set "detail", or "frac" (None goes back to the estimate)."""
+
+    def __init__(self, label: str = "", estimate: float | None = None,
+                 parse: Callable[[str, dict], str | None] | None = None, start: float | None = None,
+                 lead: float = 0.95):
+        self.label, self.estimate, self.parse, self.lead = label, estimate, parse, lead
+        self.start = time.time() if start is None else start
+        self.st: dict = {"frac": None, "detail": label, "count": None}
+        self.shown = 0.0                 # bar position last shown (0..1), never lower
+        self.base: float | None = None   # bar position when the current real numbers started …
+        self.t0 = self.f0 = 0.0          # … and when, at which fraction
+        self.last_logged = ""
+
+    def line(self, line: str) -> bool:
+        """Read one output line; True when it belongs in the log."""
+        st = self.st
+        quiet = bool(SUBTASK.match(line))
+        m = None if quiet else BUILD_FRAC.match(line)
+        if m and int(m.group(2)) > 0:
+            n, total = int(m.group(1)), int(m.group(2))
+            st["frac"], st["count"] = min(1.0, n / total), (n, total)
+        if self.parse:
+            quiet = self.parse(line, st) == "quiet" or quiet
+        elif not quiet and (pm := PCT.search(line)):
+            if line.split("%")[0][:-6] == self.last_logged.split("%")[0][:-6]:
+                quiet = True  # a \r-redrawn percentage line: progress only
+            if st["count"] is None:
+                st["frac"] = min(1.0, float(pm.group(1)) / 100)
+        if not quiet:
+            self.last_logged = line
+        return not quiet
+
+    def reading(self, now: float) -> tuple[float | None, str, float | None]:
+        """(fraction 0..1 or None, detail, eta seconds or None) for a heartbeat at `now`."""
+        st, el = self.st, now - self.start
+        what, frac = st["detail"] or self.label, st["frac"]
+        if frac is None:
+            self.base = None
+            if not self.estimate:
+                return None, f"{what} · {fmt_dur(el)}", None
+            f, eta = min(self.lead, el / self.estimate), max(0.0, self.estimate - el)
+            detail = f"{what} · {fmt_dur(el)} so far, usually about {fmt_dur(self.estimate)}"
+        else:
+            if self.base is None:
+                self.base, self.t0, self.f0 = self.shown, now, frac
+            f = self.base + (1 - self.base) * frac
+            done = frac - self.f0
+            eta = (now - self.t0) * (1 - frac) / done if done >= 0.02 else None
+            count = st["count"]
+            of = f" · {count[0]} of {count[1]}" if count and count[0] / count[1] == frac else ""
+            detail = f"{what}{of} · {fmt_dur(el)}"
+        self.shown = max(self.shown, f)
+        return self.shown, detail, eta
 
 
 def run_stream(argv: list, step_id: str | None, *, label: str = "", estimate: float | None = None,
                env: dict | None = None, cwd: str | Path | None = None,
                parse: Callable[[str, dict], str | None] | None = None, frac_range: tuple[float, float] = (0.0, 1.0),
-               mutating: bool = True, tail: list | None = None) -> int:
-    """Run a command, forwarding output as log events, with a heartbeat progress event every 2 s.
-
-    Long silent builds (xtool, the macro server) still move the bar: elapsed / estimate, capped at
-    95 %, until real numbers arrive ([n/m] build lines or NN% lines)."""
+               mutating: bool = True, tail: list | None = None, lead: float = 0.95) -> int:
+    """Run a command, forwarding output as log events, with a heartbeat progress event every 2 s
+    (StreamProgress: real numbers when the output has them, else elapsed vs. estimate up to `lead`)."""
     argv = [str(a) for a in argv]
     if DRY and mutating:
         log(step_id, "would run: " + " ".join(shell_quote(a) for a in argv) + (f"   (in {cwd})" if cwd else ""))
         return 0
     lo, hi = frac_range
-    start = time.time()
-    st = {"frac": None, "detail": label, "t": start, "beat": start}
-    last_logged = ""
+    bar = StreamProgress(label, estimate, parse, lead=lead)
+    last_beat = bar.start
 
     def beat():     # a heartbeat progress event every 2 s
+        nonlocal last_beat
         now = time.time()
-        if now - st["beat"] < 2.0:
+        if now - last_beat < 2.0:
             return
-        st["beat"] = now
-        el = now - start
-        frac = st["frac"]
-        eta = None
-        if frac is None and estimate:
-            frac = min(0.95, el / estimate)
-            eta = max(0, estimate - el)
-            detail = f"{st['detail'] or label} · {fmt_dur(el)} so far, usually about {fmt_dur(estimate)}"
-        else:
-            if frac and frac > 0.02:
-                eta = el / frac - el
-            detail = f"{st['detail'] or label} · {fmt_dur(el)}"
+        last_beat = now
+        frac, detail, eta = bar.reading(now)
         progress(step_id, None if frac is None else lo + (hi - lo) * frac, detail, eta)
 
     def on_line(line: str) -> None:
-        nonlocal last_logged
         line = line.rstrip()
         if not line:
             return
         if tail is not None:
             tail.append(line)
             del tail[:-60]
-        quiet = False
-        m = BUILD_FRAC.match(line)
-        if m and int(m.group(2)) > 0:
-            st["frac"] = int(m.group(1)) / int(m.group(2))
-        if parse:
-            res = parse(line, st)
-            quiet = res == "quiet"
-        elif PCT.search(line) and line.split("%")[0][:-6] == last_logged.split("%")[0][:-6]:
-            quiet = True  # a \r-redrawn percentage line: progress only
-        if PCT.search(line) and st["frac"] is None and parse is None:
-            try:
-                st["frac"] = float(PCT.search(line).group(1)) / 100
-            except ValueError:
-                pass
-        if not quiet:
+        if bar.line(line):
             log(step_id, line)
-            last_logged = line
 
     # Same process group as us (a pkexec/sudo child keeps working as before); killed on any exception.
     try:
