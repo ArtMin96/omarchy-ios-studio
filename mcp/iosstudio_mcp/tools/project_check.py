@@ -1,6 +1,6 @@
 """Project check: ios_project_check lists config mistakes in a project before a build (misspelled xtool.yml
 keys, missing NS*UsageDescription keys, a bad icon, entitlements a free account can't use, bundle id and
-version fields). Read-only and fast; see helper/iosstudio/features/project_check.py for the checks themselves."""
+version fields, asset catalogs xtool would leave out). Read-only and fast; see helper/iosstudio/features/project_check.py for the checks themselves."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,12 +17,13 @@ from ..core.registry import fit_page, tool
 from ..models import Out
 from ..state import get_state
 
-CHECKS = ("xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version")
+CHECKS = ("xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version", "asset-catalogs")
 HELPER_MAX = 500        # issues asked of the helper; max_issues and the check filter apply on this side
 MESSAGE_CUT = 400
 HINT_CUT = 300
 
-CheckId = Literal["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version"]
+CheckId = Literal["xtool-keys", "usage-descriptions", "icon", "entitlements", "bundle-id", "version",
+                  "asset-catalogs"]
 
 
 class ProjectIssue(Out):
@@ -86,7 +87,7 @@ def register(mcp: MCPServer) -> None:
     ) -> ProjectCheckResult:
         """Find config mistakes before a build: misspelled xtool.yml keys, missing NS*UsageDescription keys
         (the app would crash), a bad icon (needs 1024×1024 PNG, no alpha), entitlements a free Apple ID can't
-        get, bad bundle id/version. Each issue has file:line and a fix hint. Under a second, warnings only,
+        get, bad bundle id/version, an .xcassets xtool would leave out (no resources in Package.swift). Each issue has file:line and a fix hint. Under a second, warnings only,
         never changes files."""
         state = get_state(ctx)
         p = await resolve_project(state, project_path)
