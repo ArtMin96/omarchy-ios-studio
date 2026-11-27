@@ -160,7 +160,18 @@ Four tabs:
 
 ![Toolchain](screenshots/toolchain.png)
 
-Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair (or Update, with "update available", when the iOS build scripts have a newer tested version). Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
+Updates come first. Choose which versions you want:
+
+- Tested (the default) keeps the versions this iOS Studio release was tested with.
+- Latest (untested) offers the newest releases of omarchy-apple-dev, xtool, pymobiledevice3, ipsw and rcodesign, marked untested.
+
+iOS Studio checks for new versions at most once a day, and only while its window is in front. Check now checks right away. When everything is current, the section is a single line ("Up to date · checked 3 h ago"). When a tool has an update, it gets a row with the installed and new version, a link to its release notes and an Update button. With more than one update, Update all appears in the section header. Nothing installs until you click.
+
+Each download is checked against its published checksum or commit before it's used. The previous version is kept until the new one passes a check, and it comes back if that check fails or you cancel. Updating pymobiledevice3 restarts the connection to your iPhone for a moment, so iOS Studio asks first, and it won't update while a debug, mirror or hot reload session is running. The iOS SDK, Xcode and Swift are never updated here. When there's news about one of them, you see a short note, with a button to the right Setup step where there is one. Switching back to Tested reinstalls the tested versions of anything you updated, after listing what changes. While updates are waiting, the Toolchain entry in the sidebar shows their number in grey (a grey dot when the sidebar shows only icons).
+
+When an update fails its check, the previous version comes back and a note in the section says so ("Updating ipsw failed and was put back") with the reason. The note stays until the next successful check or update, or until you close it. If iOS Studio or the computer stopped in the middle of an update, the section says "An update of ipsw was interrupted" and offers Put back, which restores the previous version and removes what the update left behind. Any other update does that first anyway. Errors say what happened: another update is already running, the iPhone connection is in use, GitHub asked to wait before the next check, or a source didn't answer.
+
+Below that are the installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair. When your copy of the iOS build scripts (omarchy-apple-dev) is older than the version your channel uses, it says "update available" there and Updates lists it with the other updates, so one Update button covers it; everything keeps working until you press it. Then you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
 
 ### Settings
 

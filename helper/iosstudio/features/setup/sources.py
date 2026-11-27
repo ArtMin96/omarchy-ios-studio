@@ -14,7 +14,6 @@ from . import runtime as rt
 from .facts import apple_dev_pins, binary_has_old_ua, toolchain_root
 from .pins import (
     APPLE_DEV_CACHE,
-    APPLE_DEV_COMMIT,
     APPLE_DEV_HOME,
     APPLE_DEV_LIB,
     APPLE_DEV_REPO,
@@ -32,7 +31,7 @@ def git(args: list, step_id: str, cwd: str | Path | None = None, mutating: bool 
 
 
 def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
-    """Check out omarchy-apple-dev at the pinned commit. A checkout found elsewhere (appleDevDir) or already at the
+    """Check out omarchy-apple-dev at the pinned commit (ctx.pins). A checkout found elsewhere (appleDevDir) or already at the
     pin is kept as is unless --force; our own checkout at an older commit is moved to the pin."""
     ad = ctx.c.get("apple_dev")
     if ad and not ctx.c.get("apple_dev_outdated") and not ctx.flags.get("force"):
@@ -42,18 +41,19 @@ def i_apple_dev(ctx: Ctx, step_id: str) -> Path:
         raise HelperError("apple-dev-path", f"{appdirs.tilde(d)} exists but isn't a download of the iOS build scripts. "
                           "Move it away, then try again.")
     do_mkdir(d.parent, step_id)
+    commit = ctx.pins.apple_dev_commit
     tail: list = []
     if not (d / ".git").is_dir():
         must(git(["init", "-q", str(d)], step_id), "git", "Couldn't prepare the iOS build scripts folder.", step_id)
         must(git(["-C", str(d), "remote", "add", "origin", APPLE_DEV_REPO], step_id), "git", "Couldn't prepare the iOS build scripts folder.", step_id)
     progress(step_id, 0.3, "Downloading the iOS build scripts")
-    must(git(["-C", str(d), "fetch", "-q", "--depth", "1", APPLE_DEV_REPO, APPLE_DEV_COMMIT], step_id, tail=tail),
+    must(git(["-C", str(d), "fetch", "-q", "--depth", "1", APPLE_DEV_REPO, commit], step_id, tail=tail),
          "network", "Couldn't download the iOS build scripts from GitHub. Check your internet connection, then try again.", step_id, tail)
-    must(git(["-C", str(d), "checkout", "-q", "--detach", APPLE_DEV_COMMIT], step_id, tail=tail),
+    must(git(["-C", str(d), "checkout", "-q", "--detach", commit], step_id, tail=tail),
          "git", "Couldn't check out the iOS build scripts.", step_id, tail)
     if not rt.DRY:
         rc, out, _ = probe(["git", "-C", d, "rev-parse", "HEAD"])
-        if out.strip() != APPLE_DEV_COMMIT:
+        if out.strip() != commit:
             raise HelperError("git", "The iOS build scripts aren't at the expected version after download.", detail=out)
         ctx.c["apple_dev"], ctx.c["apple_dev_outdated"] = d, False
     return d
@@ -86,7 +86,8 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
         if rc == 0:
             log(step_id, f"xtool {sha[:7]} is already built: {appdirs.tilde(dest)}")
             do_symlink(dest / "xtool", link, step_id)
-            prune_old_xtool(name, step_id)
+            if not ctx.keep_previous:          # an update prunes once it checks out (channel.backup)
+                prune_old_xtool(name, step_id)
             return
     need_space(APPLE_DEV_CACHE, 3_000_000_000, "building xtool")
     progress(step_id, 0.02, "Downloading xtool's source code")
@@ -142,7 +143,8 @@ def i_xtool(ctx: Ctx, step_id: str) -> None:
     rc, out, _ = probe([link, "--version"])
     must(rc, "build-failed", "The new xtool doesn't start.", step_id, [out])
     log(step_id, f"Installed {appdirs.tilde(dest)} ({out.strip()}, built from {sha[:7]})")
-    prune_old_xtool(name, step_id)
+    if not ctx.keep_previous:
+        prune_old_xtool(name, step_id)
 
 
 def prune_old_xtool(keep: str, step_id: str) -> None:

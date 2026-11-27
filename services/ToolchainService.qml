@@ -6,7 +6,9 @@ import "../core"
 import "../lib/Model.js" as Model
 
 // Toolchain slice service: versions (`toolchain info`), disk usage (`toolchain disk`),
-// cleanup (`toolchain clean --item`) and removal (`toolchain remove-all`).
+// cleanup (`toolchain clean --item`), removal (`toolchain remove-all`) and toolchain updates
+// (`updates status|check|apply|channel`: the update channel, a daily check while the window is focused,
+// one-click updates that roll back on failure).
 Item {
   id: root
   required property var app
@@ -22,12 +24,20 @@ Item {
     id: diskRes
     fetch: root.app.cli.fetcher(["toolchain", "disk"], "", { timeout: 90000 })
   }
+  // `updates status`: the cached check (no network, < 20 ms); check/apply streams replace it with their result.
+  Resource {
+    id: updatesRes
+    fetch: root.app.cli.fetcher(["updates", "status"], "", { timeout: 15000 })
+    onSucceeded: root._autoCheck()
+  }
   readonly property alias infoResource: infoRes
   readonly property alias diskResource: diskRes
+  readonly property alias updatesResource: updatesRes
 
   readonly property var items: infoRes.data && infoRes.data.items ? infoRes.data.items : []   // versions
   readonly property var sdks: infoRes.data && infoRes.data.sdks ? infoRes.data.sdks : ({})
-  readonly property var _bad: items.filter(function(i) { return !i.optional && i.status !== "ok" })
+  // what needs fixing; "update" (an older iOS build scripts checkout) works as it is and counts with the updates
+  readonly property var _bad: items.filter(function(i) { return !i.optional && i.status !== "ok" && i.status !== "update" })
 
   // "unknown" | "loading" | "ready" | "needs-setup" | "error" (the last check failed)
   readonly property string status: infoRes.error ? "error"
@@ -39,15 +49,18 @@ Item {
     if (infoRes.error) return { title: "Toolchain", detail: Model.errorMessage(infoRes.error), level: "error", badge: "" }
     if (!infoRes.loaded) return { title: "Toolchain", detail: "Not checked yet", level: "info", badge: "" }
     var bad = root._bad
-    // "update" (an older iOS build scripts checkout) works as it is: named, but no warning dot
-    var updates = bad.filter(function(i) { return i.status === "update" }).length
+    // Updates (Updates rows and an older iOS build scripts checkout, once each) are a quiet count (the sidebar
+    // draws it dim), and only while nothing needs fixing.
+    var n = Model.toolchainUpdateIds(root.items, root.updates).length
+    var quiet = !bad.length && n > 0
     return {
       title: "Toolchain",
-      detail: !bad.length ? "All pieces installed"
-            : updates === bad.length ? (updates === 1 ? "1 update ready" : updates + " updates ready")
-            : bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention",
-      level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length > updates ? "warn" : "ok"),
-      badge: ""
+      detail: bad.length ? bad.length + " piece" + (bad.length === 1 ? "" : "s") + " need attention"
+            : n ? (n === 1 ? "1 update ready" : n + " updates ready") : "All pieces installed",
+      level: bad.some(function(i) { return i.status === "error" }) ? "error" : (bad.length ? "warn" : quiet ? "info" : "ok"),
+      badge: quiet ? String(n) : "",
+      quiet: quiet,
+      tip: quiet ? Model.plural(n, "toolchain update") + " available" : ""
     }
   }
 
@@ -65,6 +78,7 @@ Item {
 
   function refresh() {
     infoRes.load(true)
+    updatesRes.load(true)
     if (root.diskWanted) root.refreshDisk()
   }
 
@@ -128,6 +142,226 @@ Item {
     }
     root.refresh()
     if (root.app.setup) root.app.setup.refresh()
+  }
+
+  // ------------------------------------------------------------ updates
+  //   updates            the `updates status` object, or null before the first read
+  //   channel            "tested" | "latest" (a switch in flight shows at once)
+  //   checking, applying the check / apply streams
+  //   applyTarget        component id, "all" or "restore"; applyStep the component being updated, applyDetail its progress
+  //   lastFailure        {id, name, error} of the last update that failed and was put back, until the next good
+  //                      check or update (or dismissFailure()); the section keeps a note for it
+  //   checkUpdates(force), update(id), updateAll(), putBack(), setChannel(ch), cancelUpdate(), dismissFailure()
+  readonly property var updates: updatesRes.data && updatesRes.data.components ? updatesRes.data : null
+  readonly property int updateCount: updates && updates.count ? updates.count : 0
+  property string pendingChannel: ""
+  readonly property string channel: pendingChannel || (updates && updates.channel ? updates.channel : "tested")
+  readonly property bool checking: checkJob.running
+  readonly property bool applying: applyJob.running
+  property string applyTarget: ""
+  property string applyStep: ""
+  property real applyFraction: -1
+  property string applyDetail: ""
+  property var lastFailure: null
+  property bool _manualCheck: false
+  property real _autoAt: 0
+  property string _applyChannel: ""
+  property var _prompt: null          // confirm handle for a helper prompt
+
+  function checkUpdates(force) {
+    if (checkJob.running || applyJob.running) return
+    root._manualCheck = !!force
+    checkJob.start(["updates", "check"].concat(force ? ["--force"] : []))
+  }
+
+  // At most one background check an hour, only while the window is focused and the cached one is due.
+  function _autoCheck() {
+    if (!root.app.windowFocused || checkJob.running || applyJob.running) return
+    if (!Model.updatesDue(root.updates) || Date.now() - root._autoAt < 3600000) return
+    root._autoAt = Date.now()
+    root.checkUpdates(false)
+  }
+
+  function _component(id) {
+    var cs = root.updates ? root.updates.components : []
+    for (var i = 0; i < cs.length; i++) if (cs[i].id === id) return cs[i]
+    return null
+  }
+
+  // Updating pymobiledevice3 restarts the iPhone connection: ask once here, then the helper gets --yes.
+  function _askRestart(comps, go) {
+    var names = comps.filter(function(c) { return c && (c.restarts || []).indexOf("iphone-connection") >= 0 })
+                     .map(function(c) { return c.name })
+    if (!names.length) { go(false); return }
+    root.app.confirm({
+      title: "Restart the iPhone connection?",
+      message: "Updating " + names.join(" and ") + " restarts the connection to your iPhone for a moment. "
+               + "The iPhone reconnects on its own.",
+      confirmText: "Update",
+      glyph: Model.Glyph.phoneLink,
+      onConfirm: function() { go(true) }
+    })
+  }
+
+  // On Tested this also puts the tested version back over a newer, untested one (Model.updateIsBack).
+  function update(id) {
+    var c = root._component(id)
+    if (!c || applyJob.running) return
+    root._askRestart([c], function(yes) { root._apply(["--component", id], id, "", yes) })
+  }
+
+  // An update that was interrupted (status.interrupted): `updates apply` with no component only puts back
+  // the previous version it had set aside.
+  function putBack() {
+    if (applyJob.running || !root.updates || !root.updates.interrupted) return
+    root._apply([], "restore", "", false)
+  }
+
+  function dismissFailure() { root.lastFailure = null }
+
+  function updateAll() {
+    if (applyJob.running) return
+    var todo = Model.updateRows(root.updates).filter(function(c) { return c.state === "update" })
+    root._askRestart(todo, function(yes) { root._apply(["--all"], "all", "", yes) })
+  }
+
+  // Latest only changes what's offered; going back to Tested reinstalls the tested versions (asks first).
+  function setChannel(ch) {
+    if (ch === root.channel || applyJob.running || root.pendingChannel !== "") return
+    var back = ch === "tested" ? Model.updatesReinstall(root.updates) : []
+    if (back.length) {
+      var comps = back.map(function(b) { return root._component(b.id) })
+      root.app.confirm({
+        title: "Go back to the tested versions?",
+        message: "These are reinstalled at the versions this iOS Studio release was tested with:\n\n"
+                 + back.map(function(b) { return b.name + "  " + b.from + " → " + b.to }).join("\n")
+                 + "\n\nEach keeps working until its replacement has passed its check.",
+        confirmText: back.length === 1 ? "Reinstall " + back[0].name : "Reinstall " + back.length + " tools",
+        glyph: Model.Glyph.reinstall,
+        onConfirm: function() {
+          root._askRestart(comps, function(yes) { root._apply(["--all", "--channel", "tested"], "all", "tested", yes) })
+        }
+      })
+      return
+    }
+    root.pendingChannel = ch
+    root.app.cli.call(["updates", "channel", "--set", ch], "", function(d) {
+      root.pendingChannel = ""
+      root.app.setSetting("toolchainChannel", d && d.channel ? d.channel : ch)
+      updatesRes.load(true)
+      if (ch === "latest" && root.updates && !root.updates.checkedAt) root.checkUpdates(true)
+    }, function(e) {
+      root.pendingChannel = ""
+      root.app.toastError(e)
+    })
+  }
+
+  function cancelUpdate() { if (applyJob.running) applyJob.write({ cancel: true }) }
+
+  function _apply(args, target, channel, yes) {
+    if (applyJob.running) return
+    if (checkJob.running) checkJob.stop()
+    root._manualCheck = false
+    root.applyTarget = target
+    root.applyStep = target === "all" ? "" : target
+    root.applyFraction = -1
+    root.applyDetail = "Starting…"
+    root._applyChannel = channel || ""
+    applyJob.start(["updates", "apply"].concat(args, yes ? ["--yes"] : []))
+  }
+
+  Stream {
+    id: checkJob
+    program: [root.app.helperPath]
+    onFinished: function(ok, data, error) {
+      if (data && data.components) updatesRes.set(data)
+      else updatesRes.load(true)
+      if (ok) root.lastFailure = null
+      if (!ok && root._manualCheck && error && error.code !== "cancelled") root.app.toast(Model.updateErrorText(error), "error")
+      root._manualCheck = false
+    }
+  }
+
+  Stream {
+    id: applyJob
+    program: [root.app.helperPath]
+    onEvent: function(ev) {
+      switch (ev.event) {
+      case "step":
+        if (ev.state === "running") { root.applyStep = ev.id || ""; root.applyFraction = -1; root.applyDetail = ev.title || "" }
+        break
+      case "progress":
+        root.applyFraction = ev.fraction === null || ev.fraction === undefined ? -1 : ev.fraction
+        if (ev.detail) root.applyDetail = ev.detail
+        break
+      case "prompt":
+        root._ask(ev)
+        break
+      }
+    }
+    onFinished: function(ok, data, error) { root._applied(ok, data, error) }
+    // A helper that exits 0 without a `done` line: settle anyway (exit errors come through onFinished).
+    onExited: function(code) {
+      Qt.callLater(function() {
+        if (root.applyTarget !== "" && !applyJob.running && !applyJob.lastDone)
+          root._applied(false, {}, { code: "exited", message: "The update stopped without reporting a result." })
+      })
+    }
+  }
+
+  // A question from the helper (only when it wasn't given --yes): the shared confirm dialog, on any page.
+  function _ask(p) {
+    if (root._prompt) root.app.closeConfirm(root._prompt)
+    var yes = (p.options || []).filter(function(o) { return o.value === "yes" })[0]
+    root._prompt = root.app.confirm({
+      title: "Before updating",
+      message: p.message || "",
+      confirmText: yes ? yes.label : "Continue",
+      glyph: Model.Glyph.help,
+      onConfirm: function() { root._prompt = null; applyJob.write({ prompt: p.id, value: "yes" }) },
+      onCancel: function() { root._prompt = null; applyJob.write({ prompt: p.id, cancel: true }) }
+    })
+    if (!root.app.windowFocused) root.app.notify("iOS Studio needs you", p.message || "", Model.Glyph.help)
+  }
+
+  function _applied(ok, data, error) {
+    if (root.applyTarget === "") return
+    if (root._prompt) { root.app.closeConfirm(root._prompt); root._prompt = null }
+    var channel = root._applyChannel
+    root.applyTarget = ""
+    root.applyStep = ""
+    root.applyFraction = -1
+    root.applyDetail = ""
+    root._applyChannel = ""
+    if (data && data.status && data.status.components) updatesRes.set(data.status)
+    else updatesRes.load(true)
+    var rolled = data && data.rolledBack ? data.rolledBack : []
+    if (ok) {
+      root.lastFailure = null
+      if (channel) root.app.setSetting("toolchainChannel", channel)
+      root.app.toast(Model.updatesDoneText(data), "ok")
+    } else if (error && error.code === "cancelled") {
+      if (rolled.length) root.app.toast(Model.updateErrorText(error), "info")
+    } else {
+      // a failure that was rolled back keeps a note in the section, not only a toast
+      if (rolled.length) {
+        var failed = rolled[rolled.length - 1]
+        var c = root._component(failed)
+        root.lastFailure = { id: failed, name: c ? c.name : failed, error: error }
+      }
+      root.app.toast(Model.updateErrorText(error), "error")
+    }
+    infoRes.load(true)
+    if (root.diskWanted) root.refreshDisk()
+    if (root.app.setup) root.app.setup.refresh()
+  }
+
+  Timer {
+    interval: 3600000
+    repeat: true
+    triggeredOnStart: true
+    running: root.app.windowFocused && updatesRes.loaded
+    onTriggered: root._autoCheck()
   }
 
   Component.onCompleted: root.refresh()

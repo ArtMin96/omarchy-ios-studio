@@ -45,7 +45,11 @@ helper/
                              build-logs/), build.py (the build flow), runner.py (BuildRunner: xtool output -> events),
                              renew.py (auto-renew timer), commands.py (flags in, JSON out)
       setup/                 groups `setup`, `toolchain`: facts.py, steps.py, installers.py, downloads.py, sources.py, pins.py,
-                             xip.py, toolchain.py, runtime.py, commands.py
+                             xip.py, toolchain.py, runtime.py, channel.py (update channel pins, backups), commands.py
+                             (GROUPS loads on first use, so modules that need only channel/facts skip it)
+      updates/               group `updates` (toolchain updates, tested/latest channel): upstream.py (fetches, ETags,
+                             verification), check.py (daily check, cache), model.py (status), apply.py (backup, install,
+                             verify, roll back), commands.py
       watch/                 group `watch` (compile on save): fswatch.py (inotify/polling), watcher.py (scheduler),
                              builds.py, lifecycle.py, runtime.py (lock/status files), commands.py
       packages/              group `packages`: manifest.py, manifest_edit.py, add.py, update.py, project.py, swift.py,
@@ -72,7 +76,7 @@ helper/
       config_files.py        edits other programs' config files without losing anything
       xip_version.py         the Xcode version inside a .xip, without unpacking it
     demo/                  the helper's demo mode: demo.py (router + made-up answers), demo_art.py, debugger_demo.py, hot_reload.py,
-                           testing.py
+                           testing.py, updates_demo.py (toolchain updates; its demo-updates.json also feeds demo `toolchain info`)
     device/                the device daemon, its broker and client
       protocol.py            the wire format (JSON lines, errors)
       backend.py             the Backend base class: what the broker calls on a daemon
@@ -91,7 +95,7 @@ mcp/
     core/                  registry.py (@tool, slim_schemas), jobs.py (JobManager), job_status.py, deadline.py (25 s),
                            budget.py, params.py, errors.py
     backends/              device.py, projects.py, builds.py, console.py, crashes.py
-    tools/                 one module per area (111 tools), listed in tools/__init__.py MODULES
+    tools/                 one module per area (113 tools), listed in tools/__init__.py MODULES
   pyproject.toml         its dependencies (installed into a private venv on first run)
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                   ios-studio (launcher), iosstudio-helper, iosstudio-deviced, iosstudio-mcp
@@ -252,7 +256,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use. Two variants for screenshots of fallback states: `IOSSTUDIO_DEMO_DEBUG=plain` debugs as if lldb couldn't be prepared for iOS (no iOS SDK), so `debug check` and sessions report `swiftExpressions` false with the real `expressionsNote` / `lldb-plain` notice and Swift expressions fail as they do in real mode; `IOSSTUDIO_DEMO_APPLE_DEV=outdated` (ready and expiring) puts our omarchy-apple-dev checkout at the previous pin, so Setup's iOS build scripts row offers Update, worded as the real `steps.py` words it.
+`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use. Two variants for screenshots of fallback states: `IOSSTUDIO_DEMO_DEBUG=plain` debugs as if lldb couldn't be prepared for iOS (no iOS SDK), so `debug check` and sessions report `swiftExpressions` false with the real `expressionsNote` / `lldb-plain` notice and Swift expressions fail as they do in real mode; `IOSSTUDIO_DEMO_APPLE_DEV=outdated` (ready and expiring) puts our omarchy-apple-dev checkout at the previous pin, so Setup's iOS build scripts row offers Update, worded as the real `steps.py` words it, and Toolchain › Updates lists the same update (until a demo update installs the scripts). Toolchain updates have two more: `IOSSTUDIO_DEMO_UPDATES=rollback` makes every demo update fail its post-update check and roll back (the kept failure note), and `IOSSTUDIO_DEMO_UPDATES=interrupted` starts with an ipsw update that was interrupted, so Toolchain › Updates offers Put back until an apply puts it back. The demo's updates state lives in `$XDG_STATE_HOME/ios-studio/demo-updates.json`; delete it to start the story over.
 
 ## Tests
 

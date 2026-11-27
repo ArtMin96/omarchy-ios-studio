@@ -116,18 +116,26 @@ def find_apple_dev() -> Path | None:
     return None
 
 
-def apple_dev_pins(d: Path | None) -> dict:
+def parse_apple_dev_pins(text: str, defaults: bool = True) -> dict:
+    """XTOOL_REPO, XTOOL_SHA and XTOOL_SDK_VERSION from install-toolchain.sh's text. defaults=False leaves out the
+    ones the text doesn't set (an update checking a newer release must not assume today's values)."""
     pins = {"XTOOL_REPO": DEFAULT_XTOOL_REPO, "XTOOL_SHA": DEFAULT_XTOOL_SHA, "XTOOL_SDK_VERSION": DEFAULT_SDK_STAMP}
+    found = {}
+    for k in pins:
+        m = re.search(rf'^{k}="?([^"\n]*)"?\s*$', text, re.M)
+        if m and m.group(1):
+            found[k] = m.group(1)
+    return {**pins, **found} if defaults else found
+
+
+def apple_dev_pins(d: Path | None) -> dict:
+    text = ""
     if d:
         try:
             text = (d / "install-toolchain.sh").read_text(errors="replace")
-            for k in list(pins):
-                m = re.search(rf'^{k}="?([^"\n]*)"?\s*$', text, re.M)
-                if m and m.group(1):
-                    pins[k] = m.group(1)
         except OSError:
             pass
-    return pins
+    return parse_apple_dev_pins(text)
 
 
 def toolchain_root() -> Path | None:

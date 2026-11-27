@@ -8,10 +8,9 @@ Runs on tests/support/setup_upgrade.py's old machine (real git checkouts, fake t
 from __future__ import annotations
 
 import pytest
-from test_setup_apple_dev_048 import facts_for, relocate
 
 from iosstudio.features.setup import steps, toolchain
-from support.setup_upgrade import old_machine
+from support.setup_upgrade import facts_for, old_machine, relocate
 
 
 def row(id_: str, state: str, **kw) -> dict:

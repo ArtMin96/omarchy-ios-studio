@@ -1,5 +1,5 @@
 """An older iOS build scripts checkout (setup step state "broken" + update) reaches agents as an update, not a
-fault: ios_status names it with its fix and keeps toolchain_ready, ios_toolchain_check reports state "update".
+fault: ios_status names it with its fix (ios_toolchain_update, as ios_toolchain_updates does) and keeps toolchain_ready, ios_toolchain_check reports state "update".
 A fake iosstudio-helper behind the real helper.call().
 
     python -m pytest tests/mcp/test_mcp_setup_update.py
@@ -34,8 +34,9 @@ class Status(ToolCase):
         self.assertTrue(tc[0]["message"].startswith("Update ready (it works meanwhile): iOS build scripts."))
         self.assertIn(DETAIL, tc[0]["message"])
         self.assertNotIn("Missing", tc[0]["message"])
-        self.assertEqual(tc[0]["fix"], "ios_toolchain_install(step='apple-dev')")
-        self.assertIn("ios_toolchain_install(step='apple-dev')", d["next_steps"])
+        # the same update ios_toolchain_updates lists, through its tool (it keeps the previous version)
+        self.assertEqual(tc[0]["fix"], "ios_toolchain_update(component='apple-dev')")
+        self.assertIn("ios_toolchain_update(component='apple-dev')", d["next_steps"])
 
 
 class Check(ToolCase):

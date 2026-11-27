@@ -9,7 +9,6 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-import traceback
 
 from iosstudio.core import flags, output
 
@@ -29,6 +28,7 @@ MODULES = {
     "packages": "packages",
     "hotreload": "hotreload",
     "test": "testing",
+    "updates": "updates",
 }
 # one-word commands -> group + action
 ALIASES = {"format": ["projects", "format"], "format-lint": ["projects", "format-lint"]}
@@ -46,6 +46,7 @@ def main(argv: list[str]) -> int:
         try:
             return int(demo.run(group, action, flags.parse_flags(rest)) or 0)
         except Exception:
+            import traceback  # lazy: only on a crash (saves ~11 ms per helper call)
             return output.fail("internal", "Demo mode failed.", detail=traceback.format_exc())
     mod_name = MODULES.get(group)
     if not mod_name:
@@ -66,6 +67,7 @@ def main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         return output.fail("cancelled", "Cancelled.")
     except Exception:
+        import traceback
         return output.fail("internal", "Something unexpected went wrong.", detail=traceback.format_exc())
 
 

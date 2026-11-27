@@ -6,17 +6,20 @@ import "../../lib/Model.js" as Model
 // Tiny status marker for sidebars and tabs: a dot, or a short label/count.
 //   Badge { level: "error" }            // dot
 //   Badge { level: "warn"; text: "3" }  // count chip
+//   Badge { quiet: true; text: "2" }    // dim: informs without calling for action (e.g. toolchain updates)
 Rectangle {
   id: root
   property string level: "info"
   property string text: ""
+  property bool quiet: false
   readonly property color tint: Theme.levelColor(Model.level(level))
 
   readonly property int dot: Style.space(6)
   implicitWidth: text === "" ? dot : Math.max(label.implicitWidth + Style.spacing.md * 2, implicitHeight)
   implicitHeight: text === "" ? dot : label.implicitHeight + Style.spacing.xxs * 2
   radius: Style.cornerRadius > 0 || text === "" ? height / 2 : 0
-  color: text === "" ? tint : Util.alpha(tint, 0.18)
+  color: quiet ? (text === "" ? Theme.faint : Util.alpha(Commons.Color.foreground, 0.07))
+               : (text === "" ? tint : Util.alpha(tint, 0.18))
 
   AppText {
     id: label
@@ -26,6 +29,6 @@ Rectangle {
     size: "caption"
     strong: true
     tone: "inherit"
-    color: root.tint
+    color: root.quiet ? Theme.faint : root.tint
   }
 }

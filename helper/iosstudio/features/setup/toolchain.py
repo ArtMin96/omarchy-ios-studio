@@ -11,6 +11,7 @@ from iosstudio.core import appdirs, output
 from iosstudio.core.appdirs import CACHE_DIR, HOME, LOCAL_BIN, VENV_DIR
 from iosstudio.core.output import HelperError
 
+from . import channel
 from . import runtime as rt
 from .facts import (
     apple_dev_pins,
@@ -26,16 +27,12 @@ from .facts import (
 )
 from .pins import (
     APPLE_DEV_CACHE,
-    APPLE_DEV_COMMIT,
     APPLE_DEV_HOME,
     APPLE_DEV_LIB,
     AUR_DIR,
     DOWNLOADS,
-    IPSW_VERSION,
     LEGACY_VENV,
     OMARCHY_HOOK,
-    PYMD3_VERSION,
-    RCODESIGN_VERSION,
     SDK_CACHE,
     XTOOL_CONFIG,
 )
@@ -48,7 +45,8 @@ from .xip import find_xips
 def info() -> dict:
     """Versions and state of every piece (from the same facts as `setup check`)."""
     F = gather()
-    steps, c = build_steps(F)
+    pins = channel.effective_pins()
+    steps, c = build_steps(F, pins)
     by = {s["id"]: s for s in steps}
 
     def item(id_: str, name: str, version: str | None, detail: str, status: str, **kw) -> dict:
@@ -58,7 +56,7 @@ def info() -> dict:
 
     def st_of(sid: str) -> str:
         if by[sid].get("update") and by[sid]["state"] == "broken":
-            return "update"     # works; the tested version is a download away (Setup's Update)
+            return "update"     # works; the channel's version is a download away (Setup's Update)
         return {"done": "ok", "missing": "missing", "broken": "error", "optional": "missing", "unknown": "warn"}[by[sid]["state"]]
     xv = (F["xtool_ver"][1].strip().splitlines() or [""])[0]
     xt_real = os.path.realpath(F["xtool"]) if F["xtool"] else None
@@ -67,7 +65,8 @@ def info() -> dict:
     pkgv = re.search(r"^Version\s*:\s*(\S+)", qi, re.M)
     items = [
         item("xtool", "xtool", xv.split()[-1][:7] if xv else None, appdirs.tilde(xt_real) if xt_real else "Not installed",
-             st_of("xtool"), hasFix=F["xtool_old_ua"] is False, pinned=F["pins"]["XTOOL_SHA"][:7], step="xtool"),
+             st_of("xtool"), hasFix=F["xtool_old_ua"] is False, pinned=F["pins"]["XTOOL_SHA"][:7],
+             pinWord=pins.word("apple-dev"), step="xtool"),
         item("swift", "Swift", swift_ver, f"swift-bin {pkgv.group(1)}" if pkgv else "Not installed", st_of("swift"),
              held="swift-bin" in F["ignore"][1].split(), step="swift"),
         item("sdk", "iOS SDK", (sdk_ios_versions(c["bundle"]) or [None])[-1] if c.get("bundle") else None,
@@ -75,14 +74,16 @@ def info() -> dict:
              stamp=sdk_stamp(c["bundle"]) if c.get("bundle") else None, wantedStamp=c["stamp"], step="sdk"),
         item("pymobiledevice3", "pymobiledevice3", c["pymd3"][1] if c.get("pymd3") else None,
              (f"Python {c['pymd3'][2]} · {appdirs.tilde(Path(c['pymd3'][0]).parent.parent)}" if c.get("pymd3") else by["pymobiledevice3"]["detail"]),
-             st_of("pymobiledevice3"), pinned=PYMD3_VERSION, step="pymobiledevice3"),
+             st_of("pymobiledevice3"), pinned=pins.pymd3_version, pinWord=pins.word("pymobiledevice3"), step="pymobiledevice3"),
         item("rcodesign", "rcodesign", first_version(F["rcodesign"][1]) if F["rcodesign"][0] == 0 else None,
-             "Signs App Store builds and hot reload patches", st_of("rcodesign"), pinned=RCODESIGN_VERSION, step="rcodesign"),
+             "Signs App Store builds and hot reload patches", st_of("rcodesign"), pinned=pins.rcodesign_version,
+             pinWord=pins.word("rcodesign"), step="rcodesign"),
         item("ipsw", "ipsw", first_version(F["ipsw"][1]) if F["ipsw"][0] == 0 else None, "Debugger helper (optional)",
-             "ok" if F["ipsw"][0] == 0 else "missing", pinned=IPSW_VERSION, step="ipsw", optional=True),
+             "ok" if F["ipsw"][0] == 0 else "missing", pinned=pins.ipsw_version, pinWord=pins.word("ipsw"),
+             step="ipsw", optional=True),
         item("apple-dev", "omarchy-apple-dev", (c.get("apple_dev_head") or "")[:7] or None,
              appdirs.tilde(c["apple_dev"]) if c.get("apple_dev") else "Not downloaded", st_of("apple-dev"),
-             pinned=APPLE_DEV_COMMIT[:7], step="apple-dev"),
+             pinned=pins.apple_dev_commit[:7], pinWord=pins.word("apple-dev"), step="apple-dev"),
     ]
     caches = [dict(x, path=appdirs.tilde(x["path"])) for x in c.get("caches", [])]
     return {"items": items, "sdks": {"installed": sdk_ios_versions(c["bundle"]) if c.get("bundle") else [],
@@ -173,6 +174,9 @@ def disk_items() -> list[dict]:
         dict(id="venv", name="pymobiledevice3", paths=venvs, cleanable=False, note="In use."),
         dict(id="tools", name="rcodesign and ipsw", paths=[p for p in (LOCAL_BIN / "rcodesign", LOCAL_BIN / "ipsw") if p.exists()],
              cleanable=False, note="Small helper programs."),
+        dict(id="update-backups", name="Previous versions from updates", paths=channel.backup_paths(),
+             cleanable=True, safe=True, note="Kept while a toolchain update checks out, then deleted. Left over "
+             "only when an update was interrupted. Not used."),
         dict(id="swift", name="Swift toolchain", paths=[toolchain_root()] if toolchain_root() else [], cleanable=False,
              note="System package (swift-bin)."),
     ]
@@ -215,7 +219,9 @@ def clean(flags: dict) -> int:
         log(None, "Dry run: nothing will be deleted.")
     output.step(item_id, it["name"], "running")
     freed = 0
-    for i, p in enumerate(it["paths"]):
+    if item_id == "update-backups":     # under the updates lock: never while an update needs them
+        freed = channel.clear_backups(item_id)
+    for i, p in enumerate(it["paths"] if item_id != "update-backups" else []):
         # each path must still match its item's shape
         if item_id == "xip" and not (p.suffix == ".xip" and p.name.lower().startswith("xcode")):
             continue

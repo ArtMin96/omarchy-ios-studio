@@ -16,11 +16,9 @@ from pathlib import Path
 import pytest
 
 from iosstudio.core.output import HelperError
-from iosstudio.features.setup import facts, installers, pins, sources, steps, toolchain
+from iosstudio.features.setup import facts, installers, pins, steps, toolchain
 from iosstudio.features.setup import runtime as rt
-from support.setup_upgrade import ACTOOL, STAMP, Machine, git, make_bundle, old_machine
-
-SWIFT_QI = "Name            : swift-bin\nVersion         : 6.4.2-2\nDepends On      : python312  glibc\n"
+from support.setup_upgrade import ACTOOL, STAMP, Machine, facts_for, git, make_bundle, setup_machine
 
 
 def events(capsys) -> list[dict]:
@@ -74,65 +72,9 @@ def test_darwin_tools_stale_compares_mtimes(tmp_path):
 
 # ================================================================ steps on hand-made facts
 
-def facts_for(m: Machine, **over) -> dict:
-    F = {"pacman_T": (0, "", ""), "swift_qi": (0, SWIFT_QI, ""), "swift_ver": (0, "Swift version 6.4.2 (swift-6.4.2-RELEASE)", ""),
-         "ignore": (0, "swift-bin", ""), "xtool_ver": (0, "xtool 1.24.0\n", ""),
-         "sdk_status": (0, f"SDK is installed\nPath: {m.bundle}\n", ""), "auth": (0, "Logged in.\n", ""),
-         "rcodesign": (0, "rcodesign 0.29.0", ""), "ipsw": (1, "", ""),
-         "pymd3": [(str(steps.VENV_DIR / "bin/python"), (0, f"{pins.PYMD3_VERSION}\n3.13.1\n", ""))],
-         "ad_head": (0, m.ad_old + "\n", ""), "ad_dirty": (0, "", ""), "xtool_old_ua": False, "xcspec": True,
-         "idevice": (1, "", ""), "avahi": (0, "inactive", ""), "py312": (0, "python312 3.12.9", ""),
-         "xtool": m.local_bin / "xtool", "apple_dev": m.apple_dev, "pins": facts.apple_dev_pins(m.apple_dev)}
-    F.update(over)
-    return F
-
-
-def relocate(monkeypatch, m: Machine) -> None:
-    """Point every setup module's HOME-based path at the fake machine, and its pin at the fake remote's new commit."""
-    paths = {"APPLE_DEV_HOME": m.apple_dev, "APPLE_DEV_LIB": m.lib, "APPLE_DEV_CACHE": m.cache, "LOCAL_BIN": m.local_bin,
-             "SDK_CACHE": m.sdk_cache, "LEGACY_VENV": m.legacy_venv, "AUR_DIR": m.root / "aur", "SWIFT": m.swift,
-             "APPLE_DEV_COMMIT": m.ad_new, "APPLE_DEV_REPO": f"file://{m.root / 'remotes/omarchy-apple-dev'}"}
-    for mod in (facts, steps, sources, installers, toolchain):
-        for name, value in paths.items():
-            if hasattr(mod, name):
-                monkeypatch.setattr(mod, name, value)
-        if hasattr(mod, "toolchain_root"):
-            monkeypatch.setattr(mod, "toolchain_root", lambda: m.toolchain)
-    monkeypatch.setattr(rt, "ALLOWED_DELETE_ROOTS", (m.lib, m.cache, m.sdk_cache, m.apple_dev, m.bundle.parent))
-    monkeypatch.setattr(steps, "is_omarchy", lambda: False)
-    monkeypatch.setattr(steps, "best_xip", lambda major: None)
-    monkeypatch.setattr(steps, "last_device_developer_mode", lambda: True)
-    monkeypatch.setattr(toolchain, "find_xips", lambda: [])
-    monkeypatch.setattr(toolchain, "project_build_dirs", lambda: [])
-    monkeypatch.setattr(toolchain.appdirs, "sdk_bundle", lambda: m.bundle)
-    # Setup's rows outside the toolchain as on a set-up Omarchy machine (pacman, a paired iPhone, the launcher
-    # entry), not as on the computer running the tests: CI has none of them, so "ready" was false there and
-    # `install all` ran the real install.sh.
-    real_which = steps.shutil.which
-    monkeypatch.setattr(steps.shutil, "which",
-                        lambda name, *a, **k: "/usr/bin/pacman" if name == "pacman" else real_which(name, *a, **k))
-    pairing = m.home / ".local/share/pymobiledevice3/remote_00008110-000A1B2C3D4E5F60.plist"
-    desktop, launcher = m.root / "applications/ios-studio.desktop", m.root / "bin/ios-studio"
-    for p in (pairing, desktop, launcher):
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
-    monkeypatch.setattr(steps, "HOME", m.home)
-    monkeypatch.setattr(steps, "DESKTOP_FILE", desktop)
-    monkeypatch.setattr(steps, "LAUNCHER", launcher)
-
-
 @pytest.fixture
 def machine(tmp_path, monkeypatch) -> Machine:
-    m = old_machine(tmp_path)
-    relocate(monkeypatch, m)
-    real_gather = facts.gather
-
-    def gather():          # this machine's real probes (git, xtool, the SDK), the system packages as healthy
-        F = real_gather()
-        keep = ("xtool_ver", "sdk_status", "auth", "ad_head", "ad_dirty", "xtool_old_ua", "xtool", "apple_dev", "pins")
-        return {**facts_for(m), **{k: F[k] for k in keep}}
-    monkeypatch.setattr(steps, "gather", gather)
-    return m
+    return setup_machine(tmp_path, monkeypatch)
 
 
 def rows(F: dict) -> dict:

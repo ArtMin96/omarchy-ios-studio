@@ -42,7 +42,7 @@ data with no side effects, on a separate socket (`ios-studio-demo/`).
 | Layer | Folder | What's in it |
 |---|---|---|
 | Helper core | `helper/iosstudio/core/` | `output` (the JSON protocol), `subproc` (`Runner`, `tool_env`), `appdirs` (XDG paths), `fileio` (locks, atomic writes), `flags`, `jsonc`, `xtool_yml` |
-| Helper features | `helper/iosstudio/features/` | one module or package per helper group (`projects/`, `setup/`, `watch/`, `packages/`, `hotreload/`, `testing/`, `editor_setup/`, `agents/`, `format.py`, `account.py`, …). `cli.py` maps a group to its module and imports it lazily. |
+| Helper features | `helper/iosstudio/features/` | one module or package per helper group (`projects/`, `setup/`, `updates/`, `watch/`, `packages/`, `hotreload/`, `testing/`, `editor_setup/`, `agents/`, `format.py`, `account.py`, …). `setup/channel.py` resolves the versions Setup installs (the update channel's pins) and keeps an update's backups; `updates/` checks upstream releases and applies toolchain updates with them (see [docs/features/toolchain-updates.md](docs/features/toolchain-updates.md)). `cli.py` maps a group to its module and imports it lazily. |
 | Helper demo | `helper/iosstudio/demo/` | the made-up answers for demo mode |
 | In-app runtime | `templates/hot-reload/` | the only iOS Studio code that runs inside the user's app: the Swift package hot reload copies into a project (`full/`: C loader + Swift API; `stub/`: the same API as no-ops). See [docs/features/hot-reload.md](docs/features/hot-reload.md) |
 | Device daemon | `helper/iosstudio/device/` | `protocol.py` (wire format), `backend.py` (what the broker calls), `kit.py` (feature registry, `Resources`, `CursorRing`), `broker.py` (socket, clients, idle exit), `client.py` (asyncio client, loadable by path), `real/` (the pymobiledevice3 daemon), `demo/` (the made-up iPhone) |
@@ -51,7 +51,7 @@ data with no side effects, on a separate socket (`ios-studio-demo/`).
 | QML plumbing | `core/` | `Cli.qml`, `Stream.qml` (helper calls), `Resource.qml`, `Host.qml`, `CommandCheck.qml`, `ThemeWatcher.qml` |
 | QML helpers | `lib/Model.js` | glyphs, pages, shortcuts, formatters |
 | QML data | `services/` | one service per area (Device, Project, Log, Account, Setup, Toolchain, Watch, Test, EditorDebug, HotReload) |
-| QML screens | `pages/`, `components/<area>/` | one page per sidebar entry; widgets in `common/`, `device/`, `projects/`, `logs/`, `account/`, `settings/` |
+| QML screens | `pages/`, `components/<area>/` | one page per sidebar entry; widgets in `common/`, `device/`, `projects/`, `logs/`, `account/`, `settings/`, `toolchain/` (`UpdatesSection.qml`) |
 
 Dependencies point down: pages → components → services → `core/` → helper/daemon. A device feature never
 imports a daemon module (`real/daemon.py` runs as `__main__`), only `real/core.py` or `demo/core.py`. An MCP tool

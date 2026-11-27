@@ -6,13 +6,18 @@ auto-installable step (one password prompt for all root work). Every install sup
 
 States: `done`, `missing`, `broken` (installed but not working, or older than what iOS Studio now pins:
 shows **Repair**), `optional`, `unknown` (only the iPhone can tell). `essential: true` steps decide `summary.ready`.
-A `broken` row with `update: true` (only `apple-dev` today) works as it is and has a tested update: every install
-path repairs it like any `broken` step, but people see an update. Setup shows an accent download glyph with a neutral
-hint and an **Update** button, and when updates are all that's left the top card says "An update is ready" with an
-**Update** button. On the Toolchain page the item is `status: "update"`: its version, "update available" and **Update**.
-`summary.updates` lists these rows and `summary.broken` doesn't; with nothing else left the summary is "1 update ready"
-at level `info`. MCP: `ios_toolchain_check` reports the step as state `update`, and `ios_status` names it with
-`ios_toolchain_install(step=...)` without counting it against `toolchain_ready`.
+A `broken` row with `update: true` (only `apple-dev` today) works as it is and has an update to the channel's pin
+(see [Pins](#pins-and-the-update-channel)): every install path repairs it like any `broken` step, but people see an
+update. Setup shows an accent download glyph with a neutral hint and an **Update** button, and when updates are all
+that's left the top card says "An update is ready" with an **Update** button. On the Toolchain page the item is
+`status: "update"`: its version and "update available". Toolchain › Updates usually lists the same checkout as an
+update row (`updates status` compares it with the same pin on Tested); then the item has no button of its own, the
+row's **Update** runs the update with its backup, and the sidebar counts it once (`Model.toolchainUpdateIds`).
+Without such a row the item's **Update** runs Setup's install. `summary.updates` lists these rows and
+`summary.broken` doesn't; with nothing else left the summary is "1 update ready" at level `info`. MCP:
+`ios_toolchain_check` reports the step as state `update`, and `ios_status` names it with
+`ios_toolchain_update(component=...)` (the tool `ios_toolchain_updates` points at for the same update) without
+counting it against `toolchain_ready`.
 
 | id | Group | Title | What the user reads | Root | Size / time | How it's done |
 |---|---|---|---|---|---|---|
@@ -22,11 +27,11 @@ at level `info`. MCP: `ios_toolchain_check` reports the step as state `update`, 
 | `swift` | Toolchain | Swift compiler | The Swift toolchain that compiles your apps. | yes | 1 GB download, 3.5 GB, 5–10 min | AUR `swift-bin` pinned to `f78c5ec` (6.4.2-2): tarball downloaded by us with progress, `makepkg` as the user (runuser), `pacman -U`; also holds Swift and fixes xcspec in the same prompt |
 | `swift-hold` | Toolchain | Keep Swift on this version | Stops system updates from changing Swift behind your back. | yes | seconds | `IgnorePkg = swift-bin` + Omarchy `pre-refresh-pacman` hook |
 | `xcspec` | Toolchain | Swift build settings fix | Lets localized text files build on Linux. | yes | seconds | `helper/root/xcspec.py apply` |
-| `apple-dev` | Toolchain | iOS build scripts | omarchy-apple-dev, which turns Xcode's SDK into something Linux can build with. | – | few MB | clone `~/.local/share/omarchy-apple-dev` @ `9f8352fc` (v0.4.8). Our checkout at another commit is `broken` with `update: true` and `action.label` "Update" ("You have 79bda71; iOS Studio is tested with 9f8352f. …"): fetch + checkout of the pin, then the follow-ups below. A checkout elsewhere (the `appleDevDir` setting) is accepted as is and never moved |
+| `apple-dev` | Toolchain | iOS build scripts | omarchy-apple-dev, which turns Xcode's SDK into something Linux can build with. | – | few MB | clone `~/.local/share/omarchy-apple-dev` @ the pin (tested: `9f8352fc`, v0.4.8; see [Pins](#pins-and-the-update-channel)). Our checkout at another commit is `broken` with `update: true` and `action.label` "Update" ("You have 79bda71; iOS Studio is tested with 9f8352f. …", on Latest with an applied pin "…; the Latest channel has 1a2b3c4 (untested). …"): fetch + checkout of the pin, then the follow-ups below. A checkout elsewhere (the `appleDevDir` setting) is accepted as is and never moved |
 | `xtool` | Toolchain | xtool | Builds, signs and installs iPhone apps from Linux; compiled on your computer. | – | 1.8 GB build, 410 MB installed, ~14 min | `XTOOL_REPO`/`XTOOL_SHA` from the checkout's `install-toolchain.sh` (v0.4.8: fork `7cc56c3`, which already has the Apple sign-in fix #406 and the release-build fix #432), built as pinned into `~/.local/lib/omarchy-apple-dev/xtool-<sha>` (source `~/.cache/omarchy-apple-dev/xtool-<sha>`, the folders upstream uses); the binary is checked for the old user agent. A Setup build from another commit (also the older `xtool-<sha7>-gsa406` layout) is `broken` once the pin moves; after the new build starts, every other `xtool-*` build and source tree is deleted. Heartbeat progress |
-| `rcodesign` | Toolchain | rcodesign | Signs App Store / TestFlight uploads, and each hot reload patch. | – | 10 MB | GitHub release, sha256-pinned |
-| `pymobiledevice3` | Toolchain | iPhone connection tools | Talks to your iPhone over USB or Wi-Fi. | – | 335 MB, 1–2 min | venv `~/.local/share/ios-studio/venv`, `pymobiledevice3==11.49.0`; links `~/pymobile3-venv` to it if absent |
-| `ipsw` | Toolchain | ipsw (debugger helper, optional) | Extracts system libraries from your iPhone so the debugger shows readable stack traces. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release 3.1.743, sha256-pinned (the same pin as `install-toolchain.sh`) |
+| `rcodesign` | Toolchain | rcodesign | Signs App Store / TestFlight uploads, and each hot reload patch. | – | 10 MB | GitHub release, sha256-pinned (tested: 0.29.0); download base `IOSSTUDIO_GITHUB_DL` (tests) |
+| `pymobiledevice3` | Toolchain | iPhone connection tools | Talks to your iPhone over USB or Wi-Fi. | – | 335 MB, 1–2 min | venv `~/.local/share/ios-studio/venv`, `pymobiledevice3==<pin>` (tested: 11.49.0); links `~/pymobile3-venv` to it if absent |
+| `ipsw` | Toolchain | ipsw (debugger helper, optional) | Extracts system libraries from your iPhone so the debugger shows readable stack traces. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release, sha256-pinned (tested: 3.1.743, the same pin as `install-toolchain.sh`); download base `IOSSTUDIO_GITHUB_DL` (tests) |
 | `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. Without it lldb doesn't start, and iPhone › Debug sends you here (`debug check` → `needs-python`). | yes | about 100 MB, 10–20 min | AUR build |
 | `xcode` | Apple | Xcode 27.1 download | The iOS SDK only comes inside Apple's Xcode download. Download it once in your browser; iOS Studio finds it in Downloads. | – | ~2 GB download | `setup xip --open` / `--watch` / `--use PATH` |
 | `sdk` | Apple | iOS SDK | Apple's iOS frameworks prepared for Linux. | – | 7 GB (15 GB free while building), 20–30 min | `xtool sdk build` → cache `~/.cache/xtool/darwin-iPhoneOS<v>.xtoolsdk`, then `install-toolchain.sh --mode full --repair` (registers it, darwin tools, macro server). With a current spare copy (same stamp) only the `--repair` runs: 2–5 min, no Xcode. Also `broken` when a darwin-tools input in the checkout is newer than the SDK's actool (see below) |
@@ -53,6 +58,47 @@ can repair itself (`installed` lists what ran). So it redoes only what changed:
   actool marks the SDK `broken` (about 20 stats per `setup check`).
 - **The SDK itself** only when `XTOOL_SDK_VERSION` (the stamp) changed: from the spare copy if one has the new
   stamp, otherwise it needs the Xcode download (logged, not run).
+
+## Pins and the update channel
+
+The versions Setup installs resolve in one place, `setup/channel.py` `effective_pins(channel=None, override=None)`,
+and every installer, row and `toolchain info` `pinned` value reads the result from `ctx.pins` (never the
+`pins.py` constants directly):
+
+- **tested** (the default, settings.json `"toolchainChannel"`): `pins.py`, the versions this iOS Studio release
+  was tested with. This is the behaviour without the updates feature.
+- **latest**: the setup state's `"channelPins"` (`{<id>: {version, sha256|commit, at}}`, written by an update
+  only after its post-update check passed) laid over the tested pins. An entry that can't be verified (a binary
+  without a SHA-256, an apple-dev commit that isn't a full SHA) is ignored.
+- **override** (same shape, an update's target) wins on either channel.
+
+The rows say which pin they compare against: "At the tested version …", "(latest: 11.50.0)", or for an older
+apple-dev checkout "iOS Studio is tested with …" / "the Latest channel has … (untested)"; `toolchain info` items carry
+the same word as `pinWord` next to `pinned`. xtool has no pin of
+its own: it follows the `XTOOL_SHA` of the omarchy-apple-dev checkout. Switching to **latest** with nothing applied
+yet changes nothing; switching back to **tested** makes the rows compare against `pins.py` again (an apple-dev
+checkout at a newer commit then shows **Update**).
+
+## Backups during an update
+
+An update keeps the previous version until its post-update check passes. `channel.backup(component)` sets it aside
+before the install, runs with `Ctx(flags, pins, keep_previous=True)`, then calls `Backup.discard()` (it works) or
+`Backup.restore()` (it failed or was cancelled), newest component first:
+
+| Component | backup() | restore() | discard() |
+|---|---|---|---|
+| `ipsw`, `rcodesign` | copies `~/.local/bin/<tool>` to `~/.cache/ios-studio/updates/prev/` | copies it back (removes the new one if there was none) | deletes the copy |
+| `pymobiledevice3` | renames the venv to `venv.prev` (same folder, instant); `i_pymd3` then doesn't delete anything | deletes the new venv, renames `venv.prev` back | deletes `venv.prev` |
+| `xtool` | remembers the link target; `i_xtool` doesn't prune old builds | relinks the old build, prunes the new one | prunes every other build (as a normal install does at once) |
+| `apple-dev` | remembers HEAD and the SDK's actool mtime | `checkout --detach` the old HEAD; re-runs `install-toolchain.sh --mode full --repair` only if the update reinstalled the darwin tools (actool mtime changed), otherwise sets the rewritten darwin-tools inputs' mtimes back so the SDK stays `done` | nothing |
+
+Each backup serialises itself (`to_json()` → `{kind: binary|venv|xtool|apple-dev, component, …}`, back with
+`Backup.from_json()`) for the update's in-progress marker, so the next run can put back what a killed one set aside.
+
+Backups are cleared under `fileio.lock(~/.local/state/ios-studio/updates.lock)` (`channel.updates_lock()`), held by an
+update while it runs. Leftovers of an interrupted update show in `toolchain disk` as **Previous versions from
+updates** (`update-backups`, safe to clean); `toolchain clean --item update-backups` refuses with `busy` while an
+update runs.
 
 ## Streaming events (install, xip, clean, remove-all)
 

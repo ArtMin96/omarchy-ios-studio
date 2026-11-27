@@ -10,6 +10,7 @@ from pathlib import Path
 from iosstudio.core import appdirs
 from iosstudio.core.appdirs import HOME, REPO, VENV_DIR
 
+from .channel import Pins, effective_pins
 from .facts import (
     arch,
     darwin_tools_stale,
@@ -36,7 +37,6 @@ from .pins import (
     DOWNLOAD_PAGE,
     DOWNLOADS,
     LAUNCHER,
-    PYMD3_VERSION,
 )
 from .runtime import fmt_bytes, probe
 from .xip import best_xip
@@ -55,15 +55,19 @@ def _row(id_: str, title: str, group: str, description: str, state: str, detail:
     return d
 
 
-def apple_dev_update_detail(head: str, pinned: str | None = None) -> str:
-    """The iOS build scripts row's detail when our own checkout is at `head`, not the pin: an update, not a fault."""
+def apple_dev_update_detail(head: str, pinned: str | None = None, word: str = "tested") -> str:
+    """The iOS build scripts row's detail when our own checkout is at `head`, not the pin: an update, not a fault.
+    `word` (Pins.word): "tested" for the tested pin, "latest" for an untested one the Latest channel installed."""
     pinned = pinned or APPLE_DEV_COMMIT
-    return (f"You have {head[:7]}; iOS Studio is tested with {pinned[:7]}. Updating downloads it and rebuilds only "
-            "what changed.")
+    want = (f"iOS Studio is tested with {pinned[:7]}" if word == "tested"
+            else f"the Latest channel has {pinned[:7]} (untested)")
+    return f"You have {head[:7]}; {want}. Updating downloads it and rebuilds only what changed."
 
 
-def build_steps(F: dict) -> tuple[list[dict], dict]:
-    """The Setup steps from gather()'s facts, plus a context dict the installers use (missing packages, xip…)."""
+def build_steps(F: dict, pins: Pins | None = None) -> tuple[list[dict], dict]:
+    """The Setup steps from gather()'s facts, plus a context dict the installers use (missing packages, xip…).
+    `pins`: the versions the rows compare against (default: the update channel's, effective_pins())."""
+    pins = pins or effective_pins()
     steps: list[dict] = []
     ctx: dict = {}
 
@@ -149,23 +153,24 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     # 7 omarchy-apple-dev
     ad = F["apple_dev"]
     head = F["ad_head"][1].strip() if F["ad_head"][0] == 0 else ""
-    # Our own checkout follows APPLE_DEV_COMMIT; one the user keeps elsewhere (appleDevDir) is theirs to move.
+    # Our own checkout follows the pin; one the user keeps elsewhere (appleDevDir) is theirs to move.
+    pin, word = pins.apple_dev_commit, pins.word("apple-dev")
     managed = bool(ad) and os.path.realpath(ad) == os.path.realpath(APPLE_DEV_HOME)
-    outdated = managed and bool(head) and head != APPLE_DEV_COMMIT
+    outdated = managed and bool(head) and head != pin
     ctx["apple_dev"], ctx["apple_dev_head"], ctx["apple_dev_outdated"] = ad, head, outdated
     action = None
     if not ad:
         st, det = "missing", "Not downloaded yet"
     elif not head:
         st, det = "done", f"Found at {appdirs.tilde(ad)}"
-    elif head == APPLE_DEV_COMMIT:
-        st, det = "done", f"At the tested version {head[:7]} ({appdirs.tilde(ad)})"
+    elif head == pin:
+        st, det = "done", f"At the {word} version {head[:7]} ({appdirs.tilde(ad)})"
     elif outdated:
         # state "broken" so every install path repairs it as before; update=True tells people (UI, MCP) it's an update
-        st, det = "broken", apple_dev_update_detail(head)
+        st, det = "broken", apple_dev_update_detail(head, pin, word)
         action = {"kind": "install", "label": "Update"}
     else:
-        st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} (your copy at {appdirs.tilde(ad)})"
+        st, det = "done", f"At {head[:7]}, not the {word} {pin[:7]} (your copy at {appdirs.tilde(ad)})"
     if ad and F["ad_dirty"][0] == 0 and F["ad_dirty"][1].strip():
         det += " It has local changes." if det.endswith(".") else " · has local changes"
     steps.append(_row("apple-dev", "iOS build scripts", "Toolchain",
@@ -216,7 +221,8 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     ctx["pymd3"] = best
     if best:
         st = "done"
-        det = f"pymobiledevice3 {best[1]}" + ("" if best[1] == PYMD3_VERSION else f" (tested: {PYMD3_VERSION})") + \
+        pv = pins.pymd3_version
+        det = f"pymobiledevice3 {best[1]}" + ("" if best[1] == pv else f" ({pins.word('pymobiledevice3')}: {pv})") + \
             ("" if best[0].startswith(str(VENV_DIR)) else f" · {appdirs.tilde(Path(best[0]).parent.parent)}")
     elif F["pymd3"]:
         st, det = "broken", "Installed, but broken (usually after a Python update). Repair recreates it"
@@ -438,17 +444,21 @@ def check() -> dict:
 
 
 class Ctx:
-    """What an install run knows: its flags, the facts, the steps (by id) and build_steps' context dict `c`."""
+    """What an install run knows: its flags, the pins it installs (default: the update channel's), the facts, the
+    steps (by id) and build_steps' context dict `c`. keep_previous: an update's run, whose backups
+    (channel.backup) hold the previous versions, so installers don't delete them (nor prune old xtool builds)."""
 
-    def __init__(self, flags: dict):
+    def __init__(self, flags: dict, pins: Pins | None = None, keep_previous: bool = False):
         self.flags = flags
+        self.pins = pins or effective_pins()
+        self.keep_previous = keep_previous
         self.F = gather()
-        self.steps, self.c = build_steps(self.F)
+        self.steps, self.c = build_steps(self.F, self.pins)
         self.by_id = {s["id"]: s for s in self.steps}
 
     def refresh(self) -> None:
         self.F = gather()
-        self.steps, self.c = build_steps(self.F)
+        self.steps, self.c = build_steps(self.F, self.pins)
         self.by_id = {s["id"]: s for s in self.steps}
 
     def state(self, sid: str) -> str:

@@ -10,6 +10,9 @@ from ..core.registry import tool
 from ..models import DeviceBrief, HistoryEntry, Problem, StatusReport, iso
 from ..state import get_state, last_device_state
 
+# The parts ios_toolchain_update updates (the helper's setup/channel.py COMPONENTS).
+UPDATE_COMPONENTS = ("apple-dev", "xtool", "pymobiledevice3", "ipsw", "rcodesign")
+
 
 async def _safe(coro):
     try:
@@ -73,10 +76,11 @@ def register(mcp: MCPServer) -> None:
             for b in summ.get("broken") or []:
                 problems.append(Problem(area="toolchain", message=f"Broken: {steps.get(b, {}).get('title', b)}",
                                         fix="ios_toolchain_check for details, then ios_toolchain_install(step=...)"))
-            for u in updates:
+            for u in updates:   # the same update ios_toolchain_updates lists: one tool for it, with its backup
                 problems.append(Problem(area="toolchain", message=f"Update ready (it works meanwhile): "
                                         f"{steps[u].get('title', u)}. {steps[u].get('detail') or ''}".strip(),
-                                        fix=f"ios_toolchain_install(step='{u}')"))
+                                        fix=f"ios_toolchain_update(component='{u}')" if u in UPDATE_COMPONENTS
+                                        else f"ios_toolchain_install(step='{u}')"))
         else:
             problems.append(Problem(area="toolchain", message=f"Setup check failed: {setup}",
                                     fix="ios_toolchain_check"))
