@@ -380,7 +380,7 @@ class RunTool(unittest.TestCase):
             B.run_tool([sys.executable, "-c", script], cancel=lambda: calls.append(1) or len(calls) > 2)
         self.assertLess(time.monotonic() - t0, 5)
         time.sleep(0.2)
-        left = subprocess.run(["pgrep", "-f", script], capture_output=True, text=True).stdout.strip()
+        left = subprocess.run(["pgrep", "-f", script], capture_output=True, text=True, timeout=10).stdout.strip()
         self.assertEqual(left, "")
         self.assertEqual(B.run_tool(["/nonexistent/tool"]).returncode, 127)
 

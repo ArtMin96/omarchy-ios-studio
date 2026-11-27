@@ -173,7 +173,7 @@ Look at the editor's Debug Console. "Start 'Debug in editor' in iOS Studio first
 
 ### The debugger stops, but the variables take minutes or say "not read in time"
 
-Without the iPhone's debug symbols, lldb reads the Swift runtime from the phone's memory to show a value, and over Wi-Fi each read is slow. iOS Studio shows where the app stopped (the call stack) at once and fills in the variables when lldb has read them; a session says "Variables are slow over Wi-Fi until the iPhone's debug symbols are downloaded" when that happens. After 20 seconds the rest of the list shows names and types only. Download the symbols once on iPhone › Debug (the note's button opens it), or use a USB cable. Clicking the frame again reads what's missing; Step and Continue don't wait for the variables.
+Without the iPhone's debug symbols, lldb reads the Swift runtime from the phone's memory to show a value, and over Wi-Fi each read is slow. iOS Studio shows where the app stopped (the call stack) at once and fills in the variables when lldb has read them; the session's note "This iPhone's debug symbols aren't downloaded yet" says so when it starts. After 20 seconds the rest of the list shows names and types and says "not read yet". Download the symbols once with the note's Download symbols button (it asks first), or use a USB cable. Clicking the frame again reads what's missing; Step and Continue don't wait for the variables.
 
 ### "Swift expressions need a fresh build" or "type for self cannot be reconstructed"
 

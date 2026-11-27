@@ -362,7 +362,7 @@ class RealCli(unittest.TestCase):
             s.state("building", 30)
             xtool = str(self.tmp / "xtool")
             running = lambda: subprocess.run(["pgrep", "-f", xtool], capture_output=True,  # noqa: E731
-                                             text=True).stdout.strip()
+                                             text=True, timeout=10).stdout.strip()
             deadline = time.monotonic() + 20
             while not running() and time.monotonic() < deadline:
                 time.sleep(0.1)

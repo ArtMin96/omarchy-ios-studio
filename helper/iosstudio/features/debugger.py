@@ -62,7 +62,15 @@ ATTACH_TIMEOUT = 240        # seconds until the driver must have attached (minim
 DETACH_GRACE = 10           # seconds the driver gets to detach after we ask it to end, then SIGTERM
 KILL_GRACE = 3              # seconds after SIGTERM before its whole process group gets SIGKILL
 PUMP_GRACE = 5              # seconds to drain the driver's output once it has exited
-SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
+# The iPhone's debug symbols (iPhone › Debug, DeviceDebugView.runAction("symbols") downloads or updates them).
+SYMBOLS_FIX = {"label": "Download symbols", "page": "device", "tab": "debug", "action": "symbols"}
+SYMBOLS_UPDATE_FIX = {**SYMBOLS_FIX, "label": "Update symbols"}
+# One notice (id no-symbols) for everything missing symbols affects, with one fix: sessions, the editor bridge, demo.
+SYMBOLS_NOTE = ("This iPhone's debug symbols aren't downloaded yet. Until they are, system frames show only library "
+                "names, some Swift values (String, Array) may read wrong, and variables are slow over Wi-Fi. Download "
+                "them once under iPhone › Debug › Debug symbols.")
+SYMBOLS_UPDATE_NOTE = ("Attaching may take minutes over Wi-Fi until the debug symbols are updated (iPhone › Debug › "
+                       "Debug symbols › Update). The app stays paused meanwhile.")
 STALE_NOTE = "Swift expressions need a fresh build: Run the app again (it rebuilds what's missing)."
 MAX_SOURCES = 400
 DEBUG_BUILDS = appdirs.CACHE_DIR / "debug-builds"   # executables unpacked from .ipa files, per project
@@ -389,6 +397,15 @@ def _stream(mode: str, flags: dict) -> int:
     return asyncio.run(_run(mode, bid, flags, sl, bps, cmds))
 
 
+def symbols_notice(st: dict) -> None:
+    """The session's one notice about the iPhone's debug symbols (`debug.start` says whether they're ready): missing
+    (no-symbols) or out of date (symbols-update), each with the fix that gets them; nothing when they're fine."""
+    if not st.get("symbolsReady"):
+        output.event("notice", id="no-symbols", level="info", message=SYMBOLS_NOTE, fix=SYMBOLS_FIX)
+    elif (st.get("symbolsUpdate") or {}).get("needed"):
+        output.event("notice", id="symbols-update", level="warn", message=SYMBOLS_UPDATE_NOTE, fix=SYMBOLS_UPDATE_FIX)
+
+
 def _write(line: str) -> None:
     sys.stdout.write(line.rstrip("\n") + "\n")
     sys.stdout.flush()
@@ -440,15 +457,7 @@ async def _run(mode: str, bid: str, flags: dict, sl: SessionLldb, bps: list, cmd
         stale = Stale(path)
         if mode == "session" and path and await asyncio.to_thread(modules.pruned, path):
             stale.notice()
-        if not st.get("symbolsReady"):
-            output.event("notice", id="no-symbols", level="info",
-                         message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
-                                 "read wrong and system frames show only library names. Download them once under "
-                                 "iPhone › Debug › Debug symbols.", fix=SYMBOLS_FIX)
-        elif (st.get("symbolsUpdate") or {}).get("needed"):
-            output.event("notice", id="symbols-update", level="warn",
-                         message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
-                                 "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
+        symbols_notice(st)
         cfg = {"mode": mode, "lldbPythonPath": sl.pythonpath, "sdkPath": sl.sdk, "port": st.get("port"),
                "host": st.get("host"), "pid": st.get("pid"), "remotePath": st.get("remotePath"), "localExe": exe,
                "sysroot": st.get("sysroot") if st.get("symbolsReady") else None, "breakpoints": bps,

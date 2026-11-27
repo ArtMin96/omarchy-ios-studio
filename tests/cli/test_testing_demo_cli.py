@@ -192,7 +192,7 @@ class TestingDemoCli(unittest.TestCase):
             self.assertLess(time.monotonic() - t0, 1.0)
         finally:
             p.kill()
-            p.wait()
+            p.wait(10)
         return events
 
     def test_cancel(self):

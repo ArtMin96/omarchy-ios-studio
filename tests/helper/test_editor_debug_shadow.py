@@ -68,9 +68,9 @@ def test_launcher_runs_the_shadow_and_falls_back_to_the_toolchain(home, tmp_path
     path = lldb_shadow.write_launcher(plain, sh)
     assert path == home / ".cache/ios-studio/lldb-ios/lldb-dap" == lldb_shadow.launcher_path()
     assert os.access(path, os.X_OK)
-    assert subprocess.run([str(path), "--x", "a b"], capture_output=True, text=True).stdout == "shadow --x a b\n"
+    assert subprocess.run([str(path), "--x", "a b"], capture_output=True, text=True, timeout=30).stdout == "shadow --x a b\n"
     sh.lldb_dap.unlink()                   # a shadow pruned or being rebuilt: the toolchain's own still starts
-    assert subprocess.run([str(path)], capture_output=True, text=True).stdout == "plain \n"
+    assert subprocess.run([str(path)], capture_output=True, text=True, timeout=30).stdout == "plain \n"
     lldb_shadow.write_launcher(plain, None)
     assert "shadow=" not in path.read_text()
 
@@ -80,7 +80,7 @@ def test_launcher_is_rewritten_only_when_it_changes(home, tmp_path):
     path = lldb_shadow.write_launcher(plain, None)
     ino = path.stat().st_ino
     assert lldb_shadow.write_launcher(plain, None).stat().st_ino == ino
-    assert subprocess.run([str(path)], capture_output=True, text=True).stdout == "plain\n"
+    assert subprocess.run([str(path)], capture_output=True, text=True, timeout=30).stdout == "plain\n"
     lldb_shadow.write_launcher(plain, fake_shadow(tmp_path / "s", tmp_path / "sdk"))
     assert path.stat().st_ino != ino
     assert [p.name for p in path.parent.iterdir()] == ["lldb-dap"]   # no temp files left behind
@@ -156,7 +156,7 @@ def test_editor_config_puts_a_launcher_in_place(home, tmp_path, monkeypatch):
     monkeypatch.setattr("iosstudio.features.setup.toolchain_root", lambda: tc)
     ed.editor_config(project(tmp_path), "vscode")
     launcher = lldb_shadow.launcher_path()
-    assert subprocess.run([str(launcher)], capture_output=True, text=True).stdout == "plain\n"
+    assert subprocess.run([str(launcher)], capture_output=True, text=True, timeout=30).stdout == "plain\n"
     launcher.write_text("#!/bin/sh\necho kept\n")                   # one the bridge wrote stays as it is
     ed.editor_config(project(tmp_path, "Two", "com.example.two"), "vscode")
     assert "kept" in launcher.read_text()
@@ -279,7 +279,7 @@ def test_prepare_dap_with_the_shadow(home, tmp_path, monkeypatch):
     d = ed.prepare_dap(tc)
     assert seen == [(tc.lldb, tc.pythonpath)]           # the same stamp as the session driver's: one shadow tree
     assert (d.shadow, d.note) == (sh, "")
-    assert subprocess.run([str(d.launcher)], capture_output=True, text=True).stdout == "shadow\n"
+    assert subprocess.run([str(d.launcher)], capture_output=True, text=True, timeout=30).stdout == "shadow\n"
 
 
 def test_prepare_dap_without_the_shadow_runs_the_toolchains_lldb_dap(home, tmp_path, monkeypatch):
@@ -288,7 +288,7 @@ def test_prepare_dap_without_the_shadow_runs_the_toolchains_lldb_dap(home, tmp_p
     assert d.shadow is None
     assert d.note == ("Swift expressions (p, po) may not work when debugging from your editor: the iOS SDK isn't "
                       "installed (Setup installs it). Variables and breakpoints still work.")
-    assert subprocess.run([str(d.launcher)], capture_output=True, text=True).stdout == "plain\n"
+    assert subprocess.run([str(d.launcher)], capture_output=True, text=True, timeout=30).stdout == "plain\n"
 
 
 def test_prepare_dap_needs_the_shadows_lldb_dap_and_python(home, tmp_path, monkeypatch):

@@ -100,6 +100,9 @@ ColumnLayout {
   }
 
   readonly property var listed: root.live ? root.bps : root.specs.map(function(s) { return { spec: s } })
+  // the width the panel is given (its parent's: the panel's own would follow its widest row); below this the step
+  // and Detach buttons show only their glyphs (tooltips name them), so the controls fit a 600 px window
+  readonly property bool narrow: (root.parent ? root.parent.width : root.width) < Style.space(640)
   readonly property var frames: root.stop && root.stop.thread ? (root.stop.thread.frames || []) : []
   readonly property var f0: root.frames.length ? root.frames[0] : null
 
@@ -286,17 +289,18 @@ ColumnLayout {
       enabled: root.phase === "stopped" && !root.waiting
       onClicked: root.send("continue")
     }
-    ActionButton { text: "Step over"; glyph: Model.Glyph.arrowRight; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("next") }
-    ActionButton { text: "Step in"; glyph: Model.Glyph.chevronDown; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("step") }
-    ActionButton { text: "Step out"; glyph: Model.Glyph.chevronUp; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("finish") }
+    ActionButton { text: root.narrow ? "" : "Step over"; tooltip: root.narrow ? "Step over" : ""; glyph: Model.Glyph.arrowRight; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("next") }
+    ActionButton { text: root.narrow ? "" : "Step in"; tooltip: root.narrow ? "Step in" : ""; glyph: Model.Glyph.chevronDown; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("step") }
+    ActionButton { text: root.narrow ? "" : "Step out"; tooltip: root.narrow ? "Step out" : ""; glyph: Model.Glyph.chevronUp; compact: true; enabled: root.phase === "stopped" && !root.waiting; onClicked: root.send("finish") }
     ActionButton { text: "Pause"; glyph: Model.Glyph.pause; compact: true; visible: root.phase === "running"; onClicked: root.send("pause") }
     Item { Layout.fillWidth: true }
-    ActionButton { text: "Detach"; glyph: Model.Glyph.linkOff; compact: true; kind: "ghost"; tooltip: "Stop debugging; the app keeps running"; onClicked: root.end(false) }
+    ActionButton { text: root.narrow ? "" : "Detach"; glyph: Model.Glyph.linkOff; compact: true; kind: "ghost"; tooltip: root.narrow ? "Detach: stop debugging; the app keeps running" : "Stop debugging; the app keeps running"; onClicked: root.end(false) }
     IconButton { glyph: Model.Glyph.stop; tooltip: "Quit the app"; danger: true; onClicked: root.end(true) }
   }
 
-  // the helper's notices (no local build, symbols, slow variables, stale modules, Swift expressions unavailable): a
-  // quiet glyph + text line, with the fix as a small button on the right (once per fix: two notices can share one)
+  // the helper's notices (no local build, debug symbols, stale modules, Swift expressions unavailable): a quiet
+  // glyph + text line, with the fix as a small button on the right (once per fix: two notices can share one). The text
+  // takes the width the button leaves, so fix labels stay short ("Download symbols").
   Repeater {
     model: root.live ? root.notices : []
     delegate: RowLayout {
@@ -486,7 +490,8 @@ ColumnLayout {
             AppText {
               Layout.fillWidth: true
               text: Model.debugValueText(v.modelData)
-              mono: true; size: "small"; elide: Text.ElideRight; font.italic: !!v.modelData.unread
+              // "not read yet" is plain dim text, as in the child rows below
+              mono: true; size: "small"; elide: Text.ElideRight
               tone: v.modelData.unread ? "dim" : (v.modelData.error && v.modelData.value === undefined ? "warn" : "primary")
             }
           }
@@ -498,7 +503,7 @@ ColumnLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Style.space(40)
             text: modelData.name + ": " + (modelData.type || "?") + (modelData.unread ? " · " : " ") + Model.debugValueText(modelData)
-            mono: true; size: "small"; tone: modelData.unread ? "faint" : "dim"; elide: Text.ElideRight
+            mono: true; size: "small"; tone: "dim"; elide: Text.ElideRight
           }
         }
       }
