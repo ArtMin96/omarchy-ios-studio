@@ -13,6 +13,9 @@ Scenarios:
 Builds: HabitTracker always fails with two compiler errors. IOSSTUDIO_DEMO_FAIL=linker or =package makes
 every other project's build fail too, with an undefined-symbol link error or a package version conflict;
 that output goes through the real parser (diagnostics.py), so its categories and hints are the real ones.
+
+Setup: IOSSTUDIO_DEMO_APPLE_DEV=outdated (ready/expiring) puts our omarchy-apple-dev checkout at an older commit, so
+the iOS build scripts row offers Update as the real steps.py does when the pin moved.
 """
 from __future__ import annotations
 
@@ -250,9 +253,42 @@ FRESH_MISSING = {"swift", "swift-hold", "xcspec", "apple-dev", "xtool", "rcodesi
                  "xcode", "sdk", "apple-id", "iphone", "developer-mode", "uxplay", "wireshark"}
 
 
+def _tested() -> dict[str, dict]:
+    """The pieces whose pins Setup moves with omarchy-apple-dev, at the tested versions: ready/expiring show these
+    whatever this machine has (its own checkout, an older xtool build, an older ipsw). `row` is the Setup detail,
+    `path` the Toolchain page's."""
+    from iosstudio.features.setup import pins
+    ad, xt = pins.APPLE_DEV_COMMIT[:7], pins.DEFAULT_XTOOL_SHA[:7]
+    return {"apple-dev": {"version": ad, "row": f"At the tested version {ad} (~/.local/share/omarchy-apple-dev)",
+                          "path": "~/.local/share/omarchy-apple-dev"},
+            "xtool": {"version": xt, "row": f"Build {xt} · has the Apple sign-in fix",
+                      "path": f"~/.local/lib/omarchy-apple-dev/xtool-{pins.DEFAULT_XTOOL_SHA}/xtool"},
+            "ipsw": {"version": pins.IPSW_VERSION, "row": f"ipsw {pins.IPSW_VERSION}"}}
+
+
+OLD_APPLE_DEV = "79bda716"     # the pin before v0.4.8: what IOSSTUDIO_DEMO_APPLE_DEV=outdated pretends is checked out
+
+
+def apple_dev_outdated() -> bool:
+    return not FRESH and os.environ.get("IOSSTUDIO_DEMO_APPLE_DEV", "").strip().lower() == "outdated"
+
+
+def outdated_apple_dev_row(row: dict, head: str = OLD_APPLE_DEV, pinned: str | None = None) -> dict:
+    """The iOS build scripts row as steps.build_steps words it when Setup's own checkout is at `head`, not the pin."""
+    from iosstudio.features.setup.steps import apple_dev_update_detail
+    return {**row, "state": "broken", "canAutoInstall": True, "action": {"kind": "install", "label": "Update"},
+            "update": True, "detail": apple_dev_update_detail(head, pinned)}
+
+
 def _setup_check(flags: dict) -> dict:
     d = scrub(_real("setup", "setup", "check", flags) or {"steps": [], "groups": ["System", "Toolchain", "Apple", "iPhone"]})
+    tested = {} if FRESH else _tested()
     for s in d.get("steps", []):
+        if s["id"] in tested:
+            s.update(state="done", detail=tested[s["id"]]["row"], canAutoInstall=False,
+                     action={"kind": "install", "label": "Install"}, **({"update": False} if "update" in s else {}))
+        if s["id"] == "apple-dev" and apple_dev_outdated():
+            s.update(outdated_apple_dev_row(s))
         if s["id"] == "apple-id":
             s["detail"] = f"Signed in as {APPLE_ID}"
         if s["id"] == "iphone":
@@ -269,14 +305,25 @@ def _setup_check(flags: dict) -> dict:
                         "ready": False, "essentialMissing": miss, "level": "warn", "title": f"{len(miss)} steps left", "badge": str(len(miss))}
         if isinstance(d.get("xcode"), dict):
             d["xcode"]["file"] = None
+    elif tested and d.get("steps"):
+        from iosstudio.features.setup.steps import summarize
+        d["summary"] = summarize(d["steps"])
     return d
 
 
 def _toolchain_info(flags: dict) -> dict:
     d = scrub(_real("setup", "toolchain", "info", flags) or {"items": [], "sdks": {}})
+    tested = {} if FRESH else _tested()
     for it in d.get("items", []):
         if it.get("id") == "apple-dev" and it.get("detail"):   # a personal checkout path: show the standard one
             it["detail"] = "~/.local/share/omarchy-apple-dev"
+        t = tested.get(it.get("id"))
+        if t:
+            it.update(version=t["version"], status="ok", **({"detail": t["path"]} if "path" in t else {}))
+            if it["id"] == "xtool":
+                it["hasFix"] = True
+        if it.get("id") == "apple-dev" and apple_dev_outdated():
+            it.update(version=OLD_APPLE_DEV[:7], status="update")
     if FRESH:
         for it in d.get("items", []):
             if it["id"] not in ("apple-dev",):

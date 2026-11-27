@@ -163,9 +163,33 @@ The phone only reports hangs when Hang Detection is on. On the iPhone, open Sett
 
 The debugger is lldb from the Swift toolchain, and it needs Python 3.12. Install "Debugger support" in Setup; it builds Python from source, so it takes a while. If the message says lldb itself is missing or didn't start, install or repair Swift in Setup.
 
+### Swift expressions don't work in the debugger
+
+When iPhone › Debug says "Swift expressions (p, po) may not work in this session", Debug in editor says "Swift expressions (p, po) may not work when debugging from your editor", or Evaluate says "lldb couldn't load the app's Swift modules", lldb is missing the iOS SDK's Swift files. The note says why. Most often the iOS SDK isn't installed: install it in Setup › iOS SDK, then start debugging again. iOS Studio prepares the debugger's iOS copy in `~/.cache/ios-studio/lldb-ios/` by itself; if the note says it couldn't, free some disk space (a copy can take about 230 MB when the cache and the toolchain are on different disks). Frame variables, breakpoints and the call stack keep working either way. If the editor's Debug Console says "this editor runs another lldb-dap than iOS Studio's", set the editor up again in Settings › Code editor. Build and run the app from Projects first, so lldb finds the app's own modules. The first expression of a session can take up to 40 seconds; that's lldb loading the modules, not a hang.
+
 ### F5 in VS Code or Zed says "attachCommands failed to attach to a process"
 
-Look at the editor's Debug Console. "Start 'Debug in editor' in iOS Studio first" means iOS Studio isn't holding the connection to the phone for this app: press Debug in editor on the project's card and wait until it says it's waiting for the editor, then press F5 again. In Zed, a message that lldb-dap wasn't found means its Swift extension can't find the toolchain's debugger: set Zed up again in Settings › Code editor. If you switched VS Code's Swift extension to CodeLLDB, switch it back to lldb-dap. See [features/editor-debugging.md](features/editor-debugging.md).
+Look at the editor's Debug Console. "Start 'Debug in editor' in iOS Studio first" means iOS Studio isn't holding the connection to the phone for this app: press Debug in editor on the project's card and wait until it says it's waiting for the editor, then press F5 again. In Zed, a message that lldb-dap wasn't found means its Swift extension can't find the toolchain's debugger: set Zed up again in Settings › Code editor. If VS Code says it has no debugger of type lldb-dap, install the LLDB DAP extension from Extensions (the Swift extension normally installs it). See [features/editor-debugging.md](features/editor-debugging.md).
+
+### The debugger stops, but the variables take minutes or say "not read yet"
+
+Without the iPhone's debug symbols, lldb reads the Swift runtime from the phone's memory to show a value, and over Wi-Fi each read is slow. iOS Studio shows where the app stopped (the call stack) at once and fills in the variables when lldb has read them; the session's note "This iPhone's debug symbols aren't downloaded yet" says so when it starts. After 20 seconds the rest of the list shows names and types and says "not read yet". Download the symbols once with the note's Download symbols button (it asks first), or use a USB cable. Clicking the frame again reads what's missing; Step and Continue don't wait for the variables.
+
+### "Swift expressions need a fresh build" or "type for self cannot be reconstructed"
+
+lldb rebuilds your app's Swift types from files the build keeps in the project's `.build` folder (precompiled modules). The compiler deletes ones it hasn't used for a while, and a build that has nothing to recompile doesn't bring them back, so expressions fail with "Couldn't realize Swift AST type of self" and the console says module files are missing. Press Run the app (or Run on the project's card): iOS Studio notices the missing files, recompiles the app's own code (a few seconds more than usual) and the files come back. Then start debugging again. The variables list works meanwhile.
+
+### "Expressions can't run in this frame"
+
+The selected frame isn't your Swift code: `main` and system frames have no Swift context, so lldb has nothing to compile the expression in ("no JIT compiled function"). Select one of your app's frames in the call stack and evaluate again.
+
+### The debugger console says "Error while searching for Xcode SDK: HostInfoError"
+
+That's lldb's Swift support looking for Xcode, which Linux doesn't have. iOS Studio gives lldb the iOS SDK itself, so on its own the line is harmless; it shows once per session and repeats are counted at the end. If Swift expressions fail too, see "Swift expressions don't work in the debugger" above.
+
+### The debugger doesn't stop when I press Detach
+
+Detach waits up to 10 seconds for lldb to let the app go. When lldb is stuck reading from the iPhone, iOS Studio ends it, releases the connection to the iPhone and says so in the console ("The debugger didn't stop in time; ending it"). If the app stays frozen afterwards, open it again on the iPhone or press Run.
 
 ### Attaching the debugger takes minutes
 

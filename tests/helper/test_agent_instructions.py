@@ -143,7 +143,7 @@ def test_new_app_has_the_files_in_its_first_commit(tmp_path, settings, state, no
     assert data["agentFiles"] == ["AGENTS.md", "CLAUDE.md"]
     dest = Path(data["path"])
     assert "com.me.Habit" in (dest / "AGENTS.md").read_text()
-    tracked = subprocess.run(["git", "ls-files"], cwd=dest, capture_output=True, text=True).stdout.split()
+    tracked = subprocess.run(["git", "ls-files"], cwd=dest, capture_output=True, text=True, timeout=30).stdout.split()
     assert {"AGENTS.md", "CLAUDE.md"} <= set(tracked)
 
 

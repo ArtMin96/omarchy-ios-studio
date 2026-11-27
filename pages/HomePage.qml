@@ -27,18 +27,22 @@ PageFrame {
   readonly property bool setupLoaded: setup.loaded === true
   // Essential steps still missing in the System/Toolchain/Apple-SDK part (the
   // part Setup installs by itself; Apple ID and iPhone have their own cards).
+  // An update (Model.isSetupUpdate) isn't missing: the old version works until it's installed.
   readonly property var toolsMissing: {
     var out = []
-    var m = setup.essentialMissing || []
+    var m = setup.blocking || []
     for (var i = 0; i < m.length; i++) if (m[i] !== "apple-id" && m[i] !== "iphone") out.push(m[i])
     return out
   }
+  // Updates Setup has ready (steps), offered calmly once nothing more urgent is left.
+  readonly property var updates: setupLoaded ? (setup.updates || []).map(function(id) { return setup.step(id) }).filter(Model.isSetupUpdate) : []
   readonly property bool fresh: setupLoaded && toolsMissing.length > 0
   readonly property var sdkStep: setupLoaded ? setup.step("sdk") : null
 
   readonly property var checks: [
     { key: "tools", label: "Toolchain", ok: setupLoaded && toolsMissing.filter(function(id) { return id !== "sdk" }).length === 0,
-      busy: !setupLoaded, go: function() { page.app.openSetupStep(page.toolsMissing[0] || "") } },
+      update: updates.length > 0, busy: !setupLoaded,
+      go: function() { page.app.openSetupStep(page.toolsMissing[0] || (page.updates.length ? page.updates[0].id : "")) } },
     { key: "sdk", label: "iOS SDK", ok: !!sdkStep && sdkStep.state === "done", busy: !setupLoaded,
       go: function() { page.app.openSetupStep("sdk") } },
     { key: "account", label: "Apple ID", ok: acct.signedIn, busy: !acct.auth && acct.status !== "needs-setup" && acct.status !== "error",
@@ -103,6 +107,11 @@ PageFrame {
     if (dev.connected && dev.info && dev.info.developerMode === false)
       return { level: "warn", glyph: Model.Glyph.developer, title: "Turn on Developer Mode", text: "Your iPhone needs it to open apps you build. iOS Studio shows you where it is.",
                cta: "Show me how", ctaGlyph: Model.Glyph.arrowRight, go: function() { page.app.nav("device", { action: "devmode" }) } }
+    // Everything works; an update is waiting in Setup. Calm, and before the "all set" cards so it's seen.
+    var upd = Model.setupUpdateCard(updates)
+    if (upd)
+      return { level: "info", glyph: Model.Glyph.download, title: upd.title, text: upd.text,
+               cta: "Update", ctaGlyph: Model.Glyph.arrowRight, go: function() { page.app.openSetupStep(page.updates[0].id) } }
     if (proj.loadedOnce && (proj.items || []).length === 0)
       return { level: "ok", glyph: Model.Glyph.sparkles, title: "Create your first app", text: "Start from a template. It builds and runs on your iPhone in a few minutes.",
                cta: "New app", ctaGlyph: Model.Glyph.plus, go: function() { page.app.nav("projects", { action: "new" }) } }
@@ -227,11 +236,12 @@ PageFrame {
               id: chkRow
               spacing: Style.spacing.sm
               Spinner { visible: chk.modelData.busy; running: visible; size: Style.font.bodySmall }
+              // ready with an update waiting: the accent download glyph Setup's update row uses
               Icon {
                 visible: !chk.modelData.busy
-                glyph: chk.modelData.ok ? Model.Glyph.checkCircle : Model.Glyph.circle
+                glyph: chk.modelData.ok ? (chk.modelData.update ? Model.Glyph.download : Model.Glyph.checkCircle) : Model.Glyph.circle
                 size: Style.font.bodySmall
-                color: chk.modelData.ok ? Theme.success : Theme.faint
+                color: chk.modelData.ok ? (chk.modelData.update ? Commons.Color.accent : Theme.success) : Theme.faint
               }
               AppText {
                 text: chk.modelData.label

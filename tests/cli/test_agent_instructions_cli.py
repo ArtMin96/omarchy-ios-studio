@@ -45,7 +45,7 @@ def test_new_project_commits_the_files(tmp_path, env):
     assert data["agentFiles"] == ["AGENTS.md", "CLAUDE.md"] and data["usedXtool"] is False
     dest = Path(data["path"])
     assert "com.me.Habit" in (dest / "AGENTS.md").read_text()
-    tracked = subprocess.run(["git", "ls-files"], cwd=dest, capture_output=True, text=True).stdout.split()
+    tracked = subprocess.run(["git", "ls-files"], cwd=dest, capture_output=True, text=True, timeout=30).stdout.split()
     assert {"AGENTS.md", "CLAUDE.md"} <= set(tracked)
 
 

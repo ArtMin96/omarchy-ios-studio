@@ -11,6 +11,8 @@ tests by folder.
 - Each test gets os.environ and the machine-wide device state files (device.json, last-device, devices.json) back
   as they were, so a test that runs the real daemon can't leave a "known iPhone" behind for later tests.
 - tests/cli/ is marked `slow`, tests/mcp/ `mcp`, tests/e2e/ `slow` (network tests there add `network` themselves).
+- A test that runs longer than IOSSTUDIO_TEST_TIMEOUT seconds (default 600) stops the run with every thread's stack
+  (support/hang_guard.py), so a hang fails the suite instead of keeping it open forever.
 """
 from __future__ import annotations
 
@@ -45,6 +47,7 @@ def _user() -> str:
 
 
 _FOLDER_MARKS = {"cli": ("slow",), "mcp": ("mcp",), "e2e": ("slow",)}
+pytest_plugins = ["support.hang_guard"]
 
 
 @pytest.hookimpl(trylast=True)   # after pytest's tmpdir plugin has made config._tmp_path_factory

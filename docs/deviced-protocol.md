@@ -1384,31 +1384,85 @@ afterwards). The demo daemon keeps a made-up set whose starting state follows th
 
 | action | what it does |
 |---|---|
-| `debug check` | one-shot: `{ready, lldb, lldbVersion, python, error?}`. lldb is `<toolchain>/usr/bin/lldb` (the Swift toolchain Setup installs); it links `libpython3.12`, so without Setup's "Debugger support" step (`python312`) the error's fix opens that step |
+| `debug check` | one-shot: `{ready, lldb, lldbVersion, python, swiftExpressions, expressionsNote, shadowLldb}`, or `{ready: false, error}`. lldb is `<toolchain>/usr/bin/lldb` (the Swift toolchain Setup installs); it links `libpython3.12`, so without Setup's "Debugger support" step (`python312`) the error's fix opens that step. It also builds the shadow lldb the first time (`helper/iosstudio/features/lldb_shadow.py`), so a session start only checks its stamp: `shadowLldb` is its `usr/bin/lldb`, `swiftExpressions` false (and `expressionsNote` the plain reason, e.g. no iOS SDK) when it couldn't be built |
 | `debug sources --bundle-id B` | one-shot: `{project, files: [{path, rel, name, lines}], localBuild}` for the project whose bundle id `B` is (`XTL-<TEAM>.<id>` matches `<id>`) |
 | `debug backtrace --bundle-id B` | stream: `debug.start` (attach), attach, read every thread, detach, `debug.stop`. `done.data` = `{threads, crashedThread, selectedThread, pid, localBuild, symbolsReady, ended}` |
 | `debug session --bundle-id B [--launch auto\|attach\|suspended] [--breakpoints '<json>'] [--commands '<json>'] [--stop-at-attach]` | stream: an interactive session |
+| `debug editor-config`, `debug editor`, `debug editor-status` | Debug in editor ([docs/features/editor-debugging.md](features/editor-debugging.md)): the editors run the shadow's lldb-dap through a stable launcher, `~/.cache/ios-studio/lldb-ios/lldb-dap`; `debug editor` emits the same `lldb-plain` notice and has `swiftExpressions` on `ready` |
 
 The stream emits `step`, `notice` and `done` like other helper streams, plus `started {port, pid,
-launched, ...}`, `console {text}` (lldb's own output), `attached`, `breakpoints {items: [{id, spec,
+launched, ..., swiftExpressions}`, `console {text}` (lldb's own output), `attached`, `breakpoints {items: [{id, spec,
 locations, resolved, hits}]}`, `running`, `stopped {stopId, reason, description, thread: {index,
-frames}, threads, breakpoint?, locals: {frame, function, variables}}`, `variables`, `evaluated`,
-`backtrace`, `ack {cmd, ok, message?}` and `exited`. A frame is `{index, function, module, pc,
-offset?, file?, line?, column?, inApp}`; a variable is `{name, type, value?, error?, childCount,
-children?}` (one level deep, 20 children at most). `reason` is `breakpoint`, `step`, `exception`,
-`signal`, `paused` or `watchpoint`.
+frames}, threads, breakpoint?, localsPending, locals?: {frame, function, variables, more, partial, elapsedMs},
+localsError?}`, `variables`, `evaluated`, `backtrace`, `ack {cmd, ok, code?, message?}` and `exited`. A frame
+is `{index, function, module, pc, offset?, file?, line?, column?, inApp}`; a variable is `{name, type, value?,
+error?, childCount, children?, unread?}` (one level deep, 20 children at most). `reason` is `breakpoint`, `step`,
+`exception`, `signal`, `paused` or `watchpoint`.
+
+A stop never waits for its locals. `stopped` goes out with the frames as soon as the process stops; when the
+locals are read within half a second they ride along in `locals` (`localsPending: false`), otherwise
+`localsPending` is true and they follow as `variables {stopId, frame, function, variables, more, partial,
+elapsedMs}` with the stop's `stopId` and no `requestId` (or `variables {stopId, error}` when reading failed).
+Over Wi-Fi without the iPhone's debug symbols lldb reads the Swift runtime's metadata from phone memory, which took
+minutes for four locals in a CrashLab session; a stop's locals get 20 seconds, then the rest are listed by name and
+type with `unread: true` (`partial: true`), and `frame_variables` reads them again (40 seconds). A session without
+symbols says so once, at the start, in its `no-symbols` notice (below); the driver adds no notice of its own. Reads (`frame_variables`, `select_frame`, `evaluate`,
+`backtrace`) run one at a time on a worker thread in the driver, so the session keeps answering `detach`, `pause`,
+`status` (`reading` says whether a read runs) and signals meanwhile; a `frame_variables` for the frame whose locals
+are still being read is answered with them. `continue` and the steps cancel what is being read (queued requests get
+`ack {ok: false, code: "cancelled"}`); if lldb doesn't let go within 5 seconds the command is refused with
+`code: "busy"`. lldb reads phone memory in 16 KB lines (`target.process.memory-cache-line-size 16384`, the iPhone's
+page size; lldb's default 512 bytes cost one ~50 ms round trip each over Wi-Fi). A line is never more than the
+target's page size: lldb reads a line as a whole, and one reaching into an unmapped page fails even for its mapped
+bytes, so other platforms (the tests' local lldb-server) get 4 KB lines.
+
+A session without the shadow lldb emits `notice {id: "lldb-plain"}` (Swift expressions may not work, with the
+reason) before `started`, whose `swiftExpressions` is then false. `evaluated {requestId, expr, ok, result, code?,
+message?, fix?}`: `result` is a variable; for `po` it also has `description` (the object's description, up to 2000
+characters). When the expression failed for a reason other than the Swift, `code` and a plain `message` (and `fix`
+when there is one) say why: `swift-modules` (lldb couldn't load the iOS Swift modules: SwiftShims, HostInfoError
+alone, a corrupted precompiled module), `stale-build` ("type for self cannot be reconstructed", "Couldn't realize
+Swift AST type", a missing `.pcm`: the app's build lost its precompiled module files; fix: Run the app,
+`{page: "projects", action: "run", path}`) and `frame-no-swift` ("no JIT compiled function": main or a system
+frame). lldb's HostInfoError lines are dropped from `result.error` around a real error.
+
+Notices with a `fix` carry it as `{label, page, ...}`, like errors. The iPhone's debug symbols get one notice
+per session, at the start (`debug.start`'s `symbolsReady` and `symbolsUpdate`): `no-symbols` (info: what's
+affected, system frames with library names only, some Swift values reading wrong, slow variables over Wi-Fi) or
+`symbols-update` (warn: attaching can take minutes until they're updated), with the fix
+`{label: "Download symbols" | "Update symbols", page: "device", tab: "debug", action: "symbols"}`; the iPhone page
+runs `action` on its Debug tab, which downloads, updates or unpacks them (asking first). `debug editor` sends the
+same notice. Then `stale-modules` ("Swift expressions need a fresh build: Run the app again (it rebuilds
+what's missing).", fix: Run the app). `stale-modules` comes once per session: at the start when the project's
+`.build/out/SDKExplicitPrecompiledModules` has lost its `.pcm` files (a stat check,
+`helper/iosstudio/features/projects/modules.py`), or when lldb reports missing ones, which is also noted in
+`~/.cache/ios-studio/missing-modules.json` so the next build recompiles. The compiler prunes that folder, and a
+build that has nothing to recompile doesn't bring the files back; so before building, the project build removes the
+project's own object files when the folder has no `.pcm` left or a session noted missing ones, and the build
+recompiles them and regenerates the files (it logs a line saying so).
+
+lldb's repetitive console lines are summarized: the first "Error while searching for Xcode SDK: HostInfoError" (the
+Swift plugin looking for Xcode on Linux, hundreds per session) and the first missing-module warning each become
+one plain line, later ones are counted, and a `console` line at the end says how many were hidden. Every other
+line passes unchanged.
 
 Commands go to the session's stdin as JSON lines: `{"cmd": "continue"}` and `next` (step over),
 `step` (step in), `finish` (step out), `pause`, `detach`, `kill`, `frame_variables {frame?, depth?}`,
-`select_frame {frame}`, `evaluate {expr}`, `backtrace`, `breakpoint_add {spec}`,
+`select_frame {frame}`, `evaluate {expr}` (Swift, or lldb's `p x`, `po x`, `expression [-O] [--] x`), `backtrace`, `breakpoint_add {spec}`,
 `breakpoint_delete {id}`, `status`. An optional `requestId` comes back on the answer.
 `{"cancel": true}`, SIGTERM and the end of stdin all detach. A breakpoint `spec` is `File.swift:42`
 or a function name. Whatever ends the session, the app is detached (or killed with `kill`) before
-the helper releases the forward.
+the helper releases the forward. The helper never hangs on the driver: it runs in its own process group, and one that
+hasn't ended 10 seconds after being asked to detach gets SIGTERM, then 3 seconds later the whole group gets SIGKILL
+(a console line says so); the helper then releases the forward with `debug.stop` (`kill: true` for a launch that
+wasn't detached cleanly) and ends.
 
 lldb runs through its Python API (`helper/iosstudio/features/lldb_driver.py` under `/usr/bin/python3.12` with the path
-from `lldb -P`), using the steps omarchy-ios-kit uses for a userspace tunnel:
-`target.memory-module-load-level minimal`, `platform select remote-ios --sysroot <DeviceSupport>`, a
+from `lldb -P`, mirrored into the shadow lldb when there is one, so Swift expressions work), using the steps
+omarchy-ios-kit uses for a userspace tunnel: `target.memory-module-load-level minimal`,
+`target.process.memory-cache-line-size` (the target's page size: 16384 on an iPhone, 4096 elsewhere),
+`settings set target.sdk-path "<iPhoneOS.sdk>"` (with the shadow lldb only, before the target exists),
+`platform select remote-ios --sysroot <DeviceSupport>`, a
 target for the local `xtool/<App>.app/<exe>` with its platform path set to `remotePath`, an
 asynchronous `process connect connect://127.0.0.1:<port>` (a synchronous one waits forever), then
 `process attach --pid <pid>`. With no local build it attaches with only system symbols and says so.

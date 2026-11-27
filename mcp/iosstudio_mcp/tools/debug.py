@@ -10,7 +10,9 @@ server stops.
 Output budget: a backtrace returns the top FOCUS_FRAMES frames of the crashed (else selected)
 thread and the other threads grouped by identical stacks; every thread's frames go to a file under
 ~/.cache/ios-studio/mcp/debug/. A stop returns the top STOP_FRAMES frames and frame 0's locals
-(depth 1, values clipped).
+(depth 1, values clipped). evaluate runs Swift in the stopped frame (`po x` adds x's description, clipped to
+DESCRIPTION_CUT); the helper runs a shadow lldb set up for iOS so that works, and when it can't, the session's
+expressions_note says expressions may fail.
 """
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ MAX_GROUPS = 12
 MAX_LOCALS = 30
 VALUE_CUT = 200
 EXPR_CUT = 500
+DESCRIPTION_CUT = 1500
 CONSOLE_KEEP = 400
 CONSOLE_SHOW = 8
 MAX_SESSIONS = 2
@@ -119,6 +122,10 @@ class DebugStop(Out):
     frames_total: int = 0
     locals: list[DebugVar] = Field(default_factory=list)
     locals_more: bool = False
+    locals_pending: bool = Field(False, description="The locals are still being read (slow over Wi-Fi without the "
+                                                    "iPhone's debug symbols); they arrive with a later call")
+    locals_partial: bool = Field(False, description="Some locals weren't read in time (listed without a value); "
+                                                    "frame_variables reads them again")
 
 
 class DebugSession(B.Budgeted, Out):
@@ -132,7 +139,10 @@ class DebugSession(B.Budgeted, Out):
     breakpoints: list[str] = Field(default_factory=list, description="'#id spec (N locations)'")
     console: list[str] = Field(default_factory=list, description="Newest lldb console lines")
     notices: list[str] = Field(default_factory=list)
-    result: dict[str, Any] | None = Field(None, description="frame_variables / evaluate result")
+    expressions_note: str | None = Field(None, description="Set when Swift expressions may fail in this session "
+                                                           "(lldb couldn't be set up for iOS); frame_variables still works")
+    result: dict[str, Any] | None = Field(None, description="frame_variables / evaluate result (evaluate: value, "
+                                                            "description for po, message when it failed)")
     error: ErrorInfo | None = None
     next_steps: list[str] = Field(default_factory=list)
 
@@ -140,6 +150,8 @@ class DebugSession(B.Budgeted, Out):
 class DebugSymbols(Out):
     debugger_ready: bool
     debugger_problem: str | None = None
+    expressions_note: str | None = Field(None, description="Why Swift expressions may fail in debug sessions "
+                                                           "(None: they work)")
     ios: str | None = None
     build: str | None = None
     symbols_ready: bool = Field(False, description="A usable set is on this computer (also when outdated)")
@@ -265,7 +277,8 @@ def _var(v: dict) -> DebugVar:
         kids.append(f"… {int(v.get('childCount') or 0) - len(kids)} more")
     return DebugVar(name=str(v.get("name") or ""), type=B.clip(v.get("type"), 120) if v.get("type") else None,
                     value=B.clip(v.get("value"), VALUE_CUT) if v.get("value") is not None else
-                    (B.clip(v.get("error"), VALUE_CUT) if v.get("error") else None),
+                    (B.clip(v.get("error"), VALUE_CUT) if v.get("error") else
+                     "(not read in time)" if v.get("unread") else None),
                     children=kids, child_count=int(v.get("childCount") or 0))
 
 
@@ -274,6 +287,7 @@ def _stop(s: dict, root: str | None) -> DebugStop:
     frames = t.get("frames") or []
     f0 = frames[0] if frames else {}
     loc = (s.get("locals") or {}).get("variables") or []
+    pending = bool(s.get("localsPending")) and not s.get("locals")
     bp = s.get("breakpoint") or {}
     return DebugStop(stop_id=int(s.get("stopId") or 0), reason=str(s.get("reason") or "other"),
                      description=B.clip(s.get("description"), 200) if s.get("description") else None,
@@ -281,7 +295,8 @@ def _stop(s: dict, root: str | None) -> DebugStop:
                      function=B.clip(f0.get("function"), 200) if f0.get("function") else None,
                      breakpoint=bp.get("spec"), thread=t.get("index"),
                      frames=[_frame(f, root) for f in frames[:STOP_FRAMES]], frames_total=int(t.get("numFrames") or len(frames)),
-                     locals=[_var(v) for v in loc[:MAX_LOCALS]], locals_more=len(loc) > MAX_LOCALS or bool((s.get("locals") or {}).get("more")))
+                     locals=[_var(v) for v in loc[:MAX_LOCALS]], locals_more=len(loc) > MAX_LOCALS or bool((s.get("locals") or {}).get("more")),
+                     locals_pending=pending, locals_partial=bool((s.get("locals") or {}).get("partial")))
 
 
 # ------------------------------------------------------------------ sessions
@@ -302,6 +317,7 @@ class Session:
     console_seen: int = 0
     console_total: int = 0
     notices: list = field(default_factory=list)
+    expressions_note: str | None = None
     results: dict = field(default_factory=dict)     # requestId -> event, only for requests a tool still awaits
     waiting: set = field(default_factory=set)       # requestIds a tool call is waiting for
     ended_at: float | None = None                   # when _prune first saw it ended
@@ -325,6 +341,8 @@ class Session:
             for ln in str(ev.get("text") or "").splitlines():
                 self.console.append(B.clip(ln, 300))
                 self.console_total += 1
+        elif name == "notice" and ev.get("id") == "lldb-plain":
+            self.expressions_note = B.clip(ev.get("message"), 300)
         elif name == "notice":
             self.notices.append(B.clip(ev.get("message"), 300))
             self.notices = self.notices[-5:]
@@ -335,6 +353,8 @@ class Session:
         elif name == "stopped":
             self.state = "stopped"
             self.stop = ev
+        elif name == "variables" and not ev.get("requestId") and self.stop and ev.get("stopId") == self.stop.get("stopId"):
+            self.stop = {**self.stop, "locals": ev}     # a stop's locals, read after the stop itself was reported
         elif name in ("variables", "evaluated", "backtrace") and ev.get("requestId"):
             if str(ev["requestId"]) in self.waiting:    # a late answer to a call that gave up is dropped
                 self.results[str(ev["requestId"])] = ev
@@ -485,6 +505,9 @@ def session_view(s: Session, result: dict | None = None) -> DebugSession:
     if s.state == "stopped":
         nxt.append(f"Paused. ios_debug_session_command(session_id='{sid}', command='next'|'step'|'finish'|'continue'), "
                    "or 'frame_variables' / 'evaluate' to look closer. End with ios_debug_session_end.")
+        if stop and stop.locals_pending:
+            nxt.append(f"The locals are still being read; ios_debug_session_command(session_id='{sid}', "
+                       "command='frame_variables') returns them when ready (wait_seconds up to 40 over Wi-Fi).")
     elif s.state == "running":
         nxt.append(f"The app is running. ios_debug_session_wait(session_id='{sid}', wait_seconds=20) returns at the next "
                    "breakpoint; ask the user to trigger the code path if needed.")
@@ -500,8 +523,8 @@ def session_view(s: Session, result: dict | None = None) -> DebugSession:
     err = ErrorInfo(code=(s.error or {}).get("code"), message=B.clip_error(str((s.error or {}).get("message") or ""))) \
         if s.error else None
     return DebugSession(session_id=sid, state=s.state, bundle_id=s.bundle_id, pid=s.pid, launched=s.launched, stop=stop,
-                        new_stop=new, breakpoints=bps, console=fresh, notices=s.notices[-3:], result=result, error=err,
-                        next_steps=nxt)
+                        new_stop=new, breakpoints=bps, console=fresh, notices=s.notices[-3:],
+                        expressions_note=s.expressions_note, result=result, error=err, next_steps=nxt)
 
 
 def _clip_result(ev: dict) -> dict:
@@ -511,7 +534,12 @@ def _clip_result(ev: dict) -> dict:
                 "variables": [B.dump(_var(v)) for v in vs[:MAX_LOCALS]], "more": len(vs) > MAX_LOCALS or bool(ev.get("more"))}
     if ev.get("event") == "evaluated":
         r = ev.get("result") or {}
-        return {"expr": B.clip(ev.get("expr"), 200), "ok": bool(ev.get("ok")), **B.dump(_var(r))}
+        out = {"expr": B.clip(ev.get("expr"), 200), "ok": bool(ev.get("ok")), **B.dump(_var(r))}
+        if r.get("description"):
+            out["description"] = B.clip(r["description"], DESCRIPTION_CUT)
+        if ev.get("message"):
+            out["message"] = B.clip(ev["message"], 300)
+        return out
     return {"ok": bool(ev.get("ok")), "message": B.clip(ev.get("message"), 300), "code": ev.get("code")}
 
 
@@ -631,13 +659,18 @@ def register(mcp: MCPServer) -> None:
         session_id: Annotated[str, Field(description="From ios_debug_session_start")],
         command: Annotated[Literal["continue", "next", "step", "finish", "pause", "frame_variables", "evaluate"],
                            Field(description="next: step over; step: into; finish: out; frame_variables: locals "
-                                             "of `frame`; evaluate: Swift `expr` (may run code)")],
-        expr: Annotated[str | None, Field(max_length=EXPR_CUT, description="For evaluate")] = None,
+                                             "of `frame`; evaluate: a Swift `expr` in the current frame (may run "
+                                             "code)")],
+        expr: Annotated[str | None, Field(max_length=EXPR_CUT, description="For evaluate: Swift such as "
+                                          "'items.count * 2' or 'name.uppercased()'; 'po x' also returns x's "
+                                          "description, as on a Mac")] = None,
         frame: Annotated[int | None, Field(ge=0, le=200, description="For frame_variables (default: current)")] = None,
         wait_seconds: Annotated[float, Field(ge=0, le=MAX_WAIT, description="Wait for the resulting stop")] = 15,
     ) -> DebugSession:
         """Step, continue or inspect a paused debug session; run commands return at the next stop or after
-        wait_seconds, frame_variables and evaluate answer in `result`."""
+        wait_seconds, frame_variables and evaluate answer in `result`. evaluate runs Swift expressions
+        (p/po/expression) unless the session has an expressions_note; the first one loads the app's modules
+        (up to 40 s)."""
         state = get_state(ctx)
         s = _get(state, session_id)
         if s.ended:
@@ -655,7 +688,9 @@ def register(mcp: MCPServer) -> None:
                 msg["frame"] = frame
             ev = await s.request(msg, lambda: rid in s.results or s.ended, min(wait_seconds or 15, MAX_WAIT))
             if ev is None:
-                raise ToolError("The debugger didn't answer in time (memory reads are slow over Wi-Fi). Try again.")
+                raise ToolError("The debugger didn't answer in time (memory reads are slow over Wi-Fi"
+                                + ("; the first expression of a session loads the app's Swift modules, up to 40 s"
+                                   if command == "evaluate" else "") + "). Try again.")
             return session_view(s, _clip_result(ev))
         seen = int((s.stop or {}).get("stopId") or 0)
         def refused() -> bool:
@@ -717,6 +752,7 @@ def register(mcp: MCPServer) -> None:
                        "Wi-Fi while the app stays paused.")
         return DebugSymbols(debugger_ready=bool(chk.get("ready")),
                             debugger_problem=B.clip((chk.get("error") or {}).get("message"), 300) if not chk.get("ready") else None,
+                            expressions_note=B.clip(chk.get("expressionsNote"), 300) if chk.get("expressionsNote") else None,
                             ios=st.get("ios"), build=st.get("build"), symbols_ready=bool(st.get("ready")),
                             state=state_, update_needed=bool(upd.get("needed")),
                             update_reason=B.clip(upd.get("reason"), 300) if upd.get("needed") else None,

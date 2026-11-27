@@ -4,10 +4,10 @@ attaches through the attach file to a process under a local lldb-server, stops a
 detaches; afterwards the stub attach file refuses with a readable message."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -17,13 +17,17 @@ import unittest
 from pathlib import Path
 
 from iosstudio.core import jsonc
+from iosstudio.features.setup import toolchain_root
 from support import ROOT
 from support.dap_client import DapClient
 from support.fake_deviced import FakeDeviced
 from support.lldb_ready import debugger_ready
+from support.lldb_target import BREAK_LINE, build, start_gdbserver, start_target
 
 HELPER = [sys.executable, str(ROOT / "helper/run.py"), "iosstudio"]
-TOOLCHAIN_BIN = Path(os.path.realpath(shutil.which("swift") or "/nonexistent")).parent
+# The helper's own lookup (the realpath of /usr/bin/swift, as Setup installs it), not PATH: CI's runner has a Swift on
+# PATH under /usr/share/swift that the helper never uses.
+TOOLCHAIN_BIN = (toolchain_root() or Path("/nonexistent")) / "usr/bin"
 
 
 class Stream:
@@ -33,8 +37,11 @@ class Stream:
         self.p = subprocess.Popen(HELPER + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, env=env)
         self.lines: list[dict] = []
+        self.stderr: list[str] = []     # drained, so a chatty helper never blocks on a full pipe
+        self.logs: list[Path] = []      # other processes' logs a failing wait shows (lldb-server's)
         self._cv = threading.Condition()
         threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read_err, daemon=True).start()
 
     def _read(self) -> None:
         for line in self.p.stdout:
@@ -46,6 +53,17 @@ class Stream:
                 self.lines.append(ev)
                 self._cv.notify_all()
 
+    def _read_err(self) -> None:
+        for line in self.p.stderr:
+            self.stderr = (self.stderr + [line])[-50:]
+
+    def story(self) -> str:
+        """What the stream said, for a failing assertion: every event's name, the last few in full, stderr's tail."""
+        tail = "\n".join(json.dumps(e)[:600] for e in self.lines[-8:])
+        logs = "".join(f"\n{p.name}: {p.read_text(errors='replace')[-2000:]}" for p in self.logs if p.is_file())
+        return (f"events {[e.get('event') for e in self.lines]}\nlast:\n{tail}\n"
+                f"stderr: {''.join(self.stderr)[-2000:]}{logs}")
+
     def wait(self, pred, timeout: float = 60) -> dict:
         deadline = time.monotonic() + timeout
         with self._cv:
@@ -55,7 +73,7 @@ class Stream:
                     return hit
                 left = deadline - time.monotonic()
                 if left <= 0 or self.p.poll() is not None:
-                    raise AssertionError(f"no matching event; got {[e.get('event') for e in self.lines]}")
+                    raise AssertionError(f"no matching event within {timeout:g} s; {self.story()}")
                 self._cv.wait(min(left, 0.5))
 
     def event(self, name: str, timeout: float = 60, **match) -> dict:
@@ -66,11 +84,19 @@ class Stream:
         self.p.stdin.flush()
 
     def close(self) -> None:
+        """Cancel (the helper detaches and releases the forward as it would for the app), then kill if it lingers."""
         if self.p.poll() is None:
-            self.p.kill()
+            with contextlib.suppress(OSError, ValueError):
+                self.cancel()
+                self.p.stdin.close()
+            try:
+                self.p.wait(20)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
         self.p.wait(10)
         for f in (self.p.stdin, self.p.stdout, self.p.stderr):
-            f.close()
+            with contextlib.suppress(OSError, ValueError):
+                f.close()
 
 
 def make_project(base: Path, name: str = "Target", bundle: str = "com.example.target") -> Path:
@@ -89,7 +115,8 @@ class Base(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.env = {**os.environ, "HOME": str(self.home), "XDG_STATE_HOME": str(self.home / ".local/state"),
-                    "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_DATA_HOME": str(self.home / ".local/share")}
+                    "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_DATA_HOME": str(self.home / ".local/share"),
+                    "XDG_CACHE_HOME": str(self.home / ".cache")}
         self.env.pop("IOSSTUDIO_DEMO", None)
         # a runtime dir of our own, short enough for the socket
         self.run_dir = Path(tempfile.mkdtemp(prefix="ied-", dir="/tmp"))
@@ -126,7 +153,8 @@ class Demo(Base):
             self.addCleanup(s.close)
             ready = s.event("ready")
             self.assertEqual(set(ready) - {"event"}, {"bundleId", "appName", "port", "host", "pid", "launched",
-                                                      "scriptPath", "editors", "configName", "symbolsReady", "localBuild"})
+                                                      "scriptPath", "editors", "configName", "symbolsReady", "localBuild",
+                                                      "swiftExpressions"})
             s.event("editor", state="attached")
             s.cancel()
             done = s.event("done")
@@ -151,8 +179,14 @@ class Real(Base):
         self.assertEqual(d["editors"][0]["action"]["kind"], "write")
         doc = jsonc.load((proj / ".vscode/launch.json").read_text())
         cfg = doc["configurations"][0]
-        self.assertEqual((cfg["name"], cfg["type"], cfg["request"]), (d["configName"], "swift", "attach"))
+        self.assertEqual((cfg["name"], cfg["type"], cfg["request"]), (d["configName"], "lldb-dap", "attach"))
+        self.assertEqual(cfg["debugAdapterExecutable"], "${userHome}/.cache/ios-studio/lldb-ios/lldb-dap")
         self.assertIn("'~/.local/state/ios-studio/editor-debug/com.example.target.lldb'", cfg["attachCommands"][0])
+        launcher = self.home / ".cache/ios-studio/lldb-ios/lldb-dap"
+        if TOOLCHAIN_BIN.joinpath("lldb-dap").is_file():   # the launcher is there before the first bridge
+            self.assertIn(str(TOOLCHAIN_BIN / "lldb-dap"), launcher.read_text())
+        else:                                              # no toolchain lldb-dap: nothing to point it at yet
+            self.assertFalse(launcher.exists())
         self.assertNotIn(str(self.home), (proj / ".vscode/launch.json").read_text())   # no machine path in the project
         self.assertEqual(sorted(p.name for p in proj.rglob("*") if p.is_file()),
                          ["Package.swift", "launch.json", "xtool.yml"])   # writes only launch.json
@@ -199,23 +233,6 @@ def _tools() -> dict | None:
     return {"dap": str(dap), "server": str(server), "cc": cc}
 
 
-TARGET_C = r"""
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/prctl.h>
-static volatile int counter = 0;
-int tick(int n) {
-    counter += n;          /* BREAK */
-    return counter;
-}
-int main(void) {
-    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);   /* let lldb-server attach (Yama ptrace_scope 1) */
-    printf("%d\n", getpid());
-    fflush(stdout);
-    for (int i = 0; i < 1200; i++) { tick(i); usleep(50000); }
-    return 0;
-}
-"""
 
 
 @unittest.skipUnless(_tools(), "needs the Swift toolchain's lldb-dap and lldb-server, lldb's Python and cc")
@@ -224,20 +241,10 @@ class EndToEnd(Base):
         tools = _tools()
         proj = make_project(self.tmp)
         src = proj / "Sources/Target/target.c"
-        src.write_text(TARGET_C)
-        exe = proj / ".build/debug/Target-App"            # where local_executable finds an xtool build
-        exe.parent.mkdir(parents=True)
-        subprocess.run([tools["cc"], "-g", "-O0", "-o", str(exe), str(src)], check=True, timeout=60)
-        line = next(i for i, x in enumerate(TARGET_C.splitlines(), 1) if "BREAK" in x)
-        target = subprocess.Popen([str(exe)], stdout=subprocess.PIPE, text=True)
-        self.addCleanup(target.kill)
-        pid = int(target.stdout.readline())
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
-        server = subprocess.Popen([tools["server"], "gdbserver", f"127.0.0.1:{port}"], stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL)
-        self.addCleanup(server.kill)
+        exe = build(tools["cc"], src, proj / ".build/debug/Target-App")   # where local_executable finds an xtool build
+        line = BREAK_LINE
+        target, pid = start_target(self, exe)
+        _server, port = start_gdbserver(self, tools["server"], self.tmp / "lldb-server.log")
         installed = "XTL-TEAM123456.com.example.target"
         replies = {
             "apps.list": {"apps": [{"bundleId": "com.example.other"}, {"bundleId": installed}]},
@@ -247,17 +254,30 @@ class EndToEnd(Base):
             "processes.list": [{"pid": pid, "name": "Target", "isApp": True}],
         }
         env = {**self.env, "IOSSTUDIO_DEBUG_PLATFORM": "remote-linux"}
+        # IOSSTUDIO_TEST_DARWIN_SDK=<darwin.artifactbundle>: run it with the shadow lldb (built from that SDK into
+        # this test's cache), so the editor's lldb-dap is the launcher's shadow and the attach file sets the SDK
+        sdk = os.environ.get("IOSSTUDIO_TEST_DARWIN_SDK")
+        if sdk:
+            link = self.home / ".config/swiftpm/swift-sdks/darwin.artifactbundle"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(sdk)
         with FakeDeviced(self.run_dir, replies) as daemon:
             bridge = Stream(["debug", "editor", "--project", str(proj), "--editor", "vscode"], env)
             self.addCleanup(bridge.close)
+            bridge.logs.append(self.tmp / "lldb-server.log")
             ready = bridge.event("ready", timeout=120)
             self.assertEqual((ready["bundleId"], ready["port"], ready["pid"]), (installed, port, pid))
+            # without an iOS SDK the launcher runs the toolchain's lldb-dap, and the bridge says so
+            self.assertEqual(ready["swiftExpressions"], bool(sdk))
+            self.assertEqual(any(e.get("id") == "lldb-plain" for e in bridge.lines), not sdk)
             self.assertEqual(ready["editors"], ["vscode"])
             self.assertEqual(ready["localBuild"], str(exe))
             self.assertEqual(daemon.sent("debug.start")[0]["bundleId"], installed)
             cfg = jsonc.load((proj / ".vscode/launch.json").read_text())["configurations"][0]
+            launcher = cfg["debugAdapterExecutable"].replace("${userHome}", str(self.home))   # what VS Code runs
+            self.assertEqual("iosstudio-sdk-path" in Path(ready["scriptPath"]).read_text(), bool(sdk))
 
-            dap = self.attach(tools["dap"], cfg, env)
+            dap = self.attach(launcher, cfg, env)
             r = dap.request("setBreakpoints", {"source": {"path": str(src)}, "breakpoints": [{"line": line}]})
             self.assertTrue(r["body"]["breakpoints"][0]["verified"], r)
             self.assertTrue(dap.request("configurationDone")["success"])
@@ -269,6 +289,11 @@ class EndToEnd(Base):
             names = [v["name"] for v in dap.request("variables", {"variablesReference": scope["variablesReference"]})
                      ["body"]["variables"]]
             self.assertIn("n", names)
+            if sdk:   # the shadow's liblldb: the SDK was set, no "another lldb-dap" warning
+                self.assertNotIn("another lldb-dap", "".join(dap.output))
+                maps = Path(f"/proc/{dap.p.pid}/maps").read_text()
+                self.assertIn("/lldb-ios/", maps)
+                self.assertNotIn(str(TOOLCHAIN_BIN.parent / "lib/liblldb"), maps)
             bridge.event("editor", state="attached")
             self.assertTrue(dap.request("disconnect", {"terminateDebuggee": False})["success"])
             dap.close()
@@ -284,7 +309,7 @@ class EndToEnd(Base):
         # after the bridge: the same config now fails with the readable message instead of connecting
         script = Path(ready["scriptPath"])
         self.assertIn("iosstudio-fail", script.read_text())
-        dap = DapClient([tools["dap"]], env=env)
+        dap = DapClient([launcher], env=env)
         try:
             dap.request("initialize", {"adapterID": "lldb-dap", "clientID": "test", "pathFormat": "path"})
             r = dap.request("attach", {k: v for k, v in cfg.items() if k not in ("name", "type")}, timeout=120)

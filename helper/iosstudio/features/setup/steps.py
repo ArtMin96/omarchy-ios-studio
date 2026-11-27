@@ -12,6 +12,7 @@ from iosstudio.core.appdirs import HOME, REPO, VENV_DIR
 
 from .facts import (
     arch,
+    darwin_tools_stale,
     first_version,
     gather,
     is_omarchy,
@@ -24,8 +25,19 @@ from .facts import (
     sdk_stamp,
     swift_hold_hook_present,
     xcode_for,
+    xtool_built_from,
 )
-from .pins import APPLE_DEV_COMMIT, DESKTOP_FILE, DIRECT_XIP, DOWNLOAD_PAGE, DOWNLOADS, LAUNCHER, PYMD3_VERSION
+from .pins import (
+    APPLE_DEV_COMMIT,
+    APPLE_DEV_HOME,
+    DEFAULT_XTOOL_SHA,
+    DESKTOP_FILE,
+    DIRECT_XIP,
+    DOWNLOAD_PAGE,
+    DOWNLOADS,
+    LAUNCHER,
+    PYMD3_VERSION,
+)
 from .runtime import fmt_bytes, probe
 from .xip import best_xip
 
@@ -41,6 +53,13 @@ def _row(id_: str, title: str, group: str, description: str, state: str, detail:
          "canAutoInstall": auto and state in ("missing", "broken"), "essential": essential, "action": action}
     d.update(extra)
     return d
+
+
+def apple_dev_update_detail(head: str, pinned: str | None = None) -> str:
+    """The iOS build scripts row's detail when our own checkout is at `head`, not the pin: an update, not a fault."""
+    pinned = pinned or APPLE_DEV_COMMIT
+    return (f"You have {head[:7]}; iOS Studio is tested with {pinned[:7]}. Updating downloads it and rebuilds only "
+            "what changed.")
 
 
 def build_steps(F: dict) -> tuple[list[dict], dict]:
@@ -130,36 +149,50 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     # 7 omarchy-apple-dev
     ad = F["apple_dev"]
     head = F["ad_head"][1].strip() if F["ad_head"][0] == 0 else ""
-    ctx["apple_dev"], ctx["apple_dev_head"] = ad, head
+    # Our own checkout follows APPLE_DEV_COMMIT; one the user keeps elsewhere (appleDevDir) is theirs to move.
+    managed = bool(ad) and os.path.realpath(ad) == os.path.realpath(APPLE_DEV_HOME)
+    outdated = managed and bool(head) and head != APPLE_DEV_COMMIT
+    ctx["apple_dev"], ctx["apple_dev_head"], ctx["apple_dev_outdated"] = ad, head, outdated
+    action = None
     if not ad:
         st, det = "missing", "Not downloaded yet"
     elif not head:
         st, det = "done", f"Found at {appdirs.tilde(ad)}"
     elif head == APPLE_DEV_COMMIT:
         st, det = "done", f"At the tested version {head[:7]} ({appdirs.tilde(ad)})"
+    elif outdated:
+        # state "broken" so every install path repairs it as before; update=True tells people (UI, MCP) it's an update
+        st, det = "broken", apple_dev_update_detail(head)
+        action = {"kind": "install", "label": "Update"}
     else:
-        st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} ({appdirs.tilde(ad)})"
+        st, det = "done", f"At {head[:7]}, not the tested {APPLE_DEV_COMMIT[:7]} (your copy at {appdirs.tilde(ad)})"
     if ad and F["ad_dirty"][0] == 0 and F["ad_dirty"][1].strip():
-        det += " · has local changes"
+        det += " It has local changes." if det.endswith(".") else " · has local changes"
     steps.append(_row("apple-dev", "iOS build scripts", "Toolchain",
                    "omarchy-apple-dev: the open-source scripts that turn Xcode's iOS SDK into something Linux can build with.",
-                   st, det, size="a few MB", time_="seconds", essential=True))
+                   st, det, size="a few MB", time_="seconds", essential=True, action=action, update=outdated))
 
     # 8 xtool
     xt = F["xtool"]
     xv_rc, xv, _ = F["xtool_ver"]
     old_ua = F["xtool_old_ua"]
     ver_line = (xv.strip().splitlines() or [""])[0]
+    # A build Setup made is current when it's from the commit the build scripts pin (an older-layout
+    # `-gsa406` build counts for its own pin); an xtool from elsewhere only has to work.
+    wanted = F["pins"].get("XTOOL_SHA", DEFAULT_XTOOL_SHA)
+    built = xtool_built_from(Path(os.path.realpath(xt))) if xt else None
+    ncpu = os.cpu_count() or 4
+    est_min = max(5, min(25, round(7 * 16 / ncpu)))
     if not xt:
         st, det = "missing", "Not installed"
     elif xv_rc != 0:
         st, det = "broken", "Installed, but it doesn't start (often after a Swift update). Repair rebuilds it"
     elif old_ua:
         st, det = "broken", "This build can't sign in to Apple (HTTP 503). Repair rebuilds it with the fix"
+    elif built and not wanted.startswith(built):
+        st, det = "broken", f"Built from {built[:7]}; the iOS build scripts now use {wanted[:7]}. Repair rebuilds it (about {est_min} minutes)"
     else:
         st, det = "done", (("Build " + ver_line.split()[-1][:7]) if ver_line else "Works") + " · has the Apple sign-in fix"
-    ncpu = os.cpu_count() or 4
-    est_min = max(5, min(25, round(7 * 16 / ncpu)))
     steps.append(_row("xtool", "xtool", "Toolchain",
                    "The tool that builds, signs and installs iPhone apps from Linux. It's compiled on your computer.",
                    st, det, size="1.8 GB while building, 410 MB installed", time_=f"about {est_min} minutes (no output while it compiles)",
@@ -231,11 +264,12 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
     installed_stamp = sdk_stamp(bundle) if bundle else ""
     ios_vers = sdk_ios_versions(bundle) if bundle else []
     extras_missing = sdk_extras_missing(bundle) if bundle else []
+    tools_stale = bool(ad and bundle and not extras_missing and darwin_tools_stale(ad, bundle))
     matching = [v for v in ios_vers if v.split(".")[0] == major]
     caches = sdk_caches(stamp)
     good_cache = next((c for c in caches if c["current"] and c["complete"] and c["ios"].split(".")[0] == major), None)
     ctx.update(bundle=bundle, caches=caches, good_cache=good_cache)
-    if bundle and installed_stamp == stamp and matching and not extras_missing:
+    if bundle and installed_stamp == stamp and matching and not extras_missing and not tools_stale:
         sdk_state, sdk_det = "done", f"iOS {matching[-1]} SDK" + (", spare copy in the cache" if good_cache else "")
     elif bundle and installed_stamp and installed_stamp != stamp:
         sdk_state, sdk_det = "broken", "Built by an older xtool; it needs rebuilding"
@@ -243,6 +277,8 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
         sdk_state, sdk_det = "broken", f"Built from Xcode {ios_vers[-1]}, but Swift {swift_ver or '?'} needs Xcode {major}"
     elif bundle and extras_missing:
         sdk_state, sdk_det = "broken", "Missing extras: " + ", ".join(extras_missing)
+    elif tools_stale:
+        sdk_state, sdk_det = "broken", "The iOS build scripts have newer build tools (actool, ibtool…). Repair installs them"
     else:
         sdk_state, sdk_det = "missing", "Not installed"
 
@@ -274,10 +310,13 @@ def build_steps(F: dict) -> tuple[list[dict], dict]:
                           "downloadUrl": DIRECT_XIP.format(v=rec_ver) if "." in rec_ver else None,
                           "pageUrl": DOWNLOAD_PAGE.format(v=rec_ver), "file": xip, "downloads": str(DOWNLOADS)}))
     sdk_auto = bool(good_cache or (xip and xip.get("valid")))
+    # With a current spare copy, a repair only re-registers it and rebuilds the extras (no Xcode, no 20 min build).
+    quick = bool(good_cache) and sdk_state != "missing"
     steps.append(_row("sdk", "iOS SDK", "Apple",
                    "Apple's iOS frameworks (SwiftUI, UIKit…) unpacked from Xcode and prepared for Linux. Needed to build any app.",
                    sdk_state, sdk_det + ("" if sdk_state == "done" or sdk_auto else " · needs the Xcode download first"),
-                   size="about 7 GB on disk (15 GB free needed while building)", time_="about 20–30 minutes",
+                   size="no download (uses the spare copy)" if quick else "about 7 GB on disk (15 GB free needed while building)",
+                   time_="about 2–5 minutes" if quick else "about 20–30 minutes",
                    auto=sdk_auto, essential=True, depends=["xtool", "xcode", "pymobiledevice3"]))
 
     # 15 Apple ID
@@ -370,17 +409,23 @@ def summarize(steps: list[dict]) -> dict:
     counted = [s for s in steps if not s.get("optional") and s["state"] != "optional" and s["id"] != "platform"]
     done_n = sum(1 for s in counted if s["state"] == "done")
     essential_missing = [s["id"] for s in steps if s.get("essential") and s["state"] in ("missing", "broken")]
-    broken = [s["id"] for s in steps if s["state"] == "broken"]
+    # an update (broken + update) still counts as left to do, but isn't a fault: its own list and calmer wording
+    updates = [s["id"] for s in steps if s["state"] == "broken" and s.get("update")]
+    broken = [s["id"] for s in steps if s["state"] == "broken" and s["id"] not in updates]
     auto = [s["id"] for s in steps if s["canAutoInstall"] and s["state"] in ("missing", "broken")]
     ready = not essential_missing
     if ready:
         level, title = "ok", "Everything is ready"
     elif broken and any(b in essential_missing for b in broken):
         level, title = "error", "Something needs repair"
+    elif all(i in updates for i in essential_missing):
+        n = len(essential_missing)
+        level, title = "info", f"{n} update{'s' if n != 1 else ''} ready"
     else:
         level, title = "warn", f"{len(essential_missing)} step{'s' if len(essential_missing) != 1 else ''} left"
     return {"total": len(counted), "done": done_n, "readiness": f"{done_n} of {len(counted)} ready",
-            "ready": ready, "essentialMissing": essential_missing, "broken": broken, "autoInstallable": auto,
+            "ready": ready, "essentialMissing": essential_missing, "broken": broken, "updates": updates,
+            "autoInstallable": auto,
             "level": level, "title": title, "badge": "" if ready else str(len(essential_missing))}
 
 

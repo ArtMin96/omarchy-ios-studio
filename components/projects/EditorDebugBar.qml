@@ -12,7 +12,8 @@ import "../../lib/Model.js" as Model
 //   EditorDebugBar { app: …; entry: app.editorDebug.forProject(project); onStop: …; onDismiss: …; onRetry: … }
 // One slim row: the state (spinner while it starts or stops, the bug glyph while it runs) with what to do in
 // the editor, then Stop (or, after the end, a close button). Under it, the helper's notices (no debug symbols,
-// no local build), one quiet line each. An error shows its message, its fix button and Try again.
+// no local build), one quiet line each, with the notice's fix as a small button (no-symbols: Download symbols, which
+// opens iPhone › Debug and starts the download). An error shows its message, its fix button and Try again.
 Rectangle {
   id: root
 
@@ -39,10 +40,20 @@ Rectangle {
               : Theme.hairline
   Behavior on color { ColorAnimation { duration: 160 } }
 
-  function runFix() {
-    if (!root.fix || !root.app) return
-    if (root.fix.url) Qt.openUrlExternally(root.fix.url)
-    else if (root.fix.page) root.app.nav(root.fix.page, root.fix)
+  // An error's fix, or a notice's ({label, page | url}): a page fix is a deep link (app.nav(page, fix)).
+  function runFix(f) {
+    if (!f || !root.app) return
+    if (f.url) Qt.openUrlExternally(f.url)
+    else if (f.page) root.app.nav(f.page, f)
+  }
+
+  // The notices the strip lists, each with the fix its button shows (Model.debugNoticeFix: once per label) as
+  // shownFix and runFix to run it, so the delegate needs nothing from outside its modelData.
+  readonly property var noticeRows: {
+    var l = root.entry && !root.isError ? (root.entry.notices || []) : []
+    return l.map(function(n, i) {
+      return Object.assign({}, n, { shownFix: Model.debugNoticeFix(l, i), runFix: root.runFix })
+    })
   }
 
   readonly property bool stackButtons: isError && width < Style.space(600)
@@ -115,7 +126,7 @@ Rectangle {
         text: root.fix ? root.fix.label : ""
         kind: "primary"
         compact: true
-        onClicked: root.runFix()
+        onClicked: root.runFix(root.fix)
       }
       ActionButton {
         Layout.alignment: Qt.AlignVCenter
@@ -159,18 +170,22 @@ Rectangle {
         text: root.fix ? root.fix.label : ""
         kind: "primary"
         compact: true
-        onClicked: root.runFix()
+        onClicked: root.runFix(root.fix)
       }
       ActionButton { text: "Try again"; glyph: Model.Glyph.refresh; kind: "ghost"; compact: true; onClicked: root.retry() }
       Item { Layout.fillWidth: true }
     }
 
-    // The helper's notices: one quiet line each, under the text (same indent).
+    // The helper's notices: one quiet line each, under the text (same indent), with its fix as a small button
+    // (Model.debugNoticeFix: once per label). With a button, the glyph and the text's first line sit on the
+    // button's centre line; the text wraps at word boundaries in the width the button leaves.
     Repeater {
-      model: root.entry && !root.isError ? root.entry.notices : []
+      model: root.noticeRows
       delegate: RowLayout {
         id: note
         required property var modelData
+        readonly property var fix: note.modelData.shownFix
+        readonly property real lift: noteFix.visible ? Math.max(0, Math.round((noteFix.implicitHeight - noteMetrics.height) / 2)) : 0
         Layout.fillWidth: true
         spacing: Style.spacing.lg
         FontMetrics { id: noteMetrics; font: noteText.font }
@@ -178,6 +193,7 @@ Rectangle {
           Layout.preferredWidth: root.glyphColumn
           Layout.preferredHeight: noteMetrics.height
           Layout.alignment: Qt.AlignTop
+          Layout.topMargin: note.lift
           Icon {
             anchors.centerIn: parent
             size: Style.font.bodySmall
@@ -189,10 +205,21 @@ Rectangle {
           id: noteText
           Layout.fillWidth: true
           Layout.preferredWidth: 0
+          Layout.alignment: Qt.AlignTop
+          Layout.topMargin: note.lift
           text: note.modelData.message
           size: "small"
           tone: "dim"
           wrapMode: Text.Wrap
+        }
+        ActionButton {
+          id: noteFix
+          Layout.alignment: Qt.AlignTop
+          visible: !!note.fix
+          text: note.fix ? note.fix.label : ""
+          kind: "ghost"
+          compact: true
+          onClicked: note.modelData.runFix(note.fix)
         }
       }
     }

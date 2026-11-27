@@ -14,8 +14,8 @@ In a narrow window, such as tiled next to your editor, the sidebar shrinks to ic
 
 From top to bottom:
 
-- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. While a build runs, the card shows its progress.
-- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone.
+- Next step: one card with the most useful thing to do now and a button for it. That can be finishing Setup, signing in, connecting or unlocking the iPhone, turning on Developer Mode, renewing signing that's about to run out, creating your first app, or, once everything is ready, running your latest app. When Setup has only an update left (a newer tested version of the iOS build scripts), the card says an update is ready and its Update button opens that step in Setup; everything keeps working meanwhile, and iOS Studio doesn't open Setup by itself for it. While a build runs, the card shows its progress.
+- Readiness: a check for Toolchain, iOS SDK, Apple ID and iPhone. Toolchain shows a download arrow instead of a check while an update waits.
 - Quick actions: New app, Open Setup, Mirror screen and Connect AI agents.
 - The iPhone card shows the name, model, iOS version, connection, battery and Developer Mode, with a fix button when something needs you.
 - The Apple ID card shows your account, whether it's free or paid, and how many days are left until your apps need re-signing, with Renew.
@@ -28,7 +28,7 @@ On a fresh machine, Home shows what Setup will do instead.
 
 ![Setup](screenshots/setup.png)
 
-Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button.
+Everything iOS Studio needs, grouped into System, Toolchain, Apple and iPhone. Each step shows whether it's done, missing or broken, how big it is and how long it takes. Broken steps get a Repair button. When iOS Studio moves to a newer tested version of the iOS build scripts, that row shows an Update button instead: your copy keeps working until you press it, and Update downloads the new version and rebuilds only what changed.
 
 - Install everything runs every missing step in order. You type your password once, for the system packages and Swift. Everything else goes into your home folder.
 - You can stop an install. Finished steps stay installed.
@@ -160,7 +160,7 @@ Four tabs:
 
 ![Toolchain](screenshots/toolchain.png)
 
-Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair. Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
+Installed versions of xtool, Swift, the iOS SDK, pymobiledevice3, rcodesign, ipsw and omarchy-apple-dev, each with Install or Repair (or Update, with "update available", when the iOS build scripts have a newer tested version). Below that you see disk usage per piece, how much can be freed safely, and a Clean button for each item. Remove everything is at the bottom.
 
 ### Settings
 
@@ -295,10 +295,12 @@ AI agents can do the same with `ios_app_defaults`, `ios_app_defaults_set`, `ios_
 Open iPhone › Debug and pick your app. Only your own apps are listed: iOS lets a debugger attach only to apps built and signed for development, so App Store and system apps can't be debugged. For readable results, build and run the app from Projects first, so iOS Studio has its build.
 
 - Capture backtrace, for an app that hangs or spins: the app pauses for a few seconds while the debugger reads every thread, then runs on. The thread that stopped on an exception (else the main thread) opens first, and your own code is highlighted with its file and line. Click a frame to copy it.
-- Breakpoints: pick a file from the app's Sources and type a line, or type a function name such as `ForecastModel.refresh`. Then press Start debugging. Attach to the running app keeps it as it is; Restart it paused closes it and starts it again, paused until the debugger is ready, so breakpoints in startup code also hit. When the app stops, you see where, the call stack and the variables of the selected frame. Continue, Step over, Step in and Step out move on; Pause stops a running app. Detach ends debugging and the app keeps running, and the stop button quits the app instead.
+- Breakpoints: pick a file from the app's Sources and type a line, or type a function name such as `ForecastModel.refresh`. Then press Start debugging. Attach to the running app keeps it as it is; Restart it paused closes it and starts it again, paused until the debugger is ready, so breakpoints in startup code also hit. When the app stops, you see where, the call stack and the variables of the selected frame. Type Swift in the Evaluate box to run it in that frame: `days.count * 2`, `name.uppercased()`, or `po forecast` for an object's description, as on a Mac (`p` and `expression` work too). The first expression of a session can take up to 40 seconds while lldb loads the app's Swift modules; later ones answer at once. Continue, Step over, Step in and Step out move on; Pause stops a running app. Detach ends debugging and the app keeps running, and the stop button quits the app instead. Over Wi-Fi without the iPhone's debug symbols, reading variables is slow: the call stack shows as soon as the app stops, Variables says "Reading variables…" and fills in after; stepping doesn't wait for them. What isn't read within 20 seconds is listed by name and type and says "not read yet": press Read again (up to 40 seconds) or click the frame. The session's notes carry their fix as a button: without the iPhone's debug symbols one note says what that affects (system frames, some Swift values, slow variables over Wi-Fi), and its Download symbols button starts the download from the Debug symbols card on the same tab (it asks first); in a narrow window the step buttons show only their arrows (hover for their names). When the session says "Swift expressions need a fresh build", press Run the app: the build brings back the module files lldb needs, then debug again.
 - Debug symbols: the iPhone's Swift runtime and the system libraries lldb needs, downloaded once per iOS version. Without them everything still works, but Swift values such as strings and arrays can read wrong, system frames show only library names and attaching is slow. It needs ipsw from Setup. See [Debug symbols](#debug-symbols) below.
 
 The debugger is lldb from the Swift toolchain. It needs Python 3.12, which Setup's optional "Debugger support" step installs; the Debug tab links there when it's missing. Over Wi-Fi, attaching takes about 30 seconds.
+
+Linux lldb can't evaluate Swift for an iPhone app on its own: it looks for Xcode's Swift files, finds the toolchain's Linux ones instead, and every expression fails. So iOS Studio runs lldb from a small copy of the toolchain whose Swift files are the iOS SDK's (`~/.cache/ios-studio/lldb-ios/`, made once when the Debug tab first opens and remade after a Swift or SDK update; links or copy-on-write clones, so it takes no extra space on btrfs). Without the iOS SDK the debugger still works, the session says Swift expressions may fail, and the variables list shows values as before.
 
 #### Debug symbols
 

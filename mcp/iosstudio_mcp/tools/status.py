@@ -61,8 +61,9 @@ def register(mcp: MCPServer) -> None:
             summ = setup.get("summary") or {}
             tc_title = str(summ.get("title") or summ.get("readiness") or "")
             steps = {s["id"]: s for s in setup.get("steps") or []}
+            updates = [i for i in summ.get("updates") or [] if i in steps]   # work as they are; a tested update waits
             missing = [steps[i]["title"] for i in summ.get("essentialMissing") or [] if i in steps
-                       and steps[i].get("group") in ("System", "Toolchain")]
+                       and i not in updates and steps[i].get("group") in ("System", "Toolchain")]
             tc_ready = not missing and not summ.get("broken")
             if missing:
                 auto = summ.get("autoInstallable") or []
@@ -72,6 +73,10 @@ def register(mcp: MCPServer) -> None:
             for b in summ.get("broken") or []:
                 problems.append(Problem(area="toolchain", message=f"Broken: {steps.get(b, {}).get('title', b)}",
                                         fix="ios_toolchain_check for details, then ios_toolchain_install(step=...)"))
+            for u in updates:
+                problems.append(Problem(area="toolchain", message=f"Update ready (it works meanwhile): "
+                                        f"{steps[u].get('title', u)}. {steps[u].get('detail') or ''}".strip(),
+                                        fix=f"ios_toolchain_install(step='{u}')"))
         else:
             problems.append(Problem(area="toolchain", message=f"Setup check failed: {setup}",
                                     fix="ios_toolchain_check"))

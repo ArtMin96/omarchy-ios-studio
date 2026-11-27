@@ -68,6 +68,9 @@ SESSION = textwrap.dedent("""\
             out("done", ok=False, error={"code": "missing-tool", "message": "lldb isn't installed."})
             return
         out("started", pid=401, launched=flags.get("--launch") == "suspended", localBuild=LOCAL)
+        if "PlainLldb.swift:1" in bps:      # the shadow lldb couldn't be built (lldb_shadow.py): the helper says so
+            out("notice", id="lldb-plain", level="info",
+                message="Swift expressions (p, po) may not work in this session: the iOS SDK isn't installed.")
         out("breakpoints", items=[{"id": i + 1, "spec": s, "locations": 0 if "Nope" in s else 1}
                                   for i, s in enumerate(bps)])
         out("running")
@@ -105,6 +108,13 @@ SESSION = textwrap.dedent("""\
             elif cmd == "frame_variables":
                 out("variables", requestId=rid, frame=m.get("frame", 0), function="ForecastView.body.getter",
                     variables=[{"name": f"v{i}", "type": "Int", "value": str(i) * 400} for i in range(50)])
+            elif cmd == "evaluate" and m.get("expr", "").startswith("po "):
+                out("evaluated", requestId=rid, expr=m.get("expr"), ok=True,
+                    result={"name": "$R1", "type": "Forecast", "value": None, "description": "Forecast(" + "d" * 5000})
+            elif cmd == "evaluate" and m.get("expr") == "broken":
+                out("evaluated", requestId=rid, expr="broken", ok=False, code="swift-modules",
+                    message="lldb couldn't load the app's Swift modules for this expression.",
+                    result={"name": "", "error": "error: missing required module 'SwiftShims'"})
             elif cmd == "evaluate":
                 out("evaluated", requestId=rid, expr=m.get("expr"), ok=True,
                     result={"name": "$R0", "type": "Int", "value": "7"})
@@ -239,6 +249,34 @@ class Sessions(DebugCase):
         e = await self.error(DEBUG, "ios_debug_session_wait", session_id=sid)
         self.assertIn("ios_debug_session_start", e)
 
+    async def test_po_descriptions_plain_errors_and_the_fallback_note(self):
+        d = await self.data(DEBUG, "ios_debug_session_start", bundle_id=BID, breakpoints=["ForecastView.swift:42"],
+                            wait_seconds=3)
+        sid = d["session_id"]
+        self.assertIsNone(d.get("expressions_note"))
+        res = await self.call(DEBUG, "ios_debug_session_command", session_id=sid, command="evaluate", expr="po forecast")
+        self.assertLessEqual(size_of(res), 12_000)
+        r = res.structured_content["result"]
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["description"].startswith("Forecast("))
+        self.assertLessEqual(len(r["description"]), DEBUG.DESCRIPTION_CUT + 10)
+        r = (await self.data(DEBUG, "ios_debug_session_command", session_id=sid, command="evaluate", expr="broken"))["result"]
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["message"], "lldb couldn't load the app's Swift modules for this expression.")
+        await self.data(DEBUG, "ios_debug_session_end", session_id=sid)
+
+        d = await self.data(DEBUG, "ios_debug_session_start", bundle_id=BID, breakpoints=["PlainLldb.swift:1"],
+                            wait_seconds=3)
+        self.assertIn("Swift expressions (p, po) may not work", d["expressions_note"])
+        self.assertEqual(d.get("notices") or [], [])           # the note isn't repeated among the notices
+        await self.data(DEBUG, "ios_debug_session_end", session_id=d["session_id"])
+
+    async def test_evaluate_says_swift_expressions_and_po_work(self):
+        fn = self.fn(DEBUG, "ios_debug_session_command")
+        self.assertIn("Swift expressions (p/po/expression)", " ".join((fn.__doc__ or "").split()))
+        expr = fn.__signature__.parameters["expr"].annotation
+        self.assertIn("'po x' also returns x's description", str(getattr(expr, "__metadata__", "")))
+
     async def test_running_until_paused_and_kill(self):
         d = await self.data(DEBUG, "ios_debug_session_start", bundle_id=BID, breakpoints=["Nope.swift:1"],
                             wait_seconds=0.5)
@@ -285,6 +323,14 @@ class Symbols(DebugCase):
         self.assertIn("press Update", d["how_to_fix"])
         self.assertIn("7.0 GB", d["how_to_fix"])
         self.assertEqual(self.daemon.sent("debug.symbols")[0]["action"], "status")
+
+    async def test_the_expressions_note_is_in_the_status(self):
+        self.helper.reply("debug", "check", {"ready": True, "swiftExpressions": False, "expressionsNote": "No SDK."})
+        self.daemon.replies["debug.symbols"] = (0, {"state": "ready", "ready": True})
+        d = await self.data(DEBUG, "ios_debug_symbols_status")
+        self.assertEqual(d["expressions_note"], "No SDK.")
+        self.helper.reply("debug", "check", {"ready": True, "swiftExpressions": True})
+        self.assertIsNone((await self.data(DEBUG, "ios_debug_symbols_status")).get("expressions_note"))
 
     async def test_missing_lldb_names_the_toolchain_step(self):
         self.helper.reply("debug", "check", {"ready": False, "error": {"code": "missing-tool", "message": "No lldb."}})

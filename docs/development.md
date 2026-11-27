@@ -59,6 +59,7 @@ helper/
       account.py             group `account` (xtool)
       appconfig.py           group `app`: launcher keybinding, window rule, opacity, about
       debugger.py            group `debug` (LLDB on your own apps); lldb_driver.py runs inside lldb's Python
+      lldb_shadow.py         the shadow toolchain lldb runs from, so Swift expressions work for iOS (ensure, for_lldb)
       editor_debug*.py       `debug editor-config` / `editor` / `editor-status`: Debug in editor (VS Code, Zed via lldb-dap)
       screenshots.py         group `screenshots`: baselines and visual diffs
       format.py              `projects format` / `format-lint`: swift-format and SwiftLint
@@ -251,7 +252,7 @@ IPC functions: `nav(page)` (also `page:tab`), `navTab(page, tab)`, `refresh()`, 
 
 Demo mode, `ios-studio --demo[=ready|expiring|fresh] [page]`, runs the whole app on made-up data: a fake account, iPhone and projects. It never touches your Apple account, phone, Hyprland config or real settings. Use it for screenshots and for UI work without a phone. A demo window and a real one can't be open at the same time. The MCP server has its own demo mode (`IOSSTUDIO_DEMO=1`, see [mcp.md](mcp.md#demo-mode)).
 
-`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use.
+`setup install` accepts `--dry-run`. `IOSSTUDIO_DEMO_FAIL=linker` or `=package` makes demo builds fail with parsed linker or package errors, without a toolchain. `IOSSTUDIO_DEMO_DELAY` multiplies the demo's pretend-work pauses (build steps, installs, the demo iPhone's UI and debugger); `0` makes them instant, which the tests use. Two variants for screenshots of fallback states: `IOSSTUDIO_DEMO_DEBUG=plain` debugs as if lldb couldn't be prepared for iOS (no iOS SDK), so `debug check` and sessions report `swiftExpressions` false with the real `expressionsNote` / `lldb-plain` notice and Swift expressions fail as they do in real mode; `IOSSTUDIO_DEMO_APPLE_DEV=outdated` (ready and expiring) puts our omarchy-apple-dev checkout at the previous pin, so Setup's iOS build scripts row offers Update, worded as the real `steps.py` words it.
 
 ## Tests
 
@@ -271,6 +272,21 @@ run's folder rotates out too) and sets `IOSSTUDIO_DEMO_DELAY=0`. Shared fakes ar
 `tests/fixtures/<area>/`, and `pyproject.toml` puts `helper/`, `mcp/` and `tests/` on the path. Patch a shared folder
 or output where the code reads it (`mock.patch.object(appdirs, "STATE_DIR", …)`). No test needs xtool, pymobiledevice3,
 an iPhone or your home folder; tests that use Swift, `swift-format` or `llvm-symbolizer` skip without them.
+
+Every test has a hard limit: `tests/support/hang_guard.py` (a pytest plugin that `tests/conftest.py` loads) ends the
+whole run with exit status 1 when one test runs longer than `IOSSTUDIO_TEST_TIMEOUT` seconds (default 600; `0` turns it
+off), after printing every thread's stack to the terminal. It uses `faulthandler`, which waits and prints without the
+GIL, so it fires even while a thread is stuck in a C call (lldb, a socket read). The slowest test takes about 30 s, so
+hitting the limit means a hang. Give every subprocess a test starts its own timeout too.
+
+The tests that drive the real lldb instead of a phone (`tests/cli/test_debug_session_hardening_cli.py`,
+`tests/cli/test_editor_debug_cli.py`, with `IOSSTUDIO_DEBUG_PLATFORM=remote-linux`) use `tests/support/lldb_target.py`:
+`build()` compiles a small C program (`cc -g -O0`) that prints its pid and calls `tick()` every 50 ms until it's
+killed (at most 10 minutes), with a `BREAK_LINE` for breakpoints; `start_target()` runs it and reads its pid;
+`start_gdbserver()` runs `lldb-server gdbserver 127.0.0.1:0`, which picks a free port itself and reports it through a
+pipe, so there's no race over ports between parallel runs, and logs to a file a failing test can show. Each start has a
+30 s timeout and every process is killed at the test's cleanup. These tests skip without the toolchain's
+`lldb-server`, lldb's Python or `cc`.
 
 Hot reload's tests (listed in [features/hot-reload.md](features/hot-reload.md#tests)) use these hooks: `IOSSTUDIO_HOT_RELOAD_TEMPLATES` replaces `templates/hot-reload/` (stand-in runtime packages), `IOSSTUDIO_XTOOL_DATA` replaces xtool's data folder `~/.config/xtool/data` (a throwaway signing identity made with openssl, never yours), `IOSSTUDIO_RCODESIGN` is the rcodesign to run (a fake), and `IOSSTUDIO_SWIFT` the `swift` that checks `Package.swift` (shared with the packages feature). `IOSSTUDIO_E2E_CRASHLAB` points `tests/helper/test_hot_reload_e2e.py` at an already built copy of CrashLab, which it edits in place, to skip the first build of about 4 minutes.
 
@@ -338,6 +354,8 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Kept builds for crash symbolication (binary + dSYM per UUID; last 10 per project, 1 GB in total) | `~/.cache/ios-studio/symbols/` |
 | Screenshots, screen recordings, packet captures, metrics CSVs and memgraphs, camera test results (the oldest are deleted past a count and size cap, see `fileio.prune`) | `~/.cache/ios-studio/screens/`, `recordings/`, `captures/`, `metrics/`, `cameratest/` |
 | App executables unpacked from `.ipa` files for the debugger (the newest 2 per project) | `~/.cache/ios-studio/debug-builds/` |
+| The debugger's shadow toolchain (lldb, lldb-dap and liblldb as hard links, reflinks or copies, with the iOS SDK's Swift resource dir; `.stamp` decides reuse; one tree per toolchain, the newest 2 kept; `.build.*`/`.old.*` leftovers removed by the next build) | `~/.cache/ios-studio/lldb-ios/<hash>/` |
+| The editors' lldb-dap launcher: a small `sh` script at a fixed path that runs the shadow's lldb-dap, else the toolchain's own; rewritten only when its text changes (Debug in editor, Settings › Code editor); one file, nothing to prune | `~/.cache/ios-studio/lldb-ios/lldb-dap` |
 | Debug in editor: each app's attach file (`<bundle id>.lldb`), its running bridge (`<bundle id>.json`) and the lldb commands they load (the newest 20 apps) | `~/.local/state/ios-studio/editor-debug/` |
 | Hot reload: each project's baseline (build commands, sources and objects as built, the app's executable) and its signed patches (the newest 10); 300 MB in all, the oldest projects go first, never one with a running session; staging folders (`.<key>-…`) go after 6 hours | `~/.cache/ios-studio/hot-reload/<key>/` (key: the first 12 hex digits of the SHA-1 of the project path) |
 | Hot reload in a project: the runtime package (or its no-op stub) and a `.gitignore` of `*`; the managed block at the end of `Package.swift` | `<project>/.iosstudio/hot-reload/` |

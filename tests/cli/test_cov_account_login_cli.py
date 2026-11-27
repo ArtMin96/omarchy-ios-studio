@@ -60,7 +60,7 @@ class Session:
             return self.p.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self.p.kill()
-            return self.p.wait()
+            return self.p.wait(10)
 
 
 @pytest.fixture

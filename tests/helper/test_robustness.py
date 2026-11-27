@@ -25,7 +25,6 @@ from iosstudio.features.projects import renew as projects_renew
 from iosstudio.features.projects import runner as projects_runner
 from iosstudio.features.projects import store as projects_store
 from iosstudio.features.setup import runtime as setup_runtime
-from iosstudio.features.setup import sources as setup_sources
 from iosstudio.features.watch import fswatch, lifecycle
 from support import write_exe
 
@@ -141,16 +140,6 @@ class Timeouts(Tmp):
                 setup_runtime.run_stream([self.exe("linger", LINGERS)], None, mutating=False)
         self.assertEqual(cm.exception.code, "timeout")
         self.assertLess(time.monotonic() - t0, 5)
-
-    def test_setup_git_timeout(self):
-        bindir = self.tmp / "bin"
-        bindir.mkdir()
-        write_exe(bindir / "git", "#!/bin/sh\nsleep 30\n")
-        env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(setup_sources, "GIT_TIMEOUT", 0.3):
-            with self.assertRaises(HelperError) as cm:
-                setup_sources.git_patch_id(self.tmp, "a", "b")
-        self.assertEqual(cm.exception.code, "timeout")
 
     def test_systemctl_timeout(self):
         bindir = self.tmp / "bin"

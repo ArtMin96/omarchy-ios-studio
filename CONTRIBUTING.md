@@ -59,6 +59,13 @@ Tests never need xtool, pymobiledevice3, an iPhone or your home folder: `tests/c
 XDG folder, and `tests/support/` has the fakes (`isolated_env()`, `helper_json()`, fake tools, `FakeMCP`,
 a pymobiledevice3 stub). Add tests in a new file named for your change.
 
+Every test has a hard limit (`tests/support/hang_guard.py`, loaded by `tests/conftest.py`): a test still running
+after `IOSSTUDIO_TEST_TIMEOUT` seconds (default 600; `0` turns it off) ends the whole run with exit status 1 and
+prints every thread's stack, so a hang fails the run instead of keeping it open. Tests that drive the real lldb
+(`debug session`, Debug in editor) attach to a small C program under the toolchain's `lldb-server` instead of a
+phone: `tests/support/lldb_target.py` builds it, starts it and lets `lldb-server` pick its own port. They skip
+without `lldb-server`, lldb's Python or `cc`.
+
 ## Recipes
 
 ### Add a helper command

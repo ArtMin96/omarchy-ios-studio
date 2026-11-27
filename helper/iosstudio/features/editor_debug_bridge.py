@@ -2,7 +2,9 @@
 
   debug editor --project P | --bundle-id B [--launch auto|attach|suspended] [--udid U] [--editor E] [--no-config]
 
-A stream: writes the editor config (unless --no-config), asks the device daemon for `debug.start` (auto: attach
+A stream: prepares the editors' lldb-dap (the shadow lldb behind the stable launcher, editor_debug.prepare_dap;
+without the shadow a `notice` id lldb-plain says Swift expressions may not work), writes the editor config
+(unless --no-config), asks the device daemon for `debug.start` (auto: attach
 when the app runs, else launch it suspended, waiting for the debugger), writes the attach file with the port and
 pid, emits `ready`, then stays open until cancelled ({"cancel": true} or EOF on stdin, SIGTERM), the app exits,
 or MAX_LIFETIME. Meanwhile `editor {state: attached|detached}` follows the editor's connection to the forward
@@ -20,7 +22,7 @@ import signal
 import time
 from pathlib import Path
 
-from iosstudio.core import output
+from iosstudio.core import appdirs, output
 from iosstudio.core.output import HelperError, fix
 from iosstudio.features import editor_debug as ed
 
@@ -28,6 +30,7 @@ MAX_LIFETIME = 2 * 3600       # seconds a bridge stays open
 KEEPALIVE = 15 * 60           # seconds between debug.start refreshes of the forward
 POLL = 1.0                    # seconds between looks at the editor's connection
 APP_POLL = 10.0               # seconds between checks that the app still runs
+END_WAIT = 5.0                # seconds the watch tasks get to end once the bridge is over
 PROJECTS_FIX = fix("Open Projects", "projects")
 
 
@@ -81,10 +84,17 @@ def cmd_editor(flags: dict) -> int:
         if not Path(tc.lldb).with_name("lldb-dap").is_file():
             raise HelperError("needs-lldb", "This Swift toolchain has no lldb-dap, which editors debug with. "
                               "Install a newer Swift in Setup.", debugger.SETUP_SWIFT)
+        try:
+            dap = ed.prepare_dap(tc)
+        except OSError as exc:
+            raise HelperError("write-failed", "Couldn't prepare the editor's debugger in "
+                              f"{appdirs.tilde(exc.filename or appdirs.cache_dir())} ({exc.strerror or exc}).") from None
     except HelperError as exc:
         output.step("lldb", "Checking the debugger", "failed", error=exc.to_json())
         return output.done(False, error=exc)
     output.step("lldb", "Checking the debugger", "done", detail=tc.version)
+    if dap.note:
+        output.event("notice", id="lldb-plain", level="info", message=dap.note)
     app = str((info or {}).get("name") or (info or {}).get("product") or ed.plain_bundle_id(bid).rsplit(".", 1)[-1])
     exe = debugger.local_executable(path, info) if path else None
     configured: list[str] = []
@@ -105,11 +115,11 @@ def cmd_editor(flags: dict) -> int:
                      message="No build of this app was found on this computer, so breakpoints in your code won't "
                              "resolve. Build and run the app from iOS Studio first.")
     plain = ed.plain_bundle_id((info or {}).get("bundleId") or bid)
-    return asyncio.run(_run(flags, launch, bid, installed, plain, app, path, exe, configured))
+    return asyncio.run(_run(flags, launch, bid, installed, plain, app, path, exe, configured, dap))
 
 
 async def _run(flags: dict, launch: str, bid: str, installed: bool, plain: str, app: str, path: Path | None,
-               exe: str | None, configured: list[str]) -> int:
+               exe: str | None, configured: list[str], dap: ed.EditorDap) -> int:
     from iosstudio.device.client import DeviceClient, DeviceError
     udid = flags.get("udid") or None
     title = "Starting the debugger on your iPhone"
@@ -128,13 +138,13 @@ async def _run(flags: dict, launch: str, bid: str, installed: bool, plain: str, 
             output.step("forward", title, "failed", error=exc.to_json())
             return output.done(False, error=exc)
         output.step("forward", title, "done", detail=f"port {st.get('port')}")
-        bridge = Bridge(dev, flags, target, plain, app, path, exe, configured, st)
+        bridge = Bridge(dev, flags, target, plain, app, path, exe, configured, st, dap)
         return await bridge.run()
 
 
 class Bridge:
-    def __init__(self, dev, flags, target, plain, app, path, exe, configured, st):
-        self.dev, self.udid = dev, flags.get("udid") or None
+    def __init__(self, dev, flags, target, plain, app, path, exe, configured, st, dap: ed.EditorDap):
+        self.dev, self.udid, self.dap = dev, flags.get("udid") or None, dap
         self.target, self.plain, self.app, self.path, self.exe = target, plain, app, path, exe
         self.configured, self.st = configured, st
         self.helper_pid, self.helper_start = ed.helper_identity()
@@ -150,7 +160,10 @@ class Bridge:
                 "helper_pid": self.helper_pid, "helper_start": self.helper_start, "local_exe": self.exe,
                 "remote_path": st.get("remotePath"), "sysroot": st.get("sysroot") if st.get("symbolsReady") else None,
                 # tests drive a local lldb-server instead of a phone (IOSSTUDIO_DEBUG_PLATFORM=remote-linux)
-                "platform": os.environ.get("IOSSTUDIO_DEBUG_PLATFORM") or "remote-ios"}
+                "platform": os.environ.get("IOSSTUDIO_DEBUG_PLATFORM") or "remote-ios",
+                # Swift expressions: the iOS SDK, set only when the editor runs the shadow's liblldb
+                "sdk_path": str(sh.sdk) if (sh := self.dap.shadow) else None,
+                "lldb_lib": str(sh.root / "usr/lib") if sh else None}
 
     def save(self) -> None:
         st = self.st
@@ -168,6 +181,7 @@ class Bridge:
             self.stop.set()
 
     async def run(self) -> int:
+        from iosstudio.features import debugger
         st = self.st
         try:
             script = ed.write_attach(self.plain, self.app, **self.attach_kw())
@@ -177,14 +191,7 @@ class Bridge:
                                                         detail=str(exc)))
         self.save()
         ed.prune()
-        if not st.get("symbolsReady"):
-            output.event("notice", id="no-symbols", level="info",
-                         message="This iPhone's debug symbols aren't downloaded, so Swift values (String, Array) may "
-                                 "read wrong. Download them once under iPhone › Debug › Debug symbols.")
-        elif (st.get("symbolsUpdate") or {}).get("needed"):
-            output.event("notice", id="symbols-update", level="warn",
-                         message="Attaching may take minutes over Wi-Fi until the debug symbols are updated "
-                                 "(iPhone › Debug › Debug symbols › Update). The app stays paused meanwhile.")
+        debugger.symbols_notice(st)       # the same notice and fix (debugger.SYMBOLS_FIX) as a session's
         cfg = ed.config_name(self.app)
         if st.get("launched"):
             output.event("notice", id="waiting", level="info",
@@ -192,7 +199,8 @@ class Bridge:
         output.event("ready", bundleId=self.target, appName=self.app, port=st.get("port"),
                      host=st.get("host") or "127.0.0.1", pid=st.get("pid"), launched=bool(st.get("launched")),
                      scriptPath=str(script), editors=self.configured, configName=cfg,
-                     symbolsReady=bool(st.get("symbolsReady")), localBuild=self.exe)
+                     symbolsReady=bool(st.get("symbolsReady")), localBuild=self.exe,
+                     swiftExpressions=not self.dap.note)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             with contextlib.suppress(NotImplementedError, RuntimeError):
@@ -201,10 +209,13 @@ class Bridge:
         try:
             await asyncio.wait_for(self.stop.wait(), _lifetime())
         except asyncio.TimeoutError:
-            self.ended = "timeout"
+            self.finish("timeout")
+        # Each task also ends by itself once `stop` is set: Python 3.11's wait_for (inside dev.request) can swallow a
+        # cancel that meets its reply, and a task that lost its cancel used to poll the daemon forever. So: cancel,
+        # and wait a bounded time.
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.wait(tasks, timeout=END_WAIT)
         if self.editor == "attached":
             output.event("notice", id="editor-cut", level="warn",
                          message="Your editor was still attached; its debugging session ends now.")
@@ -230,7 +241,7 @@ class Bridge:
         reader = await _stdin_reader()
         if reader is None:
             return
-        while True:
+        while not self.stop.is_set():
             raw = await reader.readline()
             if not raw:
                 self.finish("cancelled")
@@ -242,7 +253,7 @@ class Bridge:
                     return
 
     async def _watch_editor(self) -> None:
-        while True:
+        while not self.stop.is_set():
             n = await asyncio.to_thread(ed.tcp_peers, int(self.st["port"]))
             state = "attached" if n else ("detached" if self.ever_attached else "waiting")
             if state != self.editor:
@@ -258,7 +269,7 @@ class Bridge:
         if not pid:
             return
         misses = 0
-        while True:
+        while not self.stop.is_set():
             await asyncio.sleep(APP_POLL)
             try:
                 procs = await self.dev.request("processes.list", {"udid": self.udid, "appsOnly": True}, timeout=20)
@@ -273,7 +284,7 @@ class Bridge:
                 misses = 0
 
     async def _keepalive(self) -> None:
-        while True:
+        while not self.stop.is_set():
             await asyncio.sleep(KEEPALIVE)
             try:
                 st = await self.dev.request("debug.start", {"bundleId": self.target, "launch": "none",

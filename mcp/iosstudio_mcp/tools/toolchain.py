@@ -57,7 +57,8 @@ def register(mcp: MCPServer) -> None:
             if not include_done and s.get("state") == "done":
                 continue
             steps.append(SetupStep(id=s["id"], title=s.get("title", s["id"]), group=s.get("group"),
-                                   state=s.get("state", "unknown"), detail=s.get("detail") or None,
+                                   state="update" if s.get("update") and s.get("state") == "broken"
+                                   else s.get("state", "unknown"), detail=s.get("detail") or None,
                                    essential=bool(s.get("essential")), can_auto_install=bool(s.get("canAutoInstall")),
                                    needs_root=bool(s.get("needsRoot")), size=s.get("size") or None,
                                    time=s.get("time") or None,

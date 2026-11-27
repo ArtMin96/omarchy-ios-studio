@@ -88,7 +88,7 @@ for `Sources/PackLib/PackSchema.swift` (or `Planner.swift`), newest first, and r
 `CodingKeys`) of `struct PackSchemaBase` and its `struct Extension`. So a newer xtool's keys are picked
 up without a change to iOS Studio.
 
-When there's no cached xtool source, a built-in list from xtool's pinned commit (`f300489`) is used:
+When there's no cached xtool source, a built-in list from xtool's pinned commit (`7cc56c3`) is used:
 
 - top level: `version`, `orgID`, `bundleID`, `product`, `infoPath`, `entitlementsPath`, `iconPath`,
   `resources`, `extensions`, `skipLSP`

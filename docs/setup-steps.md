@@ -4,8 +4,15 @@ What the Setup page shows, in order. `bin/iosstudio-helper setup check` returns 
 `setup install --step <id>` installs or repairs one; `setup install --all` runs every missing
 auto-installable step (one password prompt for all root work). Every install supports `--dry-run`.
 
-States: `done`, `missing`, `broken` (installed but not working: shows **Repair**), `optional`,
-`unknown` (only the iPhone can tell). `essential: true` steps decide `summary.ready`.
+States: `done`, `missing`, `broken` (installed but not working, or older than what iOS Studio now pins:
+shows **Repair**), `optional`, `unknown` (only the iPhone can tell). `essential: true` steps decide `summary.ready`.
+A `broken` row with `update: true` (only `apple-dev` today) works as it is and has a tested update: every install
+path repairs it like any `broken` step, but people see an update. Setup shows an accent download glyph with a neutral
+hint and an **Update** button, and when updates are all that's left the top card says "An update is ready" with an
+**Update** button. On the Toolchain page the item is `status: "update"`: its version, "update available" and **Update**.
+`summary.updates` lists these rows and `summary.broken` doesn't; with nothing else left the summary is "1 update ready"
+at level `info`. MCP: `ios_toolchain_check` reports the step as state `update`, and `ios_status` names it with
+`ios_toolchain_install(step=...)` without counting it against `toolchain_ready`.
 
 | id | Group | Title | What the user reads | Root | Size / time | How it's done |
 |---|---|---|---|---|---|---|
@@ -15,20 +22,37 @@ States: `done`, `missing`, `broken` (installed but not working: shows **Repair**
 | `swift` | Toolchain | Swift compiler | The Swift toolchain that compiles your apps. | yes | 1 GB download, 3.5 GB, 5–10 min | AUR `swift-bin` pinned to `f78c5ec` (6.4.2-2): tarball downloaded by us with progress, `makepkg` as the user (runuser), `pacman -U`; also holds Swift and fixes xcspec in the same prompt |
 | `swift-hold` | Toolchain | Keep Swift on this version | Stops system updates from changing Swift behind your back. | yes | seconds | `IgnorePkg = swift-bin` + Omarchy `pre-refresh-pacman` hook |
 | `xcspec` | Toolchain | Swift build settings fix | Lets localized text files build on Linux. | yes | seconds | `helper/root/xcspec.py apply` |
-| `apple-dev` | Toolchain | iOS build scripts | omarchy-apple-dev, which turns Xcode's SDK into something Linux can build with. | – | few MB | clone `~/.local/share/omarchy-apple-dev` @ `79bda716` (an existing checkout elsewhere is accepted through the `appleDevDir` setting) |
-| `xtool` | Toolchain | xtool | Builds, signs and installs iPhone apps from Linux; compiled on your computer. | – | 1.8 GB build, 410 MB installed, ~14 min | pin from omarchy-apple-dev + cherry-pick xtool-org/xtool `70e1568` (#406, Apple sign-in 503 fix); heartbeat progress |
+| `apple-dev` | Toolchain | iOS build scripts | omarchy-apple-dev, which turns Xcode's SDK into something Linux can build with. | – | few MB | clone `~/.local/share/omarchy-apple-dev` @ `9f8352fc` (v0.4.8). Our checkout at another commit is `broken` with `update: true` and `action.label` "Update" ("You have 79bda71; iOS Studio is tested with 9f8352f. …"): fetch + checkout of the pin, then the follow-ups below. A checkout elsewhere (the `appleDevDir` setting) is accepted as is and never moved |
+| `xtool` | Toolchain | xtool | Builds, signs and installs iPhone apps from Linux; compiled on your computer. | – | 1.8 GB build, 410 MB installed, ~14 min | `XTOOL_REPO`/`XTOOL_SHA` from the checkout's `install-toolchain.sh` (v0.4.8: fork `7cc56c3`, which already has the Apple sign-in fix #406 and the release-build fix #432), built as pinned into `~/.local/lib/omarchy-apple-dev/xtool-<sha>` (source `~/.cache/omarchy-apple-dev/xtool-<sha>`, the folders upstream uses); the binary is checked for the old user agent. A Setup build from another commit (also the older `xtool-<sha7>-gsa406` layout) is `broken` once the pin moves; after the new build starts, every other `xtool-*` build and source tree is deleted. Heartbeat progress |
 | `rcodesign` | Toolchain | rcodesign | Signs App Store / TestFlight uploads, and each hot reload patch. | – | 10 MB | GitHub release, sha256-pinned |
 | `pymobiledevice3` | Toolchain | iPhone connection tools | Talks to your iPhone over USB or Wi-Fi. | – | 335 MB, 1–2 min | venv `~/.local/share/ios-studio/venv`, `pymobiledevice3==11.49.0`; links `~/pymobile3-venv` to it if absent |
-| `ipsw` | Toolchain | ipsw (debugger helper, optional) | Extracts system libraries from your iPhone so the debugger shows readable stack traces. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release, sha256-pinned |
+| `ipsw` | Toolchain | ipsw (debugger helper, optional) | Extracts system libraries from your iPhone so the debugger shows readable stack traces. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release 3.1.743, sha256-pinned (the same pin as `install-toolchain.sh`) |
 | `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. Without it lldb doesn't start, and iPhone › Debug sends you here (`debug check` → `needs-python`). | yes | about 100 MB, 10–20 min | AUR build |
 | `xcode` | Apple | Xcode 27.1 download | The iOS SDK only comes inside Apple's Xcode download. Download it once in your browser; iOS Studio finds it in Downloads. | – | ~2 GB download | `setup xip --open` / `--watch` / `--use PATH` |
-| `sdk` | Apple | iOS SDK | Apple's iOS frameworks prepared for Linux. | – | 7 GB (15 GB free while building), 20–30 min | `xtool sdk build` → cache `~/.cache/xtool/darwin-iPhoneOS<v>.xtoolsdk`, then `install-toolchain.sh --mode full --repair` (registers it, darwin tools, macro server) |
+| `sdk` | Apple | iOS SDK | Apple's iOS frameworks prepared for Linux. | – | 7 GB (15 GB free while building), 20–30 min | `xtool sdk build` → cache `~/.cache/xtool/darwin-iPhoneOS<v>.xtoolsdk`, then `install-toolchain.sh --mode full --repair` (registers it, darwin tools, macro server). With a current spare copy (same stamp) only the `--repair` runs: 2–5 min, no Xcode. Also `broken` when a darwin-tools input in the checkout is newer than the SDK's actool (see below) |
 | `apple-id` | Apple | Apple Account | Sign in so apps can be signed for your iPhone. | – | a minute | `{kind:"page", page:"account", action:"signin"}` |
 | `iphone` | iPhone | Pair your iPhone | Connect, unlock, tap Trust. | – | a minute | `{kind:"page", page:"device", action:"pair"}` |
 | `developer-mode` | iPhone | Developer Mode | Settings › Privacy & Security › Developer Mode, then restart. | – | phone restarts | `{kind:"page", page:"device", action:"developer-mode"}`; state from `~/.local/state/ios-studio/device.json` `developerMode` |
 | `uxplay` | iPhone | Screen mirroring (UxPlay, optional) | Your iPhone's screen live on this computer over Wi-Fi (AirPlay). | yes | 20 MB, 2–5 min | AUR `uxplay` build, `gst-plugins-bad` and `gst-plugin-va` (hardware video decode), enable avahi, open ufw ports for `uxplay -p` (TCP 7000,7001,7100; UDP 6000,6001,7011, 5353) |
 | `wireshark` | iPhone | Wireshark (packet viewer, optional) | Opens the network recordings from the iPhone page's Network tab. | yes | about 100 MB, about a minute | `pacman -S --needed wireshark-qt` |
 | `app-integration` | System | App launcher entry | Adds iOS Studio to the app launcher. | – | seconds | runs `install.sh` |
+
+## Updating to a new omarchy-apple-dev pin
+
+`setup install --step apple-dev` (the row's one **Update**, also part of `--all`) moves our checkout to the pin
+and then runs, in the same job, each of `xtool` and `sdk` that the move turned from `done` to `broken` and that
+can repair itself (`installed` lists what ran). So it redoes only what changed:
+
+- **xtool** when `XTOOL_SHA` moved (the folder name tells which commit a build is from, no hashing).
+- **The SDK's darwin tools** (actool, ibtool, momc, xcstringstool) when their inputs changed. `install-toolchain.sh`
+  rebuilds them on every `--repair` (`install_darwin_tools` runs `swift build` in `tools/darwin-tools` and copies
+  the tools in) but has no staleness check of its own, and the SDK stamp (`darwinTools=1.1.0`) did not change for
+  v0.4.8's AssetKit bump. Setup compares mtimes instead: git rewrites only the files a commit changes and the
+  install gives actool a fresh mtime, so any of `tools/darwin-tools/{Package.swift,Package.resolved,Sources/}`,
+  `tools/{ibtool,ibmac.py,xcstringstool,xcstrings_symbols.py,momc,nibarchive.py,keyorder.py}` newer than the SDK's
+  actool marks the SDK `broken` (about 20 stats per `setup check`).
+- **The SDK itself** only when `XTOOL_SDK_VERSION` (the stamp) changed: from the spare copy if one has the new
+  stamp, otherwise it needs the Xcode download (logged, not run).
 
 ## Streaming events (install, xip, clean, remove-all)
 
@@ -45,5 +69,7 @@ Long silent builds emit a heartbeat `progress` every 2 s (elapsed vs. estimate, 
 - Root: one `pkexec helper/root/root-tasks.sh <flags>` per step (or per "Install everything"); never sudo;
   makepkg runs as the user via `runuser`.
 - `toolchain clean` deletes only the paths of allow-listed items computed by `disk_items()`, each checked
-  against fixed roots. `toolchain remove-all` keeps `~/.config/xtool` (Apple sign-in) unless
+  against fixed roots. "Old xtool builds" lists every `xtool-*` build and source tree but the active one, in both
+  layouts. `toolchain remove-all` deletes `~/.local/lib/omarchy-apple-dev` and `~/.cache/omarchy-apple-dev` whole and keeps
+  `~/.config/xtool` (Apple sign-in) unless
   `--remove-auth`, always keeps pairing records and projects.

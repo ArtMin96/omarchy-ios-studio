@@ -160,7 +160,7 @@ class CLI(unittest.TestCase):
         finally:
             if proc.poll() is None:
                 proc.kill()
-                proc.wait()
+                proc.wait(10)
             proc.stdin.close()
             proc.stdout.close()
         done = json.loads(out.strip().splitlines()[-1])
@@ -186,7 +186,7 @@ class CLI(unittest.TestCase):
         finally:
             if proc.poll() is None:
                 proc.kill()
-                proc.wait()
+                proc.wait(10)
             proc.stdin.close()
             proc.stdout.close()
         self.assertEqual(json.loads(out.strip().splitlines()[-1])["error"]["code"], "cancelled")

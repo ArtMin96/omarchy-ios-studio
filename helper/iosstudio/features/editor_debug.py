@@ -1,19 +1,27 @@
-"""Debug in editor (VS Code, Zed): the editor's own lldb-dap attaches to the app on the iPhone through the
-debugserver forward iOS Studio holds open. The stream that holds it is editor_debug_bridge.py.
+"""Debug in editor (VS Code, Zed): the editor's lldb-dap attaches to the app on the iPhone through the debugserver
+forward iOS Studio holds open. The stream that holds it is editor_debug_bridge.py.
+
+The editors run iOS Studio's lldb-dap launcher (lldb_shadow.launcher_path(), a stable path): it execs the shadow
+lldb-dap, whose liblldb sees the iOS SDK's Swift resource dir so Swift expressions (p, po) work, else the
+toolchain's own. prepare_dap() builds the shadow (a stat check once built) and rewrites the launcher; the bridge
+calls it on every start and Settings › Code editor on setup. VS Code's configuration names the launcher itself
+(`debugAdapterExecutable`); Zed's Swift extension takes it from `dap.Swift.binary` in Zed's user settings.
 
 Two pieces of state, both outside the project:
 
 * The editor's debug config, written once per project: one configuration ("Attach to <App> on iPhone (iOS
-  Studio)") in `.vscode/launch.json` (`"type": "swift"`, the Swift extension that editor setup recommends,
-  which runs the toolchain's lldb-dap) or `.zed/debug.json` (`"adapter": "Swift"`, Zed's Swift extension).
-  Every other configuration and comment in those files stays byte for byte; only our entry is added or
-  updated. Its one attach command sources the app's attach file by a path relative to the home folder, so the
-  project files carry no machine path.
+  Studio)") in `.vscode/launch.json` (`"type": "lldb-dap"`, the LLDB DAP extension the Swift extension
+  installs, with the launcher as `debugAdapterExecutable`) or `.zed/debug.json` (`"adapter": "Swift"`, Zed's
+  Swift extension). Every other configuration and comment in those files stays byte for byte; only our entry is
+  added or updated (an entry from before, `"type": "swift"`, is updated the next time). Its attach command
+  sources the app's attach file and the launcher is named by paths relative to the home folder, so the project
+  files carry no machine path.
 * The attach file, `<state>/editor-debug/<bundleId>.lldb`: the lldb commands that connect to the forward and
   attach to the app's process. While a bridge runs it holds the current port and pid, guarded by the bridge's
   pid (a stale file fails instead of connecting to an old port); otherwise it's a stub that fails with "Start
   'Debug in editor' in iOS Studio first". Its lldb commands (iosstudio-check, -connect, ...) come from
-  editor_debug_lldb.py, copied next to it as iosstudio_editor_attach.py.
+  editor_debug_lldb.py, copied next to it as iosstudio_editor_attach.py. With the shadow it sets target.sdk-path
+  before the target (iosstudio-sdk-path, only when the editor really runs the shadow's liblldb).
 
   debug editor-config --project P [--editor vscode|zed|neovim] [--dry-run]
       -> {project, bundleId, appName, configName, editors: [{id, name, path, state, action}], dryRun, applied,
@@ -24,17 +32,19 @@ Two pieces of state, both outside the project:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from iosstudio.core import appdirs, fileio, jsonc
 from iosstudio.core.jsonc import JsoncError
 from iosstudio.core.output import HelperError
-from iosstudio.features import config_files
+from iosstudio.features import config_files, lldb_shadow
 
 LLDB_MODULE = Path(__file__).resolve().parent / "editor_debug_lldb.py"
 MODULE_NAME = "iosstudio_editor_attach"
@@ -44,6 +54,7 @@ ATTACH_WAIT = 300            # lldb-dap's `timeout`: seconds to wait for the app
 EDITOR_NAMES = {"vscode": "VS Code", "zed": "Zed", "neovim": "Neovim"}
 CONFIG_FILES = {"vscode": ".vscode/launch.json", "zed": ".zed/debug.json"}
 EDITOR_USAGE = "--editor must be vscode, zed or neovim."
+VSCODE_DAP_EXT = "llvm-vs-code-extensions.lldb-dap"
 NEOVIM_NOTE = ("Neovim: add the nvim-dap snippet from the Debug in editor guide (docs/features/editor-debugging.md); "
                "iOS Studio doesn't change your Neovim config.")
 
@@ -89,9 +100,19 @@ def attach_command(script: Path, home: Path | None = None) -> str:
     return f"script import os; lldb.debugger.HandleCommand('command source \"%s\"' % os.path.expanduser({path!r}))"
 
 
+def dap_executable(home: Path | None = None) -> str:
+    """The launcher as VS Code's debugAdapterExecutable: ${userHome}/... (VS Code fills it in), else absolute."""
+    path, home = lldb_shadow.launcher_path(), home or appdirs.HOME
+    try:
+        return "${userHome}/" + path.relative_to(home).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def vscode_config(app: str, script: Path, home: Path | None = None) -> dict:
-    return {"name": config_name(app), "type": "swift", "request": "attach",
-            "attachCommands": [attach_command(script, home)], "timeout": ATTACH_WAIT}
+    return {"name": config_name(app), "type": "lldb-dap", "request": "attach",
+            "debugAdapterExecutable": dap_executable(home), "attachCommands": [attach_command(script, home)],
+            "timeout": ATTACH_WAIT}
 
 
 def zed_config(app: str, script: Path, home: Path | None = None) -> dict:
@@ -237,20 +258,73 @@ def pick_editors(editor: str | None) -> tuple[list[str], list[str]]:
 
 
 def _zed_dap_note() -> str | None:
-    """Zed's Swift extension finds lldb-dap only on PATH (or swiftly, xcrun); the toolchain keeps it next to
-    swift. Settings › Code editor sets `dap.Swift.binary` in Zed's settings then; no note once that's there."""
+    """Zed's Swift extension runs `dap.Swift.binary` from Zed's settings, else lldb-dap from PATH (or swiftly,
+    xcrun). Settings › Code editor points it at the launcher; no note once that's there."""
     from iosstudio.features.editor_setup import Env
+    from iosstudio.features.editor_setup.env import lldb_dap_for_settings
     env = Env.from_os()
-    if env.which("lldb-dap"):
-        return None
-    try:
+    want = lldb_dap_for_settings(env)
+    binary = None
+    with contextlib.suppress(OSError, JsoncError, AttributeError):
         data = jsonc.load((env.config / "zed/settings.json").read_text(errors="replace"))
-        if isinstance(data, dict) and ((data.get("dap") or {}).get("Swift") or {}).get("binary"):
-            return None
-    except (OSError, JsoncError, AttributeError):
-        pass
-    return ("Zed can't find the toolchain's debugger (lldb-dap) yet: set Zed up again in Settings › Code editor, "
-            "which points Zed's Swift extension at it.")
+        binary = ((data.get("dap") or {}).get("Swift") or {}).get("binary") if isinstance(data, dict) else None
+    if (binary and binary == want) or (not want and (binary or env.which("lldb-dap"))):
+        return None
+    if not binary and not env.which("lldb-dap"):
+        return ("Zed can't find the toolchain's debugger (lldb-dap) yet: set Zed up again in Settings › Code "
+                "editor, which points Zed's Swift extension at it.")
+    return ("Zed runs another lldb-dap than iOS Studio's, so Swift expressions (p, po) may not work there: set Zed "
+            "up again in Settings › Code editor.")
+
+
+def _vscode_dap_note() -> str | None:
+    """The configuration's type lldb-dap comes from the LLDB DAP extension, which the Swift extension installs."""
+    from iosstudio.features.editor_setup import Env
+    from iosstudio.features.editor_setup.editors import vscode_extension_dirs
+    dirs = [d for d in vscode_extension_dirs(Env.from_os()) if d.is_dir()]
+    if not dirs or any(next(d.glob(VSCODE_DAP_EXT + "-*"), None) for d in dirs):
+        return None
+    return ("VS Code needs the LLDB DAP extension (llvm-vs-code-extensions.lldb-dap) for Debug in editor; the Swift "
+            "extension installs it with itself. Search LLDB DAP in Extensions (ctrl-shift-x) if it's missing.")
+
+
+# ================================================================ the editors' lldb-dap
+
+@dataclass(frozen=True)
+class EditorDap:
+    launcher: Path                        # what the editors run (lldb_shadow.launcher_path())
+    shadow: lldb_shadow.Shadow | None     # None: the launcher runs the toolchain's own lldb-dap
+    note: str = ""                        # why Swift expressions may not work ("" = they should)
+
+
+def expressions_note(why: str) -> str:
+    why = why or "The debugger couldn't be prepared for iOS."
+    return ("Swift expressions (p, po) may not work when debugging from your editor: "
+            f"{why[0].lower() + why[1:]} Variables and breakpoints still work.")
+
+
+def prepare_dap(tc) -> EditorDap:
+    """The shadow lldb for the toolchain `tc` (debugger.Toolchain; built when missing or stale, else a few stat
+    calls) and the launcher pointing at it, or at the toolchain's lldb-dap when there's no shadow. Raises OSError
+    when the launcher can't be written."""
+    sh, why = lldb_shadow.for_lldb(tc.lldb, tc.pythonpath or None)
+    if sh is not None and (sh.lldb_dap is None or not sh.pythonpath):
+        sh, why = None, "This Swift toolchain's lldb-dap couldn't be prepared for iOS."
+    launcher = lldb_shadow.write_launcher(Path(tc.lldb).with_name("lldb-dap"), sh)
+    return EditorDap(launcher, sh, "" if sh else expressions_note(why))
+
+
+def ensure_launcher() -> None:
+    """Before the first bridge: a launcher that runs the toolchain's lldb-dap, so a configuration written now
+    starts (and shows the attach file's "start Debug in editor first"). A stat when it's there."""
+    if lldb_shadow.launcher_path().exists():
+        return
+    from iosstudio.features.setup import toolchain_root
+    root = toolchain_root()
+    dap = root / "usr/bin/lldb-dap" if root else None
+    if dap is not None and dap.is_file():
+        with contextlib.suppress(OSError):
+            lldb_shadow.write_launcher(dap, None)
 
 
 def project_identity(project: Path) -> dict:
@@ -290,8 +364,10 @@ def editor_config(project: Path, editor: str | None = None, dry_run: bool = Fals
                 applied = True
         if editors and not running_bridge(bid):
             write_stub(bid, app)
-    if "zed" in ids:
-        n = _zed_dap_note()
+        if editors:
+            ensure_launcher()
+    for e, note in (("vscode", _vscode_dap_note), ("zed", _zed_dap_note)):
+        n = note() if e in ids else None
         if n:
             notes.append(n)
     return {"project": str(project), "bundleId": bid, "appName": app, "configName": config_name(app),
@@ -334,16 +410,19 @@ def stub_text(bid: str, app: str) -> str:
 
 def attach_text(bid: str, app: str, *, port: int, host: str, pid: int, helper_pid: int, helper_start: str,
                 local_exe: str | None, remote_path: str | None, sysroot: str | None,
-                platform: str = "remote-ios") -> str:
-    """What lldb_driver.Driver.connect/attach does, as lldb commands."""
+                platform: str = "remote-ios", sdk_path: str | None = None, lldb_lib: str | None = None) -> str:
+    """What lldb_driver.Driver.connect/attach does, as lldb commands. sdk_path + lldb_lib (the shadow's usr/lib):
+    target.sdk-path for Swift expressions, set before the target exists."""
     module = folder() / f"{MODULE_NAME}.py"
     lines = _header(app, bid) + [
         f"command script import {_q(str(module))}",
         f"iosstudio-check {int(helper_pid)} {helper_start}",
         # Otherwise every image that isn't in the sysroot is read from the app's memory (minutes over Wi-Fi).
         "settings set target.memory-module-load-level minimal",
-        f"platform select {platform}" + (f" --sysroot {_q(sysroot)}" if sysroot else ""),
     ]
+    if sdk_path and lldb_lib:
+        lines.append(f"iosstudio-sdk-path {_q(sdk_path)} {_q(lldb_lib)}")
+    lines.append(f"platform select {platform}" + (f" --sysroot {_q(sysroot)}" if sysroot else ""))
     if local_exe:
         lines.append(f"target create {_q(local_exe)}")
         if remote_path:

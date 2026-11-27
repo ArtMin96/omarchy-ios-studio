@@ -239,8 +239,10 @@ Rectangle {
       model: lineModel
       boundsBehavior: Flickable.StopAtBounds
       reuseItems: true
-      topMargin: Style.spacing.md
-      bottomMargin: Style.spacing.md
+      // the padding sits outside the list's clip: a line scrolled past the top disappears under a clean
+      // band instead of being cut in half against the box's border
+      Layout.topMargin: Style.spacing.md
+      Layout.bottomMargin: Style.spacing.md
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
       onMovementStarted: root.follow = false
       onAtYEndChanged: if (atYEnd && moving) root.follow = true
