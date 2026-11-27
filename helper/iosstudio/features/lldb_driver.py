@@ -7,8 +7,8 @@ It drives lldb through its Python API (SBDebugger), with the steps omarchy-ios-k
 use for a phone reached over a userspace tunnel:
   1. settings set target.memory-module-load-level minimal   (otherwise every image not in the
      sysroot is read from process memory in 512-byte reads, minutes over Wi-Fi),
-     settings set target.process.memory-cache-line-size 16384 (the iPhone's page size: fewer round trips, see
-     MEMORY_CACHE_LINE), and
+     settings set target.process.memory-cache-line-size 16384 on an iPhone, 4096 elsewhere (the device's page
+     size: fewer round trips, see MEMORY_CACHE_LINE), and
      settings set target.sdk-path "<iPhoneOS.sdk>" when the helper runs the shadow lldb
      (lldb_shadow.py), so Swift expressions find the SDK's modules (SwiftShims, CoreFoundation)
   2. platform select remote-ios --sysroot "<DeviceSupport/<ios> (<build)>"

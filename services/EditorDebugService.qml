@@ -10,7 +10,7 @@ import "../lib/Model.js" as Model
 // Public surface (app.editorDebug):
 //   forProject(p) → the entry for a project, or null:
 //     { path, name, state: starting|ready|attached|detached|stopping|ended|error, step, owned, bundleId, port,
-//       pid, launched, configName, editors[], notices[{id, level, message}], error, ended, attached, killed, at }
+//       pid, launched, configName, editors[], notices[{id, level, message, fix}], error, ended, attached, killed, at }
 //   label(entry) → { level, text, detail, tip, live } (Model.editorDebugLabel)
 //   isLive(p) · start(p) · stop(p) · toggle(p) · dismiss(p) (drops an ended/error entry) · checkRunning()
 // At most one bridge per project. The state machine lives in lib/Model.js (editorDebugEvent), tested in

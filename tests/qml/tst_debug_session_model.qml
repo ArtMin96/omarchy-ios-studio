@@ -28,7 +28,7 @@ TestCase {
     var notices = [
       { id: "no-symbols", level: "info", message: "a", fix: symbolsFix },
       { id: "lldb-plain", level: "warn", message: "b" },
-      { id: "slow-variables", level: "info", message: "c", fix: symbolsFix },
+      { id: "other", level: "info", message: "c", fix: symbolsFix },
       { id: "stale-modules", level: "warn", message: "d", fix: { label: "Run the app", page: "projects", action: "run", path: "/p" } }
     ]
     compare(Model.debugNoticeFix(notices, 0).label, "Download debug symbols")

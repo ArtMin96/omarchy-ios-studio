@@ -189,7 +189,7 @@ def _apply(job: Job, b: Bridge, ev: dict) -> None:
                      detail=ev.get("detail"), error=err.get("message") if isinstance(err, dict) else None)
         job.report(detail=str(ev.get("title") or ev.get("id") or ""))
     elif name == "notice":
-        job.notices.append({k: ev.get(k) for k in ("id", "level", "message") if ev.get(k) is not None})
+        job.notices.append({k: ev.get(k) for k in ("id", "level", "message", "fix") if ev.get(k) is not None})
         job.notices = job.notices[-20:]
     elif name == "ready":
         b.ready = {k: v for k, v in ev.items() if k != "event"}
@@ -288,6 +288,25 @@ def _error_steps(err: dict) -> list[str]:
             or "Check ios_status, then retry."]
 
 
+def _fix_steps(notices: list[dict]) -> list[str]:
+    """The notices' fixes (no-symbols: Download symbols on iPhone › Debug) as steps for the user in the app, once per
+    label: the window opens on that page and the user presses the button (a download is theirs to start)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for n in notices:
+        f = n.get("fix")
+        if not isinstance(f, dict) or not f.get("label") or f["label"] in seen:
+            continue
+        seen.add(f["label"])
+        label = B.clip(f["label"], 60)
+        if f.get("page"):
+            out.append(f"Ask the user to press “{label}” in iOS Studio for the {n.get('id') or 'notice'} notice "
+                       f"(ios_open_app(page='{f['page']}') opens the page).")
+        elif f.get("url"):
+            out.append(f"Point the user at {B.clip(f['url'], 200)} ({label}) for the {n.get('id') or 'notice'} notice.")
+    return out[:2]
+
+
 def bridge_view(job: Job, message: str | None = None) -> EditorBridge:
     b = _bridge(job)
     r = b.ready or {}
@@ -349,6 +368,7 @@ def bridge_view(job: Job, message: str | None = None) -> EditorBridge:
                    "until the debugger has read it (seconds over USB, longer over Wi-Fi).")
         if r.get("launched"):
             nxt.append("The app was started suspended and waits for the editor; it runs once the editor attaches.")
+    nxt += _fix_steps(job.notices)
     if not r.get("localBuild"):
         nxt.append("No local build was found, so breakpoints in the app's code won't resolve: ios_run(project_path) "
                    "first, then start again.")
