@@ -112,7 +112,16 @@ update runs.
 `found {path, file, size}`, `rejected {xip, message}`; it ends with `done {ok:true, data:{xip}}` once a valid,
 version-matched .xip is there (it keeps watching after a rejected file).
 
-Long silent builds emit a heartbeat `progress` every 2 s (elapsed vs. estimate, capped at 95 %).
+Every streamed command emits a heartbeat `progress` every 2 s (`runtime.StreamProgress`). It follows real numbers
+when the output has them: build tasks (`[n/m]`, and swift-build's `[n / m]` with thin spaces), else `NN %` lines.
+SwiftPM's per-package `[n/m] Fetching …` / `[n/m] Downloading …` counters only redraw: they are neither logged nor
+taken for the build. Before real numbers arrive the bar runs on elapsed vs. estimate, up to 95 % (25 % for xtool, whose
+package download and planning come first). Once they start, they fill the rest of the bar from where the estimate
+got to (never backwards), the detail says "n of m", and the ETA follows the task rate since then.
+
+`install-toolchain.sh --repair` ends with a "Survive status" block; its `pairing:` and `auth:` lines look in the
+wrong folders for iOS Studio (xtool keeps the sign-in in `~/.config/xtool/data`) and name a terminal command, so
+Setup drops exactly those lines inside that block (`installers.survive_noise`) and keeps the rest, errors included.
 
 ## Safety
 
