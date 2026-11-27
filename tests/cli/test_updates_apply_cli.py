@@ -306,6 +306,7 @@ def machine(tmp_path, monkeypatch):
     monkeypatch.setattr(appdirs, "SETTINGS_FILE", tmp_path / "config/settings.json")
     monkeypatch.setattr(facts, "SETUP_STATE", tmp_path / "state/setup.json")
     monkeypatch.setattr(channel, "VENV_DIR", tmp_path / "data/venv")
+    monkeypatch.setattr(facts, "VENV_DIR", tmp_path / "data/venv")
     monkeypatch.setattr(channel, "APPLE_DEV_COMMIT", m.ad_old)
     cache = model.empty_cache()
     cache["components"] = [{"id": "apple-dev", "latest": m.ad_new, "commit": m.ad_new, "tag": "v0.4.8",

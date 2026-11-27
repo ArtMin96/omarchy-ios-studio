@@ -137,8 +137,10 @@ def git_head(repo: Path) -> str | None:
 
 
 def pymd3_installed() -> str | None:
-    for d in ch.VENV_DIR.glob("lib/python3*/site-packages/pymobiledevice3-*.dist-info"):
-        return d.name[len("pymobiledevice3-"):-len(".dist-info")]
+    """The version in the venv in use: the first of Setup's venvs (ours, then ~/pymobile3-venv) that has one."""
+    for v in facts.pymd3_venvs():
+        for d in v.glob("lib/python3*/site-packages/pymobiledevice3-*.dist-info"):
+            return d.name[len("pymobiledevice3-"):-len(".dist-info")]
     return None
 
 
@@ -308,7 +310,8 @@ def rows(channel: str, cache: dict) -> list[Row]:
     out.append(Row("xtool", built, x_tested, x_latest, x_target, {"commit": x_target}, x_notes,
                    xf.get("latestAt"), x_blocked))
 
-    # pymobiledevice3: our venv (an older ~/pymobile3-venv of omarchy-apple-dev's isn't ours to replace).
+    # pymobiledevice3: the venv in use, ours or ~/pymobile3-venv. An update always installs ours (it comes first);
+    # a ~/pymobile3-venv of omarchy-apple-dev's own stays as it is, so a rollback that removes ours goes back to it.
     f = fx.get("pymobiledevice3") or {}
     latest = f.get("latest")
     target = _pick(channel, tested.pymd3_version, latest, applied.pymd3_version)
