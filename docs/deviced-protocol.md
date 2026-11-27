@@ -1432,8 +1432,7 @@ affected, system frames with library names only, some Swift values reading wrong
 `symbols-update` (warn: attaching can take minutes until they're updated), with the fix
 `{label: "Download symbols" | "Update symbols", page: "device", tab: "debug", action: "symbols"}`; the iPhone page
 runs `action` on its Debug tab, which downloads, updates or unpacks them (asking first). `debug editor` sends the
-same notice. Before v0.4.8 a session also sent `slow-variables` for the same download; clients may still accept
-it. Then `stale-modules` ("Swift expressions need a fresh build: Run the app again (it rebuilds
+same notice. Then `stale-modules` ("Swift expressions need a fresh build: Run the app again (it rebuilds
 what's missing).", fix: Run the app). `stale-modules` comes once per session: at the start when the project's
 `.build/out/SDKExplicitPrecompiledModules` has lost its `.pcm` files (a stat check,
 `helper/iosstudio/features/projects/modules.py`), or when lldb reports missing ones, which is also noted in
@@ -1461,7 +1460,7 @@ wasn't detached cleanly) and ends.
 lldb runs through its Python API (`helper/iosstudio/features/lldb_driver.py` under `/usr/bin/python3.12` with the path
 from `lldb -P`, mirrored into the shadow lldb when there is one, so Swift expressions work), using the steps
 omarchy-ios-kit uses for a userspace tunnel: `target.memory-module-load-level minimal`,
-`target.process.memory-cache-line-size 16384`,
+`target.process.memory-cache-line-size` (the target's page size: 16384 on an iPhone, 4096 elsewhere),
 `settings set target.sdk-path "<iPhoneOS.sdk>"` (with the shadow lldb only, before the target exists),
 `platform select remote-ios --sysroot <DeviceSupport>`, a
 target for the local `xtool/<App>.app/<exe>` with its platform path set to `remotePath`, an

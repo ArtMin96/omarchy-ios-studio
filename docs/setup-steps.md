@@ -70,5 +70,6 @@ Long silent builds emit a heartbeat `progress` every 2 s (elapsed vs. estimate, 
   makepkg runs as the user via `runuser`.
 - `toolchain clean` deletes only the paths of allow-listed items computed by `disk_items()`, each checked
   against fixed roots. "Old xtool builds" lists every `xtool-*` build and source tree but the active one, in both
-  layouts; `toolchain remove-all` deletes `~/.local/lib/omarchy-apple-dev` and `~/.cache/omarchy-apple-dev` whole. `toolchain remove-all` keeps `~/.config/xtool` (Apple sign-in) unless
+  layouts. `toolchain remove-all` deletes `~/.local/lib/omarchy-apple-dev` and `~/.cache/omarchy-apple-dev` whole and keeps
+  `~/.config/xtool` (Apple sign-in) unless
   `--remove-auth`, always keeps pairing records and projects.

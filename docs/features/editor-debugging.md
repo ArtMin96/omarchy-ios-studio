@@ -17,7 +17,7 @@ shows how it goes, also when the card is collapsed:
 - **VS Code detached · press F5 … to attach again** after the editor's session ends. The bridge keeps running.
 - **Stop** ends it (and the editor's session, if one is attached). The strip then says why it ended (stopped, the
   app exited, after 2 hours) and leaves the card after 20 seconds, or when you close it.
-- Notices from the helper show as quiet lines under it: no debug symbols, no build of the app on this computer, or Swift expressions may not work (the debugger couldn't be set up for iOS, for example because the iOS SDK isn't installed).
+- Notices from the helper show as quiet lines under it: no build of the app on this computer, Swift expressions may not work (the debugger couldn't be set up for iOS, for example because the iOS SDK isn't installed), or the iPhone's debug symbols. Without them the line says "This iPhone's debug symbols aren't downloaded yet. Until they are, system frames show only library names, some Swift values (String, Array) may read wrong, and variables are slow over Wi-Fi. Download them once under iPhone › Debug › Debug symbols." When they're out of date it says attaching may take minutes over Wi-Fi until they're updated. The strip shows these as text; the helper's event also carries the Download symbols (or Update symbols) fix.
 - An error (the app isn't installed, another debugger is attached, the toolchain has no lldb-dap) shows its message
   with its fix button and Try again.
 
@@ -168,7 +168,7 @@ A stream (JSON lines, ends with `done`). `--project` looks up the installed bund
 |---|---|
 | `debug` | `{mode: "editor", bundleId}` |
 | `step` | ids `lldb`, `config` (unless `--no-config` or no project), `forward` |
-| `notice` | ids `lldb-plain` (the shadow lldb couldn't be prepared: Swift expressions may not work; the message says why), `editor-config` (the config notes), `no-local-build`, `no-symbols`, `symbols-update`, `waiting` (a suspended launch waits for the editor), `editor-cut`, `keepalive` |
+| `notice` | ids `lldb-plain` (the shadow lldb couldn't be prepared: Swift expressions may not work; the message says why), `editor-config` (the config notes), `no-local-build`, `no-symbols` (info) or `symbols-update` (warn): the same one notice as an iPhone › Debug session (`debugger.symbols_notice`), with `fix` `{label, page: "device", tab: "debug", action: "symbols"}` (label "Download symbols" or "Update symbols"), which opens iPhone › Debug and starts the Debug symbols card's download or update; `waiting` (a suspended launch waits for the editor), `editor-cut`, `keepalive` |
 | `ready` | `{bundleId (as installed), appName, port, host, pid, launched, scriptPath, editors: [ids configured], configName, symbolsReady, localBuild, swiftExpressions}` |
 | `editor` | `{state: attached|detached, connections}` |
 | `forward` | `{port, host}`: the forward came back on a new port (after the phone reconnected); the attach file has it |
