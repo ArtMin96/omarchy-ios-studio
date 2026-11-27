@@ -568,7 +568,7 @@ class LockTests(unittest.TestCase):
                 p.stdout.readline()
                 self.assertEqual(RT.watcher_pid(), p.pid)
                 p.kill()
-                p.wait()
+                p.wait(10)
                 p.stdout.close()
                 self.assertIsNone(RT.watcher_pid())
             finally:
@@ -583,7 +583,7 @@ class LockTests(unittest.TestCase):
                 RT.add_owner(p.pid)
                 self.assertEqual(set(RT.live_owners()), {str(os.getpid()), str(p.pid)})
                 p.kill()
-                p.wait()
+                p.wait(10)
                 self.assertEqual(set(RT.live_owners()), {str(os.getpid())})
                 RT.remove_owner(os.getpid())
                 self.assertEqual(RT.live_owners(), {})

@@ -103,7 +103,7 @@ def test_layout(env):
     assert os.readlink(u / f"{PY}/six.py") == str(tc / f"{PY}/six.py")
     assert os.readlink(u / f"{PY}/lldb/formatters") == str(tc / f"{PY}/lldb/formatters")
     assert os.path.realpath(u / f"{PY}/lldb/{SO}") == str(u / "lib/liblldb.so.21.0.0")
-    assert subprocess.run([str(sh.lldb)], capture_output=True, text=True).stdout.strip() == "stub lldb"
+    assert subprocess.run([str(sh.lldb)], capture_output=True, text=True, timeout=30).stdout.strip() == "stub lldb"
     stamp = json.loads((sh.root / ".stamp").read_text())
     assert stamp["toolchain"] == str(tc) and stamp["python"] == f"{PY}/lldb" and stamp["link"] == "hardlink"
     assert leftovers(env["cache"]) == []

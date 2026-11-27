@@ -30,6 +30,7 @@ MAX_LIFETIME = 2 * 3600       # seconds a bridge stays open
 KEEPALIVE = 15 * 60           # seconds between debug.start refreshes of the forward
 POLL = 1.0                    # seconds between looks at the editor's connection
 APP_POLL = 10.0               # seconds between checks that the app still runs
+END_WAIT = 5.0                # seconds the watch tasks get to end once the bridge is over
 PROJECTS_FIX = fix("Open Projects", "projects")
 
 
@@ -214,10 +215,13 @@ class Bridge:
         try:
             await asyncio.wait_for(self.stop.wait(), _lifetime())
         except asyncio.TimeoutError:
-            self.ended = "timeout"
+            self.finish("timeout")
+        # Each task also ends by itself once `stop` is set: Python 3.11's wait_for (inside dev.request) can swallow a
+        # cancel that meets its reply, and a task that lost its cancel used to poll the daemon forever. So: cancel,
+        # and wait a bounded time.
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.wait(tasks, timeout=END_WAIT)
         if self.editor == "attached":
             output.event("notice", id="editor-cut", level="warn",
                          message="Your editor was still attached; its debugging session ends now.")
@@ -243,7 +247,7 @@ class Bridge:
         reader = await _stdin_reader()
         if reader is None:
             return
-        while True:
+        while not self.stop.is_set():
             raw = await reader.readline()
             if not raw:
                 self.finish("cancelled")
@@ -255,7 +259,7 @@ class Bridge:
                     return
 
     async def _watch_editor(self) -> None:
-        while True:
+        while not self.stop.is_set():
             n = await asyncio.to_thread(ed.tcp_peers, int(self.st["port"]))
             state = "attached" if n else ("detached" if self.ever_attached else "waiting")
             if state != self.editor:
@@ -271,7 +275,7 @@ class Bridge:
         if not pid:
             return
         misses = 0
-        while True:
+        while not self.stop.is_set():
             await asyncio.sleep(APP_POLL)
             try:
                 procs = await self.dev.request("processes.list", {"udid": self.udid, "appsOnly": True}, timeout=20)
@@ -286,7 +290,7 @@ class Bridge:
                 misses = 0
 
     async def _keepalive(self) -> None:
-        while True:
+        while not self.stop.is_set():
             await asyncio.sleep(KEEPALIVE)
             try:
                 st = await self.dev.request("debug.start", {"bundleId": self.target, "launch": "none",

@@ -58,7 +58,7 @@ class CliTests(unittest.TestCase):
     def tearDown(self):
         self.helper("watch", "stop")
         self.owner.kill()
-        self.owner.wait()
+        self.owner.wait(10)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def status(self, env=None) -> dict:
@@ -104,7 +104,7 @@ class CliTests(unittest.TestCase):
         env = dict(self.env, FAKE_XTOOL_SECONDS="30")
         self.start(env=env)
         xtool_running = lambda: subprocess.run(["pgrep", "-f", str(self.tmp / "xtool")],   # noqa: E731
-                                               capture_output=True, text=True).stdout.strip()
+                                               capture_output=True, text=True, timeout=10).stdout.strip()
         self.status_when(lambda s: s.get("state") == "compiling" and s.get("logFile"), "the first build to start")
         wait_for(xtool_running, what="the fake xtool to run")
         t0 = time.monotonic()
@@ -119,7 +119,7 @@ class CliTests(unittest.TestCase):
         self.start()
         self.assertTrue(self.status()["watching"])
         self.owner.kill()
-        self.owner.wait()
+        self.owner.wait(10)
         st = self.status_when(lambda s: not s.get("watching"), "the watcher to stop")
         self.assertEqual((st["state"], st["stopReason"]), ("stopped", "no-owner"))
 
@@ -182,7 +182,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(tail[-1]["data"]["detached"])
         finally:
             p.kill()
-            p.wait()
+            p.wait(10)
             p.stdin.close()
             p.stdout.close()
         st = self.status_when(lambda s: not s.get("watching"), "the watcher to stop")   # it was the only owner

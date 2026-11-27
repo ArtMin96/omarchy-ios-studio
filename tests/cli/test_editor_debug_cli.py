@@ -4,10 +4,10 @@ attaches through the attach file to a process under a local lldb-server, stops a
 detaches; afterwards the stub attach file refuses with a readable message."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -21,6 +21,7 @@ from support import ROOT
 from support.dap_client import DapClient
 from support.fake_deviced import FakeDeviced
 from support.lldb_ready import debugger_ready
+from support.lldb_target import BREAK_LINE, build, start_gdbserver, start_target
 
 HELPER = [sys.executable, str(ROOT / "helper/run.py"), "iosstudio"]
 TOOLCHAIN_BIN = Path(os.path.realpath(shutil.which("swift") or "/nonexistent")).parent
@@ -33,8 +34,11 @@ class Stream:
         self.p = subprocess.Popen(HELPER + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, env=env)
         self.lines: list[dict] = []
+        self.stderr: list[str] = []     # drained, so a chatty helper never blocks on a full pipe
+        self.logs: list[Path] = []      # other processes' logs a failing wait shows (lldb-server's)
         self._cv = threading.Condition()
         threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read_err, daemon=True).start()
 
     def _read(self) -> None:
         for line in self.p.stdout:
@@ -46,6 +50,17 @@ class Stream:
                 self.lines.append(ev)
                 self._cv.notify_all()
 
+    def _read_err(self) -> None:
+        for line in self.p.stderr:
+            self.stderr = (self.stderr + [line])[-50:]
+
+    def story(self) -> str:
+        """What the stream said, for a failing assertion: every event's name, the last few in full, stderr's tail."""
+        tail = "\n".join(json.dumps(e)[:600] for e in self.lines[-8:])
+        logs = "".join(f"\n{p.name}: {p.read_text(errors='replace')[-2000:]}" for p in self.logs if p.is_file())
+        return (f"events {[e.get('event') for e in self.lines]}\nlast:\n{tail}\n"
+                f"stderr: {''.join(self.stderr)[-2000:]}{logs}")
+
     def wait(self, pred, timeout: float = 60) -> dict:
         deadline = time.monotonic() + timeout
         with self._cv:
@@ -55,7 +70,7 @@ class Stream:
                     return hit
                 left = deadline - time.monotonic()
                 if left <= 0 or self.p.poll() is not None:
-                    raise AssertionError(f"no matching event; got {[e.get('event') for e in self.lines]}")
+                    raise AssertionError(f"no matching event within {timeout:g} s; {self.story()}")
                 self._cv.wait(min(left, 0.5))
 
     def event(self, name: str, timeout: float = 60, **match) -> dict:
@@ -66,11 +81,19 @@ class Stream:
         self.p.stdin.flush()
 
     def close(self) -> None:
+        """Cancel (the helper detaches and releases the forward as it would for the app), then kill if it lingers."""
         if self.p.poll() is None:
-            self.p.kill()
+            with contextlib.suppress(OSError, ValueError):
+                self.cancel()
+                self.p.stdin.close()
+            try:
+                self.p.wait(20)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
         self.p.wait(10)
         for f in (self.p.stdin, self.p.stdout, self.p.stderr):
-            f.close()
+            with contextlib.suppress(OSError, ValueError):
+                f.close()
 
 
 def make_project(base: Path, name: str = "Target", bundle: str = "com.example.target") -> Path:
@@ -205,23 +228,6 @@ def _tools() -> dict | None:
     return {"dap": str(dap), "server": str(server), "cc": cc}
 
 
-TARGET_C = r"""
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/prctl.h>
-static volatile int counter = 0;
-int tick(int n) {
-    counter += n;          /* BREAK */
-    return counter;
-}
-int main(void) {
-    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);   /* let lldb-server attach (Yama ptrace_scope 1) */
-    printf("%d\n", getpid());
-    fflush(stdout);
-    for (int i = 0; i < 1200; i++) { tick(i); usleep(50000); }
-    return 0;
-}
-"""
 
 
 @unittest.skipUnless(_tools(), "needs the Swift toolchain's lldb-dap and lldb-server, lldb's Python and cc")
@@ -230,20 +236,10 @@ class EndToEnd(Base):
         tools = _tools()
         proj = make_project(self.tmp)
         src = proj / "Sources/Target/target.c"
-        src.write_text(TARGET_C)
-        exe = proj / ".build/debug/Target-App"            # where local_executable finds an xtool build
-        exe.parent.mkdir(parents=True)
-        subprocess.run([tools["cc"], "-g", "-O0", "-o", str(exe), str(src)], check=True, timeout=60)
-        line = next(i for i, x in enumerate(TARGET_C.splitlines(), 1) if "BREAK" in x)
-        target = subprocess.Popen([str(exe)], stdout=subprocess.PIPE, text=True)
-        self.addCleanup(target.kill)
-        pid = int(target.stdout.readline())
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
-        server = subprocess.Popen([tools["server"], "gdbserver", f"127.0.0.1:{port}"], stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL)
-        self.addCleanup(server.kill)
+        exe = build(tools["cc"], src, proj / ".build/debug/Target-App")   # where local_executable finds an xtool build
+        line = BREAK_LINE
+        target, pid = start_target(self, exe)
+        _server, port = start_gdbserver(self, tools["server"], self.tmp / "lldb-server.log")
         installed = "XTL-TEAM123456.com.example.target"
         replies = {
             "apps.list": {"apps": [{"bundleId": "com.example.other"}, {"bundleId": installed}]},
@@ -263,6 +259,7 @@ class EndToEnd(Base):
         with FakeDeviced(self.run_dir, replies) as daemon:
             bridge = Stream(["debug", "editor", "--project", str(proj), "--editor", "vscode"], env)
             self.addCleanup(bridge.close)
+            bridge.logs.append(self.tmp / "lldb-server.log")
             ready = bridge.event("ready", timeout=120)
             self.assertEqual((ready["bundleId"], ready["port"], ready["pid"]), (installed, port, pid))
             # without an iOS SDK the launcher runs the toolchain's lldb-dap, and the bridge says so

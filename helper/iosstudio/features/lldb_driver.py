@@ -7,7 +7,8 @@ It drives lldb through its Python API (SBDebugger), with the steps omarchy-ios-k
 use for a phone reached over a userspace tunnel:
   1. settings set target.memory-module-load-level minimal   (otherwise every image not in the
      sysroot is read from process memory in 512-byte reads, minutes over Wi-Fi),
-     settings set target.process.memory-cache-line-size 16384 (fewer round trips, see MEMORY_CACHE_LINE), and
+     settings set target.process.memory-cache-line-size 16384 (the iPhone's page size: fewer round trips, see
+     MEMORY_CACHE_LINE), and
      settings set target.sdk-path "<iPhoneOS.sdk>" when the helper runs the shadow lldb
      (lldb_shadow.py), so Swift expressions find the SDK's modules (SwiftShims, CoreFoundation)
   2. platform select remote-ios --sysroot "<DeviceSupport/<ios> (<build)>"
@@ -78,6 +79,15 @@ JOIN_WAIT = 5.0             # how long a step, continue or detach waits for a re
 # yet they touched only 1807 distinct 4 KB and 711 distinct 16 KB blocks. 16 KB lines (the iPhone's page size, so a
 # line never straddles a page) cut that to ~711 round trips (~40 s) for ~2.4x the bytes (11.6 MB instead of 4.8 MB).
 MEMORY_CACHE_LINE = 16384
+# A line is one page of the target, never more: lldb reads a line as a whole, and one that reaches into an unmapped page
+# fails even for the mapped bytes in it. On a 4 KB-page target (the tests' x86_64 Linux process under lldb-server)
+# 16 KB lines broke 1 in 4 expression results ("Couldn't dematerialize a result variable: couldn't read its memory").
+PAGE_SIZES = {"remote-ios": MEMORY_CACHE_LINE}   # arm64 iOS: 16 KB pages
+
+
+def cache_line(platform: str) -> int:
+    """target.process.memory-cache-line-size for the platform: its page size (4 KB unless known otherwise)."""
+    return PAGE_SIZES.get(platform, 4096)
 SYMBOLS_FIX = {"label": "Download debug symbols", "page": "device", "tab": "debug"}
 SLOW_NOTE = ("Variables are slow over Wi-Fi until the iPhone's debug symbols are downloaded (iPhone › Debug › Debug "
              "symbols). The frames are shown already; the variables follow when lldb has read them.")
@@ -98,6 +108,7 @@ _NO_JIT = re.compile(r"no JIT compiled function", re.I)
 _HOSTINFO_LINE = re.compile(r"^.*Error while searching for (?:Xcode )?SDK: HostInfoError.*(?:\n|$)", re.M)
 
 _quit: str | None = None            # "detach" | "kill" once a signal or stdin EOF asks to end
+_NOT_CONNECTED = (lldb.eStateInvalid, lldb.eStateUnloaded, lldb.eStateExited, lldb.eStateDetached)
 
 
 def emit(_event: str, **fields) -> None:
@@ -394,10 +405,10 @@ class Driver:
         c = self.cfg
         emit("step", id="connect", title="Connecting to the debugger on your iPhone", state="running")
         self.run(f"settings set target.memory-module-load-level {c.get('loadLevel') or 'minimal'}")
-        self.run(f"settings set target.process.memory-cache-line-size {MEMORY_CACHE_LINE}")
+        plat = c.get("platform") or "remote-ios"
+        self.run(f"settings set target.process.memory-cache-line-size {cache_line(plat)}")
         if c.get("sdkPath"):     # before the target exists: its Swift context is set up from it
             self.run(f'settings set target.sdk-path "{c["sdkPath"]}"')
-        plat = c.get("platform") or "remote-ios"
         sysroot = c.get("sysroot")
         self.run(f'platform select {plat}' + (f' --sysroot "{sysroot}"' if sysroot else ""))
         local = c.get("localExe")
@@ -427,9 +438,12 @@ class Driver:
                 raise Fail("connect-failed", "Couldn't reach the debugger on your iPhone.", e.GetCString() or "")
         deadline = time.monotonic() + float(c.get("connectTimeout") or 15)
         while time.monotonic() < deadline:
-            self.drain()
+            states = [s for s, _ in self.drain()]
             p = self.target.GetProcess()
-            if p.IsValid() and p.GetState() not in (lldb.eStateInvalid, lldb.eStateExited, lldb.eStateDetached):
+            # Connected once we have pulled the process's state event (lldb sets the public state as it's pulled): the
+            # state alone can read "stopped" a moment before, while the event is still on its way, and an attach then
+            # hung for good (1 in ~50 local sessions under load).
+            if p.IsValid() and (p.GetState() == lldb.eStateConnected or any(s not in _NOT_CONNECTED for s in states)):
                 break
             if _quit:
                 raise Fail("cancelled", "Cancelled.")

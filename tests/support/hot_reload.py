@@ -176,10 +176,10 @@ def make_identity(folder: Path, team: str = "ABCDE12345", key_format: str = "pkc
     if not key.exists():
         subprocess.run([OPENSSL, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out",
                         str(cert), "-days", "2", "-subj", f"/CN=Apple Development: Test ({team})/OU={team}"],
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, timeout=60)
 
     def ossl(*args: str) -> bytes:
-        return subprocess.run([OPENSSL, *args], check=True, capture_output=True).stdout
+        return subprocess.run([OPENSSL, *args], check=True, capture_output=True, timeout=60).stdout
 
     if key_format == "pkcs8-pem":
         kb = key.read_bytes()
