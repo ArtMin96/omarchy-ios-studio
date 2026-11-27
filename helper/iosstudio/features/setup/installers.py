@@ -282,12 +282,32 @@ def _build_env() -> dict:
     return subproc.tool_env("setup", {"PATH": f"{os.path.dirname(os.path.realpath('/usr/bin/swift'))}:/usr/bin:{LOCAL_BIN}:/bin"})
 
 
+# install-toolchain.sh's survive_status lines that are wrong for iOS Studio: it looks for the Apple sign-in in
+# ~/.local/share/xtool (xtool keeps it in ~/.config/xtool/data), for pairing records in one folder only, and tells
+# you to run a terminal command. Setup's own Apple ID and iPhone rows say how those stand.
+SURVIVE_HEADER = "-- Survive status --"
+SURVIVE_WRONG = re.compile(r"pairing: intact at .+/\.pymobiledevice3"
+                           r"|pairing: no records yet \(plug the iPhone once; nothing is lost here by a swap\)"
+                           r"|auth: present at .+/\.local/share/xtool"
+                           r"|auth: missing — run: .+/xtool auth")
+
+
+def survive_noise(line: str, st: dict) -> bool:
+    """True for a survive_status pairing/auth line (only inside its block, which starts at its header)."""
+    if line == SURVIVE_HEADER:
+        st["survive"] = True
+        return False
+    return bool(st.get("survive")) and SURVIVE_WRONG.fullmatch(line) is not None
+
+
 def run_sdk_repair(ad: Path, step_id: str) -> None:
     """install-toolchain.sh --mode full --repair in the checkout `ad`: re-registers the newest current SDK copy and
     (re)builds the darwin tools and the macro server. Also how an update's rollback rebuilds the old tools."""
     progress(step_id, 0.62, "Registering the SDK and building its extras")
 
     def parse(line, st):
+        if survive_noise(line, st):
+            return "quiet"
         if "Building OpenAppleMacrosServer" in line:
             st["detail"], st["frac"] = "Building the Swift macro server (about 5 min, quiet)", None
         elif line.startswith("== ") or "sdk install" in line:
