@@ -11,7 +11,8 @@ import "../../lib/Model.js" as Model
 // breakpoint session (DebugSessionPanel). The symbols card downloads the iPhone's Swift runtime and
 // system libraries once per iOS build so lldb reads Swift values right and attaches quickly; it
 // shows whether the set is ready, outdated, incomplete or failed and offers the one fix for each.
-// Helper group `debug`, daemon `debug.symbols`.
+// Helper group `debug`, daemon `debug.symbols`. runAction("symbols") starts the card's fix (a session notice's
+// "Download debug symbols", or a deep link {page: "device", tab: "debug", action: "symbols"} forwarded by DevicePage).
 ColumnLayout {
   id: root
   required property var app
@@ -79,11 +80,26 @@ ColumnLayout {
     }, function(e) { root.sources = { project: null, files: [], localBuild: null } })
   }
   function refreshSymbols() {
-    if (!root.svc.connected) return
+    if (!root.svc.connected) { root.pendingAction = ""; return }
     root.svc.request("debug.symbols", { action: "status" }, function(ok, d) {
       if (ok) { root.symbols = d; root.symbolsError = null; root.symProgress = d.progress || null }
       else root.symbolsError = d
+      var a = root.pendingAction
+      root.pendingAction = ""
+      if (ok && a !== "") root.runAction(a)
     })
+  }
+  // "symbols": the symbols card's one fix (download, update or unpack, each asks first), or a word on why there's
+  // nothing to do. Waits for the card's status when it hasn't come yet (the tab just opened).
+  property string pendingAction: ""
+  function runAction(action) {
+    if (action !== "symbols") return
+    if (!root.symbols) { root.pendingAction = action; root.refreshSymbols(); return }
+    if (root.symDownloading) root.app.toast("The debug symbols are downloading; Debug symbols below shows how far.")
+    else if (root.symFix === "") root.app.toast("The debug symbols are ready. Start debugging again to use them.", "ok")
+    else if (!root.svc.connected) root.app.toast("Connect the iPhone to download its debug symbols.", "warn")
+    else if (root.symFix !== "unpack" && !root.symEnough) root.app.toast("There isn't enough free space for the debug symbols; Debug symbols below says how much they need.", "warn")
+    else root.fixSymbols()
   }
   function activate() {
     var before = root.current
@@ -327,6 +343,8 @@ ColumnLayout {
     sources: root.sources.files || []
     hasLocalBuild: !root.sources.project || !!root.sources.localBuild
     blocked: root.btPhase === "running" || root.checkStatus === "error"
+    // the only fix that points at this tab is the helper's symbols download ({page: "device", tab: "debug"})
+    onFixHere: function(fix) { root.runAction(fix.action || "symbols") }
   }
 
   // ---------------------------------------------------------------- symbols
