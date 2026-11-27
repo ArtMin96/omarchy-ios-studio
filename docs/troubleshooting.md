@@ -171,7 +171,7 @@ When iPhone › Debug says "Swift expressions (p, po) may not work in this sessi
 
 Look at the editor's Debug Console. "Start 'Debug in editor' in iOS Studio first" means iOS Studio isn't holding the connection to the phone for this app: press Debug in editor on the project's card and wait until it says it's waiting for the editor, then press F5 again. In Zed, a message that lldb-dap wasn't found means its Swift extension can't find the toolchain's debugger: set Zed up again in Settings › Code editor. If VS Code says it has no debugger of type lldb-dap, install the LLDB DAP extension from Extensions (the Swift extension normally installs it). See [features/editor-debugging.md](features/editor-debugging.md).
 
-### The debugger stops, but the variables take minutes or say "not read in time"
+### The debugger stops, but the variables take minutes or say "not read yet"
 
 Without the iPhone's debug symbols, lldb reads the Swift runtime from the phone's memory to show a value, and over Wi-Fi each read is slow. iOS Studio shows where the app stopped (the call stack) at once and fills in the variables when lldb has read them; the session's note "This iPhone's debug symbols aren't downloaded yet" says so when it starts. After 20 seconds the rest of the list shows names and types and says "not read yet". Download the symbols once with the note's Download symbols button (it asks first), or use a USB cable. Clicking the frame again reads what's missing; Step and Continue don't wait for the variables.
 

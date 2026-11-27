@@ -273,6 +273,21 @@ run's folder rotates out too) and sets `IOSSTUDIO_DEMO_DELAY=0`. Shared fakes ar
 or output where the code reads it (`mock.patch.object(appdirs, "STATE_DIR", …)`). No test needs xtool, pymobiledevice3,
 an iPhone or your home folder; tests that use Swift, `swift-format` or `llvm-symbolizer` skip without them.
 
+Every test has a hard limit: `tests/support/hang_guard.py` (a pytest plugin that `tests/conftest.py` loads) ends the
+whole run with exit status 1 when one test runs longer than `IOSSTUDIO_TEST_TIMEOUT` seconds (default 600; `0` turns it
+off), after printing every thread's stack to the terminal. It uses `faulthandler`, which waits and prints without the
+GIL, so it fires even while a thread is stuck in a C call (lldb, a socket read). The slowest test takes about 30 s, so
+hitting the limit means a hang. Give every subprocess a test starts its own timeout too.
+
+The tests that drive the real lldb instead of a phone (`tests/cli/test_debug_session_hardening_cli.py`,
+`tests/cli/test_editor_debug_cli.py`, with `IOSSTUDIO_DEBUG_PLATFORM=remote-linux`) use `tests/support/lldb_target.py`:
+`build()` compiles a small C program (`cc -g -O0`) that prints its pid and calls `tick()` every 50 ms until it's
+killed (at most 10 minutes), with a `BREAK_LINE` for breakpoints; `start_target()` runs it and reads its pid;
+`start_gdbserver()` runs `lldb-server gdbserver 127.0.0.1:0`, which picks a free port itself and reports it through a
+pipe, so there's no race over ports between parallel runs, and logs to a file a failing test can show. Each start has a
+30 s timeout and every process is killed at the test's cleanup. These tests skip without the toolchain's
+`lldb-server`, lldb's Python or `cc`.
+
 Hot reload's tests (listed in [features/hot-reload.md](features/hot-reload.md#tests)) use these hooks: `IOSSTUDIO_HOT_RELOAD_TEMPLATES` replaces `templates/hot-reload/` (stand-in runtime packages), `IOSSTUDIO_XTOOL_DATA` replaces xtool's data folder `~/.config/xtool/data` (a throwaway signing identity made with openssl, never yours), `IOSSTUDIO_RCODESIGN` is the rcodesign to run (a fake), and `IOSSTUDIO_SWIFT` the `swift` that checks `Package.swift` (shared with the packages feature). `IOSSTUDIO_E2E_CRASHLAB` points `tests/helper/test_hot_reload_e2e.py` at an already built copy of CrashLab, which it edits in place, to skip the first build of about 4 minutes.
 
 Unit tests (the `test` group, [features/unit-tests.md](features/unit-tests.md)) run against a fake `swift`: `IOSSTUDIO_SWIFT` points at `tests/support/fake_swift_tests.py`, which answers `dump-package`, `build` and `test` from real Swift 6.4.2 output in `tests/fixtures/swift-test/` (XCTest consoles, Swift Testing event streams, a crash, a compile error, filters). `FAKE_SWIFT_SCENARIO` picks the outcome (`pass`, `fail`, `crash`, `compile`, `nomodule`, `noproduct`, `notests`, `nonative`, `nofound`, `slow`, `hang`), and `IOSSTUDIO_TEST_BUILD_TIMEOUT` / `IOSSTUDIO_TEST_RUN_TIMEOUT` shorten the 20 and 10 minute limits. `tests/helper/test_template_app_with_tests.py` also builds the App with unit tests template and runs its tests with the real `/usr/bin/swift` when it's installed.

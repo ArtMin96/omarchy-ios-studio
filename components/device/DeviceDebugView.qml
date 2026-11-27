@@ -12,7 +12,7 @@ import "../../lib/Model.js" as Model
 // system libraries once per iOS build so lldb reads Swift values right and attaches quickly; it
 // shows whether the set is ready, outdated, incomplete or failed and offers the one fix for each.
 // Helper group `debug`, daemon `debug.symbols`. runAction("symbols") starts the card's fix (a session notice's
-// "Download debug symbols", or a deep link {page: "device", tab: "debug", action: "symbols"} forwarded by DevicePage).
+// "Download symbols" / "Update symbols", or a deep link {page: "device", tab: "debug", action: "symbols"} forwarded by DevicePage).
 ColumnLayout {
   id: root
   required property var app

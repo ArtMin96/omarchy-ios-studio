@@ -458,7 +458,8 @@ ProgressTrack { Layout.fillWidth: true; value: ev.fraction; label: ev.detail; tr
 ## StepRow
 
 A wizard step. Props: `number`, `title`, `description`, `stepState`
-(`done|missing|running|failed|pending|optional|skipped`), `meta` ("≈ 900 MB · 3 min"), `actionText`,
+(`done|missing|running|failed|update|pending|optional|skipped`; `update`: works as it is and a newer tested version
+is ready, drawn with an accent disc and a download glyph), `meta` ("≈ 900 MB · 3 min"), `actionText`,
 `actionGlyph`, `actionKind` (auto: primary when missing or failed), `actionEnabled`, `actionBusy`
 (default `stepState === "running"`), `progress` (-1 hides it), `progressIndeterminate`, `progressText`,
 `progressTrailing`, `errorText`, `expanded`, `hasCursor`, `extra` (more controls under the description);
@@ -1246,11 +1247,18 @@ live mirror when no frame can be seen). Frames are double-buffered: the next one
   Its Debug symbols card follows the status `state`: a StatusPill, the reason or error, one primary fix
   (`symFix`: download, update, unpack or retry), Remove (a trash button beside the pill in the header,
   confirmed) and the Keep the download switch. The body hangs under the title text, so every line of the
-  card starts at one left edge.
+  card starts at one left edge. `runAction("symbols")` runs that fix (it asks first, then follows the card's
+  status): a session notice's Download symbols / Update symbols button calls it, and DevicePage forwards a deep link
+  `{page: "device", tab: "debug", action: "symbols"}` from other pages to it.
 - **DebugSessionPanel**: a breakpoint session on one app (helper `debug session` as a `Stream`; commands are
   written to its stdin). Props: `app`, `bundleId`, `appName`, `appRunning`, `sources` (`debug sources` files),
   `hasLocalBuild`, `blocked`; read-only `phase` (`idle|starting|running|stopped|ended|failed`) and `live`.
   `start()`, `send(cmd, extra)`, `end(kill)`. Its Stream's `quitMessage` detaches, so closing the window lets the app run.
+  A stop shows its frames at once; Variables says "Reading variables…" (a spinner) while the stop's locals are
+  pending, late locals of an earlier stop are dropped (`Model.debugVariablesForStop`), values past the read budget read
+  "not read yet" (`Model.debugValueText`) and a partial list offers Read again. Notices are a glyph and text row; one
+  with a fix gets a small ghost button (`Model.debugNoticeFix`: once per fix label). Below 640 px the step and Detach
+  buttons show only their glyphs, with the name in the tooltip.
 - **DebugBacktraceView**: collapsible threads of a captured backtrace. Props: `app`, `backtrace` (`{threads,
   crashedThread, selectedThread}`). The crashed thread, else the selected one, starts open; clicking a frame copies it.
 - **DebugFrameRow**: one stack frame (`{index, function, module, file?, line?, inApp}`): your own code in the accent
