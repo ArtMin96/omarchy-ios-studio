@@ -60,6 +60,10 @@ That installs the newest code on `main`. To install a [release](https://github.c
 git clone --branch v0.2.0 --depth 1 https://github.com/ArtMin96/omarchy-ios-studio ~/.local/share/omarchy-ios-studio && ~/.local/share/omarchy-ios-studio/install.sh
 ```
 
+### From Omarchy plugins
+
+iOS Studio is also an Omarchy plugin: a bar button that opens iOS Studio. Add it from the [Omarchy plugin marketplace](https://plugins.omarchy.org/) or with `omarchy plugin add https://github.com/ArtMin96/omarchy-ios-studio`, then click the phone icon in the bar. The first click asks before installing: it copies iOS Studio to `~/.local/share/omarchy-ios-studio`, runs the same `install.sh` as above and opens the Setup page. After that the button opens iOS Studio, or brings its window to the front. `omarchy plugin update` updates the button only; iOS Studio itself stays in its own folder.
+
 Each release also has a source tarball, `ios-studio-<version>.tar.gz`, with its `.sha256`. Check it with `sha256sum -c ios-studio-<version>.tar.gz.sha256`, unpack it, move the folder to `~/.local/share/omarchy-ios-studio` and run `install.sh` in it. Settings › About then shows no commit, because a tarball has no git history.
 
 `install.sh` only changes files in your home folder. It adds a launcher entry, an icon, the `ios-studio` command, an Omarchy theme hook and a Hyprland rule that keeps the window opaque (you can turn that off in Settings). It doesn't install the iOS tools. Setup does that, and asks for your password once for the system packages.
@@ -85,6 +89,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 1. If you want the iOS tools gone too (Swift, xtool, the iOS SDK and caches), open Toolchain › Remove everything first. Your projects and iPhone pairing stay.
 2. Open Settings › Uninstall iOS Studio, or run `ios-studio --uninstall`. It removes the launcher entry, the icon, the `ios-studio` command, the theme hook and iOS Studio's Hyprland rules and shortcut. It also turns off automatic re-signing and disconnects any AI agents you connected, then quits.
 3. Delete the app folder. Settings › About shows where it is; with the install above it's `~/.local/share/omarchy-ios-studio`. Your settings and history stay in `~/.config/ios-studio`, `~/.local/state/ios-studio` and `~/.local/share/ios-studio` until you delete them.
+4. If you added the bar button, remove it with `omarchy plugin remove io.github.artmin96.ios-studio`. Removing only the button leaves iOS Studio installed; steps 1 to 3 remove the app.
 
 ## Architecture
 

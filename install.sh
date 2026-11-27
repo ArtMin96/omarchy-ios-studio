@@ -2,6 +2,8 @@
 # iOS Studio installer. Idempotent, non-interactive, no sudo.
 #   ./install.sh              install / repair
 #   ./install.sh --uninstall  remove everything this script created (keeps your settings and data)
+# Run from an Omarchy plugin folder (~/.config/omarchy/plugins/<id>/, where `omarchy plugin add` puts this repo),
+# it first copies the app to ~/.local/share/omarchy-ios-studio and installs from there.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -14,6 +16,8 @@ ICON_PATH="$ICON_ROOT/scalable/apps/$APP_ID.svg"
 DESKTOP="$APPS_DIR/$APP_ID.desktop"
 HOOK_DIR="$HOME/.config/omarchy/hooks/theme-set.d"
 HOOK="$HOOK_DIR/ios-studio-theme"
+APP_HOME="$HOME/.local/share/omarchy-ios-studio"
+PLUGINS_DIR="$(readlink -f "$HOME/.config/omarchy/plugins" 2>/dev/null || echo "$HOME/.config/omarchy/plugins")"
 
 say() { printf '  %s\n' "$*"; }
 
@@ -67,6 +71,39 @@ except Exception:
   refresh_icons
   say "kept ~/.config/ios-studio, ~/.local/state/ios-studio, ~/.local/share/ios-studio (delete them by hand to reset)"
 }
+
+# The plugin folder only holds the bar button. The Omarchy shell refuses plugin folders that contain symlinks
+# (Commons/ and Ui/ below) and reloads plugins whenever a file there changes, so the app runs from its own copy.
+# A local clone of the commit the plugin was added at: nothing is downloaded.
+copy_from_plugin() {
+  [[ -e $APP_HOME ]] && return 0
+  local tmp="$APP_HOME.partial" url
+  echo "Copying iOS Studio to $APP_HOME"
+  rm -rf "$tmp"
+  mkdir -p "$(dirname "$APP_HOME")"
+  if [[ -d $REPO/.git ]] && command -v git >/dev/null 2>&1; then
+    if ! git clone --quiet --no-hardlinks -- "$REPO" "$tmp"; then
+      rm -rf "$tmp"
+      echo "Couldn't copy iOS Studio to $APP_HOME." >&2
+      exit 1
+    fi
+    url="$(git -C "$REPO" remote get-url origin 2>/dev/null || true)"
+    [[ -z $url ]] || git -C "$tmp" remote set-url origin "$url"
+  else
+    mkdir -p "$tmp"
+    cp -a "$REPO/." "$tmp/"
+  fi
+  mv "$tmp" "$APP_HOME"
+}
+
+if [[ $REPO == "$PLUGINS_DIR"/* ]]; then
+  [[ ${1:-} == "--uninstall" ]] || copy_from_plugin
+  if [[ -x $APP_HOME/install.sh ]]; then exec "$APP_HOME/install.sh" "$@"; fi
+  if [[ ${1:-} != "--uninstall" ]]; then
+    echo "$APP_HOME is there but isn't an iOS Studio folder. Move it aside, then install again." >&2
+    exit 1
+  fi
+fi
 
 if [[ ${1:-} == "--uninstall" ]]; then uninstall; exit 0; fi
 

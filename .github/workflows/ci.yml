@@ -85,7 +85,7 @@ jobs:
         run: |
           shellcheck --version | sed -n 2p
           shellcheck --severity=warning --format=gcc \
-            install.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp \
+            install.sh plugin/app.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp \
             helper/root/*.sh tests/fixtures/crash-symbolication/build.sh .github/scripts/*.sh
 
   qml:

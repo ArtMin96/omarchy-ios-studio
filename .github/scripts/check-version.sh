@@ -15,9 +15,11 @@ want="${BASH_REMATCH[1]}"
 # file|what it holds|the version found there
 app="$(sed -nE 's/^[[:space:]]*readonly property string version: "([^"]*)".*/\1/p' AppState.qml | head -n1)"
 mcp="$(sed -nE 's/^version = "([^"]*)".*/\1/p' mcp/pyproject.toml | head -n1)"
+plugin="$(sed -nE 's/^  "version": "([^"]*)".*/\1/p' manifest.json | head -n1)"
 
 bad=0
-for entry in "AppState.qml|the version shown in Settings › About|$app" "mcp/pyproject.toml|the MCP server's version|$mcp"; do
+for entry in "AppState.qml|the version shown in Settings › About|$app" "mcp/pyproject.toml|the MCP server's version|$mcp" \
+  "manifest.json|the Omarchy plugin's version|$plugin"; do
   IFS='|' read -r file what have <<<"$entry"
   if [[ $have != "$want" ]]; then
     echo "::error file=$file::$file has ${have:-no version} ($what), but the tag $tag needs $want. Bump it, commit, and tag that commit." >&2

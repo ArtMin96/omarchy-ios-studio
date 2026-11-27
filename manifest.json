@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.artmin96.ios-studio",
+  "name": "iOS Studio",
+  "version": "0.1.0",
+  "author": "Arthur Minasyan",
+  "license": "MIT",
+  "homepage": "https://github.com/ArtMin96/omarchy-ios-studio",
+  "description": "Build iPhone apps on Omarchy and run them on your iPhone, without a Mac. Start from a template or a Swift package, then build, sign and install over USB or Wi-Fi. Hot reload, unit tests on the computer, and breakpoints with Swift p/po (in VS Code and Zed too). See the phone's screen, logs, files, app data, performance and crashes with file and line. Setup installs the toolchain and undoes failed updates. MCP server for AI agents. Needs an iPhone, a free Apple ID and a one-time Xcode download.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "plugin/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "iOS Studio",
+    "description": "Opens iOS Studio, or offers to install it.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

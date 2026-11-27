@@ -104,7 +104,8 @@ templates/             Swift app templates used by New app (app-with-tests/ adds
                        hot-reload/ is the runtime package hot reload copies into a project (bump version.txt when it changes)
 tests/                 helper/, cli/, mcp/, qml/, e2e/, support/ (shared fakes), fixtures/<area>/
 pyproject.toml         dev tools only (pytest and ruff config, the dev dependency group); not a package
-install.sh             launcher integration (and --uninstall)
+install.sh             launcher integration (and --uninstall); from an Omarchy plugin folder it copies the app out first
+manifest.json, plugin/ the Omarchy plugin: a bar button that opens iOS Studio or installs it (docs/features/omarchy-plugin.md)
 .github/               CI and release workflows, release-note categories, scripts/check-version.sh
 ```
 
@@ -301,7 +302,7 @@ Unit tests (the `test` group, [features/unit-tests.md](features/unit-tests.md)) 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `main` and by hand (Actions › CI › Run workflow). A newer push to the same branch cancels the older run. It has three jobs:
 
 - Python, on 3.11 (the oldest the helper runs on, because of `tomllib`), 3.14 (what Omarchy ships) and 3.15. It compiles every file in `helper/`, `mcp/` and `tests/`, runs `tests/helper` and `tests/cli` with that Python and only pytest installed (the helper must stay stdlib-only), makes the dev venv with `uv sync --group dev` and runs every test but the `network` ones in it with `--durations=10`, then checks that `bin/iosstudio-mcp --prepare` (the same uv path users get) still builds the MCP venv. No test needs xtool, pymobiledevice3, an iPhone or your home folder: they use fake tools, fixtures and temp folders.
-- Lint: ruff 0.17.4 with the rules in `pyproject.toml`: pyflakes, pycodestyle's real errors (unused imports and variables, undefined names, syntax) and import order (`I`, fixable with `ruff check --fix`), no style rules. `E731` (a lambda assigned to a name) and `E741` (names like `l`) are off. Then shellcheck at warning level on `install.sh`, the shell scripts in `bin/`, `helper/root/`, `.github/scripts/` and the dSYM fixture's `build.sh`.
+- Lint: ruff 0.17.4 with the rules in `pyproject.toml`: pyflakes, pycodestyle's real errors (unused imports and variables, undefined names, syntax) and import order (`I`, fixable with `ruff check --fix`), no style rules. `E731` (a lambda assigned to a name) and `E741` (names like `l`) are off. Then shellcheck at warning level on `install.sh`, `plugin/app.sh`, the shell scripts in `bin/`, `helper/root/`, `.github/scripts/` and the dSYM fixture's `build.sh`.
 `tests/qml` is skipped there (no `qmltestrunner` on the runner); run it locally.
 - QML: qmllint on every `.qml` file in an `archlinux:latest` container with `qt6-declarative` and `quickshell` from Arch's repos. `qs.Commons` and `qs.Ui` are symlinks into Omarchy's shell that only `install.sh` makes, so their imports don't resolve there. qmllint's default levels only fail on syntax errors; the thousands of unresolved-import, unqualified and missing-property warnings that follow from that are counted in the log but don't fail the job.
 
@@ -312,7 +313,7 @@ python3 -m compileall -q helper mcp tests        # writes __pycache__ folders (g
 python3 -m pytest tests/helper tests/cli           # stdlib + pytest only
 uv sync --group dev && .venv/bin/pytest --durations=10
 .venv/bin/ruff check                               # or: uvx ruff@0.17.4 check
-shellcheck --severity=warning install.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp helper/root/*.sh tests/fixtures/crash-symbolication/build.sh .github/scripts/*.sh
+shellcheck --severity=warning install.sh plugin/app.sh bin/ios-studio bin/iosstudio-helper bin/iosstudio-deviced bin/iosstudio-mcp helper/root/*.sh tests/fixtures/crash-symbolication/build.sh .github/scripts/*.sh
 /usr/lib/qt6/bin/qmllint $(git ls-files '*.qml') >/dev/null; echo $?   # 0 unless there's a syntax error
 actionlint                                         # the workflow files themselves
 ```
@@ -323,7 +324,7 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. It checks that the 
 
 To make a release:
 
-1. Bump the version in both files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it) and `version` in `mcp/pyproject.toml`. Changing `pyproject.toml` makes each user's MCP venv rebuild once on its next start.
+1. Bump the version in all three files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it), `version` in `mcp/pyproject.toml` and `version` in `manifest.json` (the Omarchy plugin). Changing `pyproject.toml` makes each user's MCP venv rebuild once on its next start.
 2. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
 
    ```bash
@@ -374,6 +375,7 @@ The paths below are the defaults: `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_C
 | Config backups made by Settings › AI agents | `~/.local/state/ios-studio/backups/` |
 | App checkout | anywhere; the README clones into `~/.local/share/omarchy-ios-studio`. `install.sh` and `bin/ios-studio` find it from their own path |
 | Launcher command | `~/.local/bin/ios-studio` (symlink into the checkout) |
+| Omarchy plugin (the bar button) | `~/.config/omarchy/plugins/io.github.artmin96.ios-studio/`, a clone `omarchy plugin add` makes; iOS Studio itself runs from `~/.local/share/omarchy-ios-studio` |
 | Desktop entry, icon | `~/.local/share/applications/ios-studio.desktop`, `~/.local/share/icons/hicolor/scalable/apps/ios-studio.svg` |
 | New apps (default) | `~/Developer`; scanned roots default to whichever of `~/Developer`, `~/Projects`, `~/Code`, `~/src`, … exist (`appdirs.default_project_roots()`) |
 | Apple sign-in (owned by xtool) | `~/.config/xtool` |
