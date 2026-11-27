@@ -37,6 +37,7 @@ So the button and the app are separate copies: `omarchy plugin update` updates t
 | `plugin/BarWidget.qml` | the button and the install panel (`qs.Ui` `BarIconButton`, `KeyboardPanel`, `PanelHero`, `Button`); every text is plain text |
 | `plugin/Model.js` | keeps the last 20 lines of install.sh's output and picks the reason shown on failure |
 | `plugin/app.sh` | `status`, `open [setup]`, `install`: fixed commands, nothing from the widget reaches a shell |
+| `preview.png` | the marketplace listing's image (1920×1080; the marketplace makes the card and detail sizes from it) |
 | `plugin/i18n/en.json` | the panel's strings (`Commons.Translations`); other languages fall back to English |
 
 Tests: `tests/cli/test_omarchy_plugin.py` (manifest, `app.sh`, `install.sh` from a plugin folder under a private
@@ -47,4 +48,4 @@ HOME, `omarchy-plugin-validate` when it's installed) and `tests/qml/tst_plugin_i
 - The panel's install only covers what `install.sh` does (seconds: a copy and a few files in the home folder).
   The iOS toolchain still comes from Setup.
 - The marketplace's static security scan reports the review capabilities iOS Studio needs (an installer,
-  `pkexec` and `pacman` in Setup, a systemd user timer for re-signing, `pip` for its own venvs) and no findings.
+  `pkexec` and `pacman` in Setup, a systemd user timer for re-signing, `pip` for its own venvs, the README's clone-and-install line) and no findings.

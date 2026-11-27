@@ -90,6 +90,18 @@ def test_manifest_matches_the_marketplace_schema() -> None:
     assert m["barWidget"]["defaultSection"] in ("left", "center", "right")   # the marketplace allows only these
 
 
+def test_preview_is_a_root_png_the_marketplace_takes() -> None:
+    """The marketplace's one listing image: a root preview.png, at most 50 MB and 40 megapixels (build-catalog.mjs)."""
+    preview = ROOT / "preview.png"
+    assert preview.is_file() and not preview.is_symlink()
+    data = preview.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR"
+    width, height = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    assert (width, height) == (1920, 1080) and len(data) <= 50 * 1024 * 1024
+    tracked = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "-q", "preview.png"], timeout=60)
+    assert tracked.returncode == 1   # not ignored
+
+
 def test_manifest_version_is_the_app_version() -> None:
     app = re.search(r'readonly property string version: "([^"]+)"', (ROOT / "AppState.qml").read_text())
     assert app and MANIFEST["version"] == app.group(1)
