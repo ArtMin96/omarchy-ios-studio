@@ -51,6 +51,8 @@ KEEP_PER_KIND = 25           # finished jobs kept per kind…
 FINISHED_TTL = 4 * 3600      # …and none longer than this (seconds after they ended)
 FINISHED_LINES = 2_000       # a finished job keeps only its newest lines in memory (the rest: log file)
 CANCEL_SETTLE = 15.0         # seconds cancel() waits for the helper and finisher to stop
+CANCEL_ASK = 4.0             # seconds a cancelled helper gets after {"cancel": true} on stdin…
+CANCEL_TERM = 4.0            # …and after SIGTERM, before SIGKILL (a job's kill_grace can make this longer)
 SHUTDOWN_SETTLE = 10.0       # seconds shutdown() gives coroutine jobs to clean up (e.g. put an app back)
 TERMINAL = ("succeeded", "failed", "cancelled")
 TEST_STATUSES = ("passed", "failed", "skipped")   # "test" events, tallied in job.data["tests"]
@@ -94,6 +96,8 @@ class Job:
     data: dict = field(default_factory=dict)        # a feature's own state (coroutine jobs)
     exc: BaseException | None = None                # the exception a coroutine job failed with
     on_cancel: Callable[["Job"], Awaitable[None]] | None = None   # coroutine jobs: ask the work to stop first
+    kill_grace: float = 0.0         # helper jobs: seconds a cancelled helper may take to undo its work before
+                                    # SIGKILL (a toolchain update rolls back); shutdown never SIGKILLs such a job
     finisher: Finisher | None = None
     proc: asyncio.subprocess.Process | None = None
     _changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -102,6 +106,7 @@ class Job:
     poll_mark: tuple[int, int, int] | None = None   # (line_count, errors, warnings) at the last status
     _task: asyncio.Task | None = None
     _finisher_task: asyncio.Task | None = None
+    _kill_task: asyncio.Task | None = None          # a kill_grace job's SIGTERM/SIGKILL escalation after cancel()
     _answer: asyncio.Future | None = None           # coroutine jobs: the pending ask()
 
     @property
@@ -219,10 +224,10 @@ class JobManager:
     # ---------------------------------------------------------------- start
     async def start(self, kind: str, group: str, action: str, flags: dict, *, title: str,
                     prefix: str = "b", project_path: str | None = None, project: str | None = None,
-                    finisher: Finisher | None = None) -> Job:
+                    finisher: Finisher | None = None, kill_grace: float = 0.0) -> Job:
         self.prune()
         job = Job(id=f"{prefix}-{next(self._ids)}", kind=kind, action=action, title=title,
-                  project_path=project_path, project=project, finisher=finisher)
+                  project_path=project_path, project=project, finisher=finisher, kill_grace=kill_grace)
         job.proc = await helper.spawn_stream(group, action, flags)
         self.jobs[job.id] = job
         job._task = asyncio.create_task(self._pump(job), name=f"job-{job.id}")
@@ -551,7 +556,9 @@ class JobManager:
 
     async def cancel(self, job: Job) -> Job:
         """Stop the helper (or the finisher, if the build is done and it is installing) and wait until the
-        job has really stopped, so nothing is installed or launched after the job says cancelled."""
+        job has really stopped, so nothing is installed or launched after the job says cancelled. A job with
+        kill_grace is asked to stop and escalated in the background: it may still be running (undoing its work)
+        when this returns, and ends as the helper reports."""
         if job.finished:
             return job
         job.cancel_requested = True
@@ -568,10 +575,19 @@ class JobManager:
                     await self._write(job, {"prompt": job.pending_prompt.get("id"), "cancel": True})
             except ToolError:
                 pass
-            await self._kill(job, graceful=True)
+            if job.kill_grace:
+                if job._kill_task is None:
+                    job._kill_task = asyncio.create_task(self._kill(job, graceful=True), name=f"job-{job.id}-kill")
+            else:
+                await self._kill(job, graceful=True)
         pump = job._task
         if pump is not None and not pump.done():
-            await asyncio.wait({pump}, timeout=CANCEL_SETTLE)
+            settle = deadline.wait_time(CANCEL_SETTLE) if job.kill_grace else CANCEL_SETTLE
+            await asyncio.wait({pump}, timeout=settle)
+        if not job.finished and job.kill_grace and job.proc is not None and job.proc.returncode is None:
+            job.progress_detail = "Cancelling: putting the previous version back…"
+            job.touch()
+            return job
         if not job.finished:
             job.error = job.error or {"code": "cancelled", "message": "Cancelled."}
             self._finish(job, "cancelled")
@@ -605,8 +621,16 @@ class JobManager:
         proc = job.proc
         if not proc or proc.returncode is not None:
             return
-        steps = [(None, 4.0), (signal.SIGTERM, 4.0), (signal.SIGKILL, 1.5)] if graceful else \
-                [(signal.SIGTERM, 1.5), (signal.SIGKILL, 1.0)]
+        if job.kill_grace and not graceful:
+            # never SIGKILL work that is undoing itself: SIGTERM is the helper's cancel (it rolls back and exits);
+            # if it dies anyway, its in-progress marker lets the next run put things back
+            try:
+                os.kill(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            return
+        steps = [(None, CANCEL_ASK), (signal.SIGTERM, max(CANCEL_TERM, job.kill_grace)), (signal.SIGKILL, 1.5)] \
+            if graceful else [(signal.SIGTERM, 1.5), (signal.SIGKILL, 1.0)]
         for sig, grace in steps:
             if sig is not None:
                 try:
@@ -622,15 +646,26 @@ class JobManager:
         helper.kill_group(proc.pid, signal.SIGKILL)
 
     async def shutdown(self) -> None:
+        """Stop every running job. A kill_grace job (a toolchain update) is only asked to cancel and given
+        SHUTDOWN_SETTLE to roll back; it is never SIGKILLed: if it outlives the server it finishes its rollback
+        on its own (SIGTERM from PR_SET_PDEATHSIG), and the helper's in-progress marker is the last resort."""
         running = [j for j in self.jobs.values() if not j.finished]
         if running:
             log.info("stopping %d running job(s)", len(running))
         for j in running:
             j.cancel_requested = True
-        streams = [j for j in running if j.stream]
+        patient = [j for j in running if j.stream and j.kill_grace]
+        for j in patient:
+            try:
+                await self._write(j, {"cancel": True})
+            except ToolError:
+                pass
+        streams = [j for j in running if j.stream and not j.kill_grace]
         await asyncio.gather(*(self._kill(j, graceful=False) for j in streams), return_exceptions=True)
-        tasks = []
+        tasks = [j._task for j in patient if j._task and not j._task.done()]
         for j in running:
+            if j in patient:
+                continue
             if j._task and not j._task.done():
                 j._task.cancel()
                 tasks.append(j._task)
@@ -638,6 +673,9 @@ class JobManager:
                 helper.kill_group(j.proc.pid)
         if tasks:
             await asyncio.wait(tasks, timeout=SHUTDOWN_SETTLE)
+        for j in patient:
+            if not j.finished:
+                log.warning("%s is still undoing its work; leaving it to finish on its own", j.id)
 
 
 # ---------------------------------------------------------------- refusals as diagnostics

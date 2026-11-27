@@ -26,6 +26,7 @@ Quickshell picks up new files in a `components/` folder automatically (no qmldir
 | `components/logs/` | the Logs page: `Log*Tab`, `LogSyslogView`, `Crash*` |
 | `components/account/` | the Apple ID page: `AccountSignInSheet`, `AccountRevokeWarning` |
 | `components/settings/` | Settings parts: `AgentsSection`, `EditorSection`, `EditorSetupRow`, `IconTile` |
+| `components/toolchain/` | the Toolchain page: `UpdatesSection` (update channel, Check now, one row per tool with an update, notices, progress) |
 | `core/` (repo root) | non-visual: `Cli`, `Stream`, `Resource`, `ThemeWatcher`, `Host`, `CommandCheck` |
 
 An area folder imports `"../common"` (and `"../../core"` when it uses `Stream`, `Resource`, `Host` or
@@ -84,7 +85,7 @@ PageFrame {
 | `app.closeConfirm(handle)` | Close that dialog (or drop it from the queue) unanswered: neither callback runs. Use it when whatever asked has gone away (e.g. the job that wanted an answer ended). |
 | `app.notify(title, body, glyph)` | Desktop notification, only when the window isn't focused and notifications are on. |
 | `app.cli` | Shared `Cli` instance (see below). |
-| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
+| `app.settings`, `app.setting(key, fallback)`, `app.setSetting(key, value)` | `~/.config/ios-studio/settings.json`. Keys: `projectRoots` (array; empty = the detected defaults, see `common.default_project_roots()`), `editorCommand` ("" = Omarchy editor), `editorSetup` (vscode|zed|neovim: your editor for Swift, set by Settings › Code editor and by `editor setup`), `defaultDevice` (UDID), `notifications`, `autoRenew`, `autoRenewDays`, `firstRunDone`, `toolchainChannel` (`tested` | `latest`, Toolchain › Updates; the helper's `updates channel` writes it too), plus `opaqueWindow`, `agentsDemo`, the Logs page's `logsLevel`, `logsProcess`, `logsKeepStreaming` and Screen › Compare's `compareProject`. Pages may add keys. |
 | `app.setup`, `app.toolchain`, `app.account`, `app.device`, `app.projects`, `app.logs`, `app.watch`, `app.editorDebug`, `app.hotReload`, `app.tests` | Services (`app.watch`: watch mode, see WatchService below; `app.editorDebug`: debug in editor, see EditorDebugService; `app.hotReload`: hot reload, see HotReloadService; `app.tests`: unit tests, see TestService) |
 | `app.navLink(link, tab?)`, `app.cyclePage(delta)` | Deep link (see below); next/previous page (`Ctrl+Tab`). |
 | `app.page`, `app.pageParams`, `app.windowFocused`, `app.shortcutsOpen`, `app.demo` (the demo variant, "" when off) | State |
@@ -179,7 +180,10 @@ it after a failed read; panes that read once per app use `autoLoad` with an effe
 read-only views of their Resources the same way: AccountService (`account status` → `auth`/`status`/`error`;
 `account details` → `details`/`detailsLoading`/`detailsError`, seeded from `--cached`), ToolchainService
 (`infoResource` → `items`/`sdks`/`status`/`summary`; `diskResource` → `disk`, fetched only once the Toolchain
-page has set `diskWanted`), SetupService (`setup check` → `raw`/`checking`/`checkedAt`/`loaded`/`error`) and
+page has set `diskWanted`; `updatesResource` (`updates status`) → `updates`/`updateCount`/`channel`, which the
+`updates check` and `updates apply` streams replace with their result; `checkUpdates(force)`, `update(id)`, `updateAll()`,
+`setChannel(ch)`, `cancelUpdate()`; an hourly Timer runs while `app.windowFocused` and starts a check when the cached
+one is due, at most once an hour), SetupService (`setup check` → `raw`/`checking`/`checkedAt`/`loaded`/`error`) and
 LogService (`crashResource`, crash.list while the phone is connected → `crashes`/`crashStatus`/`crashError`).
 SettingsPage (`app status`, `app about`) and AgentsSection (`agents list`) hold view-local Resources.
 Projects: ProjectService (`listResource`, `templatesResource`, `historyResource`, `autorenewResource`,
@@ -234,6 +238,15 @@ Unit tests (tested in `tests/qml/tst_unit_tests.qml`): `testDuration(sec)` ("5 m
 1 failed", `regexEscape(s)`, `testFailedFilter(failures)` (a `--filter` matching exactly those ids),
 `testLibraryLabel(lib)` ("XCTest", "Swift Testing"), `testRows(results, expanded)` (failures, skipped, then a passed
 group) and `testSheetState(run, infoStatus, info)` (what the Unit tests sheet shows).
+
+Toolchain updates (tested in `tests/qml/tst_toolchain_updates.qml`; `st` is the `updates status` object):
+`toolchainGlyph(id)` (the Toolchain rows' glyph), `updateVersion(v)` (a 40-hex commit → 7 characters),
+`updateVersions(c)` → "3.1.743 → 3.1.752" ("3.1.752 → tested 3.1.743" for `newer-than-tested`), `shortAgo(t)` →
+"5 min ago", "3 h ago", "yesterday"; `updatesDue(st)` (`due`, or `nextCheckAt` has passed), `updateRows(st)`
+(`update`, plus `newer-than-tested` on the tested channel), `updateBlocked(st)`, `updatesReinstall(st)` →
+`[{id, name, from, to}]` for going back to Tested, `updateNotices(st)` (warnings and notices with a fix always,
+plain information only while something else shows), `updatesLine(st, checking)` → `{text, level}` with no-break
+spaces inside its phrases ("Up to date · checked 3 h ago"), `updatesDoneText(data)` (the toast after an apply).
 
 ---
 
@@ -551,6 +564,9 @@ the first line rather than centred on the block.
 - **LogView**: the toolbar wraps onto two rows below ~640 px (the line count hides). `copyAll()` and the
   double-click copy pipe text to `wl-copy` over stdin (no 128 KB argv limit).
 - **Sidebar**: `compact` (icons only, tooltips, status dots). shell.qml turns it on below 920 px of window width.
+  A service's `summary.quiet` draws its `badge` as a grey count (Badge's shape in `Theme.faint`, `summary.tip` as its
+  tooltip) for news that isn't a problem: Toolchain shows waiting updates this way, only while nothing needs fixing.
+  Compact mode leaves quiet badges out.
   While `app.watch` watches a project, the Projects entry also shows a small eye (`Style.font.bodySmall`, after the
   label; in compact mode a caption-sized one in the icon's bottom corner): `Theme.faint` while it waits, accent while
   it starts or compiles, `urgent` after a failed compile. Its tooltip names the project and the state. While it

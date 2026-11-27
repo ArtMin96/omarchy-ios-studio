@@ -179,6 +179,7 @@ Item {
     notifications: true,
     autoRenew: false,
     autoRenewDays: 2,
+    toolchainChannel: "tested",   // "tested" | "latest" (Toolchain › Updates; the helper reads it too)
     firstRunDone: false
   })
   property var settings: Object.assign({}, defaultSettings)

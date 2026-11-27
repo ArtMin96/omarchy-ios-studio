@@ -770,3 +770,82 @@ class RunCapture(Budgeted, Out):
     other_new_crashes: list[str] = Field(default_factory=list)
     summary: str
     next_steps: list[str] = Field(default_factory=list)
+
+
+# ------------------------------------------------------------------ toolchain updates
+
+class UpdateComponent(Out):
+    id: str = Field(description="apple-dev | xtool | pymobiledevice3 | ipsw | rcodesign")
+    name: str
+    installed: str | None = None
+    tested: str | None = Field(None, description="The version this iOS Studio release pins (channel tested)")
+    latest: str | None = Field(None, description="Newest verifiable upstream version (null: not checked yet)")
+    target: str | None = Field(None, description="What the current channel installs")
+    state: str = Field(description="current | update | newer-than-tested | blocked | unknown")
+    untested: bool = Field(False, description="target is newer than what this iOS Studio release was tested with")
+    applicable: bool = True
+    blocked_reason: str | None = None
+    checksum: str | None = Field(None, description="How the download is verified: checksums.txt, SHA256SUMS, "
+                                                   "git-commit or pypi")
+    restarts: list[str] = Field(default_factory=list, description="e.g. iphone-connection")
+    notes_url: str | None = Field(None, description="Release notes (link only)")
+    latest_at: str | None = None
+
+
+class UpdateNotice(Out):
+    id: str = Field(description="sdk | xcode | swift | xtool-upstream | …")
+    level: str = Field("info", description="info | warn")
+    message: str
+    fix: str | None = Field(None, description="Where the human does it: an ios_open_app(page=...) call")
+
+
+class UpdateInterrupted(Out):
+    component: str
+    name: str
+    since: str | None = None
+
+
+class ToolchainUpdates(Budgeted, Out):
+    state: Literal["running", "done"] = Field("done", description="running: the check is still going; call "
+                                              "ios_toolchain_updates(job_id=...) again")
+    job_id: str | None = None
+    channel: str | None = Field(None, description="tested (this release's pins) | latest (newest upstream, untested)")
+    checked_at: str | None = None
+    next_check_at: str | None = None
+    due: bool = Field(False, description="The last check is older than a day (or never ran)")
+    count: int = Field(0, description="Installable updates on the current channel")
+    components: list[UpdateComponent] = Field(default_factory=list)
+    notices: list[UpdateNotice] = Field(default_factory=list, description="Not installable here (Swift, SDK, …)")
+    error: ErrorInfo | None = Field(None, description="Why the last check failed")
+    rate_limited_until: str | None = None
+    interrupted: UpdateInterrupted | None = Field(None, description="An update whose process died mid-way; its "
+                                                  "previous version is set aside until it is put back")
+    next_steps: list[str] = Field(default_factory=list)
+
+
+class ToolchainUpdateResult(Budgeted, Out):
+    state: Literal["dry_run", "running", "needs_input", "succeeded", "failed", "cancelled"]
+    dry_run: bool = False
+    job_id: str | None = None
+    message: str
+    channel: str | None = Field(None, description="The channel this update installs from")
+    would: list[str] = Field(default_factory=list, description="Dry run: what confirm=true would do (at most 8)")
+    blocked: list[str] = Field(default_factory=list, description="Selected components that can't be updated, "
+                                                                 "and why")
+    step: str | None = None
+    progress: float | None = None
+    progress_detail: str | None = None
+    pending_prompt: PendingPrompt | None = Field(None, description="needs_input: show it to the user, answer with "
+                                                                   "ios_job_respond")
+    applied: list[str] = Field(default_factory=list, description="Components updated and checked")
+    rolled_back: list[str] = Field(default_factory=list, description="Put back to the previous version")
+    count: int | None = Field(None, description="Updates still available afterwards")
+    components: list[UpdateComponent] = Field(default_factory=list, description="Afterwards: components not "
+                                                                                "current")
+    error: ErrorInfo | None = None
+    next_steps: list[str] = Field(default_factory=list)
+
+    @field_validator("message")
+    @classmethod
+    def _msg(cls, v: str) -> str:
+        return clip(v, 600)

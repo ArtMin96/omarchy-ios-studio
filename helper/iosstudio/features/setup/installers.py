@@ -17,16 +17,11 @@ from . import runtime as rt
 from .downloads import aur_fetch, download, prefetch_swift_sources, srcinfo, strip_ver
 from .facts import arch, is_omarchy, sdk_ios_versions, swift_hold_hook_present
 from .pins import (
-    APPLE_DEV_COMMIT,
     HOOK_SRC,
     IPSW_SHA,
-    IPSW_VERSION,
     LEGACY_VENV,
     OMARCHY_HOOK,
     PACKAGES,
-    PYMD3_VERSION,
-    RCODESIGN_SHA,
-    RCODESIGN_VERSION,
     SDK_CACHE,
     SWIFT_AUR_COMMIT,
     UXPLAY_RUNTIME,
@@ -121,22 +116,27 @@ def i_swift_hook(ctx: Ctx, step_id: str) -> None:
     log(step_id, f"installed the Omarchy hook {appdirs.tilde(OMARCHY_HOOK)} (keeps the hold through “omarchy refresh pacman”)")
 
 
+def github_dl() -> str:
+    """Where GitHub release downloads come from: https://github.com, or IOSSTUDIO_GITHUB_DL (tests point it at a
+    local server, as updates/upstream.py's IOSSTUDIO_GITHUB_API). The checksum is checked either way."""
+    return (os.environ.get("IOSSTUDIO_GITHUB_DL") or "https://github.com").rstrip("/")
+
+
 def i_rcodesign(ctx: Ctx, step_id: str) -> None:
-    a = arch()
-    sha = RCODESIGN_SHA.get(a)
+    a, ver, sha = arch(), ctx.pins.rcodesign_version, ctx.pins.rcodesign_sha
     if not sha:
         raise HelperError("unsupported", f"rcodesign has no build for {a}.")
-    name = f"apple-codesign-{RCODESIGN_VERSION}-{a}-unknown-linux-musl"
-    url = f"https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F{RCODESIGN_VERSION}/{name}.tar.gz"
+    name = f"apple-codesign-{ver}-{a}-unknown-linux-musl"
+    url = f"{github_dl()}/indygreg/apple-platform-rs/releases/download/apple-codesign%2F{ver}/{name}.tar.gz"
     _install_tarball_binary(url, sha, f"{name}/rcodesign", LOCAL_BIN / "rcodesign", step_id, "rcodesign")
 
 
 def i_ipsw(ctx: Ctx, step_id: str) -> None:
-    a = arch()
-    if a not in IPSW_SHA:
+    a, ver, sha = arch(), ctx.pins.ipsw_version, ctx.pins.ipsw_sha
+    if a not in IPSW_SHA or not sha:
         raise HelperError("unsupported", f"ipsw has no build for {a}.")
-    ia, sha = IPSW_SHA[a]
-    url = f"https://github.com/blacktop/ipsw/releases/download/v{IPSW_VERSION}/ipsw_{IPSW_VERSION}_linux_{ia}.tar.gz"
+    ia = IPSW_SHA[a][0]           # the release's name for this architecture
+    url = f"{github_dl()}/blacktop/ipsw/releases/download/v{ver}/ipsw_{ver}_linux_{ia}.tar.gz"
     _install_tarball_binary(url, sha, "ipsw", LOCAL_BIN / "ipsw", step_id, "ipsw")
 
 
@@ -162,14 +162,14 @@ def i_pymd3(ctx: Ctx, step_id: str) -> None:
     py = "/usr/bin/python3"
     if not Path(py).exists():
         raise HelperError("needs-step", "Install “System packages” first.", fix("Install System packages", "setup", step="packages"))
-    venv = VENV_DIR
-    if venv.exists():
+    venv, ver = VENV_DIR, ctx.pins.pymd3_version
+    if venv.exists() and not ctx.keep_previous:   # keep_previous: the update's backup moved it to venv.prev
         do_rmtree(venv, step_id)
     do_mkdir(venv.parent, step_id)
     progress(step_id, 0.05, "Creating a private Python environment")
     tail: list = []
     must(run_stream([py, "-m", "venv", str(venv)], step_id, tail=tail), "venv", "Couldn't create the Python environment.", step_id, tail)
-    progress(step_id, 0.15, f"Downloading pymobiledevice3 {PYMD3_VERSION}")
+    progress(step_id, 0.15, f"Downloading pymobiledevice3 {ver}")
 
     def parse(line, st):
         if line.startswith(("Collecting", "Downloading")):
@@ -178,7 +178,7 @@ def i_pymd3(ctx: Ctx, step_id: str) -> None:
             st["detail"] = "Installing"
         return None
     rc = run_stream([venv / "bin/pip", "install", "--disable-pip-version-check", "--no-input", "--progress-bar", "off",
-                     f"pymobiledevice3=={PYMD3_VERSION}"], step_id, label="Installing pymobiledevice3", estimate=90,
+                     f"pymobiledevice3=={ver}"], step_id, label="Installing pymobiledevice3", estimate=90,
                     parse=parse, frac_range=(0.15, 0.97), tail=tail)
     must(rc, "network", "Couldn't install pymobiledevice3. Check your internet connection, then try again.", step_id, tail)
     # omarchy-apple-dev's scripts (device-run.sh, install-toolchain.sh --repair) look for ~/pymobile3-venv.
@@ -218,7 +218,7 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
     cache = ctx.c.get("good_cache")
     xip_path = ctx.flags.get("xip")
     xt = str(LOCAL_BIN / "xtool")
-    benv = subproc.tool_env("setup", {"PATH": f"{os.path.dirname(os.path.realpath('/usr/bin/swift'))}:/usr/bin:{LOCAL_BIN}:/bin"})
+    benv = _build_env()
     tail: list = []
     if not cache or ctx.flags.get("rebuild"):
         xip = Path(xip_path) if xip_path else (Path(ctx.c["xip"]["path"]) if ctx.c.get("xip") and ctx.c["xip"].get("valid") else None)
@@ -274,17 +274,29 @@ def i_sdk(ctx: Ctx, step_id: str) -> None:
     if not rt.DRY:
         os.utime(cache["path"])  # make ours the newest so --repair picks it
     ensure_legacy_venv(ctx, step_id)
+    run_sdk_repair(ad, step_id)
+
+
+def _build_env() -> dict:
+    """The environment Swift builds run in: the toolchain swift-bin points to first, then ~/.local/bin."""
+    return subproc.tool_env("setup", {"PATH": f"{os.path.dirname(os.path.realpath('/usr/bin/swift'))}:/usr/bin:{LOCAL_BIN}:/bin"})
+
+
+def run_sdk_repair(ad: Path, step_id: str) -> None:
+    """install-toolchain.sh --mode full --repair in the checkout `ad`: re-registers the newest current SDK copy and
+    (re)builds the darwin tools and the macro server. Also how an update's rollback rebuilds the old tools."""
     progress(step_id, 0.62, "Registering the SDK and building its extras")
 
-    def parse2(line, st):
+    def parse(line, st):
         if "Building OpenAppleMacrosServer" in line:
             st["detail"], st["frac"] = "Building the Swift macro server (about 5 min, quiet)", None
         elif line.startswith("== ") or "sdk install" in line:
             st["detail"] = line.strip("= ")[:80]
         return None
+    tail: list = []
     rc = run_stream([str(Path(ad) / "install-toolchain.sh"), "--mode", "full", "--repair"], step_id,
-                    label="Registering the SDK and building its extras", estimate=420, env=benv, cwd=str(ad),
-                    parse=parse2, frac_range=(0.62, 0.99), tail=tail)
+                    label="Registering the SDK and building its extras", estimate=420, env=_build_env(), cwd=str(ad),
+                    parse=parse, frac_range=(0.62, 0.99), tail=tail)
     must(rc, "sdk-install", "Installing the SDK failed. The log has the details.", step_id, tail)
 
 
@@ -320,7 +332,8 @@ FOLLOW_UPS = {"apple-dev": ("xtool", "sdk")}
 ROOT_STEPS = {"packages", "usbmuxd", "swift", "swift-hold", "xcspec", "uxplay", "wireshark", "debugger"}
 OPTIONAL_IN_ALL = {"ipsw", "debugger", "uxplay", "wireshark"}
 
-def _run_one(ctx: Ctx, sid: str) -> None:
+def run_one(ctx: Ctx, sid: str) -> None:
+    """Run one step's installer between its step running/done (or failed) events."""
     s = ctx.by_id.get(sid)
     title = s["title"] if s else sid
     output.step(sid, title, "running")
@@ -334,12 +347,12 @@ def _run_one(ctx: Ctx, sid: str) -> None:
     output.step(sid, title, "done", elapsed=round(time.time() - t0))
 
 
-def _run_chain(ctx: Ctx, sid: str) -> list[str]:
+def run_chain(ctx: Ctx, sid: str) -> list[str]:
     """Run one step, then the FOLLOW_UPS it turned from done to broken (an omarchy-apple-dev update that moved
     the xtool pin or the SDK's build tools), so one Update redoes exactly what changed. Returns the ids run."""
     deps = FOLLOW_UPS.get(sid, ())
     was = {d: ctx.state(d) for d in deps}
-    _run_one(ctx, sid)
+    run_one(ctx, sid)
     ran = [sid]
     if rt.DRY:
         if deps:
@@ -352,7 +365,7 @@ def _run_chain(ctx: Ctx, sid: str) -> list[str]:
         if not ctx.by_id[d]["canAutoInstall"]:
             log(sid, f"“{ctx.by_id[d]['title']}” needs a repair too: {ctx.by_id[d]['detail']}")
             continue
-        _run_one(ctx, d)
+        run_one(ctx, d)
         ctx.refresh()
         ran.append(d)
     return ran
@@ -399,7 +412,7 @@ def install(flags: dict) -> int:
             if sid == "sdk" and not rt.DRY and not ctx.by_id["sdk"]["canAutoInstall"]:
                 output.step(sid, ctx.by_id[sid]["title"], "skipped", reason="needs the Xcode download")
                 continue
-            installed += _run_chain(ctx, sid)
+            installed += run_chain(ctx, sid)
             if not rt.DRY:
                 ctx.refresh()
         return output.done(True, {"installed": installed, "summary": summarize(ctx.steps), "dryRun": rt.DRY})
@@ -419,11 +432,12 @@ def install(flags: dict) -> int:
         s = ctx.by_id[sid]
         confirm(f"Install {s['title']}? It needs {s['size']} and takes {s['time']}.", "Install", flags)
     if sid == "apple-dev" and ctx.c.get("apple_dev_outdated"):
-        confirm(f"Update the iOS build scripts to the tested version {APPLE_DEV_COMMIT[:7]}? iOS Studio then rebuilds "
+        confirm(f"Update the iOS build scripts to the {ctx.pins.word('apple-dev')} version "
+                f"{ctx.pins.apple_dev_commit[:7]}? iOS Studio then rebuilds "
                 f"only what changed: xtool if its version moved ({ctx.by_id['xtool']['time']}) and the iOS SDK's "
                 "build tools (a few minutes). The SDK is rebuilt from Xcode only if the new scripts need that.",
                 "Update", flags)
-    ran = _run_chain(ctx, sid)
+    ran = run_chain(ctx, sid)
     if not rt.DRY:
         ctx.refresh()
     return output.done(True, {"installed": ran, "step": ctx.by_id.get(sid), "summary": summarize(ctx.steps), "dryRun": rt.DRY})

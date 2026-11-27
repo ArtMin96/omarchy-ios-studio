@@ -4,17 +4,18 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../components/common"
+import "../components/toolchain"
 import "../lib/Model.js" as Model
 
-// Toolchain: what's installed (versions, SDKs), how much disk each piece
-// takes, safe cleanup, and removing everything.
+// Toolchain: updates and the update channel, what's installed (versions, SDKs), how much disk each
+// piece takes, safe cleanup, and removing everything.
 PageFrame {
   id: page
   required property var app
   readonly property var svc: app.toolchain
 
   title: "Toolchain"
-  subtitle: "Versions, the iOS SDK, disk usage and cleanup."
+  subtitle: "Updates, versions, the iOS SDK, disk usage and cleanup."
   actions: [
     IconButton { glyph: Model.Glyph.refresh; tooltip: "Refresh (r)"; busy: page.svc.infoResource.busy || page.svc.diskResource.busy; onClicked: page.svc.refresh() },
     ActionButton { text: "Open Setup"; glyph: Model.Glyph.rocket; kind: "ghost"; onClicked: page.app.nav("setup") }
@@ -53,7 +54,7 @@ PageFrame {
     return false
   }
 
-  // "update": works as it is, a tested version is ready (an older iOS build scripts checkout): accent, not an error
+  // "update": works as it is, the channel's version is ready (an older iOS build scripts checkout): accent, not an error
   function levelOf(status) { return status === "ok" ? "ok" : status === "error" ? "error" : status === "warn" ? "warn" : status === "update" ? "busy" : "info" }
   function statusText(i) {
     if (i.status === "ok") return i.version ? i.version : "installed"
@@ -62,8 +63,10 @@ PageFrame {
     return i.optional ? "not installed" : "missing"
   }
 
-  // the same install Setup's Update button runs; Setup shows its progress and log
+  // The Updates section's update when it lists the part (backup and roll-back; its row shows the progress), else
+  // the same install Setup's Update button runs (Setup shows its progress and log).
   function update(i) {
+    if (Model.updateOffered(page.svc.updates, i.id)) { page.svc.update(i.id); return }
     if (page.app.setup.installing) { page.app.toast("Wait for the current step to finish.", "warn"); return }
     page.app.setup.install(i.step)
     page.app.openSetupStep(i.step)
@@ -79,6 +82,9 @@ PageFrame {
       onConfirm: function() { page.svc.clean(d.id) }
     })
   }
+
+  // ------------------------------------------------------------ updates
+  UpdatesSection { Layout.fillWidth: true; app: page.app }
 
   // ------------------------------------------------------------ versions
   StateView {
@@ -105,16 +111,14 @@ PageFrame {
         required property var modelData
         required property int index
         Layout.fillWidth: true
-        glyph: modelData.id === "sdk" ? Model.Glyph.apple : modelData.id === "swift" ? Model.Glyph.swift
-             : modelData.id === "pymobiledevice3" ? Model.Glyph.phone : modelData.id === "xtool" ? Model.Glyph.hammer
-             : modelData.id === "apple-dev" ? Model.Glyph.folder : Model.Glyph.wrench
+        glyph: Model.toolchainGlyph(modelData.id)
         glyphColor: modelData.status === "ok" || modelData.status === "update" ? Theme.dim : Theme.levelColor(page.levelOf(modelData.status))
         title: modelData.name
         subtitle: {
           var s = modelData.detail || ""
           if (modelData.id === "swift" && modelData.held) s += " · held at this version"
           if (modelData.id === "xtool" && modelData.hasFix) s += " · Apple sign-in fix included"
-          if (modelData.pinned && modelData.version && modelData.pinned !== modelData.version && (modelData.status === "ok" || modelData.status === "update")) s += " · tested: " + modelData.pinned
+          if (modelData.pinned && modelData.version && modelData.pinned !== modelData.version && (modelData.status === "ok" || modelData.status === "update")) s += " · " + (modelData.pinWord || "tested") + ": " + modelData.pinned
           return s
         }
         hasCursor: page.cursor === index
@@ -132,7 +136,8 @@ PageFrame {
             }
             ActionButton {
               anchors.verticalCenter: parent.verticalCenter
-              visible: modelData.status !== "ok"
+              // an update the Updates section above offers has its button there, not a second one here
+              visible: modelData.status !== "ok" && !(modelData.status === "update" && Model.updateOffered(page.svc.updates, modelData.id))
               compact: true
               text: modelData.status === "update" ? "Update" : modelData.status === "error" ? "Repair" : "Install"
               glyph: modelData.status === "error" ? Model.Glyph.wrench : Model.Glyph.download

@@ -6,7 +6,8 @@ import qs.Ui
 import "../../lib/Model.js" as Model
 
 // App navigation (scaffold-internal). Badges come from each service's `summary`:
-// summary.badge (short text) or summary.level ("warn"/"error" → dot).
+// summary.badge (short text) or summary.level ("warn"/"error" → dot). summary.quiet draws the badge dim
+// (a count that isn't a problem, e.g. toolchain updates; summary.tip is its tooltip); compact mode shows a dim dot.
 // While a watch (compile on save, app.watch) runs, Projects also shows a small eye: faint while
 // watching, accent while compiling, red after a failed compile; its tooltip names the project.
 Rectangle {
@@ -65,6 +66,7 @@ Rectangle {
         readonly property var summary: svc && svc.summary ? svc.summary : null
         readonly property string level: summary && summary.level ? String(summary.level) : ""
         readonly property string badge: summary && summary.badge ? String(summary.badge) : ""
+        readonly property bool quietBadge: badge !== "" && !!(summary && summary.quiet)
         readonly property bool busy: svc ? svc.status === "loading" : false
         readonly property var watchState: modelData.key === "projects" && root.app && root.app.watch ? root.app.watch.current : null
         // A failed compile on save already turns the eye red: no second red marker for it.
@@ -132,9 +134,17 @@ Rectangle {
           }
           Spinner { visible: item.busy; running: item.busy; size: Style.font.bodySmall }
           Badge {
-            visible: !item.busy && !item.hideBadgeForWatch && (item.badge !== "" || item.level === "warn" || item.level === "error")
+            visible: !item.busy && !item.hideBadgeForWatch && !item.quietBadge && (item.badge !== "" || item.level === "warn" || item.level === "error")
             level: item.level === "" ? "info" : item.level
             text: item.badge
+          }
+          // quiet count: informs without calling for action
+          Badge {
+            visible: !item.busy && item.quietBadge
+            quiet: true
+            text: item.badge
+            HoverHandler { id: quietHover }
+            PanelToolTip { visible: quietHover.hovered && !!item.summary.tip; text: item.summary ? item.summary.tip || "" : "" }
           }
           AppText {
             visible: hover.hovered && item.watchState === null && item.badge === "" && !item.busy && item.level !== "warn" && item.level !== "error"
@@ -160,6 +170,14 @@ Rectangle {
             visible: !item.busy && !item.hideBadgeForWatch && (item.level === "warn" || item.level === "error")
             level: item.level
           }
+          // a quiet count (toolchain updates) becomes a dim dot
+          Badge {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.spacing.xs
+            visible: !item.busy && item.quietBadge && item.level !== "warn" && item.level !== "error"
+            quiet: true
+          }
           // watch mode: a small eye in the bottom corner
           Icon {
             anchors.right: parent.right
@@ -174,6 +192,7 @@ Rectangle {
         PanelToolTip {
           visible: root.compact && hover.hovered
           text: item.modelData.label + "  " + (item.index + 1) + (item.watchTip !== "" ? "  ·  " + item.watchTip : "")
+                + (item.quietBadge && item.summary.tip ? "  ·  " + item.summary.tip : "")
         }
         HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: root.selected(item.modelData.key) }

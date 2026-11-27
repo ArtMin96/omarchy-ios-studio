@@ -142,9 +142,7 @@ def test_plain_editor_debugging_has_the_editor_note(monkeypatch, capsys, real_no
 # ================================================================ IOSSTUDIO_DEMO_APPLE_DEV=outdated
 
 def test_outdated_row_matches_what_steps_builds(tmp_path, monkeypatch):
-    from test_setup_apple_dev_048 import facts_for, relocate
-
-    from support.setup_upgrade import old_machine
+    from support.setup_upgrade import facts_for, old_machine, relocate
     m = old_machine(tmp_path)
     relocate(monkeypatch, m)
     real = next(r for r in steps.build_steps(facts_for(m))[0] if r["id"] == "apple-dev")
