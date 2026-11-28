@@ -1,8 +1,9 @@
 """App integration (group "app"): launcher keybinding, window rule, about info.
 
-Edits only marker-delimited blocks in the user's Hyprland Lua files, backs the file up first
-(~/.local/state/ios-studio/backups/), validates with `hyprctl reload` + `hyprctl configerrors`,
-and restores the backup if Hyprland reports errors.
+Edits only marker-delimited blocks in the user's existing Hyprland Lua files (it never creates them),
+backs the file up first (~/.local/state/ios-studio/backups/), validates with `hyprctl reload` +
+`hyprctl configerrors`, and restores the backup if the change brought new errors (errors Hyprland
+already reported before the edit are left alone and don't undo it).
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import time
 from pathlib import Path
 
 from iosstudio.core import appdirs, fileio, subproc
-from iosstudio.core.output import HelperError, ok
+from iosstudio.core.output import HelperError, fix, ok
 
 HYPR = appdirs.HOME / ".config/hypr"
 BINDINGS = HYPR / "bindings.lua"
@@ -63,12 +64,32 @@ def _backup(path: Path) -> Path | None:
     return dest
 
 
-def _validate_or_restore(path: Path, backup: Path | None) -> None:
+_LINE_NO = re.compile(r"\b(line|:)\s*\d+")
+
+
+def _config_errors() -> list[str] | None:
+    """What `hyprctl configerrors` reports now (one entry per non-blank line); None without hyprctl."""
     if not subproc.which("hyprctl"):
+        return None
+    res = subproc.run_cmd(["hyprctl", "configerrors"], timeout=15)
+    return [l.strip() for l in (res.stdout or "").splitlines() if l.strip()]
+
+
+def _new_errors(before: list[str], after: list[str]) -> list[str]:
+    """Errors in `after` that weren't there `before`. Line numbers are ignored when comparing, so an
+    old error that only moved (our block was added or removed above it) doesn't count as new."""
+    old = {_LINE_NO.sub(r"\1N", e) for e in before}
+    return [e for e in after if _LINE_NO.sub(r"\1N", e) not in old]
+
+
+def _validate_or_restore(path: Path, backup: Path | None, before: list[str] | None) -> None:
+    """Reload Hyprland and undo the edit if it brought errors that weren't reported before it.
+
+    `before` is _config_errors() taken before the write (None: no hyprctl, nothing to check)."""
+    if before is None or not subproc.which("hyprctl"):
         return
     subproc.run_cmd(["hyprctl", "reload"], timeout=15)
-    res = subproc.run_cmd(["hyprctl", "configerrors"], timeout=15)
-    errors = [l for l in (res.stdout or "").splitlines() if l.strip()]
+    errors = _new_errors(before, _config_errors() or [])
     if errors:
         if backup:
             shutil.copy2(backup, path)
@@ -83,17 +104,24 @@ def _write_block(path: Path, start: str, end: str, body: str | None) -> None:
     """body=None removes the block; otherwise inserts/replaces it at the end of the file."""
     if path.is_symlink():
         raise HelperError("unsafe-file", f"{path.name} is a symlink; iOS Studio won't edit it.")
-    if body is None and not path.exists():
-        return    # nothing to remove: don't create the file or reload Hyprland
+    if not path.exists():
+        if body is None:
+            return    # nothing to remove: don't create the file or reload Hyprland
+        # Never create it: a new file would hold only our block and replace the user's whole config.
+        raise HelperError("hypr-config", f"Couldn't find your Hyprland config file {path.name} in "
+                          f"{path.parent}, so iOS Studio didn't change anything. Restore the file "
+                          "(Omarchy's Refresh Hyprland config in the Omarchy menu does this), then try again.",
+                          fix("Try again", "settings"))
     text = _read(path)
     new = _block_re(start, end).sub("\n", text).rstrip("\n") + "\n"
     if body is not None:
         new += f"\n{start}\n{body}\n{end}\n"
     if new == text:
         return
+    before = _config_errors()
     backup = _backup(path)
     fileio.atomic_write(path, new)
-    _validate_or_restore(path, backup)
+    _validate_or_restore(path, backup, before)
 
 
 def _key_conflict() -> str:
@@ -174,9 +202,10 @@ def migrate(flags: dict) -> int:
         for start, end in ((BIND_START, BIND_END), (WIN_START, WIN_END), (OPAQUE_START, OPAQUE_END)):
             new = _block_re(start, end).sub(lambda m: LEGACY_CLASS_RE.sub(f'"{CLASS_MATCH}"', m.group(0)), new)
         if new != text:
+            before = _config_errors()
             backup = _backup(path)
             fileio.atomic_write(path, new)
-            _validate_or_restore(path, backup)
+            _validate_or_restore(path, backup, before)
             changed.append(str(path))
     return ok({"migrated": changed})
 
