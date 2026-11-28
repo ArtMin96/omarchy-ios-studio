@@ -183,11 +183,11 @@ Below that are the installed versions of xtool, Swift, the iOS SDK, pymobiledevi
 - Notifications for a finished build, a connected iPhone or signing that's about to expire. They only appear while you're in another window.
 - Re-sign apps automatically: adds a background job that checks once a day at 10:00 and renews the apps you marked with Auto-renew. See [Renew before the 7 days run out](#renew-before-the-7-days-run-out).
 - AI agents: connects coding agents such as Claude Code to iOS Studio, and Add agent instructions to new apps (on by default). See [AI agents](#connect-an-ai-agent) below.
-- Open with Super + Shift + I adds a shortcut to `~/.config/hypr/bindings.lua`. iOS Studio backs up the file first and undoes the change if Hyprland rejects it.
+- Open with Super + Shift + I adds a shortcut to `~/.config/hypr/bindings.lua`. iOS Studio backs up the file first, never creates it if it's missing, and undoes the change only if it causes a new Hyprland error (errors you already had don't count).
 - Window: tile like other apps, or open as a floating window.
 - Opaque window (on by default) keeps the window solid so text is easier to read. Turn it off to use Omarchy's slightly see-through windows.
 - About shows versions and where iOS Studio keeps its files, plus Run setup again.
-- Uninstall iOS Studio removes the launcher entry, the icon, the `ios-studio` command, the theme hook and iOS Studio's Hyprland rules and shortcut, turns off automatic re-signing and disconnects your AI agents, then quits. It's the same as `ios-studio --uninstall`. The toolchain stays; Toolchain › Remove everything removes it.
+- Uninstall iOS Studio removes the launcher entry, the icon, the `ios-studio` command, the theme hook and iOS Studio's Hyprland rules and shortcut, turns off automatic re-signing and disconnects your AI agents, then quits. It's the same as `ios-studio --uninstall`. The toolchain stays; Toolchain › Remove everything removes it, including the UxPlay firewall rules, and avahi if Setup enabled it.
 
 ## Keyboard shortcuts
 

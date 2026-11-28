@@ -10,16 +10,20 @@ import "Model.js" as Model
 
 // iOS Studio's Omarchy bar button (the plugin's only entry point). A click opens iOS Studio, or brings its window to
 // the front, through its own launcher. When iOS Studio isn't installed, a panel asks first, runs install.sh from
-// this plugin folder, then opens iOS Studio on its Setup page; a failure says why and offers Try again.
-// Nothing runs until a click: no polling, no status badge.
+// this plugin folder, then opens iOS Studio on its Setup page. When `omarchy plugin update` has brought this folder
+// past the installed copy, the panel offers "Update iOS Studio" (install.sh --update), then opens it. A failure says
+// why and offers Try again. Nothing runs until a click: no polling, no status badge.
 Panel {
   id: root
   moduleName: "io.github.artmin96.ios-studio"
   manageIpc: false
 
   readonly property string helper: Model.localPath(Qt.resolvedUrl("app.sh"))
-  // "confirm" asks to install, "installing" runs install.sh, "failed" says why.
+  // "confirm" asks, "installing" runs install.sh, "failed" says why.
   property string stage: "confirm"
+  // What the panel offers: "install" (not installed) or "update" (the installed copy is behind this plugin folder).
+  property string action: "install"
+  readonly property bool updating: action === "update"
   property string reason: ""
   property var output: []
   // The highlighted button: 0 Cancel/Close, 1 Install/Try again.
@@ -64,9 +68,11 @@ Panel {
     command: [root.helper, "status"]
     stdout: StdioCollector { id: statusOut }
     onExited: function(exitCode) {
-      if (exitCode === 0 && statusOut.text.trim() === "installed") {
+      var next = Model.statusAction(exitCode, statusOut.text)
+      if (next === "open") {
         Quickshell.execDetached([root.helper, "open"])
       } else {
+        root.action = next
         root.stage = "confirm"
         root.open()
       }
@@ -75,13 +81,13 @@ Panel {
 
   Process {
     id: installer
-    command: [root.helper, "install"]
+    command: [root.helper, root.action]
     stdout: SplitParser { onRead: data => Model.keepLine(root.output, data) }
     onExited: function(exitCode) {
       if (exitCode === 0) {
         root.stage = "confirm"
         root.close()
-        Quickshell.execDetached([root.helper, "open", "setup"])
+        Quickshell.execDetached(root.updating ? [root.helper, "open"] : [root.helper, "open", "setup"])
       } else {
         root.reason = Model.failureReason(root.output, exitCode)
         root.stage = "failed"
@@ -109,7 +115,8 @@ Panel {
     open: root.opened
     focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(320))
+    // Room for the whole consent list at larger font sizes; the screen's height still caps it.
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(560))
 
     content: PanelKeyCatcher {
       implicitHeight: column.implicitHeight
@@ -127,8 +134,9 @@ Panel {
         PanelHero {
           width: parent.width
           title: "iOS Studio"
-          meta: root.stage === "installing" ? strings.t("installing")
-            : root.stage === "failed" ? strings.t("failed") : strings.t("notInstalled")
+          meta: root.stage === "installing" ? strings.t(root.updating ? "updating" : "installing")
+            : root.stage === "failed" ? strings.t(root.updating ? "updateFailed" : "failed")
+            : strings.t(root.updating ? "updateAvailable" : "notInstalled")
           foreground: root.foreground
           fontFamily: root.fontFamily
           iconComponent: Component {
@@ -145,8 +153,9 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.stage === "installing" ? strings.t("installingDetail")
-            : root.stage === "failed" ? strings.t("failedDetail") : strings.t("askInstall")
+          text: root.stage === "installing" ? strings.t(root.updating ? "updatingDetail" : "installingDetail")
+            : root.stage === "failed" ? strings.t(root.updating ? "updateFailedDetail" : "failedDetail")
+            : strings.t(root.updating ? "askUpdate" : "askInstall")
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -157,12 +166,13 @@ Panel {
           width: parent.width
           visible: text !== ""
           textFormat: Text.PlainText   // install.sh output: never rich text
-          text: root.stage === "failed" ? root.reason : root.stage === "confirm" ? strings.t("askDetail") : ""
+          text: root.stage === "failed" ? root.reason : root.stage === "confirm" ? strings.t(root.updating ? "askUpdateDetail" : "askDetail") : ""
           color: root.stage === "failed" ? Commons.Color.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
-          maximumLineCount: 4
+          // The confirm text lists every change install.sh makes, so it is never cut; a failure reason is.
+          maximumLineCount: root.stage === "failed" ? 4 : 1000
           elide: Text.ElideRight
         }
 
@@ -172,7 +182,7 @@ Panel {
           spacing: Style.space(8)
 
           Repeater {
-            model: root.stage === "failed" ? [strings.t("close"), strings.t("retry")] : [strings.t("cancel"), strings.t("install")]
+            model: root.stage === "failed" ? [strings.t("close"), strings.t("retry")] : [strings.t("cancel"), strings.t(root.updating ? "update" : "install")]
 
             Button {
               required property int index

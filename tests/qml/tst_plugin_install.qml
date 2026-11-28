@@ -35,6 +35,14 @@ TestCase {
     compare(Model.failureReason(["<img src=\"https://example.invalid/t\">"], 1), "<img src=\"https://example.invalid/t\">")
   }
 
+  function test_statusAction_reads_app_sh_status() {
+    compare(Model.statusAction(0, "installed\n"), "open")
+    compare(Model.statusAction(0, "outdated\n"), "update")
+    compare(Model.statusAction(0, "missing\n"), "install")
+    compare(Model.statusAction(1, "installed"), "install")
+    compare(Model.statusAction(0, ""), "install")
+  }
+
   function test_localPath_decodes() {
     compare(Model.localPath("file:///home/a%20b/plugin/app.sh"), "/home/a b/plugin/app.sh")
   }

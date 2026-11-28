@@ -114,6 +114,10 @@ Put it in the area's module in `mcp/iosstudio_mcp/tools/` (a new module goes in 
 - [ ] Works in demo mode; a test in `tests/mcp/`; the tool table in `docs/mcp.md` updated
       (`tests/mcp/test_mcp_slim.py` checks the `tools/list` size).
 
+Changed `mcp/pyproject.toml`'s dependencies? Refresh the lock with
+`uv pip compile mcp/pyproject.toml --universal --python-version 3.11 --generate-hashes -o mcp/requirements.lock`
+and commit both files ([docs/mcp.md](docs/mcp.md#dependencies)).
+
 ### Add a QML view that loads data
 
 Put it in `components/<area>/`, import `"../common"` and `"../../core"`, and let a `Resource` hold the data:

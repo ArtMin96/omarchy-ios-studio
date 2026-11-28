@@ -283,11 +283,16 @@ def remove_all(flags: dict) -> int:
         if xt.exists():
             run_stream([xt, "auth", "logout"], sid)
         do_rmtree(XTOOL_CONFIG, sid, exact=(XTOOL_CONFIG,))
-    root_args = ["--remove-usbmuxd-dropin"]
+    # Undo what Setup changed on the system: the usbmuxd drop-in, the firewall rules for screen mirroring, and
+    # avahi, but avahi only if Setup turned it on (it was off before; the setup state remembers).
+    root_args = ["--remove-usbmuxd-dropin", "--remove-ufw-uxplay"]
+    avahi_ours = bool(load_state().get("avahiEnabledBySetup"))
+    if avahi_ours:
+        root_args.append("--disable-avahi")
     if not flags.get("keep_swift"):
         root_args = ["--unhold-swift", "--remove-swift"] + root_args
     progress(sid, 0.7, "Removing system pieces (asks for your password)")
     run_root(root_args, sid, "Removing Swift")
-    save_state({"xip": None, "xipInfo": None})
+    save_state({"xip": None, "xipInfo": None, **({"avahiEnabledBySetup": None} if avahi_ours else {})})
     output.step(sid, "Removing the iOS toolchain", "done")
     return output.done(True, {"removed": True, "keptAuth": not flags.get("remove_auth"), "dryRun": rt.DRY})

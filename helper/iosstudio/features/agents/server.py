@@ -14,6 +14,7 @@ from iosstudio.features import config_files
 from .clients import LAUNCHER, launcher, which
 
 PYPROJECT = appdirs.REPO / "mcp" / "pyproject.toml"
+LOCK = appdirs.REPO / "mcp" / "requirements.lock"   # bin/iosstudio-mcp's stamp hashes both, in this order
 PREPARE_TIMEOUT = 900    # seconds for the MCP server's first-time venv setup (downloads its Python packages)
 REPAIR_FIX = {"page": "settings", "action": "agents-repair"}
 
@@ -27,7 +28,7 @@ def server_status() -> dict:
     venv = venv_dir()
     want = ""
     try:
-        want = hashlib.sha256(PYPROJECT.read_bytes()).hexdigest()[:16]
+        want = hashlib.sha256(PYPROJECT.read_bytes() + LOCK.read_bytes()).hexdigest()[:16]
     except OSError:
         pass
     have = config_files.read_text(venv / ".iosstudio-deps").strip()

@@ -30,13 +30,15 @@ def hypr(tmp_path, monkeypatch):
 class FakeTools:
     """subproc.run_cmd stand-in: records argv, answers `hyprctl configerrors` and the keybinding listing."""
 
-    def __init__(self, errors: str = "", keys: str = ""):
+    def __init__(self, errors: str = "", keys: str = "", before: str = ""):
         self.calls: list[list[str]] = []
-        self.errors, self.keys = errors, keys
+        self.errors, self.keys, self.before = errors, keys, before   # before: configerrors until a reload
 
     def __call__(self, argv, timeout=60, **kw):
         self.calls.append(list(argv))
-        out = self.errors if argv[:2] == ["hyprctl", "configerrors"] else (self.keys if argv[0] == "omarchy" else "")
+        reloaded = ["hyprctl", "reload"] in self.calls
+        out = (self.errors if reloaded else self.before) if argv[:2] == ["hyprctl", "configerrors"] else \
+            (self.keys if argv[0] == "omarchy" else "")
         return subprocess.CompletedProcess(argv, 0, out, "")
 
 
@@ -68,6 +70,7 @@ def test_keybinding_on_off_keeps_the_rest(hypr, capsys):
 
 
 def test_window_rule_and_opacity(hypr, capsys):
+    ac.HYPRLAND.write_text("-- mine\n")
     ac.window_rule({"mode": "float", "width": "900", "height": "600"})
     ac.opacity({"opaque": "on"})
     text = ac.HYPRLAND.read_text()
@@ -119,21 +122,23 @@ def test_hyprland_errors_restore_the_backup(hypr, monkeypatch):
         ac.window_rule({"mode": "float"})
     assert ei.value.code == "hypr-config" and "bad rule" in ei.value.detail
     assert ac.HYPRLAND.read_text() == "-- original\n"
-    assert tools.calls == [["hyprctl", "reload"], ["hyprctl", "configerrors"], ["hyprctl", "reload"]]
+    assert tools.calls == [["hyprctl", "configerrors"], ["hyprctl", "reload"], ["hyprctl", "configerrors"],
+                           ["hyprctl", "reload"]]
 
 
-def test_hyprland_errors_remove_a_new_file(hypr, monkeypatch):
-    install(monkeypatch, FakeTools(errors="error\n"))
-    with pytest.raises(HelperError):
+def test_adding_to_a_missing_file_is_refused(hypr, monkeypatch):
+    tools = install(monkeypatch, FakeTools())
+    with pytest.raises(HelperError) as ei:
         ac.opacity({"opaque": "on"})
-    assert not ac.HYPRLAND.exists()
+    assert ei.value.code == "hypr-config" and not ac.HYPRLAND.exists() and tools.calls == []
 
 
 def test_clean_validation_keeps_the_change(hypr, monkeypatch):
+    ac.HYPRLAND.write_text("-- mine\n")
     tools = install(monkeypatch, FakeTools(errors="\n  \n"))
     ac.opacity({"opaque": "on"})
     assert ac.OPAQUE_RULE in ac.HYPRLAND.read_text()
-    assert tools.calls == [["hyprctl", "reload"], ["hyprctl", "configerrors"]]
+    assert tools.calls == [["hyprctl", "configerrors"], ["hyprctl", "reload"], ["hyprctl", "configerrors"]]
 
 
 def test_key_conflict(hypr, monkeypatch, capsys):

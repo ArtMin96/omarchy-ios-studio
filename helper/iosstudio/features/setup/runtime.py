@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from iosstudio.core import appdirs, fileio, output, subproc
-from iosstudio.core.appdirs import HOME
+from iosstudio.core.appdirs import HOME, REPO
 from iosstudio.core.output import HelperError, event, fix
 
 from .pins import ROOT_SCRIPT
@@ -290,21 +290,62 @@ def confirm(message: str, yes_label: str, flags: dict) -> None:
         raise HelperError("cancelled", "Cancelled. Nothing was changed.")
 
 
+def _untrusted(p: Path, app: Path) -> str | None:
+    """Why `p` (a real path) can't be trusted to run as root, or None. Only this user or root may own it, nobody
+    else may write to it, and it must be inside the app folder."""
+    if p != app and not _inside(p, app):
+        return "is a link to a file outside the iOS Studio folder"
+    try:
+        st = os.stat(p)
+    except OSError:
+        return "is missing"
+    if st.st_uid not in (os.getuid(), 0):
+        return "belongs to another user"
+    if st.st_mode & 0o022:
+        return "can be changed by other users"
+    return None
+
+
+def trusted_root_script() -> Path:
+    """The real path of root-tasks.sh, after checking it, the xcspec.py it runs (the one next to it) and the
+    folders above them up to the app folder: a file there that another user could change would run as root."""
+    app = Path(os.path.realpath(REPO))
+    script = Path(os.path.realpath(ROOT_SCRIPT))
+    xcspec = Path(os.path.realpath(script.parent / "xcspec.py"))
+    checks = [(script, script.name), (xcspec, xcspec.name)]
+    d = script.parent
+    while d != app and _inside(d, app):
+        checks.append((d, f"folder {d.name}"))
+        d = d.parent
+    checks.append((app, "folder"))
+    for p, name in checks:
+        why = _untrusted(p, app)
+        if why:
+            what = "iOS Studio's folder" if name == "folder" else f"iOS Studio's {name}"
+            raise HelperError("untrusted-root-script",
+                              f"iOS Studio didn't ask for your password: {what} {why}, so another program could "
+                              "change what runs as administrator. Reinstall iOS Studio from a fresh download, then "
+                              "try again.", fix("Open Setup", "setup"), detail=str(p))
+    return script
+
+
 def run_root(args: list[str], step_id: str, label: str) -> None:
-    """One pkexec call to root-tasks.sh. Lines '@@task X' become progress detail."""
+    """One pkexec call to root-tasks.sh (its real path, after trusted_root_script()). Lines '@@task X' become
+    progress detail."""
     if not args:
         return
     if Path("/var/lib/pacman/db.lck").exists() and any(a in args for a in ("--packages", "--deps", "--aur-build", "--remove-swift")):
         raise HelperError("pacman-locked", "Another program is installing system packages right now (maybe a system "
                           "update). Wait for it to finish, then try again.", fix("Try again", "setup", step=step_id))
-    argv = ["pkexec", str(ROOT_SCRIPT), *args]
     if DRY:
+        argv = ["pkexec", str(ROOT_SCRIPT), *args]
         log(step_id, "would ask for your password once, then run: " + " ".join(shell_quote(a) for a in argv))
         rc = run_stream(["bash", str(ROOT_SCRIPT), *args, "--dry-run"], step_id, label=label, mutating=False)
         must(rc, "root-failed", "The root script rejected these arguments (dry run).", step_id)
         return
     if not shutil.which("pkexec"):
         raise HelperError("no-pkexec", "This computer has no way to ask for your password (polkit is missing).")
+    argv = ["pkexec", str(trusted_root_script()), *args]
     log(step_id, "Asking for your password…")
     progress(step_id, None, "Waiting for your password")
     tail: list = []
@@ -315,7 +356,8 @@ def run_root(args: list[str], step_id: str, label: str) -> None:
                             "hold": "Holding Swift", "xcspec": "Fixing Swift build settings", "usbmuxd": "Configuring usbmuxd",
                             "udev": "Refreshing USB devices", "avahi": "Starting network discovery",
                             "firewall": "Opening the firewall for mirroring", "remove-swift": "Removing Swift",
-                            "unhold": "Releasing the Swift hold", "done": "Finishing"}.get(line[7:].split()[0], line[7:])
+                            "unhold": "Releasing the Swift hold", "avahi-off": "Stopping network discovery",
+                            "firewall-off": "Closing the firewall for mirroring", "done": "Finishing"}.get(line[7:].split()[0], line[7:])
             if line[7:].startswith("aur"):
                 st["detail"] = f"Building and installing {line[11:]}"
             return "quiet"

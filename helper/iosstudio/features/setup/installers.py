@@ -15,17 +15,16 @@ from iosstudio.core.output import HelperError, fix
 
 from . import runtime as rt
 from .downloads import aur_fetch, download, prefetch_swift_sources, srcinfo, strip_ver
-from .facts import arch, is_omarchy, sdk_ios_versions, swift_hold_hook_present
+from .facts import arch, is_omarchy, load_state, save_state, sdk_ios_versions, swift_hold_hook_present
 from .pins import (
+    AUR_COMMITS,
     HOOK_SRC,
     IPSW_SHA,
     LEGACY_VENV,
     OMARCHY_HOOK,
     PACKAGES,
     SDK_CACHE,
-    SWIFT_AUR_COMMIT,
     UXPLAY_RUNTIME,
-    XCSPEC_PY,
 )
 from .runtime import (
     confirm,
@@ -46,16 +45,23 @@ from .steps import Ctx, summarize
 from .xip import xip_quick, xip_read_version
 
 
+def avahi_enabled() -> bool:
+    """Is avahi (the service or its socket) enabled to start at boot? systemctl answers 0 if either is."""
+    return probe(["systemctl", "is-enabled", "--quiet", "avahi-daemon.service", "avahi-daemon.socket"], timeout=3)[0] == 0
+
+
 def i_root_bundle(ctx: Ctx, ids: list[str], step_id: str, label: str) -> None:
-    """Collect the root work of several steps and run it with one password prompt."""
+    """Collect the root work of several steps and run it with one password prompt. --packages and --deps may
+    repeat: root-tasks.sh adds the lists up."""
     args: list[str] = []
     a = arch()
+    turns_avahi_on = False
     if "packages" in ids:
         miss = ctx.c.get("missing_pkgs") or []
         if miss or ctx.flags.get("force"):
             args += ["--packages", " ".join(miss or PACKAGES)]
     if "swift" in ids and (ctx.state("swift") != "done" or ctx.flags.get("force")):
-        d = aur_fetch("swift-bin", SWIFT_AUR_COMMIT, step_id)
+        d = aur_fetch("swift-bin", AUR_COMMITS["swift-bin"], step_id)
         info = srcinfo(d) if not rt.DRY else {}
         mk = sorted({strip_ver(x) for x in info.get("makedepends", []) + info.get(f"makedepends_{a}", [])} | {"base-devel"})
         if rt.DRY:
@@ -67,34 +73,32 @@ def i_root_bundle(ctx: Ctx, ids: list[str], step_id: str, label: str) -> None:
     if "swift-hold" in ids and ("swift-bin" not in ctx.F["ignore"][1].split() or ctx.flags.get("force")):
         args += ["--hold-swift"]
     if "xcspec" in ids and (ctx.state("xcspec") != "done" or ctx.flags.get("force") or "--aur-build" in args):
-        args += ["--xcspec", str(XCSPEC_PY)]
+        args += ["--xcspec"]     # root-tasks.sh runs the xcspec.py next to itself
     if "usbmuxd" in ids and ctx.state("usbmuxd") != "done":
         args += ["--usbmuxd-dropin", "--udev-trigger"]
     if "uxplay" in ids:
         if not shutil.which("uxplay") or ctx.flags.get("force"):
-            d = aur_fetch("uxplay", None, step_id)
+            d = aur_fetch("uxplay", AUR_COMMITS["uxplay"], step_id)
             info = srcinfo(d) if not rt.DRY else {}
             deps = sorted({strip_ver(x) for x in info.get("depends", []) + info.get("makedepends", []) +
                            info.get(f"depends_{a}", []) + info.get(f"makedepends_{a}", [])} | {"base-devel"})
             args += ["--deps", " ".join(deps), "--aur-build", str(d)]
         ux_miss = UXPLAY_RUNTIME if rt.DRY else [x for x in UXPLAY_RUNTIME if probe(["pacman", "-T", x])[0] != 0]
         if ux_miss:
-            if "--packages" in args:
-                i = args.index("--packages") + 1
-                args[i] = " ".join(dict.fromkeys(args[i].split() + ux_miss))
-            else:
-                args += ["--packages", " ".join(ux_miss)]
+            args += ["--packages", " ".join(ux_miss)]
         args += ["--avahi", "--ufw-uxplay"]
+        # Remember that Setup turned avahi on, so removing the toolchain turns it off again (and only then).
+        turns_avahi_on = not rt.DRY and not avahi_enabled()
     if "wireshark" in ids and (not shutil.which("wireshark") or ctx.flags.get("force")):
-        if "--packages" in args:   # one --packages flag: root-tasks.sh keeps only the last one
-            i = args.index("--packages")
-            args[i + 1] += " wireshark-qt"
-        else:
-            args += ["--packages", "wireshark-qt"]
+        args += ["--packages", "wireshark-qt"]
     if "debugger" in ids:
         pkg = ctx.by_id.get("debugger", {}).get("pkg")
         if pkg and (ctx.state("debugger") != "done" or ctx.flags.get("force")):
-            d = aur_fetch(pkg, None, step_id)
+            if pkg not in AUR_COMMITS:
+                raise HelperError("unsupported", f"Your Swift needs {pkg} for the debugger, and this version of iOS "
+                                  "Studio has no tested build recipe for it yet. Update iOS Studio, then try again.",
+                                  fix("Open Setup", "setup", step="debugger"))
+            d = aur_fetch(pkg, AUR_COMMITS[pkg], step_id)
             info = srcinfo(d) if not rt.DRY else {}
             deps = sorted({strip_ver(x) for x in info.get("depends", []) + info.get("makedepends", [])} | {"base-devel"})
             args += ["--deps", " ".join(deps), "--aur-build", str(d)]
@@ -102,6 +106,8 @@ def i_root_bundle(ctx: Ctx, ids: list[str], step_id: str, label: str) -> None:
         log(step_id, "Nothing needs your password here.")
         return
     run_root(args, step_id, label)
+    if turns_avahi_on and not load_state().get("avahiEnabledBySetup"):
+        save_state({"avahiEnabledBySetup": True})
 
 
 def i_swift_hook(ctx: Ctx, step_id: str) -> None:

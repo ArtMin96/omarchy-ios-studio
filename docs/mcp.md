@@ -50,7 +50,7 @@ The server is `bin/iosstudio-mcp` in your iOS Studio checkout. With the standard
 ~/.local/share/omarchy-ios-studio/bin/iosstudio-mcp
 ```
 
-The first start creates the server's Python environment (see above) if Prepare hasn't already. It uses `uv` if it's installed and `python -m venv` otherwise, and needs internet. Later starts are instant.
+The first start creates the server's Python environment (see above) if Prepare hasn't already. It installs the exact versions in [`mcp/requirements.lock`](../mcp/requirements.lock), each checked against its SHA-256 hash, using `uv` if it's installed and `python -m venv` with pip otherwise, and needs internet. Later starts are instant and offline: the launcher only compares a hash of the lock and `mcp/pyproject.toml` with the one it saved, and reinstalls when an update changed either file. See [Dependencies](#dependencies).
 
 Register that path with your agent. Most config files don't expand `~`, so write the full path, such as `/home/you/.local/share/omarchy-ios-studio/bin/iosstudio-mcp`. The server name is `iosstudio`, without an underscore, because Gemini CLI doesn't allow underscores in server names.
 
@@ -280,6 +280,19 @@ npx @modelcontextprotocol/inspector --cli -e IOSSTUDIO_DEMO=1 bin/iosstudio-mcp 
 ```
 
 [`mcp/evaluation.xml`](../mcp/evaluation.xml) has fifteen demo-mode questions for checking how well an agent uses the tools. See [`mcp/EVALUATION.md`](../mcp/EVALUATION.md).
+
+## Dependencies
+
+`mcp/pyproject.toml` lists the server's dependencies as version ranges. `mcp/requirements.lock` pins every package, including indirect ones, to one version with the hashes of its files, and is what `bin/iosstudio-mcp` installs: `uv pip sync --require-hashes` (which also removes packages an older lock had), or `python -I -m pip install --require-hashes --no-deps -r` when uv is missing. A file whose hash doesn't match is refused, so a changed or tampered package on the index can't reach the venv. The lock is universal: it's made for Python 3.11, the oldest the server supports, with markers that keep it valid on newer versions.
+
+After changing the dependencies in `mcp/pyproject.toml`, or to take newer releases, refresh the lock from the repo root and commit both files:
+
+```bash
+uv pip compile mcp/pyproject.toml --universal --python-version 3.11 --generate-hashes -o mcp/requirements.lock
+uv pip compile mcp/pyproject.toml --universal --python-version 3.11 --generate-hashes --upgrade -o mcp/requirements.lock   # newer releases
+```
+
+`tests/helper/test_mcp_requirements_lock.py` fails when the lock is out of step with `pyproject.toml` (a dependency missing, pinned outside its range, or without hashes). Each user's venv updates once on its next start after the lock changes.
 
 ## Troubleshooting
 

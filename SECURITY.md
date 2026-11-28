@@ -6,7 +6,7 @@ Include what you found, how to reproduce it, and which version or commit you use
 
 ## What's in scope
 
-Everything in this repository: the app, the helper (`bin/iosstudio-helper`), the device daemon (`bin/iosstudio-deviced`), the MCP server (`bin/iosstudio-mcp`) and `install.sh`. I care most about bugs that could:
+Everything in this repository: the app, the helper (`bin/iosstudio-helper`), the device daemon (`bin/iosstudio-deviced`), the MCP server (`bin/iosstudio-mcp`), the root script Setup runs through pkexec (`helper/root/root-tasks.sh`), the Omarchy plugin (`plugin/`) and `install.sh`. I care most about bugs that could:
 
 - leak Apple ID credentials, 2FA codes, signing keys or certificates
 - let something install, launch or remove apps, change settings or pair with an iPhone without the owner's consent

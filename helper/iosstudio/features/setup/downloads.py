@@ -15,7 +15,7 @@ from iosstudio.core.output import HelperError, fix
 
 from . import runtime as rt
 from .facts import arch
-from .pins import AUR_DIR, AUR_SNAPSHOT, AUR_SNAPSHOT_HEAD
+from .pins import AUR_DIR, AUR_SNAPSHOT
 from .runtime import fmt_bytes, log, progress
 
 
@@ -81,15 +81,18 @@ def sha256_of(p: Path) -> str:
 
 # ------------------------------------------------------------------ AUR recipes (built as the user)
 
-def aur_fetch(pkg: str, ref: str | None, step_id: str) -> Path:
-    """Unpack an AUR snapshot (pinned commit or HEAD) into ~/.cache/ios-studio/aur/<pkg> as the user."""
+def aur_fetch(pkg: str, ref: str, step_id: str) -> Path:
+    """Unpack the AUR snapshot of `pkg` at the pinned commit `ref` (pins.AUR_COMMITS) into
+    ~/.cache/ios-studio/aur/<pkg> as the user. Never the AUR's HEAD."""
+    if not re.fullmatch(r"[0-9a-f]{40}", ref or ""):
+        raise HelperError("internal", f"The {pkg} recipe has no pinned AUR commit.", detail=repr(ref))
     dest = AUR_DIR / pkg
-    url = AUR_SNAPSHOT.format(ref=ref) if ref else AUR_SNAPSHOT_HEAD.format(pkg=pkg)
+    url = AUR_SNAPSHOT.format(ref=ref)
     if rt.DRY:
         log(step_id, f"would fetch the AUR recipe {url} into {dest}")
         return dest
     marker = dest / ".ios-studio-ref"
-    if ref and marker.exists() and marker.read_text().strip() == ref and (dest / "PKGBUILD").exists():
+    if marker.exists() and marker.read_text().strip() == ref and (dest / "PKGBUILD").exists():
         return dest
     AUR_DIR.mkdir(parents=True, exist_ok=True)
     tmpdir = Path(tempfile.mkdtemp(prefix=f".{pkg}.", dir=AUR_DIR))
@@ -108,8 +111,7 @@ def aur_fetch(pkg: str, ref: str | None, step_id: str) -> Path:
         shutil.rmtree(dest)
     os.replace(top, dest)
     shutil.rmtree(tmpdir, ignore_errors=True)
-    if ref:
-        marker.write_text(ref + "\n")
+    marker.write_text(ref + "\n")
     return dest
 
 
