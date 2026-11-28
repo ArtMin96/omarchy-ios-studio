@@ -3,7 +3,7 @@
 #   app.sh status         prints "installed" or "missing"
 #   app.sh open [setup]   opens iOS Studio, or brings its window to the front (on the Setup page with "setup")
 #   app.sh install        runs install.sh from this plugin folder (it copies the app to ~/.local/share/omarchy-ios-studio)
-set -u
+set -euo pipefail
 
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 launcher="$HOME/.local/bin/ios-studio"   # install.sh links it; --uninstall removes it

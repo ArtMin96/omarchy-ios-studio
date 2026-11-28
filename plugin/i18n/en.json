@@ -3,7 +3,7 @@
   "installing": "Installing…",
   "failed": "Install failed",
   "askInstall": "iOS Studio isn't installed yet. Install it now?",
-  "askDetail": "Adds iOS Studio to your app launcher. It then opens on its Setup page, which installs the iOS tools.",
+  "askDetail": "It changes only files in your home folder:\n• copies iOS Studio to ~/.local/share/omarchy-ios-studio\n• adds an app launcher entry, an icon and the ~/.local/bin/ios-studio command\n• adds an Omarchy theme hook, so the window follows your theme\n• adds a marked rule to ~/.config/hypr/hyprland.lua that keeps the window opaque, and reloads Hyprland (a backup is kept; Settings can remove it)\n• makes its settings, state and cache folders\nNo system packages and no timers. Then Setup opens, which installs the iOS tools.",
   "installingDetail": "Copying iOS Studio and adding it to the app launcher.",
   "failedDetail": "iOS Studio couldn't be installed.",
   "cancel": "Cancel",

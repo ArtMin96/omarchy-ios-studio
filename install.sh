@@ -17,9 +17,25 @@ DESKTOP="$APPS_DIR/$APP_ID.desktop"
 HOOK_DIR="$HOME/.config/omarchy/hooks/theme-set.d"
 HOOK="$HOOK_DIR/ios-studio-theme"
 APP_HOME="$HOME/.local/share/omarchy-ios-studio"
+PLUGIN_ID="io.github.artmin96.ios-studio"   # manifest.json's "id": how a folder proves it is an iOS Studio checkout
 PLUGINS_DIR="$(readlink -f "$HOME/.config/omarchy/plugins" 2>/dev/null || echo "$HOME/.config/omarchy/plugins")"
 
 say() { printf '  %s\n' "$*"; }
+
+# Temporary files live in a private folder (mktemp -d) that is removed however the script ends.
+stage=""
+cleanup() {
+  [[ -n $stage ]] && rm -rf -- "$stage"
+  rm -f -- "$DESKTOP.tmp"
+}
+trap cleanup EXIT
+
+# True when $1 is an iOS Studio checkout: its manifest.json carries this plugin id and it has an install.sh.
+is_ios_studio() {
+  local dir=$1
+  [[ -f $dir/manifest.json && -f $dir/install.sh && -x $dir/install.sh ]] || return 1
+  tr -d ' \t\r\n' < "$dir/manifest.json" | grep -qF "\"id\":\"$PLUGIN_ID\""
+}
 
 # Earlier builds used a reverse-DNS app id ("dev.<user>.iosstudio"). Remove what they installed.
 remove_legacy() {
@@ -69,7 +85,7 @@ except Exception:
   fi
   for l in Commons Ui; do [[ -L $REPO/$l ]] && rm -f "$REPO/$l"; done
   refresh_icons
-  say "kept ~/.config/ios-studio, ~/.local/state/ios-studio, ~/.local/share/ios-studio (delete them by hand to reset)"
+  say "kept ~/.config/ios-studio, ~/.local/state/ios-studio, ~/.local/share/ios-studio and ~/.cache/ios-studio (delete them by hand to reset)"
 }
 
 # The plugin folder only holds the bar button. The Omarchy shell refuses plugin folders that contain symlinks
@@ -98,11 +114,13 @@ copy_from_plugin() {
 
 if [[ $REPO == "$PLUGINS_DIR"/* ]]; then
   [[ ${1:-} == "--uninstall" ]] || copy_from_plugin
-  if [[ -x $APP_HOME/install.sh ]]; then exec "$APP_HOME/install.sh" "$@"; fi
-  if [[ ${1:-} != "--uninstall" ]]; then
+  # Only hand over to a real iOS Studio checkout: never run some other install.sh that happens to sit there.
+  if is_ios_studio "$APP_HOME"; then exec "$APP_HOME/install.sh" "$@"; fi
+  if [[ -e $APP_HOME && ${1:-} != "--uninstall" ]]; then
     echo "$APP_HOME is there but isn't an iOS Studio folder. Move it aside, then install again." >&2
     exit 1
   fi
+  # --uninstall without an iOS Studio app folder: this plugin folder's own uninstall below removes the links.
 fi
 
 if [[ ${1:-} == "--uninstall" ]]; then uninstall; exit 0; fi
@@ -163,7 +181,8 @@ mv "$DESKTOP.tmp" "$DESKTOP"
 say "wrote $DESKTOP"
 
 # 5. live theme hook (the app also watches the theme itself; this is belt and braces)
-hook_tmp="$(mktemp)"
+stage="$(mktemp -d)"
+hook_tmp="$stage/ios-studio-theme"
 cat > "$hook_tmp" <<HOOK
 #!/bin/bash
 # Installed by iOS Studio ($REPO/install.sh). Re-colours a running iOS Studio window.
@@ -171,13 +190,12 @@ qs ipc -p $(printf '%q' "$REPO") call iosstudio applyTheme >/dev/null 2>&1 || tr
 HOOK
 mkdir -p "$HOOK_DIR"
 if command -v omarchy-hook-install >/dev/null 2>&1; then
-  cp "$hook_tmp" "${hook_tmp%/*}/ios-studio-theme"
-  omarchy-hook-install theme-set "${hook_tmp%/*}/ios-studio-theme" >/dev/null
-  rm -f "${hook_tmp%/*}/ios-studio-theme"
+  omarchy-hook-install theme-set "$hook_tmp" >/dev/null   # installs it under its file name, ios-studio-theme
 else
   install -m 755 "$hook_tmp" "$HOOK"
 fi
-rm -f "$hook_tmp"
+rm -rf -- "$stage"
+stage=""
 say "installed theme-set hook $HOOK"
 
 # 6. app dirs

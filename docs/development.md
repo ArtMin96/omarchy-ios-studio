@@ -246,7 +246,7 @@ python3 helper/run.py iosstudio.device.client daemon.shutdown '{"all": true}'
 Setup and demo mode are in [CONTRIBUTING.md](../CONTRIBUTING.md#run-it-in-demo-mode). The rest:
 
 ```bash
-./install.sh                    # once: symlinks, launcher entry, icon, theme hook
+./install.sh                    # once: symlinks, launcher entry, icon, theme hook, opacity rule (README › What install.sh changes)
 qs -p .                         # run from the repo (Ctrl+C to stop)
 qs log -p .                     # read the log of a running instance (ios-studio --log does the same)
 qs ipc -p . call iosstudio nav projects   # drive it over IPC
@@ -336,7 +336,7 @@ To make a release:
 
 3. Watch Actions › Release. If the version check fails, the job names the file that differs: delete the tag (`git push origin :v0.2.0 && git tag -d v0.2.0`), fix it and tag again.
 
-Users install a release by cloning its tag or from the tarball, see the README's Install section.
+No tag has been pushed yet, so users install `main`. Once one exists, they can pin it by cloning the tag (`git clone --branch <tag>`) or from its tarball; the README's Install section says so without naming a version. When you publish the first release, update that paragraph.
 
 ## Where things live
 

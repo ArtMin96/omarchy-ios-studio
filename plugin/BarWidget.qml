@@ -109,7 +109,7 @@ Panel {
     open: root.opened
     focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(320))
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(460))
 
     content: PanelKeyCatcher {
       implicitHeight: column.implicitHeight
@@ -162,7 +162,8 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
-          maximumLineCount: 4
+          // The confirm text lists every change install.sh makes, so it is never cut; a failure reason is.
+          maximumLineCount: root.stage === "failed" ? 4 : 1000
           elide: Text.ElideRight
         }
 
