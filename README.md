@@ -60,7 +60,7 @@ omarchy plugin add https://github.com/ArtMin96/omarchy-ios-studio --enable
 2. Install copies iOS Studio to `~/.local/share/omarchy-ios-studio` (a local copy of the plugin, nothing is downloaded) and runs its `install.sh`, which takes a few seconds.
 3. iOS Studio opens on its Setup page, which installs the iOS tools (see First run).
 
-After that the button opens iOS Studio, or brings its window to the front. You can also open it from the app launcher or with `ios-studio`.
+After that the button opens iOS Studio, or brings its window to the front, and offers an update when the plugin has a newer version (see Updating). You can also open it from the app launcher or with `ios-studio`.
 
 `ios-studio <page>` opens the app on a page, or brings it to the front if it's already open. The pages are `home`, `setup`, `account`, `device`, `projects`, `logs`, `toolchain` and `settings`. Run `ios-studio --help` for the other options.
 
@@ -80,11 +80,14 @@ It adds no timers or services and installs no packages. The iOS tools come from 
 
 ### Updating
 
-`omarchy plugin update io.github.artmin96.ios-studio` updates the bar button. iOS Studio itself is a git clone in `~/.local/share/omarchy-ios-studio`, so it updates separately: `git -C ~/.local/share/omarchy-ios-studio pull`, then run `~/.local/share/omarchy-ios-studio/install.sh` again (it repairs the launcher, hook and rule and keeps your settings).
+1. Update the plugin with `omarchy plugin update io.github.artmin96.ios-studio` (or `omarchy plugin update` for all plugins). That brings the plugin folder up to date, not iOS Studio itself.
+2. Click the phone icon. When the installed copy is older than the plugin, the panel says "Update available", lists what the update does and asks first. Update moves `~/.local/share/omarchy-ios-studio` forward to the plugin's version, copied from the plugin folder (nothing is downloaded), repairs the launcher entry, the command, the theme hook and the Hyprland rule, and opens iOS Studio. Reopen it if it was already open.
+
+Your settings, history and projects are left alone. If you changed files in the app folder or made commits there, the update stops with a message and changes nothing. A copy installed by hand (below) isn't updated by the button.
 
 ### Manual install / development
 
-Without the bar button, clone `main` and run the installer, then open iOS Studio from the app launcher:
+Without the bar button, clone `main` and run the installer, then open iOS Studio from the app launcher. A copy like this updates with `git pull` in its folder and another `install.sh` run, the usual way for development:
 
 ```bash
 git clone https://github.com/ArtMin96/omarchy-ios-studio ~/.local/share/omarchy-ios-studio && ~/.local/share/omarchy-ios-studio/install.sh
@@ -108,7 +111,7 @@ iOS Studio comes with an MCP server, so coding agents can build, run and debug y
 
 ## Uninstall
 
-1. If you want the iOS tools gone too (Swift, xtool, the iOS SDK and caches), open Toolchain › Remove everything first. Your projects and iPhone pairing stay.
+1. If you want the iOS tools gone too (Swift, xtool, the iOS SDK and caches), open Toolchain › Remove everything first. Your projects and iPhone pairing stay. Toolchain › Remove everything also deletes the firewall rules screen mirroring opened, and turns avahi off again if Setup turned it on.
 2. Open Settings › Uninstall iOS Studio (or run `ios-studio --uninstall`). It removes the launcher entry, the icon, the `ios-studio` command, the theme hook and iOS Studio's Hyprland rules and shortcut. It also turns off automatic re-signing and disconnects any AI agents you connected, then quits.
 3. Remove the bar button: `omarchy plugin remove io.github.artmin96.ios-studio`. Removing only the button leaves iOS Studio installed; steps 1 and 2 remove the app.
 4. Delete the app folder. Settings › About shows where it is; it's `~/.local/share/omarchy-ios-studio` unless you cloned it elsewhere. Your settings, history and caches stay in `~/.config/ios-studio`, `~/.local/state/ios-studio`, `~/.local/share/ios-studio` and `~/.cache/ios-studio` until you delete them.

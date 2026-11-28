@@ -23,6 +23,16 @@ function failureReason(lines, exitCode) {
   return ""
 }
 
+// What a click does after `app.sh status`: "open" iOS Studio, offer an "update" (the app folder is behind the
+// plugin folder) or offer to "install" it (missing, or the check itself failed).
+function statusAction(exitCode, text) {
+  if (exitCode !== 0) return "install"
+  var s = String(text).trim()
+  if (s === "installed") return "open"
+  if (s === "outdated") return "update"
+  return "install"
+}
+
 // A file:// URL from Qt.resolvedUrl as a path for Process.command (spaces and other characters decoded).
 function localPath(url) {
   return decodeURIComponent(String(url).replace(/^file:\/\//, ""))

@@ -2,6 +2,8 @@
 # iOS Studio installer. Idempotent, non-interactive, no sudo.
 #   ./install.sh              install / repair
 #   ./install.sh --uninstall  remove everything this script created (keeps your settings and data)
+#   ./install.sh --update     from the plugin folder: bring the app folder up to the plugin's commit (fast-forward
+#                             only, from the local plugin folder), then install / repair as above
 # Run from an Omarchy plugin folder (~/.config/omarchy/plugins/<id>/, where `omarchy plugin add` puts this repo),
 # it first copies the app to ~/.local/share/omarchy-ios-studio and installs from there.
 set -euo pipefail
@@ -112,7 +114,48 @@ copy_from_plugin() {
   mv "$tmp" "$APP_HOME"
 }
 
+# --update (the bar button's "Update iOS Studio"): fast-forward the app folder to the plugin folder's commit. Only
+# a clean git copy that is behind the plugin is moved; local changes or commits of its own stop it with a message.
+# Settings, state and data live outside the app folder and are never touched.
+update_from_plugin() {
+  local theirs mine
+  if ! is_ios_studio "$APP_HOME" || [[ ! -d $APP_HOME/.git || ! -d $REPO/.git ]] || ! command -v git >/dev/null 2>&1; then
+    echo "$APP_HOME isn't a git copy of iOS Studio, so it can't be updated in place. Move it aside, then install again." >&2
+    exit 1
+  fi
+  theirs="$(git -C "$REPO" rev-parse --verify -q HEAD)" || { echo "The plugin folder has no commit to update to." >&2; exit 1; }
+  mine="$(git -C "$APP_HOME" rev-parse --verify -q HEAD)" || mine=""
+  if [[ $mine == "$theirs" ]]; then say "iOS Studio is already up to date"; return 0; fi
+  if [[ -n $(git -C "$APP_HOME" status --porcelain --untracked-files=no 2>/dev/null) ]]; then
+    echo "iOS Studio in $APP_HOME has changes of its own, so it wasn't updated." >&2
+    exit 1
+  fi
+  echo "Updating iOS Studio in $APP_HOME"
+  if ! git -C "$APP_HOME" fetch --quiet --no-tags -- "$REPO" HEAD; then
+    echo "Couldn't read the new version from the plugin folder." >&2
+    exit 1
+  fi
+  if ! git -C "$APP_HOME" merge-base --is-ancestor HEAD FETCH_HEAD; then
+    echo "iOS Studio in $APP_HOME has commits the plugin doesn't, so it wasn't updated." >&2
+    exit 1
+  fi
+  if ! git -C "$APP_HOME" merge --quiet --ff-only FETCH_HEAD >/dev/null 2>&1; then
+    echo "iOS Studio in $APP_HOME couldn't be updated: a file of yours is in the way." >&2
+    exit 1
+  fi
+  say "updated to $(git -C "$APP_HOME" log -1 --format='%h %cs')"
+}
+
+if [[ ${1:-} == "--update" && $REPO != "$PLUGINS_DIR"/* ]]; then
+  echo "--update only works from the Omarchy plugin folder; this copy updates with git." >&2
+  exit 2
+fi
+
 if [[ $REPO == "$PLUGINS_DIR"/* ]]; then
+  if [[ ${1:-} == "--update" ]]; then
+    update_from_plugin
+    set --   # then install / repair from the updated app folder
+  fi
   [[ ${1:-} == "--uninstall" ]] || copy_from_plugin
   # Only hand over to a real iOS Studio checkout: never run some other install.sh that happens to sit there.
   if is_ios_studio "$APP_HOME"; then exec "$APP_HOME/install.sh" "$@"; fi

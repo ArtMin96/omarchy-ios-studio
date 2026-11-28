@@ -104,8 +104,8 @@ templates/             Swift app templates used by New app (app-with-tests/ adds
                        hot-reload/ is the runtime package hot reload copies into a project (bump version.txt when it changes)
 tests/                 helper/, cli/, mcp/, qml/, e2e/, support/ (shared fakes), fixtures/<area>/
 pyproject.toml         dev tools only (pytest and ruff config, the dev dependency group); not a package
-install.sh             launcher integration (and --uninstall); from an Omarchy plugin folder it copies the app out first
-manifest.json, plugin/ the Omarchy plugin: a bar button that opens iOS Studio or installs it (docs/features/omarchy-plugin.md)
+install.sh             launcher integration (and --uninstall); from an Omarchy plugin folder it copies the app out first (--update: fast-forwards that copy from the plugin folder)
+manifest.json, plugin/ the Omarchy plugin: a bar button that opens, installs or updates iOS Studio (docs/features/omarchy-plugin.md)
 .github/               CI and release workflows, release-note categories, scripts/check-version.sh
 ```
 
