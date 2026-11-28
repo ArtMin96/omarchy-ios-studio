@@ -115,7 +115,8 @@ Panel {
     open: root.opened
     focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(460))
+    // Room for the whole consent list at larger font sizes; the screen's height still caps it.
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(560))
 
     content: PanelKeyCatcher {
       implicitHeight: column.implicitHeight

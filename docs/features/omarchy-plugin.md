@@ -55,7 +55,7 @@ from the plugin folder runs the app folder's uninstall (or its own, when the app
 
 ## What the install changes
 
-The panel's text (`askDetail` in `plugin/i18n/en.json`) names all of it; README › What install.sh changes has the
+The panel's text (`askDetail` in `plugin/i18n/en.json`) names all of it; README › What the install changes has the
 same list with full paths. Everything is in the home folder, without a password:
 
 - `~/.local/share/omarchy-ios-studio`: the app folder, copied from the plugin folder

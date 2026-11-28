@@ -53,6 +53,7 @@ Recipe: [CONTRIBUTING.md#add-a-helper-command](../../CONTRIBUTING.md#add-a-helpe
   process group and put back anything half-changed.
 - `message` is plain language for end users and never says "run X in a terminal". Secrets (password, 2FA)
   travel only over stdin, never argv. Root work is one `pkexec helper/root/root-tasks.sh` per step, never `sudo`.
+  AUR recipes are always pinned to a commit in `pins.AUR_COMMITS`.
 
 ## Tests
 

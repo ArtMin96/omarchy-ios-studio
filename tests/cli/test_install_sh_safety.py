@@ -165,7 +165,9 @@ def test_the_install_prompt_lists_every_change() -> None:
 def test_readme_installs_through_the_plugin_and_claims_no_release() -> None:
     readme = (ROOT / "README.md").read_text()
     install = readme.split("## Install", 1)[1].split("## First run", 1)[0]
-    assert install.index("omarchy plugin add https://github.com/ArtMin96/omarchy-ios-studio") < install.index("git clone")
+    assert "omarchy plugin add https://github.com/ArtMin96/omarchy-ios-studio" in install
+    assert "git clone" not in install and "/install.sh" not in install   # users never run a script by hand
+    assert "omarchy plugin update" in install
     assert "omarchy plugin remove io.github.artmin96.ios-studio" in readme
     assert not re.search(r"--branch v\d", readme)   # no tags exist yet: never name a version to clone
 

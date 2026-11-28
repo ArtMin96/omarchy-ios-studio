@@ -97,6 +97,7 @@ mcp/
     backends/              device.py, projects.py, builds.py, console.py, crashes.py
     tools/                 one module per area (113 tools), listed in tools/__init__.py MODULES
   pyproject.toml         its dependencies (installed into a private venv on first run)
+  requirements.lock      the exact, hash-pinned dependencies bin/iosstudio-mcp installs
   evaluation.xml, EVALUATION.md   demo-mode evaluation questions and results
 bin/                   ios-studio (launcher), iosstudio-helper, iosstudio-deviced, iosstudio-mcp
 templates/             Swift app templates used by New app (app-with-tests/ adds Package.swift.template, Sources/AppCore/, Tests/);
@@ -154,7 +155,7 @@ A one-shot command prints exactly one JSON object and exits 0 (ok), 1 (handled e
 
 Long jobs (installs, builds, sign-in) stream JSON lines: `step`, `progress`, `log`, `notice`, `prompt` and a final `done`. The UI answers a prompt by writing `{"prompt": "<id>", "value": "..."}` to stdin. `Stream.qml` handles this for every service. The Setup-specific events are listed in [setup-steps.md](setup-steps.md).
 
-Root work goes through one `pkexec helper/root/root-tasks.sh <flags>` per step, so the user sees one password prompt. Never `sudo`: there's no terminal. `makepkg` runs as the user.
+Root work goes through one `pkexec helper/root/root-tasks.sh <flags>` per step, so the user sees one password prompt. Never `sudo`: there's no terminal. `makepkg` runs as the user. The root script checks itself first (`runtime.trusted_root_script()`), takes only flags and package names (no paths but AUR build folders), and runs the `xcspec.py` next to itself.
 
 ## Device daemon
 
@@ -246,7 +247,7 @@ python3 helper/run.py iosstudio.device.client daemon.shutdown '{"all": true}'
 Setup and demo mode are in [CONTRIBUTING.md](../CONTRIBUTING.md#run-it-in-demo-mode). The rest:
 
 ```bash
-./install.sh                    # once: symlinks, launcher entry, icon, theme hook, opacity rule (README › What install.sh changes)
+./install.sh                    # once: symlinks, launcher entry, icon, theme hook, opacity rule (README › What the install changes)
 qs -p .                         # run from the repo (Ctrl+C to stop)
 qs log -p .                     # read the log of a running instance (ios-studio --log does the same)
 qs ipc -p . call iosstudio nav projects   # drive it over IPC
@@ -301,7 +302,7 @@ Unit tests (the `test` group, [features/unit-tests.md](features/unit-tests.md)) 
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `main` and by hand (Actions › CI › Run workflow). A newer push to the same branch cancels the older run. It has three jobs:
 
-- Python, on 3.11 (the oldest the helper runs on, because of `tomllib`), 3.14 (what Omarchy ships) and 3.15. It compiles every file in `helper/`, `mcp/` and `tests/`, runs `tests/helper` and `tests/cli` with that Python and only pytest installed (the helper must stay stdlib-only), makes the dev venv with `uv sync --group dev` and runs every test but the `network` ones in it with `--durations=10`, then checks that `bin/iosstudio-mcp --prepare` (the same uv path users get) still builds the MCP venv. No test needs xtool, pymobiledevice3, an iPhone or your home folder: they use fake tools, fixtures and temp folders.
+- Python, on 3.11 (the oldest the helper runs on, because of `tomllib`), 3.14 (what Omarchy ships) and 3.15. It compiles every file in `helper/`, `mcp/` and `tests/`, runs `tests/helper` and `tests/cli` with that Python and only pytest installed (the helper must stay stdlib-only), makes the dev venv with `uv sync --group dev` and runs every test but the `network` ones in it with `--durations=10`, then checks that `bin/iosstudio-mcp --prepare` (the same uv path users get) still builds the MCP venv from `mcp/requirements.lock` with hashes required. No test needs xtool, pymobiledevice3, an iPhone or your home folder: they use fake tools, fixtures and temp folders.
 - Lint: ruff 0.17.4 with the rules in `pyproject.toml`: pyflakes, pycodestyle's real errors (unused imports and variables, undefined names, syntax) and import order (`I`, fixable with `ruff check --fix`), no style rules. `E731` (a lambda assigned to a name) and `E741` (names like `l`) are off. Then shellcheck at warning level on `install.sh`, `plugin/app.sh`, the shell scripts in `bin/`, `helper/root/`, `.github/scripts/` and the dSYM fixture's `build.sh`.
 `tests/qml` is skipped there (no `qmltestrunner` on the runner); run it locally.
 - QML: qmllint on every `.qml` file in an `archlinux:latest` container with `qt6-declarative` and `quickshell` from Arch's repos. `qs.Commons` and `qs.Ui` are symlinks into Omarchy's shell that only `install.sh` makes, so their imports don't resolve there. qmllint's default levels only fail on syntax errors; the thousands of unresolved-import, unqualified and missing-property warnings that follow from that are counted in the log but don't fail the job.
@@ -324,7 +325,7 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. It checks that the 
 
 To make a release:
 
-1. Bump the version in all three files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it), `version` in `mcp/pyproject.toml` and `version` in `manifest.json` (the Omarchy plugin). Changing `pyproject.toml` makes each user's MCP venv rebuild once on its next start.
+1. Bump the version in all three files to the same `X.Y.Z`: `readonly property string version` in `AppState.qml` (Settings › About shows it), `version` in `mcp/pyproject.toml` and `version` in `manifest.json` (the Omarchy plugin). Changing `pyproject.toml` or `requirements.lock` makes each user's MCP venv rebuild once on its next start.
 2. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
 
    ```bash
@@ -390,7 +391,7 @@ The UI and error rules are in [ARCHITECTURE.md](../ARCHITECTURE.md#key-patterns)
 - Nothing animates unseen: an `Icon` with `spinning` turns only while it's visible and the window isn't hidden, a
   StatusPill's `level: "busy"` is bound to work that is running (never left on a hidden pill), and an endless
   animation of your own checks `visible` too. A hidden spinner keeps the whole window redrawing.
-- Settings edits to Hyprland files only touch marker-delimited blocks, back the file up first and roll back if `hyprctl configerrors` reports a problem.
+- Settings edits to Hyprland files only touch marker-delimited blocks, back the file up first and roll back only if `hyprctl configerrors` reports an error that wasn't there before the edit; a missing hyprland.lua/bindings.lua is never created (`hypr-config` error). The auto-renew service unit has `ConditionFileIsExecutable=` on the helper, so a deleted app folder skips the timer's run instead of failing and retrying.
 
 ## Reference
 

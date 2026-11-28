@@ -40,6 +40,7 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             mcp/pyproject.toml
+            mcp/requirements.lock
 
       # The image ships LLVM without an unversioned llvm-symbolizer on PATH; without one the crash
       # symbolication tests skip.
@@ -64,7 +65,7 @@ jobs:
       - name: All tests (not network)
         run: uv run --no-sync pytest -m "not network" --durations=10
 
-      # The same script users run: it creates the venv with uv and installs mcp/pyproject.toml's dependencies.
+      # The same script users run: it creates the venv with uv and installs mcp/requirements.lock (hashes required).
       - name: Create the MCP venv with bin/iosstudio-mcp --prepare
         run: |
           IOSSTUDIO_MCP_VENV="$RUNNER_TEMP/mcp-venv" bin/iosstudio-mcp --prepare

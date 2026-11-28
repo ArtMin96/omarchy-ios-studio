@@ -69,7 +69,8 @@ module imports only `core/` and `backends/`, never another tool module.
   See [docs/components.md](docs/components.md#loading-data-resource--stateview).
 - **Errors are for people.** Every error has a plain-language `message` and, where possible, a `fix` that
   deep-links the UI (`page`, `step`, `action` or `url`). The app never says "run X in a terminal". Root
-  work goes through one `pkexec` per step, never `sudo`.
+  work goes through one `pkexec` per step, never `sudo`, to `helper/root/root-tasks.sh` after
+  `runtime.trusted_root_script()` has checked it; AUR recipes are pinned to a commit (`pins.AUR_COMMITS`).
 - **One way to run tools.** Helper code starts external programs through `helper/iosstudio/core/subproc.py`: `tool_env(kind)`
   builds the environment, `Runner` streams output with timeouts, cancel and process-group kill.
 - **One registry per daemon.** Each device feature registers its commands; a module that fails to load is
