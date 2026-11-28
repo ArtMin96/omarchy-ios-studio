@@ -149,6 +149,8 @@ the same pin.
 - pymobiledevice3's wheel checksum comes from PyPI, but pip installs by version (`pymobiledevice3==X`); the
   venv is checked afterwards by importing it.
 - Swift, Xcode and the SDK are never updated here: Swift needs root, about 1 GB and a rebuilt SDK.
+- The AUR recipes Setup builds (swift-bin, uxplay, python312) stay on the commits pinned in `pins.AUR_COMMITS` on
+  both channels; neither channel moves them (see [Setup steps › Safety](../setup-steps.md#safety)).
 
 ## Code and tests
 

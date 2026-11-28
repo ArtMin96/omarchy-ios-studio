@@ -32,13 +32,13 @@ counting it against `toolchain_ready`.
 | `rcodesign` | Toolchain | rcodesign | Signs App Store / TestFlight uploads, and each hot reload patch. | – | 10 MB | GitHub release, sha256-pinned (tested: 0.29.0); download base `IOSSTUDIO_GITHUB_DL` (tests) |
 | `pymobiledevice3` | Toolchain | iPhone connection tools | Talks to your iPhone over USB or Wi-Fi. | – | 335 MB, 1–2 min | venv `~/.local/share/ios-studio/venv`, `pymobiledevice3==<pin>` (tested: 11.49.0); links `~/pymobile3-venv` to it if absent |
 | `ipsw` | Toolchain | ipsw (debugger helper, optional) | Extracts system libraries from your iPhone so the debugger shows readable stack traces. iPhone › Debug needs it to unpack the debug symbols download. | – | 40 MB | GitHub release, sha256-pinned (tested: 3.1.743, the same pin as `install-toolchain.sh`); download base `IOSSTUDIO_GITHUB_DL` (tests) |
-| `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. Without it lldb doesn't start, and iPhone › Debug sends you here (`debug check` → `needs-python`). | yes | about 100 MB, 10–20 min | AUR build |
+| `debugger` | Toolchain | Debugger support (optional) | lldb needs python312, compiled from source. Without it lldb doesn't start, and iPhone › Debug sends you here (`debug check` → `needs-python`). | yes | about 100 MB, 10–20 min | AUR `python312` pinned to `f7df439` (3.12.16-2), built like swift-bin. A Swift that needs another Python, one without a pinned recipe, gets `unsupported` ("Update iOS Studio") |
 | `xcode` | Apple | Xcode 27.1 download | The iOS SDK only comes inside Apple's Xcode download. Download it once in your browser; iOS Studio finds it in Downloads. | – | ~2 GB download | `setup xip --open` / `--watch` / `--use PATH` |
 | `sdk` | Apple | iOS SDK | Apple's iOS frameworks prepared for Linux. | – | 7 GB (15 GB free while building), 20–30 min | `xtool sdk build` → cache `~/.cache/xtool/darwin-iPhoneOS<v>.xtoolsdk`, then `install-toolchain.sh --mode full --repair` (registers it, darwin tools, macro server). With a current spare copy (same stamp) only the `--repair` runs: 2–5 min, no Xcode. Also `broken` when a darwin-tools input in the checkout is newer than the SDK's actool (see below) |
 | `apple-id` | Apple | Apple Account | Sign in so apps can be signed for your iPhone. | – | a minute | `{kind:"page", page:"account", action:"signin"}` |
 | `iphone` | iPhone | Pair your iPhone | Connect, unlock, tap Trust. | – | a minute | `{kind:"page", page:"device", action:"pair"}` |
 | `developer-mode` | iPhone | Developer Mode | Settings › Privacy & Security › Developer Mode, then restart. | – | phone restarts | `{kind:"page", page:"device", action:"developer-mode"}`; state from `~/.local/state/ios-studio/device.json` `developerMode` |
-| `uxplay` | iPhone | Screen mirroring (UxPlay, optional) | Your iPhone's screen live on this computer over Wi-Fi (AirPlay). | yes | 20 MB, 2–5 min | AUR `uxplay` build, `gst-plugins-bad` and `gst-plugin-va` (hardware video decode), enable avahi, open ufw ports for `uxplay -p` (TCP 7000,7001,7100; UDP 6000,6001,7011, 5353) |
+| `uxplay` | iPhone | Screen mirroring (UxPlay, optional) | Your iPhone's screen live on this computer over Wi-Fi (AirPlay). | yes | 20 MB, 2–5 min | AUR `uxplay` pinned to `f387a2c` (1:1.73.7-1), built like swift-bin; `gst-plugins-bad` and `gst-plugin-va` (hardware video decode), enable avahi (the setup state's `avahiEnabledBySetup` records that it was off before), open ufw ports for `uxplay -p` (TCP 7000,7001,7100; UDP 6000,6001,7011, 5353) from the private networks, each rule commented `iOS Studio UxPlay` / `iOS Studio mDNS` |
 | `wireshark` | iPhone | Wireshark (packet viewer, optional) | Opens the network recordings from the iPhone page's Network tab. | yes | about 100 MB, about a minute | `pacman -S --needed wireshark-qt` |
 | `app-integration` | System | App launcher entry | Adds iOS Studio to the app launcher. | – | seconds | runs `install.sh` |
 
@@ -126,7 +126,34 @@ Setup drops exactly those lines inside that block (`installers.survive_noise`) a
 ## Safety
 
 - Root: one `pkexec helper/root/root-tasks.sh <flags>` per step (or per "Install everything"); never sudo;
-  makepkg runs as the user via `runuser`.
+  makepkg runs as the user via `runuser`. Every task is a fixed flag; the only values the caller passes are
+  package names (`--packages`/`--deps`, repeatable, the lists add up and duplicates drop; lowercase words only,
+  none starting with `-`, and pacman gets them after `--`) and AUR build folders, which must resolve inside
+  `~/.cache/ios-studio/aur/` and belong to the user. `--xcspec` takes no path: the script runs the
+  `xcspec.py` next to its own real path (`readlink -f "$0"`).
+- Trust model. pkexec always asks for an administrator password: iOS Studio ships no polkit rule or action, so
+  nothing runs as root without that prompt. The root script lives in the app folder, which belongs to you, so
+  anything that runs as you could edit it before the next prompt; the password prompt is the boundary, as for any
+  script you run with pkexec. Before every prompt `runtime.trusted_root_script()` refuses
+  (`untrusted-root-script`, "Reinstall iOS Studio from a fresh download", fix → Setup) when `root-tasks.sh`, the
+  `xcspec.py` next to it or a folder between them and the app folder belongs to someone other than you or root,
+  can be written by the group or others, or is a link that resolves outside the app folder. pkexec gets the
+  checked real path.
+- AUR recipes come from a pinned commit of each package's AUR git repo (`pins.AUR_COMMITS`: `swift-bin`,
+  `uxplay`, `python312`), as the cgit snapshot of that commit, never the AUR's HEAD; each PKGBUILD pins its
+  sources with `sha256sums`. makepkg runs without `--skippgpcheck`: none of the pinned recipes has a
+  signature (`.sig`/`.asc`) source, so a future pin that adds one fails until its key is handled on purpose.
+  These pins aren't on the update channel (Toolchain › Updates only reports a newer swift-bin); move one by
+  reading the PKGBUILD at the new commit (`git ls-remote https://aur.archlinux.org/<pkg>.git`).
+- The recipes unpack into `~/.cache/ios-studio/aur/<pkg>` (`pins.AUR_DIR`), always under `~/.cache` and not
+  `$XDG_CACHE_HOME`, because that is the only folder the root script builds from.
+- Each edit of `/etc/pacman.conf` (hold, unhold) first copies it to `/etc/pacman.conf.bak-ios-studio-<time>`;
+  only the newest 3 copies are kept.
+- `toolchain remove-all` undoes Setup's system changes in its one password prompt: unholds and removes swift-bin
+  (unless `--keep-swift`), removes the usbmuxd drop-in, deletes exactly the ufw rules screen mirroring added
+  (`--remove-ufw-uxplay` repeats them with their comment, so ufw never deletes a rule of your own for the same
+  ports), and disables avahi only if Setup enabled it (`avahiEnabledBySetup`, then forgotten). The UxPlay,
+  Wireshark and python312 packages and the system packages stay: other software may use them.
 - `toolchain clean` deletes only the paths of allow-listed items computed by `disk_items()`, each checked
   against fixed roots. "Old xtool builds" lists every `xtool-*` build and source tree but the active one, in both
   layouts. `toolchain remove-all` deletes `~/.local/lib/omarchy-apple-dev` and `~/.cache/omarchy-apple-dev` whole and keeps

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from iosstudio.core.appdirs import CACHE_DIR, HOME, LOCAL_BIN, REPO, STATE_DIR
+from iosstudio.core.appdirs import HOME, LOCAL_BIN, REPO, STATE_DIR
 
 # omarchy-apple-dev v0.4.8 (2026-11-23). Its install-toolchain.sh pins xtool 7cc56c3 (xtool main after 1.24.0,
 # which already carries the Apple sign-in fix xtool-org/xtool#406 and the release-build fix #432, plus the
@@ -23,10 +23,14 @@ DEFAULT_SDK_STAMP = "epoch=4,darwinTools=1.1.0,oam=1.4.1"
 # HTTP 503 (#404). Every pin since omarchy-apple-dev v0.4.8 contains the fix; this check verifies the build.
 XTOOL_OLD_UA = b"akd/1.0 CFNetwork/808.1.4"
 
-# swift-bin from the AUR, pinned to a commit (6.4.2-2), built as the user.
-SWIFT_AUR_COMMIT = "f78c5ec6f5be1052fa6ffd3bf78ee44b3fb607a0"
+# AUR recipes, each pinned to a commit of its AUR git repo and built as the user (never from the AUR's HEAD).
+# A PKGBUILD at a commit can't change, and it pins its sources with sha256sums. Before moving a pin, read the
+# PKGBUILD at the new commit (git ls-remote https://aur.archlinux.org/<pkg>.git gives HEAD).
+SWIFT_AUR_COMMIT = "f78c5ec6f5be1052fa6ffd3bf78ee44b3fb607a0"       # swift-bin 6.4.2-2
+UXPLAY_AUR_COMMIT = "f387a2cdc0e6f98507f4059f55ed440baf0ac771"      # uxplay 1:1.73.7-1 (Screen mirroring)
+PYTHON312_AUR_COMMIT = "f7df439e17ebed7f3f853b2e7825a7958ee54c66"   # python312 3.12.16-2 (Debugger support)
+AUR_COMMITS = {"swift-bin": SWIFT_AUR_COMMIT, "uxplay": UXPLAY_AUR_COMMIT, "python312": PYTHON312_AUR_COMMIT}
 AUR_SNAPSHOT = "https://aur.archlinux.org/cgit/aur.git/snapshot/aur-{ref}.tar.gz"
-AUR_SNAPSHOT_HEAD = "https://aur.archlinux.org/cgit/aur.git/snapshot/{pkg}.tar.gz"
 
 PYMD3_VERSION = "11.49.0"
 
@@ -54,7 +58,9 @@ SDK_CACHE = HOME / ".cache/xtool"
 APPLE_DEV_CACHE = HOME / ".cache/omarchy-apple-dev"
 APPLE_DEV_LIB = HOME / ".local/lib/omarchy-apple-dev"
 LEGACY_VENV = HOME / "pymobile3-venv"   # omarchy-apple-dev's venv path (its scripts expect it)
-AUR_DIR = CACHE_DIR / "aur"
+# Fixed under ~/.cache, not $XDG_CACHE_HOME: root-tasks.sh only builds recipes inside ~/.cache/ios-studio/aur/
+# (it can't see the caller's environment through pkexec).
+AUR_DIR = HOME / ".cache/ios-studio/aur"
 SETUP_STATE = STATE_DIR / "setup.json"
 OMARCHY_HOOK = HOME / ".config/omarchy/hooks/pre-refresh-pacman.d/ios-studio-hold-swift-bin"
 DESKTOP_FILE = HOME / ".local/share/applications/ios-studio.desktop"
